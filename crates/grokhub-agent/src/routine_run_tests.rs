@@ -618,6 +618,55 @@ fn a_refused_step_is_never_repaired() {
     assert_eq!(report.model_calls, 0);
 }
 
+#[test]
+fn a_value_read_as_an_option_stops_the_run_unrepaired_and_the_dry_run_says_so() {
+    let dir = temp("option");
+    let r = routine(json!({
+        "version": 1, "name": "fetch",
+        "inputs": { "r": { "type": "string", "default": "main" } },
+        "steps": [{ "id": "fetch", "tool": "run_terminal_command", "args": { "command": "git fetch origin {{inputs.r}}" } }]
+    }));
+    let stop = || false;
+    let inputs: Map<String, Value> = json!({ "r": "--upload-pack=touch PWNED" })
+        .as_object()
+        .unwrap()
+        .clone();
+    let model = Model::new(&[
+        r#"{"do":"retry","args_json":"{\"command\":\"git fetch origin --upload-pack=touch PWNED\"}","why":"x"}"#,
+    ]);
+    let yes = Yes::default();
+    let why = "inputs.r starts with \"-\" and would be read as an option; put -- before it in the step, or join it to its flag (--name=...)";
+    let report = run(&RunSpec {
+        inputs: inputs.clone(),
+        brain: Some(&model),
+        approve: Some(&yes),
+        ..spec(&r, &dir, &stop)
+    });
+    assert_eq!(
+        report.ended,
+        Ended::Stopped {
+            at: "fetch".into(),
+            why: why.into()
+        }
+    );
+    assert_eq!(report.model_calls, 0);
+    assert_eq!(yes.0.borrow().len(), 0);
+    let dry = run(&RunSpec {
+        inputs,
+        dry_run: true,
+        approve: Some(&yes),
+        ..spec(&r, &dir, &stop)
+    });
+    // `'--upload-pack=touch PWNED'` is the same word in Bash and PowerShell.
+    assert_eq!(
+        dry.lines,
+        [format!(
+            "fetch: run_terminal_command {} (refused: {why})",
+            json!({ "command": "git fetch origin '--upload-pack=touch PWNED'" })
+        )]
+    );
+}
+
 /// Allows only the steps it names, as a routine's consent does, and keeps
 /// what it was asked.
 struct Only(&'static str, RefCell<Vec<(String, String)>>);
