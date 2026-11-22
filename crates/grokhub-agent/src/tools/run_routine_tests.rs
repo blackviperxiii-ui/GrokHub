@@ -5,6 +5,11 @@ fn temp(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("run-routine-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    // Grants are sealed with the learned-tier key: a test keyring.
+    crate::harness::use_key_store_for(
+        &dir,
+        std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+    );
     dir
 }
 

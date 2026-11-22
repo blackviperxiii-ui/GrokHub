@@ -53,6 +53,9 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         Ok(path) => path,
         Err(err) => return ToolOutput::err(err),
     };
+    if let Some(why) = super::person_only_file(&grokhub_core::paths::config_dir(), &path) {
+        return ToolOutput::err(why);
+    }
     let redacted = crate::memory::redact_model_text(&path, &replacement);
     let note = if redacted != replacement {
         " (secrets redacted)"

@@ -451,6 +451,49 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(acc)
 }
 
+/// The consent ledger or the routine consent store, which only the
+/// person's click writes. The write and edit tools refuse them however the
+/// path is spelled, through a symlinked folder too; a file of the same name
+/// in a project is fine.
+pub(crate) fn person_only_file(config_dir: &Path, path: &Path) -> Option<String> {
+    let real = resolved(path)?;
+    let stores = [
+        crate::harness::consent_path(config_dir),
+        crate::routine_consent::path(config_dir),
+    ];
+    stores
+        .iter()
+        .any(|s| resolved(s).as_ref() == Some(&real) || same_file(s, path))
+        .then(|| "only your click changes the consent files".to_string())
+}
+
+/// Two names for one file, as a hard link makes.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file(_: &Path, _: &Path) -> bool {
+    false
+}
+
+/// `path` with its folder's symlinks resolved, in lowercase for file
+/// systems that ignore case. The file itself may not exist yet.
+fn resolved(path: &Path) -> Option<String> {
+    let folder = path.parent()?.canonicalize().ok()?;
+    Some(
+        folder
+            .join(path.file_name()?)
+            .to_string_lossy()
+            .to_lowercase(),
+    )
+}
+
 /// A native tool's full schema by name, whatever the gate or the deferred
 /// index say: the caller decides whether it is offered.
 pub(crate) fn native_schema(name: &str) -> Option<Value> {
@@ -732,5 +775,35 @@ mod tests {
         assert!(confine(&dir, "leak").is_err());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_write_tools_never_reach_the_consent_files_however_the_path_reads() {
+        let home = std::env::temp_dir().join(format!("person-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let config = home.join(".config/GrokHub");
+        std::fs::create_dir_all(config.join("routines")).unwrap();
+        std::fs::create_dir_all(home.join("src/routines")).unwrap();
+        std::os::unix::fs::symlink(config.join("routines"), home.join("rr")).unwrap();
+        let refused = |rel: &str| person_only_file(&config, &confine(&home, rel).unwrap());
+        let why = Some("only your click changes the consent files".to_string());
+        assert_eq!(refused(".config/GrokHub/routines/consent.json"), why);
+        assert_eq!(refused(".config/GrokHub/routines/Consent.JSON"), why);
+        assert_eq!(refused(".config/GrokHub/consent.jsonl"), why);
+        // Through a symlink to the routines folder.
+        assert_eq!(refused("rr/consent.json"), why);
+        // Through a hard link to the store.
+        std::fs::write(config.join("routines/consent.json"), "{}").unwrap();
+        std::fs::hard_link(
+            config.join("routines/consent.json"),
+            home.join("notes.json"),
+        )
+        .unwrap();
+        assert_eq!(refused("notes.json"), why);
+        // A project's own file of the same name.
+        assert_eq!(refused("src/routines/consent.json"), None);
+        assert_eq!(refused(".config/GrokHub/routines/note/routine.json"), None);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

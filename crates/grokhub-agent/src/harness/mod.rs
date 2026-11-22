@@ -94,9 +94,10 @@ pub use approval::{
     GateOutcome, HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
 pub use at_rest::{
-    forget_key_store_for, has_sealed_data, keyring_name_for, read_key, recheck_keyring,
-    set_default_key_store, use_key_store_for, use_os_keyring, KeyStore, KeyringOs, LearnedVault,
-    Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE, SEALED_PREFIX,
+    forget_key_store_for, has_sealed_data, keyring_name_for, open_with, read_key, recheck_keyring,
+    seal_with, set_default_key_store, use_key_store_for, use_os_keyring, write_key, KeyStore,
+    KeyringOs, LearnedVault, Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE,
+    KEY_SERVICE, SEALED_PREFIX,
 };
 pub use audit::{
     audit_file, audit_spans, pass1, pass2, summarize, Audit, SpanDigest, Window, WindowAudit,

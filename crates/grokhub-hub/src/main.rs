@@ -67,7 +67,11 @@ fn main() {
     if let Some(socket) = askpass_socket(&args) {
         std::process::exit(grokhub_agent::sudo_pass::client(socket));
     }
-    match parse_args(&args) {
+    let launch = parse_args(&args);
+    if launch.uses_os_stores() {
+        use_os_stores();
+    }
+    match launch {
         Launch::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
         }
@@ -75,17 +79,14 @@ fn main() {
             eprint!("{}", help_text(env!("CARGO_PKG_VERSION")));
         }
         Launch::McpSelf => {
-            use_os_stores();
             let dir = grokhub_core::paths::config_dir();
             std::process::exit(grokhub_agent::self_manage::mcp::run_stdio(&dir));
         }
         Launch::McpDesktop => {
-            use_os_stores();
             grokhub_desktop::host::install_standalone();
             std::process::exit(grokhub_desktop::run_stdio());
         }
         Launch::McpCua => {
-            use_os_stores();
             grokhub_desktop::host::install_standalone();
             std::process::exit(grokhub_desktop::run_cua_stdio());
         }
@@ -101,7 +102,6 @@ fn main() {
             std::process::exit(if ok { 0 } else { 1 });
         }
         Launch::OAuth => {
-            use_os_stores();
             std::process::exit(grokhub_hub::oauth_cli::run(
                 &grokhub_agent::xai_keychain::Keychain,
                 &std::thread::sleep,
@@ -119,11 +119,9 @@ fn main() {
             );
         }
         Launch::BenchLocal => {
-            use_os_stores();
             std::process::exit(grokhub_agent::route::local_bench::run_cli());
         }
         Launch::RoutineRun => {
-            use_os_stores();
             std::process::exit(grokhub_agent::routine_run::run_cli(
                 &args[3..],
                 &grokhub_core::paths::config_dir(),

@@ -2674,14 +2674,16 @@ fn set_routine_on(
     Ok(routines_page::rows(&state.config_dir))
 }
 
-/// Allow on a routine's row: its change steps may run unattended.
+/// Allow on a routine's row: its change steps, as the row showed them, may
+/// run unattended.
 #[cfg(desktop)]
 #[tauri::command]
 fn allow_routine(
     state: State<'_, ShellState>,
     name: String,
+    hash: String,
 ) -> Result<Vec<routines_page::Row>, String> {
-    routines_page::allow(&state.config_dir, &name)?;
+    routines_page::allow(&state.config_dir, &name, &hash)?;
     Ok(routines_page::rows(&state.config_dir))
 }
 
