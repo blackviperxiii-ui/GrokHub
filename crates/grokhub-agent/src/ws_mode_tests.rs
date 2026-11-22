@@ -424,10 +424,11 @@ fn the_client_tries_the_socket_first_and_falls_back_to_http() {
 #[test]
 fn a_side_call_goes_over_http_and_leaves_the_chats_chain_alone() {
     let srv = server(|seq, _| reply(&format!("resp_{seq}"), "pong"));
-    // HTTP points at a closed loopback port: a side call fails fast there
-    // instead of reaching the socket.
+    // HTTP answers every request with a 400: a side call fails there at once,
+    // with no retries, instead of reaching the socket. (A closed port is a
+    // transport error, which is retried for about a minute per call.)
     let client = crate::XaiClient::new("test-bearer", AuthKind::ApiKey, Duration::from_secs(5))
-        .with_loopback_url("http://127.0.0.1:9/v1/responses")
+        .with_loopback_url(&bad_request_http())
         .unwrap()
         .with_loopback_ws(&srv.url)
         .unwrap();
@@ -474,6 +475,23 @@ fn a_side_call_goes_over_http_and_leaves_the_chats_chain_alone() {
     let got = srv.got();
     assert_eq!(got.len(), 2, "side calls never reach the chat's socket");
     assert_eq!(got[1].1["previous_response_id"], "resp_0");
+}
+
+/// A loopback HTTP endpoint that answers every request with 400 Bad Request.
+fn bad_request_http() -> String {
+    use std::io::{Read, Write};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    format!("http://127.0.0.1:{port}/v1/responses")
 }
 
 /// A port that takes the TCP connection and then never answers the upgrade.

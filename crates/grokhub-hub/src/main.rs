@@ -95,11 +95,8 @@ fn main() {
         }
         Launch::Doctor { fix } => {
             let dir = grokhub_core::paths::config_dir();
-            let (text, ok) = grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(
-                &dir,
-                hub_port(),
-                fix,
-            ));
+            let (text, ok) =
+                grokhub_hub::doctor::report(&grokhub_hub::doctor::gather(&dir, hub_port(), fix));
             print!("{text}");
             std::process::exit(if ok { 0 } else { 1 });
         }

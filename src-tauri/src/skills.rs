@@ -104,8 +104,7 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
             phrase => phrase.to_string(),
         };
         let skills_dir = config_dir.join("skills");
-        let quarantined =
-            grokhub_core::verify_and_record_skill(&skills_dir, &name, &raw).summary();
+        let quarantined = grokhub_core::verify_and_record_skill(&skills_dir, &name, &raw).summary();
         let row = Row {
             on: quarantined.is_none() && !grokhub_agent::skill_is_off_in(&skills_dir, &name),
             quarantined,

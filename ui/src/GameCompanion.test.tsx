@@ -52,6 +52,17 @@ describe("GameCompanion", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Note saved.");
   });
 
+  it("shows a news item that isn't a web page as plain text, not a link", async () => {
+    api.companionFrame.mockResolvedValue({
+      note: "",
+      news: [{ title: "Odd item", url: "javascript:alert(1)" }],
+      guidesUrl: null,
+    });
+    render(<GameCompanion target={{ kind: "steam", appId: 620, lastPlayed: 1_700_000_000 }} />);
+    expect(await screen.findByText("Odd item")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Odd item" })).toBeNull();
+  });
+
   it("shows empty news for Steam and unavailable news for Battle.net", async () => {
     api.companionFrame.mockResolvedValue({ note: "", news: [], guidesUrl: null });
     const { rerender } = render(

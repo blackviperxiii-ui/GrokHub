@@ -132,7 +132,9 @@ mod tests {
 
     #[test]
     fn tags_and_version_mark_ollama() {
-        assert!(looks_like_ollama(r#"{"models":[{"name":"llama3:latest"}]}"#));
+        assert!(looks_like_ollama(
+            r#"{"models":[{"name":"llama3:latest"}]}"#
+        ));
         assert!(looks_like_ollama(r#"{"version":"0.6.0"}"#));
         assert!(!looks_like_ollama(r#"{"ok":true}"#));
         assert_eq!(

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { companionFrame, companionSetNote, type CompanionFrame } from "./api";
 import { GameWatch } from "./GameWatch";
+import { ExternalLink } from "./ui";
 
 export const NO_NEWS = "No news since you last played.";
 export const NEWS_UNAVAILABLE = "Couldn't read the news for it just now.";
@@ -97,9 +98,7 @@ export function GameCompanion({
           <ul>
             {frame.news.map((n) => (
               <li key={n.url}>
-                <a href={n.url} target="_blank" rel="noreferrer">
-                  {n.title}
-                </a>
+                <ExternalLink href={n.url}>{n.title}</ExternalLink>
               </li>
             ))}
           </ul>
@@ -107,9 +106,7 @@ export function GameCompanion({
       </div>
       {frame?.guidesUrl && (
         <p className="game-companion-guides">
-          <a href={frame.guidesUrl} target="_blank" rel="noreferrer">
-            Top-rated community guides
-          </a>
+          <ExternalLink href={frame.guidesUrl}>Top-rated community guides</ExternalLink>
         </p>
       )}
       <GameWatch compact />

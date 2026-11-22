@@ -203,8 +203,8 @@ mod tests {
     #[test]
     fn the_backup_sits_beside_the_appimage() {
         assert_eq!(
-            backup_path(Path::new("/home/user/Apps/GrokHub.AppImage")),
-            PathBuf::from("/home/user/Apps/GrokHub.AppImage.previous")
+            backup_path(Path::new("/home/user/Apps/App.AppImage")),
+            PathBuf::from("/home/user/Apps/App.AppImage.previous")
         );
     }
 

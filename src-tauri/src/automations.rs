@@ -941,12 +941,8 @@ mod tests {
         assert_eq!(row.check_command, "df -h /");
         assert!(row.gate.on_change);
         assert!(!row.gate.no_agent);
-        let plain = add(
-            &dir,
-            "every day at 10am summarize my inbox",
-            tuesday_8am(),
-        )
-        .expect("plain");
+        let plain =
+            add(&dir, "every day at 10am summarize my inbox", tuesday_8am()).expect("plain");
         let plain_row = &rows(&plain, tuesday_8am())[1];
         assert_eq!(plain_row.check_command, "");
         assert_eq!(plain_row.gate, RowGate::default());

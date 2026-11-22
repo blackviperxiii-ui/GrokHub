@@ -142,7 +142,11 @@ pub fn parse_tree(body: &str) -> Vec<FileGroup> {
 }
 
 /// Stamp each group with a coarse fit for this PC's usable VRAM and spare RAM.
-pub fn price_groups(groups: &[FileGroup], usable_vram_mb: u64, ram_available_mb: u64) -> Vec<FileGroup> {
+pub fn price_groups(
+    groups: &[FileGroup],
+    usable_vram_mb: u64,
+    ram_available_mb: u64,
+) -> Vec<FileGroup> {
     groups
         .iter()
         .map(|g| {

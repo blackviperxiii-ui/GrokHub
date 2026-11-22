@@ -535,7 +535,10 @@ mod tests {
     fn other_ai_without_xai_is_ok_on_the_auth_row() {
         let mut facts = empty_facts();
         facts.other_ai = true;
-        facts.hub_health = Some(format!(r#"{{"ok":true,"kind":"{}"}}"#, grokhub_core::HUB_KIND));
+        facts.hub_health = Some(format!(
+            r#"{{"ok":true,"kind":"{}"}}"#,
+            grokhub_core::HUB_KIND
+        ));
         let (text, ok) = report(&facts);
         assert!(ok, "{text}");
         assert!(
@@ -653,15 +656,14 @@ mod tests {
 
         let before = perm_lines(&d);
         assert!(
-            before.iter().any(|l| !l.ok && l.text.contains("secrets.json")),
+            before
+                .iter()
+                .any(|l| !l.ok && l.text.contains("secrets.json")),
             "{before:?}"
         );
 
         let fixed = apply_safe_fixes(&d);
-        assert!(
-            fixed.iter().any(|m| m.contains("0600")),
-            "fixes={fixed:?}"
-        );
+        assert!(fixed.iter().any(|m| m.contains("0600")), "fixes={fixed:?}");
         let mode = std::fs::metadata(&secrets).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         let dir_mode = std::fs::metadata(&d).unwrap().permissions().mode() & 0o777;
@@ -682,7 +684,9 @@ mod tests {
         std::fs::write(d.join("web-access/key.pem"), "k").unwrap();
         let lines = remote_lines(&d);
         assert!(
-            lines.iter().any(|l| !l.ok && l.text.contains("key.pem without cert")),
+            lines
+                .iter()
+                .any(|l| !l.ok && l.text.contains("key.pem without cert")),
             "{lines:?}"
         );
         let _ = std::fs::remove_dir_all(&d);

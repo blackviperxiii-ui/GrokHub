@@ -151,8 +151,8 @@ mod tests {
     #[test]
     fn the_screen_files_live_in_their_own_config_folder() {
         assert_eq!(
-            dir(Path::new("/home/user/.config/GrokHub")),
-            Path::new("/home/user/.config/GrokHub/bot-desktop")
+            dir(Path::new("/home/user/.config/app")),
+            Path::new("/home/user/.config/app/bot-desktop")
         );
     }
 

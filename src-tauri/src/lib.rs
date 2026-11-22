@@ -15,9 +15,9 @@ pub mod automations;
 pub mod background;
 pub mod bg_runs;
 pub mod bot_screen;
-pub mod browser_attach;
 #[cfg(test)]
 mod brand_guard;
+pub mod browser_attach;
 pub mod capabilities;
 pub mod card_chat;
 mod catalog_refresh;
@@ -6751,7 +6751,10 @@ async fn remove_library_model(
 }
 
 #[tauri::command]
-async fn search_hf_gguf(query: String, limit: Option<usize>) -> Result<Vec<model_library::HfHit>, String> {
+async fn search_hf_gguf(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<model_library::HfHit>, String> {
     capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     off_main(move || model_library::search_hf(&query, limit.unwrap_or(20))).await?
 }
