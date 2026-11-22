@@ -16,13 +16,15 @@ pub const UNIT: &str = "grokhub-automations.service";
 /// The launchd agent's label (and file name, with `.plist`).
 pub const LABEL: &str = "dev.grokhub.shell.automations";
 /// The Windows logon task's name.
-pub const TASK: &str = "GrokHub automations";
+pub fn task() -> &'static str {
+    grokhub_core::brand::filled("{product} automations")
+}
 
 /// The systemd user unit that runs `exe --automations`.
 pub fn systemd_unit(exe: &Path) -> String {
     format!(
         "[Unit]\n\
-         Description=GrokHub scheduled automations (no window)\n\
+         Description={} scheduled automations (no window)\n\
          After=network-online.target\n\
          \n\
          [Service]\n\
@@ -32,6 +34,7 @@ pub fn systemd_unit(exe: &Path) -> String {
          \n\
          [Install]\n\
          WantedBy=default.target\n",
+        grokhub_core::brand::product_name(),
         systemd_quoted(&exe.to_string_lossy())
     )
 }
@@ -84,7 +87,7 @@ pub fn schtasks_create(exe: &Path) -> Vec<String> {
     [
         "/Create",
         "/TN",
-        TASK,
+        task(),
         "/TR",
         &format!("\"{}\" {AUTOMATIONS_ARG}", exe.to_string_lossy()),
         "/SC",
@@ -127,7 +130,7 @@ pub fn installed() -> Result<bool, String> {
     let home = grokhub_core::paths::user_home().ok_or("Couldn't find your home folder.")?;
     match service_file(&home) {
         Some(file) => Ok(file.is_file()),
-        None => Ok(run("schtasks", &["/Query", "/TN", TASK]).is_ok()),
+        None => Ok(run("schtasks", &["/Query", "/TN", task()]).is_ok()),
     }
 }
 
@@ -169,9 +172,10 @@ pub fn install() -> Result<String, String> {
                 "schtasks",
                 &args.iter().map(String::as_str).collect::<Vec<_>>(),
             )?;
-            run("schtasks", &["/Run", "/TN", TASK])?;
+            run("schtasks", &["/Run", "/TN", task()])?;
             Ok(format!(
-                "Automations now run with the app closed (task \"{TASK}\").\n"
+                "Automations now run with the app closed (task \"{}\").\n",
+                task()
             ))
         }
     }
@@ -197,8 +201,8 @@ pub fn remove() -> Result<String, String> {
             }
         }
         None => {
-            let _ = run("schtasks", &["/End", "/TN", TASK]);
-            let _ = run("schtasks", &["/Delete", "/TN", TASK, "/F"]);
+            let _ = run("schtasks", &["/End", "/TN", task()]);
+            let _ = run("schtasks", &["/Delete", "/TN", task(), "/F"]);
         }
     }
     Ok("Automations run only while the app is open now.\n".into())
@@ -226,18 +230,21 @@ mod tests {
     #[test]
     fn the_systemd_unit_runs_the_app_headless_and_restarts_it() {
         assert_eq!(
-            systemd_unit(Path::new("/home/user/Apps/GrokHub 100%/grokhub-shell")),
-            "[Unit]\n\
-             Description=GrokHub scheduled automations (no window)\n\
-             After=network-online.target\n\
-             \n\
-             [Service]\n\
-             ExecStart=\"/home/user/Apps/GrokHub 100%%/grokhub-shell\" --automations\n\
-             Restart=on-failure\n\
-             RestartSec=30\n\
-             \n\
-             [Install]\n\
-             WantedBy=default.target\n"
+            systemd_unit(Path::new("/home/user/Apps/My App 100%/grokhub-shell")),
+            format!(
+                "[Unit]\n\
+                 Description={} scheduled automations (no window)\n\
+                 After=network-online.target\n\
+                 \n\
+                 [Service]\n\
+                 ExecStart=\"/home/user/Apps/My App 100%%/grokhub-shell\" --automations\n\
+                 Restart=on-failure\n\
+                 RestartSec=30\n\
+                 \n\
+                 [Install]\n\
+                 WantedBy=default.target\n",
+                grokhub_core::brand::product_name()
+            )
         );
         assert_eq!(systemd_quoted(r#"a"b\c"#), r#"a\"b\\c"#);
     }
@@ -257,13 +264,13 @@ mod tests {
     #[test]
     fn the_windows_task_runs_at_logon_with_limited_rights() {
         assert_eq!(
-            schtasks_create(Path::new(r"C:\Program Files\GrokHub\grokhub-shell.exe")),
+            schtasks_create(Path::new(r"C:\Program Files\My App\grokhub-shell.exe")),
             [
                 "/Create",
                 "/TN",
-                "GrokHub automations",
+                format!("{} automations", grokhub_core::brand::product_name()).as_str(),
                 "/TR",
-                r#""C:\Program Files\GrokHub\grokhub-shell.exe" --automations"#,
+                r#""C:\Program Files\My App\grokhub-shell.exe" --automations"#,
                 "/SC",
                 "ONLOGON",
                 "/RL",
@@ -294,5 +301,4 @@ mod tests {
             ))
         );
     }
-
 }

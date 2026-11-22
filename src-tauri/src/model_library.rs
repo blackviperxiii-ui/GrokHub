@@ -564,11 +564,8 @@ pub fn hf_files(config_dir: &Path, repo: &str) -> Result<Vec<HfFileRow>, String>
     }
     let body = hf_get_json(&grokhub_core::hf_gguf::tree_url(repo))?;
     let (vram, ram) = budget_mb(config_dir);
-    let groups = grokhub_core::hf_gguf::price_groups(
-        &grokhub_core::hf_gguf::parse_tree(&body),
-        vram,
-        ram,
-    );
+    let groups =
+        grokhub_core::hf_gguf::price_groups(&grokhub_core::hf_gguf::parse_tree(&body), vram, ram);
     Ok(groups
         .into_iter()
         .map(|g| {

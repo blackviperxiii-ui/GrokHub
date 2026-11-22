@@ -371,9 +371,7 @@ pub fn call_model(
                 break;
             }
             Err(err)
-                if !on_device
-                    && !short_retried
-                    && live::short_retry_after_wait(&err).is_some() =>
+                if !on_device && !short_retried && live::short_retry_after_wait(&err).is_some() =>
             {
                 let wait = live::short_retry_after_wait(&err).unwrap();
                 if live::wait_short_retry(wait, cancel) {

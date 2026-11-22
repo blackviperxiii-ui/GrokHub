@@ -377,8 +377,7 @@ fn live_preflight_block(
     let mut configured = Vec::new();
     for row in &rows {
         configured.push(row.name.clone());
-        if !row.enabled || row.needs_sign_in || row.status == "error" || row.status == "disabled"
-        {
+        if !row.enabled || row.needs_sign_in || row.status == "error" || row.status == "disabled" {
             let detail = if row.needs_sign_in {
                 "needs sign-in".into()
             } else if !row.error.is_empty() {

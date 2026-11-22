@@ -183,7 +183,11 @@ fn binary_ready(name: &str, ctx: &PreflightCtx<'_>) -> bool {
 
 /// Validate `job` against live facts. `script_only` skips the model-route
 /// check (the run is the check output alone).
-pub fn preflight(job: &Automation, script_only: bool, ctx: &PreflightCtx<'_>) -> Option<PreflightBlock> {
+pub fn preflight(
+    job: &Automation,
+    script_only: bool,
+    ctx: &PreflightCtx<'_>,
+) -> Option<PreflightBlock> {
     let mut reasons = Vec::new();
 
     if needs_model_route(&job.gate, script_only) && !ctx.route_ready {
@@ -207,11 +211,7 @@ pub fn preflight(job: &Automation, script_only: bool, ctx: &PreflightCtx<'_>) ->
         if ctx.ready_connectors.iter().any(|n| n == name) {
             continue;
         }
-        if let Some((_, detail)) = ctx
-            .blocked_connectors
-            .iter()
-            .find(|(n, _)| n == name)
-        {
+        if let Some((_, detail)) = ctx.blocked_connectors.iter().find(|(n, _)| n == name) {
             let detail = detail.trim();
             reasons.push(if detail.is_empty() {
                 format!("connector `{name}` is not ready")
@@ -256,9 +256,7 @@ pub fn mark_automation_preflight_failed(
 ) -> Automation {
     a = crate::mark_automation_failed(a, why);
     a.last_run = Some(now_ms);
-    a.next_run = Some(
-        crate::compute_next_run(&a, clock).max(now_ms.saturating_add(60_000)),
-    );
+    a.next_run = Some(crate::compute_next_run(&a, clock).max(now_ms.saturating_add(60_000)));
     a
 }
 
@@ -310,12 +308,7 @@ mod tests {
         assert!(block.line().contains("Sign in with Grok"));
         assert!(preflight(&a, true, &PreflightCtx::route_only(false, "x")).is_none());
         let script = job("", "every day at 9", true);
-        assert!(preflight(
-            &script,
-            false,
-            &PreflightCtx::route_only(false, "x")
-        )
-        .is_none());
+        assert!(preflight(&script, false, &PreflightCtx::route_only(false, "x")).is_none());
     }
 
     #[test]
@@ -340,7 +333,11 @@ mod tests {
 
     #[test]
     fn missing_or_blocked_connector_fails_closed() {
-        let a = job("", "every day at 9 sync Linear issues into the board", false);
+        let a = job(
+            "",
+            "every day at 9 sync Linear issues into the board",
+            false,
+        );
         let configured = vec!["linear".into(), "github".into()];
         let blocked = vec![("linear".into(), "needs sign-in".into())];
         let ctx = PreflightCtx {
@@ -379,8 +376,7 @@ mod tests {
             minute: 0,
         };
         let a = job("", "every day at 9", false);
-        let failed =
-            mark_automation_preflight_failed(a, "Preflight: no model route", 1_000, clock);
+        let failed = mark_automation_preflight_failed(a, "Preflight: no model route", 1_000, clock);
         assert_eq!(failed.run_count, 0);
         assert!(failed.health.failing());
         assert!(failed.health.error.contains("no model route"));

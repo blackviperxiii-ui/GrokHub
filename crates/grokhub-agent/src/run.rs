@@ -8221,7 +8221,11 @@ mod tests {
             ),
             ("work_archive", r#"{"id":"w1"}"#, ALL),
             ("run_routine", r#"{"name":"disk-report"}"#, ALL),
-            ("save_routine", r#"{"name":"disk-report","about":"Disk use"}"#, ALL),
+            (
+                "save_routine",
+                r#"{"name":"disk-report","about":"Disk use"}"#,
+                ALL,
+            ),
         ];
         for (name, arguments, line) in rows {
             let line = if *line == ALL { arguments } else { line };

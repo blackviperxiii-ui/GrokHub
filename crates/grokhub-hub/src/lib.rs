@@ -34,7 +34,9 @@ pub enum Launch {
     McpBridge,
     /// Auth, memory, hub and security checks; exits 1 on any ERR.
     /// `fix`: apply safe permission repairs before reporting.
-    Doctor { fix: bool },
+    Doctor {
+        fix: bool,
+    },
     /// Says how this install updates. Runs nothing.
     Update,
     /// Sign in with Grok (device code) into the shell's keychain entry.
@@ -62,7 +64,10 @@ pub fn parse_args(args: &[String]) -> Launch {
         return Launch::RoutineRun;
     }
     if args.get(1).map(String::as_str) == Some("routine")
-        && matches!(args.get(2).map(String::as_str), Some("allow" | "revoke" | "undo"))
+        && matches!(
+            args.get(2).map(String::as_str),
+            Some("allow" | "revoke" | "undo")
+        )
     {
         return Launch::RoutineManage;
     }

@@ -126,6 +126,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),
     ("crates/grokhub-agent/src/auto_review/routine_git.rs", 2, "routine git verbs list"),
     ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
+    ("crates/grokhub-agent/src/routine_draft.rs", 1, "saved-step tool label list (web_fetch is \"fetch\")"),
 ];
 
 /// Scanners name every exit pattern themselves.

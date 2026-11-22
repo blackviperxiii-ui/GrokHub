@@ -32,13 +32,7 @@ fn slot(key: &str, label: &str, placeholder: &str) -> BlueprintSlot {
     }
 }
 
-fn tile(
-    id: &str,
-    title: &str,
-    body: &str,
-    seed: &str,
-    slots: Vec<BlueprintSlot>,
-) -> Blueprint {
+fn tile(id: &str, title: &str, body: &str, seed: &str, slots: Vec<BlueprintSlot>) -> Blueprint {
     Blueprint {
         id: id.into(),
         title: title.into(),
@@ -110,7 +104,9 @@ pub fn fill(seed: &str, slots: &[(impl AsRef<str>, impl AsRef<str>)]) -> Result<
         }
         // Refuse values that would break the backticked check command.
         if value.contains('`') || value.contains('\n') || value.contains('\0') {
-            return Err(format!("The value for {key} cannot include backticks or new lines."));
+            return Err(format!(
+                "The value for {key} cannot include backticks or new lines."
+            ));
         }
         let needle = format!("{{{key}}}");
         if !out.contains(&needle) {
@@ -163,7 +159,10 @@ mod tests {
     #[test]
     fn fill_refuses_empty_or_dangerous_values() {
         assert_eq!(
-            fill("every day at {time} run `df -h {path}`", &[("time", ""), ("path", "/")]),
+            fill(
+                "every day at {time} run `df -h {path}`",
+                &[("time", ""), ("path", "/")]
+            ),
             Err("Fill in time first.".into())
         );
         assert_eq!(

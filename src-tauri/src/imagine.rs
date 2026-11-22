@@ -1129,21 +1129,9 @@ mod tests {
     #[test]
     fn make_without_a_bearer_names_both_ways_when_nothing_can_draw() {
         let d = dirs("make-none");
-        let err = make(
-            &d.config,
-            &req("a cabin", 1, Kind::Image),
-            &|| false,
-            NOW,
-        )
-        .unwrap_err();
+        let err = make(&d.config, &req("a cabin", 1, Kind::Image), &|| false, NOW).unwrap_err();
         assert_eq!(err, grokhub_agent::route::local_image::NO_SOURCE);
-        let err = make(
-            &d.config,
-            &req("a cabin", 1, Kind::Video),
-            &|| false,
-            NOW,
-        )
-        .unwrap_err();
+        let err = make(&d.config, &req("a cabin", 1, Kind::Video), &|| false, NOW).unwrap_err();
         assert_eq!(err, NEED_SIGNIN);
     }
 

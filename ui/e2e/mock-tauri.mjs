@@ -65,6 +65,7 @@ const EMPTY_BOARD = {
   columns: [],
   cards: [],
   swept: [],
+  archived: [],
 };
 
 const EMPTY_PULSE = {
@@ -388,6 +389,7 @@ const EMPTY_AI_MODELS = {
     ceilings: [5, 15, 30, 60],
   },
   premium: [],
+  benched: [],
   table: [],
   tableBuiltAt: 0,
   locked: "",
@@ -423,6 +425,7 @@ const EMPTY_LOCAL_AI = {
       denyApps: [],
     },
     localModel: { selected: "" },
+    ownFiles: [],
     noticeSeen: [],
   },
   status: {

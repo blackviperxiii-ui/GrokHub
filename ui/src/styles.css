@@ -3159,7 +3159,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .automations .suggested h3 {
   margin: 0 0 4px;
   font-size: var(--font-prose);
-  color: var(--amber, #ff9f1a);
+  color: var(--amber);
 }
 
 .automations .blueprint-fill {
@@ -3174,15 +3174,15 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   flex-direction: column;
   gap: 4px;
   color: var(--muted);
-  font-size: var(--font-small, 0.85rem);
+  font-size: var(--font-body);
 }
 
 .automations .blueprint-slot input {
-  border-color: color-mix(in srgb, var(--amber, #ff9f1a) 35%, var(--border, #333));
+  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
 }
 
 .automations .card.blueprint {
-  border-color: color-mix(in srgb, var(--red, #d7263d) 28%, var(--border, #333));
+  border-color: color-mix(in srgb, var(--red) 28%, var(--border));
 }
 
 .card.automation,
@@ -3201,7 +3201,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .card-check {
   margin: 0;
   color: var(--muted);
-  font-size: 0.9em;
+  font-size: var(--font-body);
 }
 
 .card-health,
@@ -7247,20 +7247,20 @@ button.primary:not(.quick-chip) {
 }
 .hf-browse-files h4 {
   margin: 0.5rem 0 0.25rem;
-  font-size: 0.95rem;
+  font-size: var(--font-prose);
 }
 .badge.hf-fit-yes {
-  color: #000;
+  color: var(--text);
   background: color-mix(in srgb, var(--amber) 35%, transparent);
   border: 1px solid var(--amber);
 }
 .badge.hf-fit-tight {
-  color: #000;
+  color: var(--text);
   background: color-mix(in srgb, var(--amber) 18%, transparent);
   border: 1px solid color-mix(in srgb, var(--amber) 55%, #000);
 }
 .badge.hf-fit-no {
-  color: #fff;
+  color: var(--on-red);
   background: var(--red);
   border: 1px solid var(--red);
 }
