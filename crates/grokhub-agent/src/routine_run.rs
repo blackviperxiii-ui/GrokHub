@@ -14,7 +14,8 @@ use std::path::Path;
 
 use grokhub_core::recipe::ComputerOp;
 use grokhub_core::routine::{
-    self, fill, fill_args, pieces, Checked, Piece, Quote, Ref, Routine, StepKind, StepOut, Values,
+    self, fill, fill_args, pieces, Checked, FillError, Piece, Quote, Ref, Routine, StepKind,
+    StepOut, Values,
 };
 use serde_json::{json, Map, Value};
 
@@ -124,6 +125,17 @@ enum Fail {
     Refused(String),
     /// The step broke. The model may repair it.
     Broke(String),
+}
+
+impl From<FillError> for Fail {
+    /// A value that would change what its command does stops the run: a
+    /// repair would only hand the model the same value to place.
+    fn from(e: FillError) -> Fail {
+        match e {
+            FillError::Unsafe(why) => Fail::Refused(why),
+            FillError::Missing(why) => Fail::Broke(why),
+        }
+    }
 }
 
 /// Where the run goes after a step.
@@ -457,7 +469,7 @@ impl Runner<'_> {
                     self.call(&retry_id(&step.id), tool, &Value::Object(args).to_string())
                 }
                 None => fill_args(tool, args, values, Quote::shell())
-                    .map_err(Fail::Broke)
+                    .map_err(Fail::from)
                     .and_then(|filled| {
                         self.call(&step.id, tool, &Value::Object(filled).to_string())
                     }),
@@ -598,7 +610,8 @@ impl Runner<'_> {
     ) -> Result<String, String> {
         let body = std::fs::read_to_string(self.spec.dir.join(file))
             .map_err(|e| format!("couldn't read {file}: {e}"))?;
-        let filled = Value::Object(fill_args("", args, values, Quote::Plain)?).to_string();
+        let filled = fill_args("", args, values, Quote::Plain).map_err(|e| e.to_string())?;
+        let filled = Value::Object(filled).to_string();
         let encoded = serde_json::to_string(&filled).unwrap_or_else(|_| "\"{}\"".into());
         let script = format!("import json as _json\nARGS = _json.loads({encoded})\n{body}");
         Ok(json!({ "script": script }).to_string())
@@ -666,7 +679,16 @@ impl Runner<'_> {
                         .collect(),
                 );
                 let arguments = filled.to_string();
-                format!("{tool} {arguments} ({})", gated(tool, &arguments))
+                let refused = args.iter().find_map(|(k, v)| {
+                    routine::COMMAND_ARGS
+                        .contains(&(tool.as_str(), k.as_str()))
+                        .then(|| preview_refusal(v, values, Quote::shell()))
+                        .flatten()
+                });
+                match refused {
+                    Some(why) => format!("{tool} {arguments} (refused: {why})"),
+                    None => format!("{tool} {arguments} ({})", gated(tool, &arguments)),
+                }
             }
             StepKind::Script { file, args } => {
                 let args: Map<String, Value> = args
@@ -747,6 +769,30 @@ fn preview_text(template: &str, values: &Values, quote: Quote) -> String {
             Piece::Ref(r) => format!("{{{{{r}}}}}"),
         })
         .collect()
+}
+
+/// Why the real run would refuse an input in this command template, as
+/// [`fill`] would.
+fn preview_refusal(v: &Value, values: &Values, quote: Quote) -> Option<String> {
+    match v {
+        Value::String(s) => {
+            let places = routine::places(s, quote);
+            let refs = pieces(s).ok()?.into_iter().filter_map(|p| match p {
+                Piece::Ref(r) => Some(r),
+                Piece::Text(_) => None,
+            });
+            refs.enumerate().find_map(|(k, r)| {
+                let value = matches!(r, Ref::Input(_)).then(|| values.get(&r).ok())??;
+                let place = places.get(k).copied().unwrap_or_default();
+                routine::check_value(&r, &value, quote, place)
+                    .err()
+                    .map(|e| e.to_string())
+            })
+        }
+        Value::Array(items) => items.iter().find_map(|i| preview_refusal(i, values, quote)),
+        Value::Object(map) => map.values().find_map(|i| preview_refusal(i, values, quote)),
+        _ => None,
+    }
 }
 
 fn preview_value(v: &Value, values: &Values, quote: Quote) -> Value {

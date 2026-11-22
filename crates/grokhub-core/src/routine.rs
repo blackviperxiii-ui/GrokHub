@@ -15,6 +15,9 @@ use serde_json::{Map, Value};
 
 use crate::recipe::Recipe;
 
+#[path = "routine_command.rs"]
+mod command;
+
 /// The one format version this build reads.
 pub const VERSION: u32 = 1;
 /// The routine's file inside its folder.
@@ -671,16 +674,116 @@ impl Quote {
     }
 }
 
+/// Why a template couldn't be filled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FillError {
+    /// A value it names isn't there, or the template doesn't parse.
+    Missing(String),
+    /// A value would change what its command does. Never repaired.
+    Unsafe(String),
+}
+
+impl std::fmt::Display for FillError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FillError::Missing(why) | FillError::Unsafe(why) => f.write_str(why),
+        }
+    }
+}
+
 /// `template` with each `{{ ref }}` replaced by its value, quoted by `quote`.
-pub fn fill(template: &str, values: &Values, quote: Quote) -> Result<String, String> {
+pub fn fill(template: &str, values: &Values, quote: Quote) -> Result<String, FillError> {
+    let places = places(template, quote);
     let mut out = String::with_capacity(template.len());
-    for piece in pieces(template)? {
+    let mut k = 0;
+    for piece in pieces(template).map_err(FillError::Missing)? {
         match piece {
             Piece::Text(t) => out.push_str(t),
-            Piece::Ref(r) => out.push_str(&quote.apply(&values.get(&r)?)),
+            Piece::Ref(r) => {
+                let value = values.get(&r).map_err(FillError::Missing)?;
+                check_value(
+                    &r,
+                    &value,
+                    quote,
+                    places.get(k).copied().unwrap_or_default(),
+                )?;
+                k += 1;
+                out.push_str(&quote.apply(&value));
+            }
         }
     }
     Ok(out)
+}
+
+/// Where a placeholder sits in a command template, for [`check_value`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    /// A value that starts with `-` would be read as an option here.
+    pub option: bool,
+    /// On Windows, a program gets it through its command line (not a
+    /// PowerShell cmdlet, which gets the string as it is).
+    pub native: bool,
+    /// On Windows, that program may be a `.cmd` or `.bat` file that
+    /// cmd.exe reads again: it isn't named with `.exe`.
+    pub batch: bool,
+}
+
+impl Default for Place {
+    /// Where nothing is known: check everything.
+    fn default() -> Self {
+        Place {
+            option: true,
+            native: true,
+            batch: true,
+        }
+    }
+}
+
+/// Each placeholder's [`Place`] in a command template, in order.
+pub fn places(template: &str, quote: Quote) -> Vec<Place> {
+    command::places(template, quote)
+}
+
+/// Refuses a value that would change what its command does: one that
+/// starts with `-` where it starts a word (`--upload-pack=...`), and on
+/// Windows one that Windows PowerShell can't pass to a program as one
+/// argument.
+pub fn check_value(r: &Ref, value: &str, quote: Quote, place: Place) -> Result<(), FillError> {
+    let unsafe_ = |why: String| Err(FillError::Unsafe(why));
+    let native = quote == Quote::PowerShell && place.native;
+    match quote {
+        Quote::Plain => Ok(()),
+        _ if place.option && reads_as_option(value) => unsafe_(format!(
+            "{r} starts with \"-\" and would be read as an option; put -- before it in the step, or join it to its flag (--name=...)"
+        )),
+        // Windows PowerShell 5.1 hands a program `"` unescaped, and wraps a
+        // value with a space in quotes that a trailing `\` escapes.
+        _ if native && value.contains('"') => {
+            unsafe_(format!("{r} has a double quote, which Windows can't pass to a program safely"))
+        }
+        _ if native && value.ends_with('\\') && value.contains(char::is_whitespace) => {
+            unsafe_(format!("{r} has a space and ends with \"\\\", which Windows reads as a quote"))
+        }
+        // A .cmd or .bat program (mvn, gradlew) runs through cmd.exe, which
+        // reads these in a value with no space as its own.
+        _ if native && place.batch && value.contains(['&', '|', '<', '>', '^']) => unsafe_(format!(
+            "{r} has one of & | < > ^, which cmd.exe can run as a command on Windows"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// A value a command would take as an option: it starts with `-` and isn't
+/// a number like `-5`.
+fn reads_as_option(value: &str) -> bool {
+    value.starts_with('-') && !is_number(value.trim())
+}
+
+/// `5`, `-5`, `2.5`, but not `-inf` or `nan`.
+fn is_number(word: &str) -> bool {
+    word.trim_start_matches(['-', '+'])
+        .starts_with(|c: char| c.is_ascii_digit())
+        && word.parse::<f64>().is_ok()
 }
 
 /// A step's arguments, filled. A command argument ([`COMMAND_ARGS`]) is
@@ -691,7 +794,7 @@ pub fn fill_args(
     args: &Map<String, Value>,
     values: &Values,
     shell: Quote,
-) -> Result<Map<String, Value>, String> {
+) -> Result<Map<String, Value>, FillError> {
     args.iter()
         .map(|(key, v)| {
             let quote = if is_command(tool, key) {
@@ -708,15 +811,17 @@ fn is_command(tool: &str, key: &str) -> bool {
     COMMAND_ARGS.contains(&(tool, key))
 }
 
-fn fill_value(v: &Value, values: &Values, quote: Quote) -> Result<Value, String> {
+fn fill_value(v: &Value, values: &Values, quote: Quote) -> Result<Value, FillError> {
     Ok(match v {
         Value::String(s) => {
             if quote == Quote::Plain
-                && let [Piece::Ref(r @ Ref::Input(_))] = pieces(s)?.as_slice()
+                && let [Piece::Ref(r @ Ref::Input(_))] =
+                    pieces(s).map_err(FillError::Missing)?.as_slice()
             {
                 return values
                     .json(r)
-                    .unwrap_or_else(|| unreachable!("inputs are JSON"));
+                    .unwrap_or_else(|| unreachable!("inputs are JSON"))
+                    .map_err(FillError::Missing);
             }
             Value::String(fill(s, values, quote)?)
         }
@@ -729,7 +834,7 @@ fn fill_value(v: &Value, values: &Values, quote: Quote) -> Result<Value, String>
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(k, i)| Ok((k.clone(), fill_value(i, values, quote)?)))
-                .collect::<Result<_, String>>()?,
+                .collect::<Result<_, FillError>>()?,
         ),
         other => other.clone(),
     })
@@ -867,9 +972,14 @@ impl Routine {
                 }
             }
             StepKind::Script { file, .. } => {
+                // A plain name: no folder, and nothing a terminal or a
+                // text view would act on (control or direction characters).
                 let plain = !file.is_empty()
                     && !file.starts_with('.')
                     && !file.contains(['/', '\\', ':'])
+                    && !file.chars().any(|c| {
+                        c.is_control() || matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+                    })
                     && file != "routine.json";
                 if !plain {
                     out.push(format!(
@@ -945,8 +1055,29 @@ impl Routine {
                 return;
             }
         };
-        if command && let Some(e) = quote_problem(text) {
-            out.push(format!("{at}: {e}"));
+        if command {
+            if let Some(e) = command::problem(text, Quote::shell()) {
+                out.push(format!("{at}: {e}"));
+            }
+            // A default that would be refused on every run (save as routine
+            // can make one from `cargo build --release`).
+            let places = places(text, Quote::shell());
+            let names = list.iter().filter_map(|p| match p {
+                Piece::Ref(r) => Some(r),
+                Piece::Text(_) => None,
+            });
+            for (k, r) in names.enumerate() {
+                if let Ref::Input(name) = r
+                    && places.get(k).is_some_and(|p| p.option)
+                    && let Some(Value::String(d)) =
+                        self.inputs.get(name).and_then(|i| i.default.as_ref())
+                    && reads_as_option(d)
+                {
+                    out.push(format!(
+                        "{at}: inputs.{name} defaults to \"{d}\", which would be read as an option; write it in the step instead"
+                    ));
+                }
+            }
         }
         for piece in list {
             let Piece::Ref(r) = piece else { continue };
@@ -1052,25 +1183,6 @@ fn expect_problems(at: &str, e: &Expect, out: &mut Vec<String>) {
     if e.equals.is_some() && (e.at_least.is_some() || e.at_most.is_some()) {
         out.push(format!("{at}: use equals or a range, not both"));
     }
-}
-
-/// A placeholder in a command line sits inside quotes the runner didn't add:
-/// the runner quotes each value itself, so `'{{x}}'` would break out.
-fn quote_problem(command: &str) -> Option<String> {
-    let mut in_quote: Option<char> = None;
-    for (i, c) in command.char_indices() {
-        match in_quote {
-            Some(q) if c == q => in_quote = None,
-            None if matches!(c, '\'' | '"' | '`') => in_quote = Some(c),
-            _ if command[i..].starts_with("{{") && in_quote.is_some() => {
-                return Some(
-                    "a value in a command is quoted for you; take the quotes off around it".into(),
-                );
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Which steps can run, and which are sure to have run before each one.
