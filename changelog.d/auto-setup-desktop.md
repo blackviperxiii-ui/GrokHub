@@ -1,5 +1,0 @@
-- The desktop app sets itself up too. A new profile opens on a short welcome with a "Make things bigger" button, then "Just set it up" or "Tailor it", a few questions the PC can't answer for itself, and a summary of what it set with Undo on each line. After that it looks again at launch, when the PC changes and after a long break, and says what it changed (with Undo) or offers a change (Yes or Not now) in a note in the corner.
-- Settings → Your PC → Auto setup lists what it set and why, with Undo, Hand back, Hand everything back and Forget what you learned. Settings → Appearance has Text size (the whole window zooms) and Reduce motion.
-- Chat lines like "make the text bigger", "dark mode", "undo that" or "why is the text so big?" are answered at once, without a model call.
-- Notifications set to "only important" keep the OKs and replies and skip finished automations.
-- Home's Patch Notes tile now sees the desktop app's game companion switch.

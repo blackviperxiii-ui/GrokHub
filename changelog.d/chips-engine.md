@@ -1,1 +1,0 @@
-- Quick chips now rank through one shared engine on the home page and in the composer. It learns from which chips you tap, pass over or hide, shows at most three, and keeps the engine's own order until it has enough history. The row stays put while you type and only reshuffles between turns.

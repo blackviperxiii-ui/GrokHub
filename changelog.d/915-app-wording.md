@@ -1,4 +1,0 @@
-- Wording: the desktop app's own pages no longer call it "cabin", and the chat's assistant is no longer told it is "the cabin assistant" or that "the cabin safety rules" win. Greyed / commands read "Not in this app", the skills group is "App skills", and older chats read "Grok CLI and older chats".
-- Notes about automations now say what really happens: runs go ahead while the app is open or in the tray, follow your Approvals setting, and aren't held back by quiet hours or the daily budget yet. A queued workboard card reuses its own chat when it has one.
-- Workboard: Resume on a card that is gone now takes it off the page.
-- Chat: the assistant is no longer told it can start background work with a `BACKGROUND_TASK:` line, because the desktop app never ran those lines. `/bg <task>` still starts one.

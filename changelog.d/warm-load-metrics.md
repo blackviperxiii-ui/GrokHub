@@ -1,1 +1,0 @@
-- Local AI's health log now says how much of the model was already cached in RAM when it loaded, and how long the first reply after a load took to read its prompt.

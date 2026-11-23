@@ -1,1 +1,0 @@
-- Chat: a long line typed or dictated in one burst no longer drops a key. The ghost suggestion's reset queued a render on every keystroke, and past 50 React gave up on the key.

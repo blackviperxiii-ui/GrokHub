@@ -1,1 +1,0 @@
-- Plan reply chips (Yes, go, Tell me more, Change this and the rest) now learn through the learning engine. The reply you usually pick still leads the row, but the habit fades if you stop using it, it shows under what the app learned, and Forget or That's wrong there resets the row.

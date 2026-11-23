@@ -1,1 +1,0 @@
-- Per-chat caches (trim results, briefs, talk styles, playbooks, frozen MCP tool lists and the prefix guard) now drop the least recently used chat when full, instead of wiping every chat at once.

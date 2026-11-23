@@ -1,1 +1,0 @@
-- xAI server compaction now sends the chat's cache key, so the fold can reuse the chat's cached prefix. If the endpoint refuses the key, that compaction is sent again without it and the key isn't sent there again.

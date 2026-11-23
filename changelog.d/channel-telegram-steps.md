@@ -1,1 +1,0 @@
-- Messaging channels, part 3: Telegram message handling. Only direct text from people is read (no groups, no bots); a paired sender's message is handed on, a new sender gets one pairing code, and repeats are dropped. The bot isn't connected to Telegram yet.

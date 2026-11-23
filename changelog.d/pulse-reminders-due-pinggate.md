@@ -1,1 +1,0 @@
-- Pulse reminders: Workboard cards can set a due time that feeds proactive `due_at`, and the 3-a-day PingGate count persists in `ping_gate.json` across restarts.

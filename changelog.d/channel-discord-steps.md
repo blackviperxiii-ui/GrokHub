@@ -1,1 +1,0 @@
-- Messaging channels, part 4: Discord message handling. Only direct messages from people are read (no server channels, no bots); a paired sender's message is handed on, a new sender gets one pairing code, and replies can't ping anyone. The bot isn't connected to Discord yet.

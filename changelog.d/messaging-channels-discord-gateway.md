@@ -1,1 +1,0 @@
-Messaging channels: Discord now connects for real over one Gateway connection. It asks only for direct messages, sends heartbeats, resumes after a dropped connection, and stops on a bad token. Pairing texts go out over Discord's REST API behind the egress guard, and messages from paired senders wait in the channel inbox for the app.

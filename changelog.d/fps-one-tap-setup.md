@@ -1,1 +1,0 @@
-- Home's Frame Rate tile sets itself up in one tap: Set up shows your system's own password (or Windows admin) prompt, checks that frames are counting, and offers Undo setup. Desktops with no prompt get Copy setup with the exact steps. Asking the chat to set up Frame Rate runs the same setup.

@@ -1,3 +1,0 @@
-### Added
-- Goals on Objectives now move from game data you already turned on, and show "Checked" when they do. Old School RuneScape skill levels and boss kill counts come from your saved hiscores reads. Steam achievement goals ("30 achievements in Hades", "100% achievements in Hades") come from the weekly achievements check, which now reads the games you have achievement goals for first. A watched Counter-Strike 2 or Dota 2 match moves "win 10 matches", "play 5 matches" and "500 kills" goals for that game when it ends. A goal's first reading becomes where its bar starts, so levels you already had don't pay milestone XP. Nothing new reads a running game.
-- Typed goals understand "2000 total level" and kill counts ("kill Zulrah 100 times").

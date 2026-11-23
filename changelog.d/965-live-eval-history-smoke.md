@@ -1,1 +1,0 @@
-- Opt-in `--live` eval under a hard $0.20 dollar/token cap (offline by default; never on PR CI), and Tauri smoke walks History plus the Code tab.

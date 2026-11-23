@@ -1,2 +1,0 @@
-### Added
-- Gentle follow-ups on goals left a few days: "Want to pick a night for your next Elden Ring session?". At most one per goal a week and two a week in all, never while a game is running, and after two go by with no progress the last one says "I'll stop asking about Elden Ring, just say the word." Any progress starts it over. The desktop app sends it as a one-tap card; the shell shows it on Home and Objectives with Plan it, which puts the ask in the chat box.

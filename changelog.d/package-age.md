@@ -1,1 +1,0 @@
-- Packages the agent installs (npm, uv, pip, pipx, Poetry), and MCP servers started with `npx` or `uvx`, now skip releases younger than seven days, since most poisoned releases are pulled within days. A plain install beside a lockfile gets a note to install exactly what it pins.

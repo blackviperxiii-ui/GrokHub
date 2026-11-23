@@ -1,1 +1,0 @@
-- In a chat opened from a crash card, "look into it" now reads that program's own crash history by the name on the card: its crash dumps and its recent warnings on Linux, its crashes in the Application log on Windows. It only reads when and how it crashed, never the dump itself, and changes nothing.

@@ -1,1 +1,0 @@
-- The decision engine keeps a scoreboard: for each area, the share of its offers and changes that went your way in the last four weeks against the four before. An area that got worse asks first for a month. `/learned decisions` and the desktop page show the numbers.

@@ -1,1 +1,0 @@
-- After a chat's first message, small talk and bare go-aheads ("ok", "lol", "how are you", "do it") no longer pull memory into the turn, which could add about 1k tokens of unrelated notes each time. The first message's recall is still there.

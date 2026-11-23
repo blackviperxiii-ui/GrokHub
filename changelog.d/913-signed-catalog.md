@@ -1,1 +1,0 @@
-- Local AI: once a day the app saves a newer signed model catalog from its update channel's newest release, so new local models show up without an app update. Only a catalog that matches the release's signed checksums is kept.

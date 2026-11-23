@@ -1,4 +1,0 @@
-- Auto routing treats risky asks with more care: deleting or force-pushing, dropping a table, a production deploy or migration, and security work such as passwords, keys or encryption go to the strongest model and think hard from the start.
-- Inside a long agent run, effort follows the work: a step that only reads tool output thinks lightly, while a tool failing twice, a repeated call, tests or a build failing after an edit, or a long search with no edits make it think harder. A run of working edits and passing tests lets it ease off again.
-- When a reply spends its whole thinking budget and comes back empty, Auto counts it as a failure and thinks harder on the next step. "Try again" and "regenerate" do the same for the next answer.
-- On repeated trouble Auto raises effort first and keeps the same model, so the prompt cache stays warm. Only two failures in a row at the top effort move the work to a stronger model.

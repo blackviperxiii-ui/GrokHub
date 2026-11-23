@@ -1,4 +1,0 @@
-- The window app now reads each message itself: there are no Chat, Plan or btw buttons. A big multi-step job gets a plan first, everything else is answered straight away, and `/plan` still asks for a plan on the next message.
-- While a reply runs, a side question gets its own answer in an "On the side" card without touching the work, with Tell the main task to feed it in. Corrections steer the work, "stop" stops it, and a new job waits its turn.
-- Ask / Auto / Always moved out of the chat box and the Privacy page into one setting: Settings → Defaults → "When the AI wants to change things". Typing `/auto` or `/always-approve` opens it. A saved session mode is dropped on the next save.
-- The permission prompt offers Allow once, Always allow (this kind of step here), Deny, and Stop asking me, which loosens the setting one step.

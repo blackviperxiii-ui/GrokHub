@@ -1,3 +1,0 @@
-- A chat reply that links a page no tool opened this turn gets sent back once: the model opens the page, drops the link, or says that part is from memory, not checked.
-- A tool call the model writes into its reply as text (like `<report_findings>{…}</report_findings>`) no longer shows in the chat, in exports, or in the Tauri shell. A findings card written that way is posted as the real card; any other written call gets the model one note to call the tool properly.
-- The Tauri shell shows a findings card's plain list after the reply instead of dropping it.

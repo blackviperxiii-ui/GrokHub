@@ -1,1 +1,0 @@
-- The desktop app's Settings → Labs now has Diagnostics mode like the cabin: one click builds a redacted debug bundle, shows it with a redaction summary you can copy, and saves it to your Diagnostics folder. Chat text goes in only for a chat you pick, and nothing is uploaded.

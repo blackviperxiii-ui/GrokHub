@@ -1,4 +1,0 @@
-- Quick chips now prove themselves: a replay test shows the engine finding the next step about 2.5 times as often as plain habit counting, and ranking 200 chips stays under a millisecond.
-- One boundary in twenty shows no chips, so Settings → Labs → Diagnostics can compare how fast the next step comes with chips and without, beside pick and hide rates.
-- The coding or life lane now nudges chips before they are ranked, so the row that shows is the row that was learned from.
-- Old chip code that nothing used is gone.

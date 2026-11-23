@@ -1,1 +1,0 @@
-- Download models: live Hugging Face GGUF search with VRAM fit badges into Auto, and Ollama `/api/show` num_ctx auto-probe.

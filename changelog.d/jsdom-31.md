@@ -1,1 +1,0 @@
-- Bump jsdom to 31 for Vitest; add @testing-library/dom and tolerate jsdom's shorter transform floats.

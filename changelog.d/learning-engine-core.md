@@ -1,1 +1,0 @@
-- Learning engine, first part: one place for the app to record what happened (ids and counts only, never text) and to keep what it concluded, with a confidence per line, counts that fade over 30 days, and Forget and "That's wrong" for the user. Nothing uses it yet, so the app behaves the same. It writes at most once every 30 seconds and stays under 2 MB on disk.

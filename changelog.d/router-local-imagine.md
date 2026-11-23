@@ -1,3 +1,0 @@
-- When a chat falls back to Local AI, it now thinks as hard as the step needs on models that can switch thinking on and off: a quick step turns thinking off, a harder one turns it on and picks the model's nearest thinking level.
-- Imagine picks its own model and quality from what you ask for: posters, photoreal scenes, 4k and words in the picture get full quality; sketches, icons, memes and drafts get the faster one. Asking for a video, an animation or a timelapse makes a clip, with its length and sharpness taken from your words.
-- The price limit and spend estimates now count the higher rate OpenRouter lists for long prompts.

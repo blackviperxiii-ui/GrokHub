@@ -1,1 +1,0 @@
-- Local AI now recommends a speedy, capable everyday model for your PC (marked "Recommended for this PC"), and every local model carries task strengths (chat, code, reasoning, writing, long pastes, 18+) so the router can pick the best one per task.

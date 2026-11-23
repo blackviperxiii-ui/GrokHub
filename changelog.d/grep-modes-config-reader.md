@@ -1,1 +1,0 @@
-- The agent's grep can ignore case and answer with just the matching files or a count per file, and says when it stopped at its 200-line cap. Config switches read one way everywhere: a typo like `enabled = flase` now keeps the default and says so, instead of quietly reading as on.

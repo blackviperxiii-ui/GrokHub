@@ -1,1 +1,0 @@
-- Dream reports now show the configured Memory retention window in their closing `Settings:` line, including keeping everything (`never retired (keeps everything)`).

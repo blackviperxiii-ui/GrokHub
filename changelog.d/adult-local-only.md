@@ -1,2 +1,0 @@
-- 18+ chats now run only on this computer's model, which never refuses, and never go to xAI, OpenRouter or another online model. With no local model set up, the chat says so in one line and points to Local AI in Settings.
-- Turning the joke heat up no longer marks every chat as 18+, so ordinary chats on OpenRouter keep sending after an adult chat in another window.

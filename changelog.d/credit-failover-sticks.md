@@ -1,1 +1,0 @@
-- When a provider runs out of credit or refuses its key, the router keeps it out for the rest of the session (and the provider's other paid models with it) instead of retrying it every minute. A rate limit keeps it out for at least five minutes. If Grok itself is out of credit, a provider you set up, or this computer's model, takes the turn instead of the turn failing.

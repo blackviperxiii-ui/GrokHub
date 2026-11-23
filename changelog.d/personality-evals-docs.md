@@ -1,1 +1,0 @@
-- The live eval checks that an ordinary adult question gets a friendly answer with no lecture, and that a filthy roast lands instead of being refused. The reference gains a Personalities section.

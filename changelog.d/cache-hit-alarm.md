@@ -1,1 +1,0 @@
-- The Grok prompt-cache share now shows on Home's AI usage tile (flagged when low), and a turn whose cache share falls under 80% right after a cached turn says "down from N%" on its usage line.

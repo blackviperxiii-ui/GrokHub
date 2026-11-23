@@ -1,1 +1,0 @@
-- Compaction now starts in the background once a chat passes 70% of its window (earlier for Grok, ahead of xAI's long-context price step). The run keeps working, and at the compaction line the finished summary is swapped in with everything since kept after it, so long runs no longer pause to compact. Local models skip it; `background = false` in `compaction.toml` turns it off.

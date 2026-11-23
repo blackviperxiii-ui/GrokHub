@@ -1,1 +1,0 @@
-- Nightly chat review now respects `heartbeat` per-day and per-hour caps instead of checking only whether the pace is off.

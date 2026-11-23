@@ -1,5 +1,0 @@
-- Chat asks before `sort -o`, `uniq IN OUT`, `rg --hostname-bin` and any `git branch` that creates, deletes, moves or forces a branch; these ran as read-only commands with no card.
-- Web app: goals, pausing a memory row and adding a personal fact work from a paired browser (the desktop refused them).
-- Code tab: a test run whose output hits the size cap in the middle of a character no longer crashes and locks the runner.
-- Code tab: a remote URL with `@github.com` in its path is no longer read as GitHub.
-- Stop asking me keeps settings that changed after the chat loaded, a mangled pairing link shows the pairing form, and pairing says "Too many open tabs." when that is why it failed.

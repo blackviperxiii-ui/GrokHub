@@ -1,1 +1,0 @@
-- Cua Driver (the `cuaDriver` spike) now runs on macOS (TextEdit) and Linux arm64 as well as Linux x86_64, behind the same gates. Windows says why it stays off: the pinned Driver can't match a Windows app to its bounded manifest.

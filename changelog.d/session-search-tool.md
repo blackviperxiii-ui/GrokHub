@@ -1,1 +1,0 @@
-- Chat: the assistant can search your earlier chats for something said (`session_search`), with no model call. A local index of each chat's lines, secrets redacted, gives 10 hits a page and the lines around a hit.

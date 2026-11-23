@@ -1,3 +1,0 @@
-- Tool scripts (`run_tool_script`) run without asking only where the OS sandbox fully holds them; on Windows, with the sandbox off, or without Landlock they ask like a terminal command, and plan mode and unattended runs refuse them there.
-- Routines: a repair that retries a step with new arguments no longer runs under the routine's consent; it asks, or stops while nobody is there. A repair can't skip a failed check.
-- Code tab: linking a GitHub repo lends the GitHub token to the clone as a one-time header, so it is no longer saved in the clone's `.git/config` or shown in the process list.

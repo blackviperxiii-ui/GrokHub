@@ -1,1 +1,0 @@
-- Asking why a program keeps crashing ("why does bluetoothd keep crashing", "what's wrong with Discord.exe") now reads that program's own crash history, with how many times it crashed, when, and the likely cause, instead of only checking background services. A follow-up like "check into it for me" now remembers that answer.

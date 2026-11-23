@@ -1,1 +1,0 @@
-- Claude plan: Settings → AI models → Claude (your plan) now shows how much of your plan's limit is used and when it resets, as Claude Code reported it on your last chat turn on the plan. It turns red once the limit is reached.

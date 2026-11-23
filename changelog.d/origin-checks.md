@@ -1,1 +1,0 @@
-- Agent: a step that would send something to an email address, site or phone number that only a web page or other outside text mentioned now asks you first, even with Always on. Values you typed, your memory and your project's own git server pass as before; unattended runs refuse and explain why.

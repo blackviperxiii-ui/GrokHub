@@ -1,1 +1,0 @@
-- A chat's Speed or Performance ask no longer reads "another chat was answering" when only the app's own background work (a classify, a summary) is running on the on-device model. The ask waits up to 10 seconds for that work to finish, then swaps the model; another chat's reply in flight still keeps the model as before.

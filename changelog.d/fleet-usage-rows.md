@@ -1,1 +1,0 @@
-- Fleet: the app reads Claude Code's usage on this computer from its local transcripts (tokens in the open 5-hour window, when it resets, and the last 7 days) and the last Grok plan room, for the coming Fleet page. Only `.jsonl` files under Claude Code's `projects` folder are read, never its settings or sign-in.

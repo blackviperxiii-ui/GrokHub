@@ -1,1 +1,0 @@
-- An AppImage self-update keeps a copy of the old version. If the new version starts twice and ends both times before it has run for 90 seconds, the next start puts the old version back and runs it, and Settings → Updates says so.

@@ -1,5 +1,0 @@
-- Helpers in a git worktree: what a helper changes is now kept as a sealed snapshot when it ends, however it ends. Stopping a helper no longer deletes its worktree. A helper that finished reads "ready to merge", one that was stopped, failed or ran out of steps reads "partial", and one that changed nothing reads "no changes" and its worktree is removed. Merging the work into the project comes in a later change.
-- A worktree helper now starts from the project as it is on disk: your uncommitted and untracked files are in its worktree, and ignored files are not. Your branch, index and git objects are not touched.
-- Helper worktrees moved from `worktrees/` to `helper-work/` in the config folder. Folders left by older builds are moved over, and one that still holds files is kept and listed instead of being deleted after three days.
-- A helper can no longer start worktree helpers of its own, and worktree helpers need git 2.41 or newer.
-- Sandbox: for a command in a helper's worktree, the git guard protects the project's own repository folder and never follows the `.git` file in the worktree, which the helper can change.

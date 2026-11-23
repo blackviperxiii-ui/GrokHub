@@ -1,1 +1,0 @@
-- Refresh `src-tauri/Cargo.lock` so the shell workspace tracks `grokhub-core`'s quick-xml 0.42 and `cargo deny --locked` passes.

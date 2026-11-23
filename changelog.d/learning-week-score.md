@@ -1,1 +1,0 @@
-- The weekly recap card has a new section, "How its own calls went": for each area with a score, the share of what the app offered or changed that went your way in the last four weeks. It is left out of the share text.
