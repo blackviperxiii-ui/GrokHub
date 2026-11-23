@@ -1,1 +1,0 @@
-- MCP: tool calls that can change something carry an idempotency key in `_meta`, and a resend after a lost answer reuses the same key for ten minutes, so a server that honours keys never runs the same send twice. When an answer is lost mid-call, Loadout is told the call may have run and to check before sending again.

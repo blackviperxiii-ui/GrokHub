@@ -1,1 +1,0 @@
-- The agent now asks you first before any step that needs admin rights or changes system protection (an admin prompt, a machine-wide registry change, System Restore, Defender or firewall settings), and never works around the sandbox or an access-denied error on its own. Helper scripts and logs stay out of AppData, and PowerShell progress noise no longer shows up in tool output.

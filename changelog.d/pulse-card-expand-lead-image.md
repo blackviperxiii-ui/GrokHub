@@ -1,1 +1,0 @@
-- Pulse: each card shows its first image beside the text, loaded only as the card nears the screen, or the link's site when there is no image. The title opens the source, Read it opens it in a paired browser too, and Show more opens the full report, the other images and why the card is here.

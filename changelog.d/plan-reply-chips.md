@@ -1,3 +1,0 @@
-- The /plan chip now puts /plan in the box (before anything you typed) instead of doing nothing you could see.
-- Plans can be answered in one tap: Yes, go, Tell me more, More on step N, Change this, Go, but…, or Not now. The reply you pick most moves to the front, and typing "go", "yes" or "go ahead, but skip step 3" runs the plan instead of planning it again.
-- The agent's plan approval card takes the same replies, and "tell me more" or a change goes back to it in the same turn. Question cards show their options as one-tap chips. Permission cards keep Allow once, Always allow and Deny.

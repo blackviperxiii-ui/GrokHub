@@ -1,2 +1,0 @@
-- A card's read-only check, like "Look into the crashes", now runs quietly without opening a chat, and its result lands on the card as a dated receipt.
-- A running fix shows a live checklist: each step marked done, running, waiting for your OK, not started, didn't work or didn't run, then the re-check. A Stop fix button ends the step in flight, and the result keeps the checklist next to Undo fix.

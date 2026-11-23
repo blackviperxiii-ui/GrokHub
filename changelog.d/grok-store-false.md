@@ -1,1 +1,0 @@
-- Every Grok request is now sent with `store: false`, including non-reasoning models, so xAI keeps no copy of the chat. History is kept on your machine, as before.

@@ -1,1 +1,0 @@
-- The desktop app can run a supervised desktop session like the classic app: switch it on above the message box while desktop control is on, watch each step and the latest screen, and Pause, Stop or Halt it. Risky steps (delete, send, money, passwords) wait for your OK in every approvals mode. With the Cua driver turned on in the classic app's settings, sessions use it on Linux.

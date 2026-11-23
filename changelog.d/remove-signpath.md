@@ -1,1 +1,0 @@
-- Release: removed the unused SignPath Authenticode setup (its policy file and `docs/CODE_SIGNING.md`). Release notes now say the Windows installer isn't Authenticode-signed yet.

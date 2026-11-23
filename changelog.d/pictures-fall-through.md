@@ -1,1 +1,0 @@
-- Chat pictures no longer stop at Grok Imagine: when it can't make one (busy, rate limited, signed out, sign-in refused, no network), the picture model on this computer draws it instead. Only when neither can is the user told how to set one up, naming both ways.

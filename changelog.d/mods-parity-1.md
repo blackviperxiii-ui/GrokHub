@@ -1,1 +1,0 @@
-- The new app has a Mods page: your moddable games most recently played first (the rest under Can't mod with the reason), Popular, Trending, New finds and Updated per source, a search, and For you, the same as the classic window. Installing comes next.

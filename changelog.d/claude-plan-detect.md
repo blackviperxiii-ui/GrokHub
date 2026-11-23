@@ -1,1 +1,0 @@
-- Settings → AI models: a new Claude (your plan) card checks whether Claude Code is on this computer and how it's signed in (your Claude plan, or billed elsewhere), with Check again. Only the sign-in kind is read, never a Claude credential. Chats on Claude come in a later update.

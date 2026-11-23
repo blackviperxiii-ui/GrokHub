@@ -1,2 +1,0 @@
-- A repository's own permission file can't pre-approve its commands anymore: its allow rules count only after you trust the folder (Settings shows Trust folder), and the agent writing its own settings or hooks always asks.
-- Sandboxed commands can't plant git hooks or git config that would run later outside the sandbox: the sandbox puts them back and the agent has to ask. Loadout's own git calls run with hooks off, and only package download caches stay writable, not tool folders like `~/.cargo/bin`.

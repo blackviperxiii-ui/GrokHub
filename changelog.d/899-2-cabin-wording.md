@@ -1,1 +1,0 @@
-- Docs and hub update advice drop leftover cabin / grokhub-app wording after the egui retirement.

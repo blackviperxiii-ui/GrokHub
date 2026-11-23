@@ -1,3 +1,0 @@
-- Desktop & web shell: wrap lazy views in a per-page error boundary with a "Try again" recovery card so a render error in one tab never blanks the app.
-- Mobile & narrow windows: give the chat composer's message box a full row above its buttons on phones (`<= 600px`), and tighten desktop view-tab spacing so more tabs fit per row.
-- Weekly self-review: write `self_review.json` atomically via a temporary file and release the night's claim if the weekly model call fails before posting any cards.

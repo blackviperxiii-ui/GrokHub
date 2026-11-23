@@ -1,2 +1,0 @@
-- Popups no longer appear in the top-right corner of the window app. Everything they said, plus finished background tasks, print alerts, game tips and Pulse pings, now lands in the bell.
-- The bell shows how many notifications you haven't read (hidden at 0, "99+" past 99), and the same message twice in a row folds into one entry marked x2.

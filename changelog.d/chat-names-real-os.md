@@ -1,1 +1,0 @@
-- On Windows the assistant now knows it is on a Windows PC with PowerShell, so it no longer says it is on Linux or reaches for bash commands.

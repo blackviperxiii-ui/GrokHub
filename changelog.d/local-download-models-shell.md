@@ -1,1 +1,0 @@
-- The desktop app's Local AI page has the same Download models section: Chat, Drafts, Image, Voice and Other tabs, Download all and Download everything, Remove and In use, with progress and Pause. It's the desktop app's first way to download a chat model.

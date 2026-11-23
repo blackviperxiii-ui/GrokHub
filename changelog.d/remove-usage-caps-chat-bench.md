@@ -1,3 +1,0 @@
-- Removed app-side weekly, daily, and per-second usage caps and the SuperGrok room meter so server responses govern limits and Auto failover across available sources without primary-provider bias.
-- Added plain-word chat model/provider benching and unbenching with persistent storage and a Benched models management list in Settings -> AI models.
-- Surfaced local routing reasons in chat and loading thoughts whenever an on-device model is loaded or used.

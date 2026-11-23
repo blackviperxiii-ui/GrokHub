@@ -1,1 +1,0 @@
-- CI: push to beta skips windows and ui-shots (PRs already ran them; nightly covers beta). changes, fmt, guards and linux still run so the rust cache stays warm.

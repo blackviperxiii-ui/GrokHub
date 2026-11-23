@@ -1,1 +1,0 @@
-- Trimming and compaction now go by xAI's own count of the last prompt plus an estimate of what was added since, instead of counting sealed reasoning by the size of its encrypted blob. Long tool-heavy chats no longer trim many steps early, so the prompt cache breaks less often. The blob sizes are logged once per session next to the real count.

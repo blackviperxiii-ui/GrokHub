@@ -1,1 +1,0 @@
-- Pulse: a new opt-in Local models source under Settings → Pulse. Once a week it checks whether a bigger model from the app's checked catalog fits this PC and posts a card with Open in Settings, and it links new abliterated builds on Hugging Face that would fit. Nothing downloads on its own.

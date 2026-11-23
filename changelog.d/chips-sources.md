@@ -1,4 +1,0 @@
-- Feature offers (the app you just left, a new model file, code you left, a backup or Downloads cleanup that's due, your game, a release reminder, a matching skill) now rank with every other quick chip instead of jumping to the front, and they still lead when nothing else is stronger.
-- While you're gaming or a fullscreen app is up, quick chips hold their nudges and keep only the chat's own chips and game chips. While a protected anti-cheat runs, chips that touch the game, read other windows or run commands are hidden.
-- A file waiting to be sent offers an "Explain" chip, and the file's name is never kept as a habit.
-- "Continue" chips for other chats now follow the chats you used most recently.

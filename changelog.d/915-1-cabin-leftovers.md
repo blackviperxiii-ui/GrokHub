@@ -1,2 +1,0 @@
-- Wording: the nightly chat review, the skill tool, the local model bench and a few model-facing notes no longer call the app "the cabin".
-- Cleanup: removed code only the retired cabin used (its greeting line and greeting and idea prompts, the idea refresh timer, slash help text, screen-frame attach helpers, voice session encoder, repaint timer, rewind copy check and the pager slash parity list).

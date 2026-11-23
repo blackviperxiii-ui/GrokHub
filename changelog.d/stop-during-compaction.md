@@ -1,1 +1,0 @@
-- Stop now takes effect right away while the server is compacting a long chat, instead of after up to 90 seconds.

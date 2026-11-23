@@ -1,1 +1,0 @@
-- Approval asks can go to paired Telegram and Discord chats. Turn them on per sender under Phone and chat apps; each waiting ask arrives with a short code, and "yes CODE" allows it once or "no CODE" denies it. A hard stop can only be denied from a chat; allowing it stays on the computer, and "Always" is never offered remotely.

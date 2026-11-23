@@ -1,2 +1,0 @@
-- Auto routing: saying no to a tool, a safety refusal, or a repeated call no longer counts as a failed step, so two noes don't push the next steps to max thinking.
-- Background work sent through xAI's batch queue no longer counts toward how fast a model looks, so it can't make Grok look slow or skew the tuning.

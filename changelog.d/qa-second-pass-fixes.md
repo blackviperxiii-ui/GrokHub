@@ -1,6 +1,0 @@
-- Workboard: archiving a queued card takes it off the queue, so Restore no longer starts an agent run on it; a card the agent marks done leaves the queue too.
-- Agent: a workspace program named like a read-only tool (`./gh`, `tools/cat`) no longer gets the read-only fast path; only a bare name or a system bin path does.
-- Memory: a MEMORY.md with a non-UTF-8 byte is left untouched (remember and dream say so) instead of being cut off at that byte; reads still show every note.
-- History: Delete all also removes `threads.json.bak` and the quarantined copies, so no backup keeps the deleted chats.
-- Shell Pulse: the writer asks only the sources left on in Settings → Pulse → Sources.
-- Local AI: resuming an engine or draft model download continues where it stopped; the Range header now reaches the CDN a release host redirects to.

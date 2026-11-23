@@ -1,1 +1,0 @@
-- CI: when the shell smoke's web access page never loads, the log says which requests were open, whether the server answers, and where the shell's threads wait.

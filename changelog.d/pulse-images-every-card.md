@@ -1,1 +1,0 @@
-- Pulse: release radar, wishlist, achievement and daily drop cards now download and show their pictures too, and written posts keep the video or feed thumbnail of the story they cite. Each picture is fetched once over the same guarded connection, never while Offline only is on, and a picture that fails is not asked for again.

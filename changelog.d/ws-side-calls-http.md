@@ -1,1 +1,0 @@
-- Side calls (auto-review judge, close check, Brief, memory and dream) now go over HTTP instead of the chat's WebSocket, so they no longer break the chat's response chain and their deadlines hold.

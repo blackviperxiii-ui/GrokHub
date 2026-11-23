@@ -1,2 +1,0 @@
-- Web fetch and web search never ask you to sign in to Grok: neither needs xAI. A run with no web access set up now says so plainly.
-- New guard test (`crates/grokhub-core/tests/xai_guard.rs`): code may reach xAI directly (`XaiClient::` or `api.x.ai`) only in the files it lists, so new features go through the shared router or a capability adapter. The list should only shrink.

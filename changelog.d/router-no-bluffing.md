@@ -1,1 +1,0 @@
-- A chat no longer bluffs about the online models: a reply that says Claude or another key is connected without a check is sent back to check first, it no longer tells you to update, restart, sign in again or send a harder task to test a model, and asking about a task id that was never started says so instead of looking like a running task.

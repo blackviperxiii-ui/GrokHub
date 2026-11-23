@@ -1,1 +1,0 @@
-- Format the Tauri ghost and focus-help modules so `cargo fmt --check` passes on the shell CI job.

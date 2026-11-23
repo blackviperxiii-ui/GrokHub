@@ -1,6 +1,0 @@
-- A USER.md, SOUL.md or MEMORY.md that can't be read as text (saved in another encoding, not a file, or no access) is left alone by Save instead of being replaced by the draft; Review and the Saved screen name the file and say why.
-- When one of the three notes files is a link, Save stops before it writes any of them, and Review says so before Save is pressed.
-- Get to know you handles one request at a time, so a second press of Save or quick Next clicks no longer fail with "No such file or directory" or overwrite the one-step backup; Save is greyed while it is saving.
-- A session runtime folder (`XDG_RUNTIME_DIR`) is used for the sudo helper only when it is yours alone and outside the folders sandboxed commands may write (`/tmp/runtime-…` is not used); otherwise, or when the helper can't be made there, it is kept in the config folder.
-- `grokhub-hub --oauth` asks again after a passing server error (502, 503, 504) from the sign-in server instead of giving up, and stops once the code's own lifetime has passed. A server error while refreshing the sign-in no longer says to sign in again.
-- Sign in with Grok refuses a page address or a code that holds a line break or another control character, so a terminal can't be shown a second address under xAI's.

@@ -1,1 +1,0 @@
-- Sign in with Grok in the desktop app takes a code that ran out off the screen as soon as you come back to Settings, and after Cancel and a new code, a late answer about the old code no longer shows under the new one or makes the page ask xAI again without waiting.

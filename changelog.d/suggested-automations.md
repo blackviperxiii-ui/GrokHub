@@ -1,1 +1,0 @@
-- The Automations page shows Suggested tiles again: what the nightly review learned first, then the built-in ones, minus any already running. Add saves one as an automation, and a /loop tile becomes a heartbeat row.

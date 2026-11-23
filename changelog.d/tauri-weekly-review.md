@@ -1,1 +1,0 @@
-- The desktop app now runs the Sunday self-review when the cabin is closed: the same pass, the same five-card cap and quiet mode, and never on a night the cabin already reviewed.

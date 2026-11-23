@@ -1,5 +1,0 @@
-- Auto routing knows current Grok prices and context sizes (Grok 4.7, 4.5 and 4.3) even when only a Grok Build sign-in lists the models, and counts every token at twice the rate once a prompt reaches 200k tokens. A live price list still wins.
-- Long prompts (200k tokens and up) go to a model with a 1M context, such as Grok 4.3, unless the step needs the strongest model and it still fits there.
-- Grok 4.20 Multi-Agent runs 4 agents on everyday turns. 16 agents need a hard step and your OK for that route.
-- A model that hits its requests-per-second limit counts as busy, so Auto picks the next model instead of waiting on a busy answer.
-- Grok 4.7 Fast is only used with a Grok Build sign-in, never with an API key.

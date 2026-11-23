@@ -1,1 +1,0 @@
-- On Windows, desktop control now reads the button, link or field under a click through UI Automation (read-only, 300 ms cap, paused while an anti-cheat runs), so risky clicks get the same named-target checks as on Linux.

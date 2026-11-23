@@ -1,1 +1,0 @@
-- Classic Dark and Light now wear the Loadout frame: the LOADOUT titlebar with the personality pill, the red window rim and the rail's selected mark. Their own colours stay.

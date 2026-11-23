@@ -1,1 +1,0 @@
-- Tauri Imagine: + New project clears the prompt, last result and error for a fresh start. Agents lists queued jobs, and Run sends a job's prompt to its chat as a normal turn.

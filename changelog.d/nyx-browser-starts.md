@@ -1,3 +1,0 @@
-- Nyx's own browser now starts headless in a profile Loadout owns, so a locked or shared Playwright profile can't kill it. Set `GROKHUB_BROWSER_HEADED=1` in the Playwright server's env to watch it.
-- On Linux, browsers Loadout starts get Wayland back (the cabin window still runs on X11 for close-to-tray).
-- When the browser dies at launch, Loadout relaunches it once with a fresh profile; if it dies again, Nyx is told to read the page with web_fetch instead, so the turn still answers.

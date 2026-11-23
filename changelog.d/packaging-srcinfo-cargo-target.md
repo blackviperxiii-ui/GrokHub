@@ -1,1 +1,0 @@
-- Packaging: keep AUR `.SRCINFO` in lockstep with `PKGBUILD`, and resolve a relative `CARGO_TARGET_DIR` to an absolute path in `install.sh` before the build.

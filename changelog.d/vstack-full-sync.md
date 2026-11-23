@@ -1,1 +1,0 @@
-Ship all 58 `blackviperxiii-ui/vstack` skills as Loadout built-ins, add runtime automatic & manual sync against upstream `main` with offline bundled fallback and commit/integrity verification, add CI drift detection against upstream `main`, and display the active vstack version/commit, last sync time, and Sync now button in Settings → Code.

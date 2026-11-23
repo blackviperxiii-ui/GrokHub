@@ -1,1 +1,0 @@
-- Internal: the proto, hub, desktop and xtask crates move to Rust edition 2024; a root `rustfmt.toml` pins the 2021 format style. No app behavior change.

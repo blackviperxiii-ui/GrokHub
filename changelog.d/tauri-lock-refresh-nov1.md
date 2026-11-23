@@ -1,1 +1,0 @@
-- Dependencies: refreshed the desktop shell's Rust lockfile to the newest semver-compatible releases (zip 9.2, brotli 9.1, wasm-bindgen 0.2.130 and 17 others). No manifest changes.

@@ -1,4 +1,0 @@
-- Quick chips can now come from the reply itself: the model ends each chat reply with up to three hidden next steps, which never show in the chat or the saved history and compete with the local chips for a place in the row.
-- Reply chips that would send, delete, pay or buy are dropped, a page chip must be one the app has, and every line passes the same copy checks as other chips.
-- If the reply's chips keep getting passed over for the local ones, the app stops asking for them for two weeks, then tries again.
-- Removed the old, unused path that asked a separate model for chip suggestions.

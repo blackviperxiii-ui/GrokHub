@@ -1,3 +1,0 @@
-- Fan fixes can now run on Linux: the fix saves every fan's setting first, sets the fans to full speed in one step you approve with your password, and checks them afterwards. Undo puts each fan back the way it was.
-- Fans are never changed while a game runs. Under CoolerControl the card points you to CoolerControl. On Windows only your PC maker's own app is used, because other fan tools load drivers that anti-cheats flag.
-- No fix may change clock speeds, power limits or undervolts, or install a fan driver that anti-cheats flag (WinRing0, PawnIO, InpOut). Those steps are refused outright.

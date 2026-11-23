@@ -1,1 +1,0 @@
-- Windows: route every OS keychain write through chunked keyring_blob, and size chunks for Credential Manager’s 2560-byte UTF-16LE blob limit (1280 characters), so long OAuth tokens no longer hit TooLong.

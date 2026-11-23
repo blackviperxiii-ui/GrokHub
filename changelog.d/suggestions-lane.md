@@ -1,1 +1,0 @@
-- Settings → Behavior has "Suggestions lean toward" Coding or Life. When two suggestions under a chat's box are close, the one on that side goes first; a much stronger one still leads. Coding is the default, as in the cabin.

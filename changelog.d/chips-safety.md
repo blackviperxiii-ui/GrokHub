@@ -1,2 +1,0 @@
-- Quick chips are safer: a shell chip puts its command in the box for you to check and Enter runs it, a chip adds to what you typed instead of replacing it, the row waits while a reply streams, and a hidden chip stays hidden after a restart.
-- Quick chips no longer remember shell commands, file paths or live status (model, resume, backup and similar) as habits; old ones are cleared on load. "Why this?" now explains each chip in plain words.

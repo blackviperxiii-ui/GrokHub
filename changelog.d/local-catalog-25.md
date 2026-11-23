@@ -1,2 +1,0 @@
-- The on-device catalog now lists 25 uncensored chat models: the five Gemma 4 defaults plus the best Heretic or abliterated build from NVIDIA, Qwen, ByteDance, Zhipu, Mistral, OpenAI, Nous, IBM, DeepSeek, AllenAI, Microsoft, Meta and Hugging Face, every file SHA-256 pinned. The new ones are optional: they never replace the model picked for you, but once downloaded the router can step up to them for a hard task.
-- Qwen3.5, Llama 3.2, Ministral 3 and Granite 4.2 come with small same-family draft models; the speed test still decides whether each one is used.

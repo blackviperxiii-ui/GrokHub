@@ -1,3 +1,0 @@
-- The new Loadout window's Pulse cards now match the app's: each card says what was found, shows a short summary with "Show the full report", and has chips for its fixes, Discuss, Ignore for now and Remind me later.
-- A fix chip or Discuss opens that card's own chat with the report already in hand. Nothing runs until you send it there.
-- Ignore for now hides a card without teaching Pulse to show less of it. Remind me later brings it back tonight before you wind down, or when you next sit down.

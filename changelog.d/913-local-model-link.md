@@ -1,1 +1,0 @@
-- Pulse: a Local models card for a bigger model that fits this PC now has Open in Settings, which opens Settings → Local AI on that model's row. Nothing downloads until you press its Download button.

@@ -1,1 +1,0 @@
-- The agent always keeps its system prompt fixed and puts each turn's style, playbook and memory notes in that turn's own message, so every chat gets the cheaper cached prompt. The old switch that rewrote the system prompt every turn is gone, and the live A/B run can now compare WebSocket mode on and off instead.

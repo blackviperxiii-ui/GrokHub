@@ -1,1 +1,0 @@
-- Automations: preflight blocks broken jobs before a model call; Blueprints starter gallery with slot-filled seeds.

@@ -1,1 +1,0 @@
-- The agent never installs low-level input drivers such as Interception, and a fan, RGB or monitoring tool whose driver is on Microsoft's vulnerable driver blocklist gets a card that explains, in plain words, why anti-cheats may refuse to start games with it. The blocklist is fetched on Windows at most once a month.

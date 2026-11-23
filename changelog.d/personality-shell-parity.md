@@ -1,2 +1,0 @@
-- The shell's Settings → Personality matches the cabin: turning on Adults-only personalities asks the one-time 18+ check first, then shows a Heat dial (Cheeky, Spicy or Filthy), and a Dynamic chat switch (on by default) lets another voice step in while the topic calls for it.
-- Shell chats now speak with the heat you pick while 18+ is on, hand off between voices like cabin chats, and carry the safety closer once instead of twice.

@@ -1,1 +1,0 @@
-- Claude plan: a chat on your Claude plan is now saved like any other chat. Its messages show in History, it goes on in the same Claude Code session after the app restarts, and the app's own models see those messages if you switch the chat back. Deleting a message from it starts a new Claude Code session, so the deleted message doesn't come back.

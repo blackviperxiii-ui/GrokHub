@@ -1,1 +1,0 @@
-- Undo and Keep rows for changes Loadout made on its own now show only in the chat that made them.

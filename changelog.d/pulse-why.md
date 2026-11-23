@@ -1,2 +1,0 @@
-- Pulse posts news for the Steam games you play even when you haven't added them as interests, and says "You play {game}" on the post.
-- "Why am I seeing this?" and the line under each Pulse post are now plain words ("Matches your interest in Rust", "From r/buildapc, a source you follow"), with no internal tags or scores.
