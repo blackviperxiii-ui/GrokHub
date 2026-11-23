@@ -214,6 +214,7 @@ pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;
+pub mod skills_hub;
 pub mod slash;
 pub mod small_talk;
 pub mod ssrf;
@@ -683,6 +684,10 @@ pub use skill::{
     skill_follow_block, skill_lock_path, skill_quarantine_reason, skill_safe,
     skill_use_in_chat_prompt, verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillMd,
     SkillScan, SkillThreat, AUTO_SKILL_PITFALL, SKILL_LOCK_FILE,
+};
+pub use skills_hub::{
+    fetch_skill_md, install_hub_skill, parse_clawhub_search, parse_github_tree_skills,
+    parse_skills_sh_search, parse_well_known_index, search_hub, HubHit, HubSource, InstallOutcome,
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,

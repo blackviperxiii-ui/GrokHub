@@ -1,7 +1,14 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillDetail, SkillPage, SkillRow, SkillSource } from "./api";
+import type {
+  SkillDetail,
+  SkillPage,
+  SkillRow,
+  SkillSource,
+  SkillsHubHit,
+  SkillsHubInstall,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getSkills: vi.fn<() => Promise<SkillPage>>(),
@@ -18,6 +25,8 @@ const api = vi.hoisted(() => ({
       instructions: string,
     ) => Promise<SkillPage>
   >(),
+  searchSkillsHub: vi.fn<(query: string) => Promise<SkillsHubHit[]>>(),
+  installSkillsHub: vi.fn<(hit: SkillsHubHit) => Promise<SkillsHubInstall>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -28,6 +37,7 @@ import {
   SKILL_OFF_NOTE,
   Skills,
   SKILLS_EMPTY,
+  SKILLS_HUB_NOTE,
   SKILLS_NONE_MATCHED,
 } from "./Skills";
 
@@ -312,13 +322,65 @@ describe("Skills", () => {
     expect(screen.queryByRole("form", { name: "Edit deploy-site" })).toBeNull();
   });
 
-  it("the web app gets no New skill and no Edit", async () => {
+  it("the web app gets no New skill, no Edit, and no Skills Hub", async () => {
     api.getSkills.mockResolvedValue({ rows: ROWS });
     render(<Skills onUse={() => {}} onOpenConnectors={() => {}} remote />);
 
     await screen.findByRole("listitem", { name: "deploy-site" });
     expect(screen.queryByRole("button", { name: "New skill" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByLabelText("Skills Hub")).toBeNull();
+  });
+
+  it("Skills Hub search lists hits and Install refreshes the page", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.searchSkillsHub.mockResolvedValue([
+      {
+        source: "clawhub",
+        id: "find-skills",
+        name: "find-skills",
+        description: "Discover skills",
+      },
+    ]);
+    const installed = row({
+      name: "find-skills",
+      description: "Discover skills",
+      trigger: "Use the find-skills skill.",
+    });
+    api.installSkillsHub.mockResolvedValue({
+      page: { rows: [...ROWS, installed] },
+      note: "Installed find-skills. Chat can use it.",
+    });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    expect(await screen.findByText(SKILLS_HUB_NOTE)).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByLabelText("Search Skills Hub"),
+      "find skills",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Search Hub" }));
+    const hub = await screen.findByRole("list", { name: "Skills Hub results" });
+    expect(within(hub).getByRole("listitem", { name: "find-skills" })).toHaveTextContent(
+      "clawhub",
+    );
+    await userEvent.click(
+      within(hub).getByRole("button", { name: "Install" }),
+    );
+    expect(api.installSkillsHub).toHaveBeenCalledWith({
+      source: "clawhub",
+      id: "find-skills",
+      name: "find-skills",
+      description: "Discover skills",
+    });
+    expect(
+      await within(
+        await screen.findByRole("list", { name: "App skills" }),
+      ).findByRole("listitem", { name: "find-skills" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Skills Hub results" })).toBeNull();
+    expect(
+      screen.getByText("Installed find-skills. Chat can use it."),
+    ).toBeInTheDocument();
   });
 
   it("says so when there are none, refreshes, and links to Connectors", async () => {
