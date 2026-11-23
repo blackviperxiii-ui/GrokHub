@@ -318,7 +318,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: nextest
       # Each test runs in its own process (see .config/nextest.toml), so they
@@ -342,7 +342,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: cargo-deny
       - run: cargo deny --locked check
@@ -599,7 +599,7 @@ jobs:
       # The Gradle and Xcode projects call the CLI back while they build. The
       # npm CLI records a path relative to where it ran, which they can't
       # find, so the phone jobs use cargo's.
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: tauri-cli@2.12.4
       - name: Smoke build
@@ -699,7 +699,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: nextest
       - run: cargo nextest run --workspace --locked --profile ci
