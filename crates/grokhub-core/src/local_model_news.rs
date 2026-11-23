@@ -1,4 +1,4 @@
-//! New local models for Pulse. Opt-in. Once a week the cabin scores the
+//! New local models for Pulse. Opt-in. Once a week the app scores the
 //! curated catalog (`local_picker`) against this PC and, when a bigger model
 //! than the one it runs now is Recommended here, posts a card that opens the
 //! model picker on it, where Download (size shown) is the approval. It also
@@ -59,6 +59,10 @@ pub struct Tracker {
     /// Catalog models already suggested.
     #[serde(default)]
     pub suggested: BTreeSet<String>,
+    /// Releases picked that couldn't be posted: offered first next check,
+    /// while Hugging Face still lists them.
+    #[serde(default)]
+    pub retry: BTreeSet<String>,
 }
 
 pub fn path(config_dir: &Path) -> PathBuf {
@@ -89,7 +93,7 @@ pub fn repo_url(repo: &str) -> String {
     format!("https://huggingface.co/{repo}")
 }
 
-/// The card's action: opens Settings → Cabin defaults on that catalog model.
+/// The card's action: opens Settings → Local AI on that catalog model.
 pub fn picker_link(id: &str) -> String {
     format!("grokhub://local-model/{id}")
 }
@@ -197,7 +201,6 @@ pub fn upgrade(p: &Profile, installed_id: &str, bench: &BenchCache) -> Option<Su
 }
 
 /// New repos that fit with headroom and run bigger than the installed model.
-/// Returns the suggestions and every repo id read, for `seen`.
 pub fn releases(p: &Profile, installed_run_mb: u64, repos: &[String]) -> Vec<Suggestion> {
     let (mem, budget) = p.budget();
     let catalog_repos: BTreeSet<&str> = local_models().iter().map(|m| m.repo).collect();
@@ -319,8 +322,11 @@ impl Tracker {
     }
 
     /// Fold one check in and return what to post: the catalog upgrade (once
-    /// per model) then up to `links` new releases. Every repo read is
-    /// remembered; the first check posts no releases.
+    /// per model) then up to `links` new releases. Every other repo read is
+    /// remembered; the first check that reads any posts no releases, so a
+    /// check that couldn't read the list doesn't count as that first one.
+    /// A pick is remembered only once [`Tracker::offered`] says it posted,
+    /// so one that couldn't be posted comes back next check.
     pub fn check(
         &mut self,
         upgrade: Option<Suggestion>,
@@ -332,25 +338,93 @@ impl Tracker {
         self.last_check_ms = now_ms;
         let mut out = Vec::new();
         if let Some(up) = upgrade {
-            if self.suggested.insert(up.key()) {
+            if !self.suggested.contains(&up.key()) {
                 out.push(up);
             }
         }
+        // The releases that are listed and fit: a retry outside them is let go.
+        let listed: BTreeSet<String> = releases
+            .iter()
+            .filter_map(|s| match s {
+                Suggestion::Release { repo, .. } => Some(repo.clone()),
+                Suggestion::Upgrade { .. } => None,
+            })
+            .collect();
         if self.seeded {
-            out.extend(
-                releases
-                    .into_iter()
-                    .filter(|s| matches!(s, Suggestion::Release { repo, .. } if !self.seen.contains(repo)))
-                    .take(links),
+            let mut fresh: Vec<Suggestion> = releases
+                .into_iter()
+                .filter(
+                    |s| matches!(s, Suggestion::Release { repo, .. } if !self.seen.contains(repo)),
+                )
+                .collect();
+            // Stable: one that couldn't be posted last time goes first, so
+            // newer releases don't push it out under the cap.
+            fresh.sort_by_key(
+                |s| !matches!(s, Suggestion::Release { repo, .. } if self.retry.contains(repo)),
             );
+            out.extend(fresh.into_iter().take(links));
         }
-        self.seen.extend(read.iter().cloned());
-        self.seeded = true;
+        let picked: BTreeSet<&str> = out
+            .iter()
+            .filter_map(|s| match s {
+                Suggestion::Release { repo, .. } => Some(repo.as_str()),
+                Suggestion::Upgrade { .. } => None,
+            })
+            .collect();
+        // A retry still listed waits for a later check even when the cap
+        // left it out this time (a lower cap after Not interested). One no
+        // longer listed, or that no longer fits, is let go; an unread list
+        // lets nothing go.
+        if !read.is_empty() {
+            self.retry.retain(|r| listed.contains(r));
+        }
+        let retry = &self.retry;
+        self.seen.extend(
+            read.iter()
+                .filter(|r| !picked.contains(r.as_str()) && !retry.contains(*r))
+                .cloned(),
+        );
+        self.seeded |= !read.is_empty();
         out
     }
 
+    /// Remember a pick from [`Tracker::check`] as offered. Saved before it
+    /// is posted, so a card in the feed is never posted twice; a post that
+    /// then fails is handed back with [`Tracker::not_posted`].
+    pub fn offered(&mut self, pick: &Suggestion) {
+        match pick {
+            Suggestion::Upgrade { .. } => {
+                self.suggested.insert(pick.key());
+            }
+            Suggestion::Release { repo, .. } => {
+                self.seen.insert(repo.clone());
+                self.retry.remove(repo);
+            }
+        }
+    }
+
+    /// A pick that couldn't be posted: it is offered again next check, and a
+    /// release goes ahead of newer ones.
+    pub fn not_posted(&mut self, pick: &Suggestion) {
+        match pick {
+            Suggestion::Upgrade { .. } => {
+                self.suggested.remove(&pick.key());
+            }
+            Suggestion::Release { repo, .. } => {
+                self.seen.remove(repo);
+                self.retry.insert(repo.clone());
+            }
+        }
+    }
+
+    /// Off: forget the releases seen, so turning this on again starts fresh
+    /// without a backlog. Catalog models already offered stay offered: their
+    /// cards may still be in the feed, or dismissed, and mustn't come twice.
     pub fn turn_off(&mut self) {
-        *self = Tracker::default();
+        *self = Tracker {
+            suggested: std::mem::take(&mut self.suggested),
+            ..Tracker::default()
+        };
     }
 }
 
@@ -486,6 +560,105 @@ mod tests {
     }
 
     #[test]
+    fn a_release_that_could_not_be_posted_goes_ahead_of_newer_ones() {
+        let p = gpu(16_384);
+        let mut t = Tracker {
+            on: true,
+            seeded: true,
+            ..Default::default()
+        };
+        let a = "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF";
+        let b = "huihui-ai/Huihui-Phi-5-12B-abliterated-GGUF";
+        let week2 = repos(&[b, a]);
+        let picks = t.check(None, releases(&p, 5_900, &week2), &week2, 2, 10);
+        assert_eq!(picks.len(), 2);
+        for pick in &picks {
+            t.not_posted(pick);
+        }
+        // Newer, fitting releases above them on the newest-first list.
+        let week3 = repos(&[
+            "huihui-ai/Huihui-Mistral-Nemo-12B-abliterated-GGUF",
+            "huihui-ai/Huihui-Qwen3-8B-abliterated-GGUF",
+            b,
+            a,
+        ]);
+        let picks = t.check(None, releases(&p, 5_900, &week3), &week3, 2, 20);
+        let names: Vec<String> = picks.iter().map(Suggestion::title).collect();
+        assert_eq!(
+            names,
+            vec![
+                "New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF",
+                "New on Hugging Face: Huihui-Qwen3-14B-abliterated-GGUF",
+            ]
+        );
+        for pick in &picks {
+            t.offered(pick);
+        }
+        assert!(t.retry.is_empty());
+        // The two newer ones were seen while the retries went first.
+        assert_eq!(t.seen.len(), 4);
+    }
+
+    #[test]
+    fn a_retry_left_out_by_a_lower_cap_waits_for_the_next_check() {
+        let p = gpu(16_384);
+        let mut t = Tracker {
+            on: true,
+            seeded: true,
+            ..Default::default()
+        };
+        let a = "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF";
+        let b = "huihui-ai/Huihui-Phi-5-12B-abliterated-GGUF";
+        let list = repos(&[b, a]);
+        for pick in &t.check(None, releases(&p, 5_900, &list), &list, 2, 10) {
+            t.offered(pick);
+            t.not_posted(pick);
+        }
+        // Not interested lowered the cap to one a check.
+        let first = t.check(None, releases(&p, 5_900, &list), &list, 1, 20);
+        assert_eq!(
+            first.iter().map(Suggestion::title).collect::<Vec<_>>(),
+            vec!["New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF"]
+        );
+        t.offered(&first[0]);
+        let second = t.check(None, releases(&p, 5_900, &list), &list, 1, 30);
+        assert_eq!(
+            second.iter().map(Suggestion::title).collect::<Vec<_>>(),
+            vec!["New on Hugging Face: Huihui-Qwen3-14B-abliterated-GGUF"]
+        );
+        t.offered(&second[0]);
+        assert!(t.retry.is_empty());
+        assert!(t
+            .check(None, releases(&p, 5_900, &list), &list, 1, 40)
+            .is_empty());
+        // An unread list keeps a retry; one no longer listed is let go.
+        t.not_posted(&second[0]);
+        assert!(t.check(None, Vec::new(), &[], 1, 50).is_empty());
+        assert_eq!(t.retry.len(), 1);
+        let later = repos(&[b]);
+        assert!(t
+            .check(None, releases(&p, 5_900, &later), &later, 1, 60)
+            .is_empty());
+        assert!(t.retry.is_empty());
+    }
+
+    #[test]
+    fn a_check_that_read_no_repos_does_not_seed() {
+        let p = gpu(16_384);
+        let mut t = Tracker {
+            on: true,
+            ..Default::default()
+        };
+        assert!(t.check(None, Vec::new(), &[], 2, 10).is_empty());
+        assert!(!t.seeded, "nothing was read, so nothing is known to be old");
+        // The list comes back a week later: still the backlog, not news.
+        let read = repos(&["huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"]);
+        let next = t.check(None, releases(&p, 5_900, &read), &read, 2, 20);
+        assert!(next.is_empty(), "a backlog never posts");
+        assert!(t.seeded);
+    }
+
+    #[test]
     fn the_first_check_only_records_releases_and_each_posts_once() {
         let p = gpu(16_384);
         let read = repos(&["huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"]);
@@ -506,6 +679,13 @@ mod tests {
             names,
             vec!["New on Hugging Face: Huihui-Phi-5-12B-abliterated-GGUF"]
         );
+        // Not posted yet: the next check offers it again.
+        let again = t.check(None, releases(&p, 5_900, &newer), &newer, 2, 25);
+        assert_eq!(again.len(), 1);
+        t.offered(&again[0]);
+        assert!(t
+            .check(None, releases(&p, 5_900, &newer), &newer, 2, 26)
+            .is_empty());
         let up = || {
             upgrade(
                 &gpu(24_576),
@@ -513,10 +693,21 @@ mod tests {
                 &BenchCache::new(),
             )
         };
-        assert_eq!(t.check(up(), Vec::new(), &[], 2, 30).len(), 1);
+        let picks = t.check(up(), Vec::new(), &[], 2, 30);
+        assert_eq!(picks.len(), 1);
+        t.offered(&picks[0]);
         assert!(t.check(up(), Vec::new(), &[], 2, 40).is_empty());
         assert!(!t.due(40));
         assert!(t.due(40 + CHECK_EVERY_MS));
+        // Off and on again: the upgrade already offered isn't offered twice,
+        // and the releases start over from a fresh seed.
+        t.turn_off();
+        assert_eq!(
+            (t.on, t.seeded, t.seen.len(), t.last_check_ms),
+            (false, false, 0, 0)
+        );
+        t.on = true;
+        assert!(t.check(up(), Vec::new(), &[], 2, 50).is_empty());
     }
 
     #[test]

@@ -524,22 +524,71 @@ fn a_local_answer_streams_to_the_chat_like_any_other() {
         hosted_search: false,
         call_timeout: None,
     };
+    let _mark = super::live::StepOnDeviceForTests::set(false);
     let mut shown = String::new();
+    let mut here_at_first_piece = None;
     let out = super::live::stream_routed(
         &Never,
         &req,
         &crate::client::CancelToken::new(),
         &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
+                // Written before the model call, so the first spoken piece
+                // already uses this computer's voice.
+                here_at_first_piece
+                    .get_or_insert_with(|| super::local_live::runs_here("local-stream-1"));
                 shown.push_str(&t);
             }
         },
         "chat:default",
     )
     .expect("the device answers");
+    assert_eq!(here_at_first_piece, Some(true));
     assert_eq!(out.text, "hello offline");
     // The run loop shows only streamed text: a local answer that is returned
     // but never streamed is saved to the session and never seen in the chat.
     assert_eq!(shown, "hello offline");
+    // The step ran here, so the tools it calls (a picture) run here too.
+    assert!(super::live::step_on_device());
+    // And so does the chat's voice: the record says this chat runs here.
+    assert!(super::local_live::runs_here("local-stream-1"));
+    assert!(!super::local_live::must_stay_here("local-stream-1"));
+    // The app's own call on the device leaves the chat step's mark alone.
+    let _cloud_step = super::live::StepOnDeviceForTests::set(false);
+    let summary = ResponsesRequest {
+        conversation_id: "local-stream-2".into(),
+        ..req.clone()
+    };
+    super::live::stream_routed(
+        &Never,
+        &summary,
+        &crate::client::CancelToken::new(),
+        &mut |_| {},
+        "background:summarize",
+    )
+    .expect("the device sums it up");
+    assert!(!super::live::step_on_device());
+    // The app's own call writes no record: that chat still reads as cloud.
+    assert!(!super::local_live::runs_here("local-stream-2"));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Offline, the difficulty estimator never starts the on-device model: a
+/// start before the turn's own would load a model without knowing the turn
+/// carries a picture. With a runtime installed it is used as before.
+#[test]
+fn offline_the_difficulty_estimator_rides_on_what_is_loaded_and_starts_nothing() {
+    let _off = ForceOffline::on();
+    let health = super::local_health::path(&crate::perm::config_dir());
+    let lines = || std::fs::read_to_string(&health).map_or(0, |t| t.lines().count());
+    {
+        // Local AI on, nothing loaded and nothing installed to load.
+        let _on = ForceOn::with(None);
+        let before = lines();
+        assert!(super::live::offline_estimator().is_none());
+        assert_eq!(lines(), before, "no start was tried");
+    }
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    let rt = super::live::offline_estimator().expect("the installed runtime");
+    assert_eq!(rt.difficulty("x").unwrap(), json!({ "d": 0.4 }));
 }

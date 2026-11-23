@@ -32,7 +32,7 @@ fn send(live: &mut Live, audio: &[i16]) -> Vec<LiveEvent> {
 
 #[test]
 fn a_spoken_turn_comes_out_as_a_wav_once() {
-    let mut live = Live::start();
+    let mut live = Live::new(None);
     let mut audio = hush(500);
     audio.extend(tone(1500));
     audio.extend(hush(2000));
@@ -42,10 +42,17 @@ fn a_spoken_turn_comes_out_as_a_wav_once() {
         panic!("a turn: {events:?}");
     };
     assert!(*ms >= 1500, "{ms}");
-    let wav = live.take_turn().expect("the turn");
+    let Some(Pending::Audio {
+        samples,
+        news: None,
+    }) = live.take_turn()
+    else {
+        panic!("the turn's audio, with no stream");
+    };
+    let wav = wav(&samples, RATE);
     assert_eq!(&wav[0..4], b"RIFF");
     assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 16_000);
-    assert_eq!(live.take_turn(), None, "once only");
+    assert!(live.take_turn().is_none(), "once only");
     // Not listening until the page asks again.
     assert_eq!(send(&mut live, &audio), vec![]);
     live.listen(false);
@@ -57,7 +64,7 @@ fn a_spoken_turn_comes_out_as_a_wav_once() {
 
 #[test]
 fn a_bad_block_is_refused() {
-    let mut live = Live::start();
+    let mut live = Live::new(None);
     assert_eq!(live.push(&[1, 2, 3]), Err(BAD_BLOCK.to_string()));
     assert_eq!(
         live.push(&vec![0; BLOCK_MAX + 2]),
@@ -76,11 +83,15 @@ fn events_reach_the_page_as_tagged_objects() {
         serde_json::to_value(LiveEvent::CheckIn).unwrap(),
         serde_json::json!({"kind": "check_in"})
     );
+    assert_eq!(
+        serde_json::to_value(LiveEvent::Caption { text: "hi".into() }).unwrap(),
+        serde_json::json!({"kind": "caption", "text": "hi"})
+    );
 }
 
 #[test]
 fn a_reply_streams_into_pieces_and_a_new_one_starts_after() {
-    let mut live = Live::start();
+    let mut live = Live::new(None);
     let mut spoken = live.reply_feed("Okay, the game is updated and ready ");
     spoken.extend(live.reply_feed("to launch now. Have fun!"));
     assert_eq!(
@@ -97,7 +108,7 @@ fn a_reply_streams_into_pieces_and_a_new_one_starts_after() {
 
 #[test]
 fn a_whole_reply_drops_thinking_lines() {
-    let mut live = Live::start();
+    let mut live = Live::new(None);
     assert_eq!(
         live.reply_finish("THINKING:\nplan the night\n\nI'll look."),
         vec!["I'll look.".to_string()]
@@ -106,7 +117,7 @@ fn a_whole_reply_drops_thinking_lines() {
 
 #[test]
 fn a_hushed_reply_speaks_no_more() {
-    let mut live = Live::start();
+    let mut live = Live::new(None);
     let _ = live.reply_feed("Here is the first sentence of it. And");
     live.reply_hush();
     assert_eq!(
@@ -224,13 +235,916 @@ fn offline_refuses_speech_before_anything_leaves() {
 fn without_the_on_device_engine_there_is_no_local_voice() {
     let config = temp_dir("no-engine");
     assert_eq!(
-        speak_on_device(&config, &config.join("models"), "ara", "Hello."),
+        speak_on_device(&config, &config.join("models"), "ara", "Hello.", 0),
         None
+    );
+}
+
+/// The on-device engine and a voice, as if downloaded, under `config`; the
+/// models folder. The speaking program is an empty file: it can't run, so
+/// any answer but "didn't start" came before it would have.
+fn fake_voice(config: &std::path::Path) -> std::path::PathBuf {
+    use grokhub_core::local_setup::ModelKind;
+    use grokhub_core::model_download as md;
+    let models = config.join("models");
+    let sherpa = &grokhub_core::voice_engine::SHERPA;
+    std::fs::create_dir_all(sherpa.program_path(config).parent().unwrap()).unwrap();
+    std::fs::write(sherpa.program_path(config), b"").unwrap();
+    std::fs::write(sherpa.dir(config).join("version.txt"), sherpa.version).unwrap();
+    std::fs::create_dir_all(ve::tts_path(config).parent().unwrap()).unwrap();
+    std::fs::write(ve::tts_path(config), b"").unwrap();
+    let voice = grokhub_core::local_setup::local_models()
+        .iter()
+        .find(|m| m.kind == ModelKind::TextToSpeech)
+        .unwrap();
+    let dir = md::kind_dir(&models, ModelKind::TextToSpeech);
+    let put = |path: std::path::PathBuf| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"x").unwrap();
+    };
+    put(md::final_path(&dir, voice));
+    for part in voice.parts.iter() {
+        put(dir.join(part.file));
+    }
+    models
+}
+
+#[test]
+fn without_room_beside_the_chat_model_the_voice_declines_before_it_starts() {
+    use grokhub_agent::route::local_scale::{set_room, Room};
+    let config = temp_dir("no-room");
+    let models = fake_voice(&config);
+    assert_eq!(ve::voice_model(&models).map(|m| m.run_mb), Some(1_024));
+    // 80% of 512 MB free is 409 MB; the voice needs 1,024.
+    let room = Room {
+        free_vram_mb: None,
+        free_ram_mb: 512,
+        cpu_busy_pct: None,
+        on_battery: false,
+        unified: false,
+    };
+    set_room(room, grokhub_core::now_ms());
+    let said = speak_on_device(&config, &models, "ara", "Hello.", hushes());
+    // A stale reading: later tests see no reading at all.
+    set_room(room, 0);
+    assert_eq!(
+        said.map(|r| r.map(|s| s.mime)),
+        Some(Err(
+            "The on-device voice needs about 1 GB of free memory, and this computer doesn't have it right now."
+                .to_string()
+        ))
+    );
+    assert!(!grokhub_agent::route::local_resident::held());
+}
+
+#[test]
+fn a_piece_asked_before_the_reply_was_hushed_is_not_spoken() {
+    let config = temp_dir("hushed");
+    let models = fake_voice(&config);
+    let asked = hushes();
+    // The person talks over the reply while this piece waits its turn.
+    // Voice mode may be off in this test: the hush still counts.
+    let _ = voice_reply_hush();
+    assert_eq!(
+        speak_on_device(&config, &models, "ara", "Later.", asked).map(|r| r.map(|s| s.mime)),
+        Some(Err("That reply was stopped.".to_string()))
+    );
+    // A piece asked after the hush is tried: with no reading it starts the
+    // engine, which can't run here.
+    assert_eq!(
+        speak_on_device(&config, &models, "ara", "Next.", hushes()).map(|r| r.map(|s| s.mime)),
+        Some(Err("The on-device voice didn't start.".to_string()))
     );
 }
 
 #[test]
 fn no_turn_hears_nothing() {
-    let config = temp_dir("hear");
-    assert_eq!(hear(&config, None), Ok(String::new()));
+    assert_eq!(hear(None, |_| panic!("no upload")), Ok(String::new()));
+}
+
+/// A session whose every listen gets a fresh test stream: the test holds
+/// each stream's audio side and news sender, in order.
+struct Streams {
+    audio: Vec<Receiver<Vec<i16>>>,
+    news: Vec<std::sync::mpsc::Sender<SttNews>>,
+    /// Each stream's "the server is ready" flag; ready from the start.
+    ready: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+fn streaming() -> (Live, std::sync::Arc<std::sync::Mutex<Streams>>) {
+    let streams = std::sync::Arc::new(std::sync::Mutex::new(Streams {
+        audio: Vec::new(),
+        news: Vec::new(),
+        ready: Vec::new(),
+    }));
+    let held = streams.clone();
+    let live = Live::new(Some(Box::new(move || {
+        let (audio_tx, audio_rx) = std::sync::mpsc::channel();
+        let (news_tx, news_rx) = std::sync::mpsc::channel();
+        let mut s = held.lock().unwrap();
+        let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        s.audio.push(audio_rx);
+        s.news.push(news_tx);
+        s.ready.push(ready.clone());
+        Some(SttLink {
+            audio: audio_tx,
+            news: news_rx,
+            ready,
+        })
+    })));
+    (live, streams)
+}
+
+/// The reply started or stopped, as the page's command does it: the stream
+/// opens with the session let go.
+fn playing(live: &mut Live, now: bool) {
+    let cell = Mutex::new(Some(std::mem::replace(live, Live::new(None))));
+    then_open(&cell, |live| live.playing_changed(now)).expect("voice mode on");
+    *live = cell.into_inner().unwrap().expect("still on");
+}
+
+/// Every block the stream got so far.
+fn streamed(streams: &std::sync::Mutex<Streams>, i: usize) -> Vec<Vec<i16>> {
+    let s = streams.lock().unwrap();
+    std::iter::from_fn(|| s.audio[i].try_recv().ok()).collect()
+}
+
+#[test]
+fn room_sound_stays_here_until_someone_starts_then_the_lead_in_goes_first() {
+    let (mut live, streams) = streaming();
+    let quiet = hush(1500);
+    let _ = send(&mut live, &quiet);
+    assert_eq!(
+        streamed(&streams, 0),
+        Vec::<Vec<i16>>::new(),
+        "nothing before a start"
+    );
+    // Every block the mic got, in order.
+    let mut sent: Vec<Vec<i16>> = quiet.chunks(1600).map(<[i16]>::to_vec).collect();
+    let talk = tone(1500);
+    let mut first = Vec::new();
+    for block in talk.chunks(1600) {
+        sent.push(block.to_vec());
+        let heard = live.push(&bytes(block)).expect("block");
+        if heard.contains(&LiveEvent::Started) {
+            first = streamed(&streams, 0);
+            // The last 1.1 s, this block included: 11 blocks of 100 ms, the
+            // room sound before the start first.
+            assert_eq!(first, sent[sent.len() - 11..].to_vec());
+            assert_ne!(first[0], first[1], "each block is its own");
+            break;
+        }
+    }
+    assert!(!first.is_empty(), "the mic heard a start");
+    // From then on, each block as it comes.
+    let more = tone(100);
+    live.push(&bytes(&more)).expect("block");
+    assert_eq!(streamed(&streams, 0), vec![more]);
+}
+
+#[test]
+fn smart_turn_ends_the_turn_early_with_its_words() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(1500));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Ended("Remind me to call Sam.".into()))
+        .expect("news");
+    assert_eq!(
+        send(&mut live, &tone(100)),
+        vec![LiveEvent::Turn { ms: 1600 }]
+    );
+    let turn = live.take_turn();
+    assert!(
+        matches!(&turn, Some(Pending::Words(w)) if w == "Remind me to call Sam."),
+        "{turn:?}"
+    );
+    // The mic stopped: a whole spoken turn after it is no turn until the
+    // page listens again.
+    let mut more = hush(500);
+    more.extend(tone(1500));
+    more.extend(hush(2000));
+    assert_eq!(send(&mut live, &more), vec![]);
+    assert_eq!(
+        hear(turn, |_| panic!("no upload")),
+        Ok("Remind me to call Sam.".to_string())
+    );
+}
+
+#[test]
+fn when_the_mic_ends_the_turn_the_streamed_words_are_used() {
+    let (mut live, streams) = streaming();
+    let mut audio = tone(1500);
+    audio.extend(hush(2000));
+    assert!(matches!(
+        send(&mut live, &audio).last(),
+        Some(LiveEvent::Turn { .. })
+    ));
+    // The stream's audio side is closed: it asks for the last words.
+    let s = streams.lock().unwrap();
+    while s.audio[0].try_recv().is_ok() {}
+    assert_eq!(s.audio[0].try_recv(), Err(TryRecvError::Disconnected));
+    // Captions on the way are skipped for the words.
+    s.news[0]
+        .send(SttNews::Caption("buy".into()))
+        .expect("news");
+    s.news[0]
+        .send(SttNews::Ended("buy milk".into()))
+        .expect("news");
+    drop(s);
+    assert_eq!(
+        hear(live.take_turn(), |_| panic!("no upload")),
+        Ok("buy milk".to_string())
+    );
+}
+
+#[test]
+fn a_failed_stream_falls_back_to_one_upload() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(300));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Failed("speech stream closed".into()))
+        .expect("news");
+    let mut audio = tone(1200);
+    audio.extend(hush(2000));
+    assert!(matches!(
+        send(&mut live, &audio).last(),
+        Some(LiveEvent::Turn { .. })
+    ));
+    let mut uploads = 0;
+    let heard = hear(live.take_turn(), |wav| {
+        uploads += 1;
+        assert_eq!(&wav[0..4], b"RIFF");
+        Ok("open the build log".into())
+    });
+    assert_eq!(heard, Ok("open the build log".to_string()));
+    assert_eq!(uploads, 1);
+}
+
+#[test]
+fn a_silent_stream_falls_back_after_the_wait() {
+    let (mut live, streams) = streaming();
+    let mut audio = tone(1200);
+    audio.extend(hush(2000));
+    let _ = send(&mut live, &audio);
+    // The news side stays open and says nothing.
+    let _keep = streams.lock().unwrap().news[0].clone();
+    let started = Instant::now();
+    let mut uploads = 0;
+    let heard = hear(live.take_turn(), |_| {
+        uploads += 1;
+        Ok("turn on the lights".into())
+    });
+    assert_eq!(heard, Ok("turn on the lights".to_string()));
+    assert_eq!(uploads, 1);
+    assert!(started.elapsed() >= crate::stt_stream::HEAR_WAIT);
+}
+
+#[test]
+fn a_turn_over_before_its_stream_got_ready_uploads_at_once() {
+    let (mut live, streams) = streaming();
+    // Still connecting: the server hasn't said it is ready.
+    streams.lock().unwrap().ready[0].store(false, std::sync::atomic::Ordering::SeqCst);
+    let mut audio = tone(1200);
+    audio.extend(hush(2000));
+    let _ = send(&mut live, &audio);
+    let _keep = streams.lock().unwrap().news[0].clone();
+    let started = Instant::now();
+    let heard = hear(live.take_turn(), |_| Ok("turn on the lights".into()));
+    assert_eq!(heard, Ok("turn on the lights".to_string()));
+    assert!(
+        started.elapsed() < crate::stt_stream::HEAR_WAIT,
+        "no wait for a stream that has no words"
+    );
+}
+
+#[test]
+fn noise_alone_listens_again() {
+    let (mut live, streams) = streaming();
+    let mut audio = tone(1200);
+    audio.extend(hush(2000));
+    let _ = send(&mut live, &audio);
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Ended(String::new()))
+        .expect("news");
+    assert_eq!(
+        hear(live.take_turn(), |_| panic!("no upload")),
+        Ok(String::new())
+    );
+}
+
+#[test]
+fn empty_words_mid_listen_do_not_end_the_turn() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Ended(String::new()))
+        .expect("news");
+    let events = send(&mut live, &tone(300));
+    assert!(
+        !events.iter().any(|e| matches!(e, LiveEvent::Turn { .. })),
+        "{events:?}"
+    );
+    assert!(live.take_turn().is_none());
+    // The stream still runs: the next block reaches it.
+    let s = streams.lock().unwrap();
+    while s.audio[0].try_recv().is_ok() {}
+    drop(s);
+    live.push(&bytes(&tone(100))).expect("block");
+    assert!(streams.lock().unwrap().audio[0].try_recv().is_ok());
+}
+
+#[test]
+fn listening_over_a_reply_opens_no_stream() {
+    let (mut live, streams) = streaming();
+    assert_eq!(streams.lock().unwrap().audio.len(), 1);
+    live.listen(true);
+    assert_eq!(streams.lock().unwrap().audio.len(), 1);
+    // The stream from before went with the old listen.
+    assert_eq!(
+        streams.lock().unwrap().audio[0].try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
+    live.listen(false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+}
+
+#[test]
+fn captions_reach_the_page_while_they_talk() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    {
+        let s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Caption("remind me".into()))
+            .expect("news");
+        s.news[0]
+            .send(SttNews::Caption("remind me to call".into()))
+            .expect("news");
+    }
+    // The newest caption only, once.
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me to call".into()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_caption_before_smart_turn_ends_it_gives_way_to_the_turn() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(1500));
+    {
+        let s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Caption("buy".into()))
+            .expect("news");
+        s.news[0]
+            .send(SttNews::Ended("Buy milk.".into()))
+            .expect("news");
+    }
+    assert_eq!(
+        live.push(&bytes(&tone(100))).expect("block"),
+        vec![LiveEvent::Turn { ms: 1600 }]
+    );
+}
+
+#[test]
+fn a_stream_that_already_ended_still_hands_over_its_words() {
+    let (mut live, streams) = streaming();
+    let _ = send(&mut live, &tone(1500));
+    {
+        // Smart Turn ended it and the stream's thread went away.
+        let mut s = streams.lock().unwrap();
+        s.news[0]
+            .send(SttNews::Ended("Buy milk.".into()))
+            .expect("news");
+        s.news.clear();
+        s.audio.clear();
+    }
+    assert_eq!(
+        send(&mut live, &tone(100)),
+        vec![LiveEvent::Turn { ms: 1600 }]
+    );
+    assert!(
+        matches!(live.take_turn(), Some(Pending::Words(w)) if w == "Buy milk."),
+        "the words came through"
+    );
+}
+
+#[test]
+fn the_turn_after_a_spoken_reply_gets_a_stream() {
+    let (mut live, streams) = streaming();
+    live.listen(true);
+    assert_eq!(streams.lock().unwrap().audio.len(), 1);
+    playing(&mut live, false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+    // Already open: a second stop opens no other.
+    playing(&mut live, false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+    assert!(send(&mut live, &tone(1000)).contains(&LiveEvent::Started));
+    assert!(!streamed(&streams, 1).is_empty(), "their talk goes to it");
+    // A reply playing again drops it.
+    playing(&mut live, true);
+    assert_eq!(
+        streams.lock().unwrap().audio[1].try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
+}
+
+#[test]
+fn talking_over_a_reply_keeps_the_upload_for_that_turn() {
+    let (mut live, streams) = streaming();
+    live.listen(true);
+    // A quiet reply, then they talk over it, so it stops mid-turn.
+    let _ = send(&mut live, &hush(700));
+    assert_eq!(send(&mut live, &tone(1500)), vec![LiveEvent::Started]);
+    assert!(live.mic.talking(), "mid-turn");
+    playing(&mut live, false);
+    assert_eq!(streams.lock().unwrap().audio.len(), 1, "no stream mid-turn");
+}
+
+#[test]
+fn a_caption_goes_when_its_stream_drops_mid_listen() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("remind me".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me".into()
+        }]
+    );
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Failed("speech stream: closed".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: String::new()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_stream_that_drops_before_any_caption_says_nothing() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news.clear();
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn smart_turn_words_without_a_start_the_mic_heard_are_not_a_turn() {
+    let (mut live, streams) = streaming();
+    // Only room noise reached the mic, yet the stream heard words.
+    let _ = send(&mut live, &hush(500));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Ended("on the TV".into()))
+        .expect("news");
+    assert_eq!(send(&mut live, &hush(100)), vec![]);
+    assert!(live.take_turn().is_none(), "nothing to hear");
+    // The stream is dropped, so their real turn uploads.
+    let s = streams.lock().unwrap();
+    while s.audio[0].try_recv().is_ok() {}
+    assert_eq!(s.audio[0].try_recv(), Err(TryRecvError::Disconnected));
+}
+
+#[test]
+fn a_start_just_before_a_reply_ends_still_reaches_the_stream() {
+    let (mut live, streams) = streaming();
+    live.listen(true);
+    // The reply plays quietly, and they start under the barge-in bar.
+    let _ = send(&mut live, &hush(700));
+    let lead = tone(300);
+    assert_eq!(send(&mut live, &lead), vec![]);
+    playing(&mut live, false);
+    assert_eq!(
+        streams.lock().unwrap().audio.len(),
+        2,
+        "a stream for the turn"
+    );
+    let mut rest = tone(1200);
+    rest.extend(hush(2000));
+    assert!(matches!(
+        send(&mut live, &rest).last(),
+        Some(LiveEvent::Turn { .. })
+    ));
+    // The stream got the start they made while the reply still played.
+    let got: Vec<i16> = streamed(&streams, 1).concat();
+    assert!(
+        got.windows(lead.len()).any(|w| w == lead.as_slice()),
+        "the lead-in reached the stream"
+    );
+}
+
+static TARGETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A key for the first listen only, as if it was cleared after.
+fn key_once(_: &std::path::Path, _: &str) -> Option<crate::stt_stream::StreamTarget> {
+    (TARGETS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0).then(|| {
+        crate::stt_stream::StreamTarget {
+            url: "ws://127.0.0.1:9/v1/stt".into(),
+            bearer: "sk-abcdefghijklmnopqrstuv".into(),
+        }
+    })
+}
+
+#[test]
+fn each_listen_reads_the_key_as_it_is_then() {
+    let mut live = Live::new(Some(opener(
+        temp_dir("key-once"),
+        std::sync::Arc::default(),
+        key_once,
+    )));
+    assert!(live.stt.is_some(), "the first listen streams");
+    live.listen(false);
+    assert!(live.stt.is_none(), "a cleared key opens nothing");
+    assert_eq!(TARGETS.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_listen_that_asks_while_a_stream_opens_gets_that_stream() {
+    let (mut live, streams) = streaming();
+    assert!(live.restart(false), "a listen wants a stream");
+    let mut open = live.lend_opener().expect("the opener");
+    // An empty turn: the page listens again while the stream is opening,
+    // and finds the opener lent out.
+    assert!(live.restart(false));
+    assert!(live.lend_opener().is_none());
+    let link = open();
+    live.take_back(open, link);
+    assert!(
+        live.stt.is_some(),
+        "nothing was sent to it: this listen has it"
+    );
+    assert!(live.open.is_some(), "the opener came back");
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+}
+
+#[test]
+fn a_stream_that_opens_while_a_reply_plays_is_not_used() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    assert!(!live.playing_changed(true));
+    let link = open();
+    live.take_back(open, link);
+    assert!(live.stt.is_none(), "its echo could end a turn nobody spoke");
+}
+
+#[test]
+fn a_stream_that_opens_after_a_start_is_not_used() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    // They started talking while the key was being read.
+    assert!(send(&mut live, &tone(1000)).contains(&LiveEvent::Started));
+    let link = open();
+    live.take_back(open, link);
+    assert!(live.stt.is_none(), "it would have missed the start");
+    assert!(live.open.is_some());
+}
+
+#[test]
+fn a_start_already_over_still_keeps_a_late_stream_out() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    // The mic heard a start that is no longer under way.
+    live.spoke = true;
+    assert!(!live.mic.talking());
+    let link = open();
+    live.take_back(open, link);
+    assert!(live.stt.is_none());
+}
+
+#[test]
+fn a_stream_that_waited_too_long_for_a_start_is_opened_again() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Idle)
+        .expect("news");
+    assert_eq!(send(&mut live, &hush(100)), vec![]);
+    assert!(live.stt.is_none());
+    assert!(live.take_reopen(), "the listen still waits");
+    assert!(!live.take_reopen(), "once");
+    let cell = Mutex::new(Some(live));
+    then_open(&cell, |live| live.wants_stream()).expect("on");
+    let live = cell.into_inner().unwrap().expect("still on");
+    assert!(live.stt.is_some());
+    assert_eq!(streams.lock().unwrap().audio.len(), 2);
+}
+
+#[test]
+fn a_stream_that_failed_is_not_opened_again_until_the_next_listen() {
+    let (mut live, streams) = streaming();
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Failed("speech stream closed".into()))
+        .expect("news");
+    assert_eq!(send(&mut live, &hush(100)), vec![]);
+    assert!(live.stt.is_none());
+    assert!(!live.take_reopen());
+}
+
+#[test]
+fn no_caption_before_the_mic_hears_a_start() {
+    let (mut live, streams) = streaming();
+    // Someone else in the room, or the TV.
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("and in other news".into()))
+        .expect("news");
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+/// A machine's hum: one level throughout, never a voice.
+fn hum(ms: u32) -> Vec<i16> {
+    let n = (RATE * ms / 1000) as usize;
+    (0..n)
+        .map(|i| {
+            (6000.0 * (2.0 * std::f32::consts::PI * 120.0 * i as f32 / RATE as f32).sin()) as i16
+        })
+        .collect()
+}
+
+#[test]
+fn a_start_the_mic_takes_back_ends_the_stream_and_its_caption() {
+    let (mut live, streams) = streaming();
+    let mut audio = hush(500);
+    audio.extend(hum(1500));
+    audio.extend(hush(2000));
+    let mut events = Vec::new();
+    for (i, block) in audio.chunks(1600).enumerate() {
+        if i == 12 {
+            // What the stream made of the hum.
+            streams.lock().unwrap().news[0]
+                .send(SttNews::Caption("mm".into()))
+                .expect("news");
+        }
+        events.extend(live.push(&bytes(block)).expect("block"));
+    }
+    assert_eq!(
+        events,
+        vec![
+            LiveEvent::Started,
+            LiveEvent::Caption { text: "mm".into() },
+            LiveEvent::Nothing
+        ]
+    );
+    assert!(live.stt.is_none(), "the stream that heard the hum goes");
+    assert!(!live.spoke);
+    // Room sound after it stays here.
+    let _ = streamed(&streams, 0);
+    assert_eq!(send(&mut live, &hush(300)), vec![]);
+    assert_eq!(
+        streams.lock().unwrap().audio[0].try_recv(),
+        Err(TryRecvError::Disconnected)
+    );
+}
+
+#[test]
+fn local_only_and_offline_modes_fail_over_cleanly_in_tts() {
+    let config = temp_dir("tts-route");
+    let models = fake_voice(&config);
+    // In LocalOnly mode with fake_voice (empty sherpa binary), it skips xAI
+    // completely and attempts on-device Kokoro instead ("didn't start").
+    let cfg = VoiceRouteConfig {
+        mode: voice_route::VoiceRouteMode::LocalOnly,
+    };
+    let env = VoiceEnv {
+        has_xai_auth: true,
+        local_enabled: true,
+        local_ai_capable: true,
+        local_ready: true,
+        ..Default::default()
+    };
+    fn unreachable_target() -> Option<TtsTarget> {
+        Some(TtsTarget {
+            url: "http://127.0.0.1:1/v1/tts".into(),
+            bearer: "sk-abcdefghijklmnopqrstuv".into(),
+        })
+    }
+    let out = speak_with_env(
+        None,
+        &cfg,
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        unreachable_target,
+    );
+    assert_eq!(out, Err("The on-device voice didn't start.".to_string()));
+
+    // In Auto mode when xAI fails mid-session and local is ready, it records xAI
+    // cooldown and fails over to local on-device voice cleanly.
+    voice_route::clear_failures();
+    let auto = VoiceRouteConfig::default();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    drop(listener);
+    let url = format!("http://127.0.0.1:{port}/v1/tts");
+    // Use speak_with_env via unreachable_target (port 1 fails immediately with Transport error).
+    let _ = url;
+    let out = speak_with_env(
+        None,
+        &auto,
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        unreachable_target,
+    );
+    assert_eq!(out, Err("The on-device voice didn't start.".to_string()));
+    assert!(voice_route::xai_in_cooldown(
+        StageKind::Tts,
+        grokhub_core::now_ms()
+    ));
+    voice_route::clear_failures();
+}
+
+/// A stream for any chat but `here-1`, as the router plans it.
+fn stream_unless_here(_: &std::path::Path, chat: &str) -> Option<crate::stt_stream::StreamTarget> {
+    (chat != "here-1").then(|| crate::stt_stream::StreamTarget {
+        url: "ws://127.0.0.1:9/v1/stt".into(),
+        bearer: "sk-abcdefghijklmnopqrstuv".into(),
+    })
+}
+
+#[test]
+fn the_opener_asks_for_the_chat_voice_mode_is_in_now() {
+    let chat = std::sync::Arc::new(Mutex::new("here-1".to_string()));
+    let mut open = opener(temp_dir("opener-chat"), chat.clone(), stream_unless_here);
+    // A chat that runs here: no stream, so the open mic stays here.
+    assert!(open().is_none());
+    // Moved to a cloud chat: the next listen streams.
+    *chat.lock().unwrap() = "cloud-1".to_string();
+    assert!(open().is_some());
+}
+
+#[test]
+fn a_stream_opened_for_the_chat_before_a_move_here_is_never_attached() {
+    let (mut live, _streams) = streaming();
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    let link = open();
+    assert!(link.is_some());
+    // Voice mode moved to a chat that runs here while the stream opened.
+    live.set_chat("c2", false);
+    assert_eq!(*live.chat.lock().unwrap(), "c2");
+    live.take_back(open, link);
+    assert!(live.stt.is_none(), "it was opened for the chat before");
+    assert!(live.open.is_some(), "the opener came back");
+
+    // A move to a chat that may stream, before lending, still attaches.
+    live.set_chat("c3", true);
+    assert!(live.restart(false));
+    let mut open = live.lend_opener().expect("the opener");
+    let link = open();
+    live.take_back(open, link);
+    assert!(live.stt.is_some());
+}
+
+#[test]
+fn a_move_to_a_chat_that_runs_here_drops_its_open_stream() {
+    let (mut live, _streams) = streaming();
+    assert!(live.stt.is_some(), "the first listen streams");
+    live.set_chat("c2", false);
+    assert!(live.stt.is_none());
+}
+
+#[test]
+fn a_chat_that_runs_here_speaks_on_device_and_never_tries_xai() {
+    let config = temp_dir("tts-here");
+    let models = fake_voice(&config);
+    voice_route::clear_failures();
+    let env = VoiceEnv {
+        chat_here: true,
+        has_xai_auth: true,
+        local_enabled: true,
+        local_ai_capable: true,
+        local_ready: true,
+        ..Default::default()
+    };
+    fn unreachable_target() -> Option<TtsTarget> {
+        Some(TtsTarget {
+            url: "http://127.0.0.1:1/v1/tts".into(),
+            bearer: "sk-abcdefghijklmnopqrstuv".into(),
+        })
+    }
+    let out = speak_with_env(
+        None,
+        &VoiceRouteConfig::default(),
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        unreachable_target,
+    );
+    // The on-device voice is an empty file here, and nothing falls to xAI.
+    assert_eq!(out, Err("The on-device voice didn't start.".to_string()));
+    assert!(!voice_route::xai_in_cooldown(
+        StageKind::Tts,
+        grokhub_core::now_ms()
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_piece_spoken_on_device_names_the_voice_and_why() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = temp_dir("tts-here-line");
+    let models = fake_voice(&config);
+    // A speaking program that writes a short WAV where it is told to.
+    std::fs::write(
+        ve::tts_path(&config),
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --output-filename=*) out=\"${a#--output-filename=}\";; esac; done\nprintf 'RIFF0000WAVEfmt ' > \"$out\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        ve::tts_path(&config),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let env = VoiceEnv {
+        chat_here: true,
+        has_xai_auth: true,
+        local_enabled: true,
+        local_ai_capable: true,
+        local_ready: true,
+        ..Default::default()
+    };
+    fn no_target() -> Option<TtsTarget> {
+        None
+    }
+    let out = speak_with_env(
+        None,
+        &VoiceRouteConfig::default(),
+        &env,
+        &config,
+        &models,
+        "ara",
+        "Hello.",
+        hushes(),
+        no_target,
+    )
+    .expect("spoken here");
+    assert_eq!(out.mime, "audio/wav");
+    assert_eq!(
+        out.line.as_deref(),
+        Some("Spoken on this computer with Kokoro text to speech: this chat runs here.")
+    );
+}
+
+#[test]
+fn a_move_here_clears_the_caption_its_dropped_stream_showed() {
+    let (mut live, streams) = streaming();
+    assert!(send(&mut live, &tone(1500)).contains(&LiveEvent::Started));
+    streams.lock().unwrap().news[0]
+        .send(SttNews::Caption("remind me to".into()))
+        .expect("news");
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: "remind me to".into()
+        }]
+    );
+    live.set_chat("here-2", false);
+    assert_eq!(
+        live.push(&bytes(&hush(100))).expect("block"),
+        vec![LiveEvent::Caption {
+            text: String::new()
+        }]
+    );
+    assert_eq!(live.push(&bytes(&hush(100))).expect("block"), vec![]);
+}
+
+#[test]
+fn a_stream_lent_by_an_earlier_session_never_reaches_a_new_one() {
+    let (old, _streams) = streaming();
+    let cell = Mutex::new(Some(old));
+    let (epoch, mut open) = with_in(&cell, |live| {
+        assert!(live.restart(false));
+        live.lend_opener().map(|open| (live.epoch, open))
+    })
+    .expect("voice mode on")
+    .expect("the opener");
+    let link = open();
+    assert!(link.is_some());
+    // Voice mode off and on again, in a chat that runs here: no opener.
+    *cell.lock().unwrap() = Some(Live::new(None));
+    with_in(&cell, |live| {
+        assert!(live.wants_stream());
+        live.take_back_from(epoch, open, link);
+        assert!(live.stt.is_none(), "the old session's stream goes");
+        assert!(live.open.is_none(), "and so does its opener");
+    })
+    .expect("voice mode on");
 }

@@ -205,6 +205,32 @@ pub fn export_to(dir: &Path) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
+/// Bring the Obsidian-friendly wiki of the plain memory up to date
+/// (`amr/wiki/`). Returns the page's line. Private lines never get a page.
+pub fn export_wiki() -> Result<String, String> {
+    wiki_line(&grokhub_agent::amr_store())
+}
+
+fn wiki_line(store: &grokhub_core::amr::AmrStore) -> Result<String, String> {
+    let done = store.export_wiki().map_err(|e| format!("{e:?}"))?;
+    let pages = match done.pages {
+        1 => "1 page".to_string(),
+        n => format!("{n} pages"),
+    };
+    let mut line = format!(
+        "The wiki in {} has {pages} ({} changed, {} removed).",
+        store.wiki_dir().display(),
+        done.written,
+        done.removed
+    );
+    match done.private {
+        0 => {}
+        1 => line.push_str(" 1 private line stays out of it."),
+        n => line.push_str(&format!(" {n} private lines stay out of it.")),
+    }
+    Ok(line)
+}
+
 /// What Wipe did, for the page's line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -805,6 +831,30 @@ fn tab_path(name: &str) -> Result<std::path::PathBuf, String> {
     }
 }
 
+/// SOUL.md, USER.md and MEMORY.md as they are on disk, each with when it
+/// last changed (Unix ms, 0 when it isn't there), for what `/sync` hands to
+/// a paired computer. A link or an oversized file is refused, as the Memory
+/// page refuses it.
+pub fn tab_files() -> Result<Vec<(&'static str, String, u64)>, String> {
+    ["SOUL.md", "USER.md", "MEMORY.md"]
+        .into_iter()
+        .map(|name| tab_file(name).map(|(body, at)| (name, body, at)))
+        .collect()
+}
+
+/// One memory tab as [`tab_files`] reads it: its text, and when it last
+/// changed.
+pub fn tab_file(name: &str) -> Result<(String, u64), String> {
+    let path = tab_path(name)?;
+    let body = read(&path)?;
+    let at = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as u64);
+    Ok((body, at))
+}
+
 /// The three Memory page tabs (global config folder), plus the one-time tidy offer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -986,6 +1036,16 @@ pub fn reflect(config_dir: &Path, chat_id: Option<&str>) -> Result<ReflectResult
             let chat = crate::settings::load(config_dir).last_chat;
             (!chat.is_empty()).then_some(chat)
         });
+    if id
+        .as_deref()
+        .is_some_and(grokhub_agent::scratch::is_scratch)
+    {
+        return Ok(ReflectResult {
+            status: "Scratch — no reflect".into(),
+            diff: String::new(),
+            files: load_files()?,
+        });
+    }
     let pairs: Vec<(String, String)> = match &id {
         Some(id) => crate::history::saved(config_dir, id)
             .map(|info| grokhub_agent::transcript_pairs(&info))
@@ -1140,6 +1200,46 @@ pub fn dream_report(config_dir: &Path) -> String {
     }
 }
 
+/// One dream at a time: `/dream` and the nightly pass share the store.
+pub(crate) static DREAM: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// USER.md read for the dream's preference proposals, at most this much.
+const USER_MD_CAP: u64 = 1024 * 1024;
+
+/// The dream's options for the pinned config folder: Memory retention as
+/// the stale cutoff (0 keeps everything), USER.md as it is now (its first
+/// 1 MiB; none yet reads as empty, so every confident preference is
+/// proposed), and the report named `date` (`None` uses the UTC date).
+pub(crate) fn dream_opts(date: Option<&str>) -> grokhub_core::amr::DreamOpts {
+    use std::io::Read;
+    let days = retention_days();
+    let user = grokhub_agent::global_memory_path().with_file_name("USER.md");
+    let mut bytes = Vec::new();
+    if let Ok(file) = std::fs::File::open(&user) {
+        let _ = file.take(USER_MD_CAP).read_to_end(&mut bytes);
+    }
+    grokhub_core::amr::DreamOpts {
+        date: date.map(str::to_string),
+        ttl_days: if days == 0 { u64::MAX } else { days },
+        user_md: Some(String::from_utf8_lossy(&bytes).into_owned()),
+        ..Default::default()
+    }
+}
+
+/// Your local day, once the window has reported its clock, so `/dream` and
+/// the nightly pass name the same report.
+#[cfg(desktop)]
+fn local_today(config_dir: &Path, now: u64) -> Option<String> {
+    crate::scheduler::utc_offset()
+        .or_else(|| crate::pulse_feed::state(config_dir).utc_offset_min)
+        .map(|offset| crate::self_review::local_day(now, offset))
+}
+
+#[cfg(not(desktop))]
+fn local_today(_config_dir: &Path, _now: u64) -> Option<String> {
+    None
+}
+
 /// `/dream`: one dream pass now over the learned notes (merge repeats, retire
 /// unsure ones, propose missing preferences), then its report.
 pub fn dream_now(config_dir: &Path) -> Result<String, String> {
@@ -1147,17 +1247,18 @@ pub fn dream_now(config_dir: &Path) -> Result<String, String> {
         return Ok("Dreaming runs in memory repo mode only.".into());
     }
     let store = open_store()?;
-    let days = retention_days();
-    let opts = grokhub_core::amr::DreamOpts {
-        ttl_days: if days == 0 { u64::MAX } else { days },
-        user_md: std::fs::read_to_string(
-            grokhub_agent::global_memory_path().with_file_name("USER.md"),
-        )
-        .ok(),
-        ..Default::default()
+    // The nightly pass may be waiting on its model call: say so, don't wait.
+    let _one = match DREAM.try_lock() {
+        Ok(one) => one,
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return Ok("A dream is already running. Its report shows here when it's done.".into())
+        }
     };
+    let now = grokhub_core::now_ms();
+    let today = local_today(config_dir, now);
     let done = store
-        .dream_once(grokhub_core::now_ms(), &opts)
+        .dream_once(now, &dream_opts(today.as_deref()))
         .map_err(|e| e.to_string())?;
     Ok(format!(
         "{}\n\n{}",
@@ -1190,6 +1291,42 @@ mod tests {
             workspace,
             _guard: grokhub_agent::perm::ConfigGuard::set(&config),
         }
+    }
+
+    #[test]
+    fn the_wiki_line_counts_pages_and_private_lines() {
+        let root = std::env::temp_dir().join(format!("grokhub-shell-wiki-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = grokhub_core::amr::AmrStore::at(root.join("amr"));
+        store.init().unwrap();
+        let draft = |id: &str, body: &str| grokhub_core::amr::NodeDraft {
+            id: id.into(),
+            node_type: grokhub_core::amr::NodeType::Fact,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.9,
+            tags: Vec::new(),
+            body: body.into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
+        };
+        store
+            .remember(&draft("dock-layout", "Berth 4 is ours."))
+            .unwrap();
+        let dir = store.wiki_dir().display().to_string();
+        assert_eq!(
+            wiki_line(&store).unwrap(),
+            format!("The wiki in {dir} has 1 page (1 changed, 0 removed).")
+        );
+        store
+            .remember(&draft("boat-refit", "Refit this winter."))
+            .unwrap();
+        assert_eq!(
+            wiki_line(&store).unwrap(),
+            format!("The wiki in {dir} has 2 pages (1 changed, 0 removed).")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A preview (`/forget <topic>`, `/memory prune`) runs on a copy of the
@@ -1515,6 +1652,26 @@ mod tests {
         let done = reflect(&grokhub_agent::perm::config_dir(), None).unwrap();
         assert_eq!(done.status, "Reflect: nothing new");
         assert!(done.diff.is_empty());
+    }
+
+    #[test]
+    fn reflect_refuses_a_scratch_chat() {
+        let _d = dirs("reflect-scratch");
+        let done = reflect(
+            &grokhub_agent::perm::config_dir(),
+            Some("shell-scratch-a-b"),
+        )
+        .unwrap();
+        assert_eq!(done.status, "Scratch — no reflect");
+        assert!(done.diff.is_empty());
+        // Reflect with no chat named falls back to the last chat: a scratch
+        // one is refused the same way.
+        let dir = grokhub_agent::perm::config_dir();
+        let mut saved = crate::settings::load(&dir);
+        saved.last_chat = "shell-scratch-c-d".into();
+        crate::settings::save(&dir, &saved).unwrap();
+        let fallback = reflect(&dir, None).unwrap();
+        assert_eq!(fallback.status, "Scratch — no reflect");
     }
 
     #[test]

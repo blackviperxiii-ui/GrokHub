@@ -15,7 +15,7 @@ import { StatusLine, useNote } from "./ui";
 
 /** The groups, in page order. Built-in skills live in the Code tab, not here. */
 export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
-  { source: "cabin", label: "Cabin skills" },
+  { source: "cabin", label: "App skills" },
   { source: "project", label: "Project skills" },
   { source: "user", label: "User skills" },
   { source: "plugin", label: "Plugin skills" },
@@ -179,10 +179,10 @@ export function Skills({
         </button>
       </div>
       <p className="note">
-        Skills chat can use: this computer's cabin skills, the project's and
-        your own, and the ones enabled plugins bring. Switch one off to keep it
-        but stop chat using it. Make a new one with New skill, or Edit one of
-        this computer's skills to change it.
+        Skills chat can use: this app's own, the project's and yours, and the
+        ones enabled plugins bring. Switch one off to keep it but stop chat
+        using it. Make a new one with New skill, or Edit one of this app's own
+        to change it.
       </p>
       {making && (
         <form

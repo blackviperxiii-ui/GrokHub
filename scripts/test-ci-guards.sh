@@ -12,10 +12,11 @@ trap 'rm -rf "$TMP"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export REAL_GIT
 
-# Stub cargo (xtask bump --check always ok) and a git shim that can fail one subcommand.
+# Stub cargo (xtask bump --check always ok) and a git shim that can fail one
+# subcommand (FAIL_GIT_SUBCMD) or one exact command line (FAIL_GIT_ARGS).
 mkdir -p "$TMP/shim"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$TMP/shim/cargo"
-printf '#!/usr/bin/env bash\nif [[ "${1:-}" == "${FAIL_GIT_SUBCMD:-}" ]]; then exit 2; fi\nexec "$REAL_GIT" "$@"\n' >"$TMP/shim/git"
+printf '#!/usr/bin/env bash\nif [[ "${1:-}" == "${FAIL_GIT_SUBCMD:-}" ]]; then exit 2; fi\nif [[ -n "${FAIL_GIT_ARGS:-}" && "$*" == "$FAIL_GIT_ARGS" ]]; then exit 2; fi\nexec "$REAL_GIT" "$@"\n' >"$TMP/shim/git"
 chmod +x "$TMP/shim/cargo" "$TMP/shim/git"
 
 "$REAL_GIT" init -q --bare -b beta "$TMP/origin.git"
@@ -24,12 +25,31 @@ W="$TMP/work"
 mkdir -p "$W/scripts" "$W/crates/grokhub-core/src/slash"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
 cp -r "$SRC/scripts/ci-guards.d" "$W/scripts/ci-guards.d"
+cp "$SRC/scripts/aur-srcinfo.py" "$W/scripts/aur-srcinfo.py"
 printf 'fn main() {}\n' >"$W/crates/grokhub-core/src/slash/mod.rs"
 printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"$W/Cargo.toml"
 printf 'name = "grokhub-core"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
 printf '1.0.0\n' >"$W/VERSION"
-mkdir -p "$W/packaging/windows"
-printf '#define MyAppName "Old"\n#ifndef MyAppVersion\n  #define MyAppVersion "1.0.0"\n#endif\n' >"$W/packaging/windows/grokhub.iss"
+mkdir -p "$W/packaging/aur"
+printf 'pkgname=grokhub\npkgver=1.0.0\npkgdesc="Old"\n' >"$W/packaging/PKGBUILD"
+# Full enough for scripts/aur-srcinfo.py --check (ci-guards 42-aur-srcinfo).
+cat >"$W/packaging/aur/PKGBUILD" <<'PKG'
+pkgname=grokhub
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Old"
+arch=('x86_64')
+url="https://example.com/GrokHub"
+license=('MIT')
+depends=('gtk3')
+optdepends=('ffmpeg: Imagine video')
+makedepends=('cargo' 'git')
+options=('!debug')
+install=grokhub.install
+source=("${pkgname}::git+https://example.com/GrokHub.git#tag=v${pkgver}")
+sha256sums=('SKIP')
+PKG
+python3 "$W/scripts/aur-srcinfo.py" --write
 mkdir -p "$W/.github/workflows"
 SHA=0123456789abcdef0123456789abcdef01234567
 # Job `a` stays last: the pinned-action cases append steps to it.
@@ -93,7 +113,7 @@ failed=0
 # run_guard <expect: pass|fail> <name> [FAIL_GIT_SUBCMD]
 run_guard() {
   local expect="$1" name="$2" shim="${3:-}" rc=0
-  PATH="$TMP/shim:$PATH" FAIL_GIT_SUBCMD="$shim" GITHUB_EVENT_NAME=pull_request \
+  PATH="$TMP/shim:$PATH" FAIL_GIT_SUBCMD="$shim" FAIL_GIT_ARGS="${FAIL_GIT_ARGS:-}" GITHUB_EVENT_NAME=pull_request \
     GITHUB_BASE_REF=beta GITHUB_PR_LABELS="${LABELS:-none}" \
     bash "$W/scripts/ci-guards.sh" >"$TMP/out.log" 2>&1 || rc=$?
   if { [[ "$expect" == pass && $rc -eq 0 ]] || [[ "$expect" == fail && $rc -ne 0 ]]; }; then
@@ -123,6 +143,8 @@ run_guard pass "baseline harmless PR passes"
 
 run_guard fail "git grep error fails" grep
 run_guard fail "git diff error fails" diff
+# Only the case-clash guard runs exactly `git ls-files -z`.
+FAIL_GIT_ARGS="ls-files -z" run_guard fail "git ls-files -z error fails"
 
 fresh_pr
 printf '<<<<<<< HEAD\n' >>"$W/VERSION.txt"
@@ -130,25 +152,117 @@ commit_pr
 run_guard fail "conflict marker fails"
 
 fresh_pr
+printf 'a\n' >"$W/Notes.md"
+printf 'b\n' >"$W/notes.md"
+commit_pr
+run_guard fail "two paths that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs/Guide" "$W/docs/guide"
+printf 'a\n' >"$W/docs/Guide/a.md"
+printf 'b\n' >"$W/docs/guide/b.md"
+commit_pr
+run_guard fail "two folders that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/ui/src"
+printf 'export {};\n' >"$W/ui/src/ChatFind.tsx"
+printf 'export {};\n' >"$W/ui/src/chatFind.ts"
+commit_pr
+run_guard fail "JS/TS modules that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/ui/src/games"
+printf 'export {};\n' >"$W/ui/src/Games.tsx"
+printf 'export {};\n' >"$W/ui/src/games/index.tsx"
+commit_pr
+run_guard fail "a module and a folder index that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/ui/src"
+printf 'export {};\n' >"$W/ui/src/Foo.mts"
+printf 'export {};\n' >"$W/ui/src/foo.d.mts"
+commit_pr
+run_guard fail "a .mts module and a .d.mts that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs/guide"
+printf 'a\n' >"$W/docs/Guide"
+printf 'b\n' >"$W/docs/guide/a.md"
+commit_pr
+run_guard fail "a file and a folder that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs"
+printf 'a\n' >"$W/docs/Été.md"
+printf 'b\n' >"$W/docs/été.md"
+commit_pr
+run_guard fail "non-ASCII names that differ only by case fail"
+
+fresh_pr
+mkdir -p "$W/docs"
+printf 'a\n' >"$W/docs/ς.md"
+printf 'b\n' >"$W/docs/σ.md"
+commit_pr
+run_guard fail "final sigma and sigma, one name on Windows, fail"
+
+fresh_pr
+mkdir -p "$W/ui/src/Panel" "$W/ui/src/games"
+for f in ChatFindBar.tsx chatFind.ts chatFind.test.ts types.d.ts types.ts Panel.tsx Panel/index.tsx Games.tsx games/Wow.tsx straße.ts strasse.ts; do
+  printf 'export {};\n' >"$W/ui/src/$f"
+done
+commit_pr
+run_guard pass "distinct module names, a .d.ts beside its module, a same-case folder index, a folder without one, and ß beside ss pass"
+
+fresh_pr
 printf '[workspace]\nversion = "1.0.1"\n' >"$W/Cargo.toml"
 commit_pr
 run_guard fail "unparseable Cargo.toml version fails"
 
 fresh_pr
-sed -i 's/"Old"/"New"/' "$W/packaging/windows/grokhub.iss"
+sed -i 's/"Old"/"New"/' "$W/packaging/PKGBUILD"
 commit_pr
-run_guard pass "grokhub.iss name edit without a version change passes"
+run_guard pass "clone PKGBUILD recipe edit without a pkgver change passes"
 
 fresh_pr
-sed -i 's/"1.0.0"/"1.0.1"/' "$W/packaging/windows/grokhub.iss"
+sed -i 's/pkgdesc="Old"/pkgdesc="New"/' "$W/packaging/aur/PKGBUILD"
 commit_pr
-run_guard fail "grokhub.iss MyAppVersion bump without release fails"
-LABELS=release run_guard pass "grokhub.iss MyAppVersion bump with release passes"
+run_guard fail "AUR PKGBUILD edit without refreshing .SRCINFO fails"
 
 fresh_pr
-sed -i '/MyAppVersion "/d' "$W/packaging/windows/grokhub.iss"
+sed -i 's/pkgdesc="Old"/pkgdesc="New"/' "$W/packaging/aur/PKGBUILD"
+python3 "$W/scripts/aur-srcinfo.py" --write
 commit_pr
-run_guard fail "grokhub.iss missing MyAppVersion define fails"
+run_guard pass "AUR PKGBUILD recipe edit with matching .SRCINFO passes"
+
+fresh_pr
+sed -i 's/^pkgver=1.0.0$/pkgver=1.0.1/' "$W/packaging/PKGBUILD"
+commit_pr
+run_guard fail "PKGBUILD pkgver bump without release fails"
+LABELS=release run_guard pass "PKGBUILD pkgver bump with release passes"
+
+fresh_pr
+sed -i 's/^pkgver=1.0.0$/pkgver=1.0.1/' "$W/packaging/aur/PKGBUILD"
+commit_pr
+run_guard fail "AUR PKGBUILD pkgver bump without release fails"
+
+fresh_pr
+printf '1.0.1\n' >"$W/VERSION"
+commit_pr
+run_guard fail "VERSION edit without release fails"
+LABELS=release run_guard pass "VERSION edit with release passes"
+
+fresh_pr
+printf '# Changelog\n\n- Edited by hand.\n' >"$W/CHANGELOG.md"
+commit_pr
+run_guard fail "CHANGELOG.md edit without release fails"
+LABELS=release run_guard pass "CHANGELOG.md edit with release passes"
+
+fresh_pr
+sed -i '/^pkgver=/d' "$W/packaging/aur/PKGBUILD"
+commit_pr
+run_guard fail "PKGBUILD missing its pkgver line fails"
+LABELS=release run_guard fail "PKGBUILD missing its pkgver line fails even with release"
 
 fresh_pr
 printf 'name = "other"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
@@ -254,65 +368,6 @@ commit_pr
 run_guard pass "docker action with a digest passes"
 
 CI_YML="$W/.github/workflows/ci.yml"
-
-# merged_download [pattern line]: a step that merges every artifact it
-# downloads into one directory, with an optional `pattern:` input.
-merged_download() {
-  printf '      - uses: actions/download-artifact@%s # v8\n        with:\n          path: dist-release\n          merge-multiple: true\n' "$SHA" >>"$CI_YML"
-  if (($# > 0)); then
-    printf '          %s\n' "$1" >>"$CI_YML"
-  fi
-}
-
-fresh_pr
-merged_download
-commit_pr
-run_guard fail "a merged download without a pattern fails"
-
-fresh_pr
-merged_download 'pattern: "{linux,windows,shell-*}"'
-commit_pr
-run_guard pass "a merged download that names the release artifacts passes"
-
-fresh_pr
-merged_download "pattern: 'linux' # one artifact"
-commit_pr
-run_guard pass "a merged download of one named artifact passes"
-
-fresh_pr
-merged_download 'pattern: "*"'
-commit_pr
-run_guard fail "a merged download of every artifact fails"
-
-fresh_pr
-merged_download 'pattern: "{linux,windows*,shell-*}"'
-commit_pr
-run_guard fail "a merged download whose pattern takes the unsigned Windows staging files fails"
-
-fresh_pr
-merged_download 'pattern: "{linux,windows-signpath-unsigne?}"'
-commit_pr
-run_guard fail "a merged download that matches the staging files with ? fails"
-
-fresh_pr
-merged_download 'pattern: "windows{,-signpath-unsigned}"'
-commit_pr
-run_guard fail "a merged download pattern with an empty alternative fails"
-
-fresh_pr
-merged_download 'pattern: "!(linux)"'
-commit_pr
-run_guard fail "a merged download pattern the guard cannot read fails"
-
-fresh_pr
-merged_download 'pattern: {linux,windows}'
-commit_pr
-run_guard fail "an unquoted brace pattern, which YAML reads as a map, fails"
-
-fresh_pr
-printf '      - uses: actions/download-artifact@%s # v8\n        with:\n          name: linux\n          path: dist-release\n' "$SHA" >>"$CI_YML"
-commit_pr
-run_guard pass "a download of one artifact by name, not merged, passes"
 
 fresh_pr
 sed -i "/^  linux:/,/^  windows:/s/^    if: .*/    if: needs.changes.outputs.code == 'true'/" "$CI_YML"

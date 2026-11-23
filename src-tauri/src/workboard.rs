@@ -44,7 +44,7 @@ const DETAIL_MAX: usize = 2000;
 pub const LOG_LINES: usize = 20;
 /// Most of a progress log the page reads: its tail, never the whole file.
 pub const LOG_READ_MAX: u64 = 32 * 1024;
-pub const GONE: &str = "That card is gone. It may have been removed in the cabin.";
+pub const GONE: &str = "That card is gone. The page now shows what is left.";
 
 pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
@@ -147,6 +147,9 @@ pub struct Card {
     pub user_steps: bool,
     /// The steps as the editor shows them, one a line with its mark.
     pub steps_text: String,
+    /// When this card is due, as unix ms. None when it has no due time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<u64>,
     /// The card as one mission (Doing or Blocked): checklist, status and
     /// header, projected from its steps, checkpoint and newest outcome.
     pub mission: Option<grokhub_core::MissionView>,
@@ -244,6 +247,10 @@ pub enum Act {
     Place {
         to: Lane,
         before: Option<String>,
+    },
+    /// Set or clear when the card is due (unix ms). Pulse reminders read it.
+    Due {
+        due_at: Option<u64>,
     },
 }
 
@@ -385,6 +392,7 @@ fn card(c: &BoardCard, all: &[BoardCard], outcomes: &crate::mission::Outcomes) -
         flow: c.flow.as_ref().map(|f| f.line()),
         user_steps: c.user_steps,
         steps_text: wt::steps_text(c),
+        due_at: c.due_at,
         mission: crate::mission::project(c, outcomes),
     }
 }
@@ -660,6 +668,11 @@ fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bo
         Act::Block { reason } => wt::block_card(cards, id, reason, now)?,
         Act::Unblock => wt::unblock_card(cards, id, now),
         Act::Steps { text } => wt::edit_steps(&mut cards[i], text, now),
+        Act::Due { due_at } => {
+            let changed = cards[i].due_at != *due_at;
+            cards[i].due_at = *due_at;
+            changed
+        }
         Act::Rank { up } => match cards[i].status.column() {
             Some(column) => {
                 let order = in_column(cards, column);
@@ -713,6 +726,7 @@ fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bo
             | Act::Block { .. }
             | Act::Unblock
             | Act::Steps { .. }
+            | Act::Due { .. }
     );
     if changed && yours {
         grokhub_core::mark_touched(cards, id, now);
@@ -1696,6 +1710,30 @@ mod tests {
         assert!(matches!(parsed, Act::Priority { priority } if priority == "high"));
         let parsed: Act = serde_json::from_str(r#"{"kind":"steps","text":"A\nB"}"#).expect("steps");
         assert!(matches!(parsed, Act::Steps { text } if text == "A\nB"));
+        let parsed: Act =
+            serde_json::from_str(r#"{"kind":"due","dueAt":1732147200000}"#).expect("due");
+        assert!(matches!(
+            parsed,
+            Act::Due {
+                due_at: Some(1732147200000)
+            }
+        ));
+        let parsed: Act =
+            serde_json::from_str(r#"{"kind":"due","dueAt":null}"#).expect("clear due");
+        assert!(matches!(parsed, Act::Due { due_at: None }));
+    }
+
+    #[test]
+    fn a_due_act_sets_and_clears_the_card_due_time() {
+        let config = temp_dir("due-act");
+        cabin_writes(&config, &[board_card("a", BoardStatus::Todo)]);
+        let due = 1_732_147_200_000u64;
+        let page = act(&config, "a", Act::Due { due_at: Some(due) }).expect("set due");
+        assert_eq!(lane(&page, Lane::Todo)[0].due_at, Some(due));
+        assert_eq!(on_disk(&config)[0].due_at, Some(due));
+        let page = act(&config, "a", Act::Due { due_at: None }).expect("clear");
+        assert_eq!(lane(&page, Lane::Todo)[0].due_at, None);
+        assert_eq!(on_disk(&config)[0].due_at, None);
     }
 
     #[test]

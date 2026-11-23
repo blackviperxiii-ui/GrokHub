@@ -175,6 +175,10 @@ pub struct LocalModel {
     pub min_llama_build: Option<u32>,
     /// Offered, never picked for the user.
     pub optional: bool,
+    /// Listed in Download models. `offered = false` keeps a row out of the
+    /// list (and "Download all") until it is on disk, for a model nothing
+    /// in the app uses yet.
+    pub offered: bool,
     /// A speculative-decoding drafter, not a model to chat with.
     pub is_drafter: bool,
     /// What the model is for.
@@ -187,6 +191,8 @@ pub struct LocalModel {
     pub refusal_score: Option<u8>,
     /// The id of its drafter, when it has one.
     pub drafter: Option<&'static str>,
+    /// The id of its vision projector, when it has one.
+    pub projector: Option<&'static str>,
     pub min_budget: Budgets,
     pub tok_s: TokS,
     /// Files it needs besides `file`, downloaded after it; empty for a GGUF.
@@ -269,6 +275,8 @@ struct CatalogRow {
     min_llama_build: Option<u32>,
     #[serde(default)]
     optional: bool,
+    #[serde(default = "offered_default")]
+    offered: bool,
     #[serde(default)]
     role: Option<String>,
     #[serde(default)]
@@ -280,6 +288,8 @@ struct CatalogRow {
     #[serde(default)]
     refusal_score: Option<u8>,
     drafter: Option<String>,
+    #[serde(default)]
+    projector: Option<String>,
     min_budget: Budgets,
     tok_s: TokS,
     #[serde(default)]
@@ -315,6 +325,10 @@ struct AbliterationRow {
 }
 
 const CATALOG_TOML: &str = include_str!("../data/local_catalog.toml");
+
+fn offered_default() -> bool {
+    true
+}
 
 fn leak(s: String) -> &'static str {
     s.leak()
@@ -367,6 +381,7 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
         needs_avx2: r.needs_avx2,
         min_llama_build: r.min_llama_build,
         optional: r.optional,
+        offered: r.offered,
         is_drafter: kind == ModelKind::Drafter,
         kind,
         pairs_with: r.pairs_with.map(leak),
@@ -376,6 +391,7 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
         }),
         refusal_score: r.refusal_score,
         drafter: r.drafter.map(leak),
+        projector: r.projector.map(leak),
         min_budget: r.min_budget,
         tok_s: r.tok_s,
         profile: LocalProfile {
@@ -406,7 +422,10 @@ pub(crate) fn parse_catalog(text: &str) -> Option<(u32, Vec<LocalModel>)> {
 
 /// The version of the catalog built into this app.
 pub fn bundled_version() -> u32 {
-    parse_catalog(CATALOG_TOML).map_or(0, |(v, _)| v)
+    // Parsed once: parsing keeps the catalog's strings for the run.
+    static VERSION: LazyLock<u32> =
+        LazyLock::new(|| parse_catalog(CATALOG_TOML).map_or(0, |(v, _)| v));
+    *VERSION
 }
 
 /// Every catalog row, biggest first. Parsed once; the strings live for the
@@ -679,7 +698,7 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 39, "catalog parsed");
+        assert_eq!(all.len(), 44, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
         assert_eq!(
             chat.len(),
@@ -702,7 +721,8 @@ mod tests {
                 m.id,
                 a.method
             );
-            // No row claims vision until its projector downloads with it.
+            // No row claims vision: a picture is read only once the
+            // projector is on disk, and the router loads it then.
             assert!(!m.badges.contains(&"vision"), "{}", m.id);
         }
         // The defaults stay huihui-ai's Gemma 4 builds.
@@ -732,6 +752,39 @@ mod tests {
                 );
             }
         }
+        // Every projector names the chat model it reads pictures for, and
+        // that model names it back.
+        let projectors: Vec<_> = all
+            .iter()
+            .filter(|m| m.kind == ModelKind::VisionProjector)
+            .collect();
+        assert_eq!(projectors.len(), 5);
+        for v in &projectors {
+            let t = model_by_id(v.pairs_with.unwrap()).unwrap();
+            assert_eq!(t.projector, Some(v.id), "{}", v.id);
+            assert_eq!(v.remote_name(), "mmproj-model-bf16.gguf", "{}", v.id);
+            // Every folder scan skips a file led by `mmproj`.
+            assert!(v.file.starts_with("mmproj-"), "{}", v.file);
+        }
+        // Every projector a chat row names is in the catalog, under a file
+        // of its own.
+        for m in all.iter().filter(|m| m.is_chat()) {
+            if let Some(v) = m.projector {
+                let v = model_by_id(v).unwrap_or_else(|| panic!("{v}"));
+                assert_eq!(v.kind, ModelKind::VisionProjector, "{}", v.id);
+                assert_eq!(v.pairs_with, Some(m.id), "{}", v.id);
+                assert_eq!(
+                    all.iter().filter(|o| o.file == v.file).count(),
+                    1,
+                    "{}",
+                    v.file
+                );
+            }
+        }
+        assert_eq!(
+            model_by_id("gemma-4-e2b-it-abliterated-q4_k").and_then(|m| m.projector),
+            Some("gemma-4-e2b-it-abliterated-mmproj")
+        );
     }
 
     #[test]

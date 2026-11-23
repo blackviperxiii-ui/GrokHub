@@ -2,6 +2,7 @@
 //! One worker thread per stdio child or HTTP read. No tokio.
 
 mod browser;
+pub use browser::{loopback_endpoint, origin_of, Attach as BrowserAttach};
 mod config;
 mod elicit;
 mod headers;
@@ -466,6 +467,29 @@ pub fn restart(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The browser attach changed: each running Playwright server starts again
+/// with the new flags, and one that fell back to its own browser after a
+/// failed attach tries the attach again. The servers it restarted.
+pub fn browser_attach_changed() -> Vec<String> {
+    browser::forget_isolated();
+    let running: Vec<String> = slots_now()
+        .into_iter()
+        .filter(|(_, slot)| {
+            let inner = lock_slot(slot);
+            inner.conn.is_some()
+                && matches!(
+                    &inner.def.transport,
+                    TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
+                )
+        })
+        .map(|(name, _)| name)
+        .collect();
+    running
+        .into_iter()
+        .filter(|name| restart(name).is_ok())
+        .collect()
+}
+
 /// Sign in to an HTTP server in the browser `open` launches, then reconnect
 /// it with the new token. Returns the line naming the account.
 pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<String, String> {
@@ -547,7 +571,7 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
     let path = config::config_file();
     let target = crate::harness::McpFile { path: &path, name };
     let cur = crate::harness::ChangeTarget::read(&target)?
-        .ok_or_else(|| format!("{name} isn't one of this cabin's connections"))?;
+        .ok_or_else(|| format!("{name} isn't one of this app's connections"))?;
     let mut entry: serde_json::Map<String, Value> =
         serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
     let was_on = entry
@@ -1028,6 +1052,10 @@ fn normalize_args(value: Option<&Value>) -> Value {
 }
 
 fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+    // The user's own browser opens only the sites they allowed.
+    if let Some(why) = browser::navigate_refusal(&rec.server, &rec.raw, args) {
+        return ToolOutput::err(why);
+    }
     let slots = slots_now();
     let Some(slot) = slots.get(&rec.server).cloned() else {
         return ToolOutput::err(format!("MCP server `{}` stopped", rec.server));
@@ -1069,6 +1097,10 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     );
     if let Some(text) = died.filter(|_| playwright) {
         eprintln!("grokhub mcp `{}` browser launch died: {text}", rec.server);
+        // The dead launch's text passes the same page check as any answer,
+        // here and when the next call shows it as the server's error.
+        let text = browser::page_refusal(&rec.server, &rec.raw, args, &text, true)
+            .map_or_else(|why| why, rpc::clip);
         inner.conn.take();
         inner.last_error = Some(clip_err(&text));
         drop(inner);
@@ -1079,6 +1111,17 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
         out.text = format!("{}\n{}", browser::CANT_START, out.text);
         return out;
     }
+    // Nothing from a tab on a site the user didn't allow reaches the model.
+    // The page check reads the whole answer; only then is it cut to size.
+    let result = match result {
+        Ok((text, failed)) => {
+            match browser::page_refusal(&rec.server, &rec.raw, args, &text, failed) {
+                Ok(text) => Ok((rpc::clip(text), failed)),
+                Err(why) => return ToolOutput::err(why),
+            }
+        }
+        Err(err) => Err(err),
+    };
     match result {
         Ok((text, true)) => fenced_error(&text),
         Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
@@ -1632,7 +1675,7 @@ mod tests {
         );
         assert_eq!(
             super::set_enabled("nope", false),
-            Err("nope isn't one of this cabin's connections".into())
+            Err("nope isn't one of this app's connections".into())
         );
         super::shutdown_all();
         super::invalidate();
@@ -1882,6 +1925,8 @@ mod tests {
     fn a_pasted_stdio_connector_starts_with_the_key_saved_for_it() {
         let dir = crate::harness::test_dir("mcp-import-save-start");
         let _guard = ConfigGuard::set(&dir);
+        // The probe starts in the workspace: an earlier test's may be gone.
+        super::set_workspace(&dir);
         super::invalidate();
         let (entry, seen) = env_probe(&dir, "BRAVE_API_KEY", "brave-search");
         let pasted = json!({"mcpServers": {"brave-search": entry}});
@@ -1907,6 +1952,8 @@ mod tests {
     #[test]
     fn an_imported_stdio_entry_never_starts_with_another_entrys_key() {
         let (dir, _guard) = sealed_cfg("mcp-import-other-env");
+        // The probe starts in the workspace: an earlier test's may be gone.
+        super::set_workspace(&dir);
         let (entry, seen) = env_probe(&dir, "NOTES_KEY", "github");
         let pasted = json!({"mcpServers": {"notes": entry}});
         import_documents(&[pasted.to_string()]).unwrap();
@@ -2722,7 +2769,7 @@ mod tests {
     #[test]
     fn offline_only_pauses_third_party_servers_and_keeps_the_apps_own() {
         use super::{doctor, invalidate, offline_paused, shutdown_all};
-        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
+        const MSG: &str = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
         let exe = Path::new("/opt/loadout/grokhub");
         let cua = vec!["--mcp-cua".to_string()];
         let npx = vec!["-y".to_string(), "weather-mcp".to_string()];

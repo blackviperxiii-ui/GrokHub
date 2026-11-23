@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Settings } from "./api";
+import type { Settings, HeardWords } from "./api";
 
 const api = vi.hoisted(() => ({
-  transcribe: vi.fn<(wav: string) => Promise<string>>(),
+  transcribe: vi.fn<(wav: string, conversationId?: string | null) => Promise<HeardWords>>(),
   sendChat: vi.fn<(...args: unknown[]) => Promise<string>>(),
+  loadChat: vi.fn<(id: string, limit?: number) => Promise<unknown>>(),
 }));
 
 vi.mock("./api", async () => {
@@ -15,8 +16,8 @@ vi.mock("./api", async () => {
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   // No chat saved from an earlier launch.
-  getLastChat: () => Promise.resolve(null),
-  loadChat: vi.fn(),
+  getStartChat: () => Promise.resolve(null),
+  loadChat: api.loadChat,
   transcribe: api.transcribe,
   sendChat: api.sendChat,
   getSettings: () =>
@@ -31,6 +32,8 @@ vi.mock("./api", async () => {
       version: "3.5.0",
       summonHotkey: false,
       notifications: true,
+      dockPanels: false,
+      dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
     } satisfies Settings),
   saveSettings: vi.fn(),
   answerElicit: vi.fn(),
@@ -50,7 +53,7 @@ vi.mock("./api", async () => {
 });
 
 import { Chat } from "./Chat";
-import { appendDraft, closeMic, MIC_DENIED } from "./Mic";
+import { appendDraft, closeMic, Mic, MIC_DENIED } from "./Mic";
 
 /** A fake mic at 48 kHz: `feed` plays samples into the open recording. */
 function fakeMic() {
@@ -101,6 +104,7 @@ describe("push to talk", () => {
   beforeEach(() => {
     api.transcribe.mockReset();
     api.sendChat.mockReset();
+    api.loadChat.mockReset();
   });
   afterEach(async () => {
     await closeMic();
@@ -109,7 +113,7 @@ describe("push to talk", () => {
 
   it("holding records, letting go transcribes into the draft and sends nothing", async () => {
     const mic = fakeMic();
-    api.transcribe.mockResolvedValue("open the build log");
+    api.transcribe.mockResolvedValue({ words: "open the build log", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "please");
 
@@ -140,7 +144,7 @@ describe("push to talk", () => {
 
   it("asks for echo cancellation, noise suppression and level control", async () => {
     const mic = fakeMic();
-    api.transcribe.mockResolvedValue("hi");
+    api.transcribe.mockResolvedValue({ words: "hi", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     const button = screen.getByRole("button", { name: MIC });
     fireEvent.pointerDown(button);
@@ -155,7 +159,7 @@ describe("push to talk", () => {
 
   it("the next hold starts at once and keeps the moment before the press", async () => {
     const mic = fakeMic();
-    api.transcribe.mockResolvedValue("one");
+    api.transcribe.mockResolvedValue({ words: "one", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     const button = screen.getByRole("button", { name: MIC });
     fireEvent.pointerDown(button);
@@ -180,7 +184,7 @@ describe("push to talk", () => {
 
   it("the last word, said as you let go, is kept", async () => {
     const mic = fakeMic();
-    api.transcribe.mockResolvedValue("done");
+    api.transcribe.mockResolvedValue({ words: "done", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     const button = screen.getByRole("button", { name: MIC });
     fireEvent.pointerDown(button);
@@ -195,7 +199,7 @@ describe("push to talk", () => {
 
   it("Ctrl+G holds to talk too", async () => {
     const mic = fakeMic();
-    api.transcribe.mockResolvedValue("hello");
+    api.transcribe.mockResolvedValue({ words: "hello", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     fireEvent.keyDown(window, { key: "g", ctrlKey: true });
     await waitFor(() => expect(mic.processor).not.toBeNull());
@@ -206,7 +210,7 @@ describe("push to talk", () => {
 
   it("a Ctrl+G hold ends when the window loses focus, with no key let go", async () => {
     const mic = fakeMic();
-    api.transcribe.mockResolvedValue("said before switching away");
+    api.transcribe.mockResolvedValue({ words: "said before switching away", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     fireEvent.keyDown(window, { key: "g", ctrlKey: true });
     await waitFor(() => expect(mic.processor).not.toBeNull());
@@ -224,7 +228,7 @@ describe("push to talk", () => {
     let allow: () => void = () => {};
     const stream = { getTracks: () => [{ stop: () => {} }] };
     mic.getUserMedia.mockImplementation(() => new Promise((resolve) => (allow = () => resolve(stream as never))));
-    api.transcribe.mockResolvedValue("what I said after Allow");
+    api.transcribe.mockResolvedValue({ words: "what I said after Allow", line: null });
     render(<Chat onOpenSettings={() => {}} />);
     fireEvent.keyDown(window, { key: "g", ctrlKey: true });
     // The prompt opens and takes focus: no keyup reaches the page.
@@ -254,6 +258,84 @@ describe("push to talk", () => {
     fireEvent.pointerUp(button);
     expect(await screen.findByRole("alert")).toHaveTextContent(MIC_DENIED);
     expect(api.transcribe).not.toHaveBeenCalled();
+  });
+
+  it("the words are heard for this chat, and an on-device line shows as a hint, not the error line", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue({
+      words: "turn on the lights",
+      line: "Heard on this computer with Parakeet v3 speech to text: this chat runs here.",
+    });
+    api.loadChat.mockResolvedValue({
+      id: "shell-saved",
+      title: "lights",
+      lines: [{ role: "user", text: "are the lights on" }],
+      earlier: 0,
+    });
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-saved", n: 1 }} />);
+    expect(await screen.findByText("are the lights on")).toBeVisible();
+    const button = screen.getByRole("button", { name: MIC });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.pointerUp(button);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+    expect(api.transcribe.mock.calls[0][1]).toBe("shell-saved");
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("turn on the lights"));
+    expect(
+      screen.getByText("Heard on this computer with Parakeet v3 speech to text: this chat runs here."),
+    ).toHaveClass("voice-line");
+    expect(screen.queryByRole("alert")).toBeNull();
+    // The next hold starts without the old line.
+    fireEvent.pointerDown(button);
+    await waitFor(() =>
+      expect(screen.queryByText("Heard on this computer with Parakeet v3 speech to text: this chat runs here.")).toBeNull(),
+    );
+    fireEvent.pointerUp(button);
+  });
+
+  it("a line heard for one chat never shows after another chat opens", async () => {
+    const mic = fakeMic();
+    let heard = (_: HeardWords) => {};
+    api.transcribe.mockImplementationOnce(() => new Promise((res) => (heard = res)));
+    const hints: string[] = [];
+    const words: string[] = [];
+    const props = {
+      onText: (w: string) => words.push(w),
+      onError: () => {},
+      onHint: (l: string) => hints.push(l),
+      busy: false,
+      active: true,
+    };
+    const { rerender } = render(<Mic {...props} conversationId="chat-here" />);
+    const button = screen.getByRole("button", { name: MIC });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.pointerUp(button);
+    await waitFor(() => expect(api.transcribe).toHaveBeenCalledTimes(1));
+    expect(api.transcribe.mock.calls[0][1]).toBe("chat-here");
+    // A cloud chat opens while this computer is still hearing it.
+    rerender(<Mic {...props} conversationId="chat-online" />);
+    await act(async () =>
+      heard({ words: "turn on the lights", line: "Heard on this computer with Parakeet v3 speech to text: this chat runs here." }),
+    );
+    expect(words).toEqual(["turn on the lights"]);
+    expect(hints).toEqual([""]);
+  });
+
+  it("a chat that plainly runs online shows no line", async () => {
+    const mic = fakeMic();
+    api.transcribe.mockResolvedValue({ words: "open the build log", line: null });
+    const { container } = render(<Chat onOpenSettings={() => {}} />);
+    const button = screen.getByRole("button", { name: MIC });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(mic.processor).not.toBeNull());
+    mic.feed(new Float32Array(4800).fill(0.25));
+    fireEvent.pointerUp(button);
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue("open the build log"));
+    expect(container.querySelector(".voice-line")).toBeNull();
   });
 
   it("the desktop's refusal shows in its words", async () => {

@@ -383,6 +383,19 @@ fn base_urls_are_https_hosts_and_xai_is_built_in() {
         parse_base_url("https://10.0.0.5/v1").unwrap_err(),
         "That address isn't a public https URL."
     );
+    // A provider's key is saved under its id, so no id may be a named key's.
+    assert_eq!(
+        parse_base_url("https://cabin-web-search-brave.example.com/v1").unwrap_err(),
+        "That provider name is reserved."
+    );
+    for key in providers::NamedKey::ALL {
+        let url = format!("https://{}.example.com/v1", key.account());
+        assert_ne!(
+            parse_base_url(&url).map(|(_, _, id)| id).as_deref(),
+            Ok(key.account()),
+            "{url}"
+        );
+    }
     let a = providers::Provider {
         id: "anthropic".into(),
         kind: ProviderKind::Anthropic,
@@ -1668,6 +1681,7 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
         &dir,
         &approving_browser("good-code", seen.clone()),
         std::time::Duration::from_secs(10),
+        &|| false,
     )
     .unwrap();
     assert_eq!(key.as_str(), KEY);
@@ -1718,9 +1732,34 @@ fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
         &dir,
         &approving_browser("bad-code", seen),
         std::time::Duration::from_secs(10),
+        &|| false,
     )
     .unwrap_err();
     assert_eq!(err, "OpenRouter didn't hand over a key (HTTP 403)");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn offline_only_opens_no_openrouter_page() {
+    let dir = test_dir("r3b-openrouter-offline");
+    let wire = Arc::new(KeyWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let _on = grokhub_core::offline::force_for_thread(true);
+    let opened = Mutex::new(Vec::<String>::new());
+    let err = providers::openrouter_key(
+        &dir,
+        &|link: &str| {
+            opened.lock().unwrap().push(link.to_string());
+            Ok(())
+        },
+        std::time::Duration::from_secs(1),
+        &|| false,
+    )
+    .unwrap_err();
+    assert_eq!(err, *grokhub_core::offline::OFFLINE_MSG);
+    assert!(opened.lock().unwrap().is_empty());
+    assert!(wire.0.lock().unwrap().is_empty());
+    assert!(read_egress(&dir).is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -2118,12 +2157,99 @@ fn an_18_plus_chat_goes_straight_to_the_local_model_and_a_clean_one_does_not() {
     // A banned ask is held before any model sees it: the notice is the answer.
     let banned = send(&["nsfw schoolgirl roleplay"]).unwrap();
     assert_eq!(banned.text, grokhub_core::adult_guard::HELD_NOTICE);
-    let clean = send(&["fix my wifi"]);
-    assert!(
-        matches!(clean, Err(ClientError::Auth { .. })),
-        "only 18+ chats fall back here: {clean:?}"
-    );
+    // Card 900.5: a refused Grok sign-in also falls back when Local AI is ready.
+    let clean = send(&["fix my wifi"]).unwrap();
+    assert_eq!(clean.text, "local here");
     assert_eq!(wire.n(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Card 900.5: a 401 on Grok retries the turn on this computer's model once,
+/// with the plain "Grok not connected" notice.
+#[test]
+fn a_refused_grok_key_retries_the_turn_on_the_local_model() {
+    let (dir, _wire) = setup("auth-local-retry");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut thought = String::new();
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &chat("auth-local-1", &["hey"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::ReasoningDelta(t) = ev {
+                thought.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("local takes the turn");
+    assert_eq!(out.text, "local here");
+    assert!(
+        thought.contains(super::local::LOCAL_FALLBACK_MSG),
+        "notice missing: {thought:?}"
+    );
+    assert!(
+        super::local::fallback_active(),
+        "Grok refusal marks the local fallback chip"
+    );
+    // The turn moved to this computer, so its voice runs here too.
+    assert!(super::local_live::runs_here("auth-local-1"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Card 900.5: with no local model, a refused Grok key still surfaces as Auth.
+#[test]
+fn a_refused_grok_key_keeps_the_auth_error_when_no_local_model() {
+    let (dir, _wire) = setup("auth-no-local");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    // Local AI off / no runtime: ForceOn is not set.
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &chat("auth-no-local-1", &["hey"]),
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    );
+    assert!(
+        matches!(out, Err(ClientError::Auth { status: 401, .. })),
+        "{out:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Card 900.5: with no Grok credential and Local AI ready, chat goes local
+/// up front (`local:no_keys`) and shows the same notice.
+#[test]
+fn missing_grok_creds_route_chat_to_the_local_model() {
+    let (dir, wire) = setup("no-keys-local");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    save_registry(&dir, &reg).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let mut thought = String::new();
+    // A client that would blow up if xAI were tried.
+    let out = live::stream_routed(
+        &XaiSignedOut,
+        &chat("no-keys-1", &["hey"]),
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::ReasoningDelta(t) = ev {
+                thought.push_str(&t);
+            }
+        },
+        "chat:default",
+    )
+    .expect("local answers with no Grok key");
+    assert_eq!(out.text, "local here");
+    assert_eq!(wire.n(), 0, "xAI must not be called");
+    assert!(
+        thought.contains(super::local::LOCAL_FALLBACK_MSG),
+        "notice missing: {thought:?}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -2176,6 +2302,9 @@ fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
     assert_eq!(out.unwrap().text, "local here");
     assert_eq!(shown, "local here");
     assert_eq!(sent_to_xai(), 0);
+    // Its voice runs here and must stay here.
+    assert!(super::local_live::runs_here("adult-unload-1"));
+    assert!(super::local_live::must_stay_here("adult-unload-1"));
 
     // Unloaded for a game.
     drop(loaded);
@@ -2186,6 +2315,9 @@ fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
     assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
     assert_eq!(shown, LOCAL_ONLY_MISSING);
     assert_eq!(sent_to_xai(), 0);
+    // No step ran here this time, but the voice still may not leave.
+    assert!(!super::local_live::runs_here("adult-unload-1"));
+    assert!(super::local_live::must_stay_here("adult-unload-1"));
     // An 18+ turn says in one line why it can't run, and sends nothing.
     let (out, shown, _) = send("lets get naked", "chat:default");
     assert_eq!(out.unwrap().text, LOCAL_ONLY_MISSING);
@@ -2207,10 +2339,13 @@ fn an_18_plus_chat_keeps_answering_after_its_local_model_is_unloaded() {
     );
     drop(again);
 
-    // Ready but not loaded yet: the chat says it's loading, never a silent wait.
+    // Ready but not loaded yet: the chat says it's loading with why it routed locally.
     let _cold = super::local::ForceOn::with(None);
     let (out, _, thought) = send("lets get naked", "chat:default");
-    assert_eq!(thought, super::local::LOCAL_LOADING_NOTE);
+    assert!(
+        thought.starts_with(super::local::LOCAL_LOADING_NOTE) && thought.contains("Reason:"),
+        "expected loading note with routing reason, got: {thought}"
+    );
     assert!(out.is_err(), "no engine here, so it can't start: {out:?}");
     assert_eq!(sent_to_xai(), 0);
     assert_eq!(wire.n(), 0);
@@ -2753,13 +2888,15 @@ fn xai_down_hands_an_ordinary_turn_to_a_provider_then_to_this_computer() {
         (rec.used.provider.as_str(), rec.used.model.as_str()),
         ("openrouter", OR_MODEL)
     );
-    // A signed-out xAI is no outage: nothing stands in for it.
-    let (out, _) = send(&XaiSignedOut, 4, &["fix my wifi"]);
-    assert!(matches!(out, Err(ClientError::Auth { .. })), "{out:?}");
+    // A signed-out xAI hands off like an outage: the provider you set up answers.
+    let (out, shown) = send(&XaiSignedOut, 4, &["fix my wifi"]);
+    assert_eq!(out.unwrap().text, "hello from the provider");
+    assert_eq!(shown, "hello from the provider");
+    assert_eq!(wire.n(), 2);
     // An 18+ chat never goes to the provider: this computer's model answers.
     let (out, _) = send(&XaiDown, 5, &["talk dirty to me, I'm horny"]);
     assert_eq!(out.unwrap().text, "local here");
-    assert_eq!(wire.n(), 1, "nothing more reached the provider");
+    assert_eq!(wire.n(), 2, "nothing more reached the provider");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -3254,11 +3391,11 @@ fn stand_in(dir: &Path) -> Option<String> {
 
 #[test]
 fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
-    // Healthy: Grok on OpenRouter goes first, so the reply keeps its voice.
+    // Both healthy: no primary-provider Grok bias (rule 918.6); a healthy provider answers.
     let dir = two_providers("health-ok", &[(200, true, false, 1_500)]);
-    assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
+    assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
     let _ = std::fs::remove_dir_all(dir);
-    // Three of its last five calls answered 429: the other provider goes first.
+    // Three of OpenRouter's last five calls answered 429: the other healthy provider goes first.
     let busy = [
         (500, false, true, 0),
         (400, false, true, 0),
@@ -3277,7 +3414,7 @@ fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
     assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
     let _ = std::fs::remove_dir_all(dir);
     // A batched call's queueing (0, no sample) teaches nothing, and an hour-old
-    // busy spell is over.
+    // busy spell is over; a healthy candidate stands in.
     let old_and_queued = [
         (2 * 60 * 60 * 1000, false, true, 0),
         (2 * 60 * 60 * 1000 - 1, false, true, 0),
@@ -3287,7 +3424,7 @@ fn a_busy_or_slow_provider_stands_in_after_a_healthy_one() {
         (100, true, false, 0),
     ];
     let dir = two_providers("health-queued", &old_and_queued);
-    assert_eq!(stand_in(&dir).as_deref(), Some("openrouter/x-ai/grok-test"));
+    assert_eq!(stand_in(&dir).as_deref(), Some("groq/vendor/fast"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -3555,7 +3692,7 @@ fn provider_fallible_covers_limits_credit_and_outages_only() {
         // the app's own offline mode blocks every cloud route alike.
         ClientError::Protocol("HTTP 400: maximum context length exceeded".into()),
         ClientError::Transport(
-            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this."
+            "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this."
                 .into(),
         ),
     ];
@@ -4106,4 +4243,86 @@ fn a_rate_limit_cools_for_minutes_and_an_outage_for_one() {
     assert!(live::cooling(&dir, "anthropic/y", NOW + 59_000));
     assert!(!live::cooling(&dir, "anthropic/y", NOW + 61_000));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Local router step 7: a chat whose last step ran here, its newest message
+/// a picture, the fleet with the device on it. The answer, what the chat thought, and the route log's
+/// model and rules.
+type PictureTurn = (Result<TurnOutput, ClientError>, String, String, Vec<String>);
+
+fn picture_turn(id: &str, xai: &dyn ModelClient) -> PictureTurn {
+    let (dir, _wire) = setup(id);
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::Local,
+            super::local::TIERS
+                .iter()
+                .map(|t| super::local::tier_meta(t))
+                .collect(),
+        )],
+        &[],
+        2,
+    );
+    save_registry(&dir, &reg).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    super::local_live::note_step_here(id, true, false);
+    let mut req = chat(id, &[]);
+    req.input.push(InputItem::Message {
+        role: "user".into(),
+        content: vec![
+            ContentPart::InputText("hey".into()),
+            ContentPart::InputImage("data:image/png;base64,YQ==".into()),
+        ],
+    });
+    let mut thought = String::new();
+    let out = live::stream_routed(
+        xai,
+        &req,
+        &CancelToken::new(),
+        &mut |ev| {
+            if let StreamEvent::ReasoningDelta(t) = ev {
+                thought.push_str(&t);
+            }
+        },
+        "chat:default",
+    );
+    let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES).pop().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    (out, thought, rec.chosen.model, rec.rule_ids)
+}
+
+/// Online, a chat is never routed to the device, so a chat that last ran
+/// here sends its picture to the online model that reads it; nothing in the
+/// chat says the device was passed over.
+#[test]
+fn a_chat_picture_goes_online_with_the_picture_when_the_cloud_answers() {
+    let xai = XaiRec::default();
+    let (out, thought, model, rules) = picture_turn("vision-online-1", &xai);
+    assert_eq!(out.unwrap().text, "hey you");
+    assert_eq!(model, "grok-4.3");
+    assert!(!rules.iter().any(|r| r == "local:no_vision"), "{rules:?}");
+    assert_eq!(thought, "");
+    let sent = xai.0.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(
+        matches!(&sent[0].input.last(), Some(InputItem::Message { content, .. })
+            if content.iter().any(|p| matches!(p, ContentPart::InputImage(_)))),
+        "{:?}",
+        sent[0].input.last()
+    );
+}
+
+/// The online call fails before it shows anything and the device answers
+/// without the picture: the line under the reply says it wasn't read.
+#[test]
+fn a_chat_picture_that_lands_on_the_device_says_it_wasnt_read() {
+    let (out, thought, _, _) = picture_turn("vision-back-1", &XaiSignedOut);
+    assert_eq!(out.unwrap().text, "local here");
+    assert_eq!(thought, super::local::LOCAL_FALLBACK_MSG);
+    assert_eq!(
+        super::local_live::take_line("vision-back-1").as_deref(),
+        Some(super::local_live::BLIND_LINE)
+    );
 }

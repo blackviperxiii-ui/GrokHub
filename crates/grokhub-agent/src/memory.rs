@@ -136,27 +136,7 @@ pub fn take_memory_status() -> Option<String> {
     }
 }
 
-/// `score = (−bm25) × exp(−ln(2) × age / half_life)`.
-///
-/// `bm25` is the raw SQLite FTS5 value (negative, closer to zero is worse).
-/// `age_secs` and `half_life_secs` are seconds. A non-positive half-life
-/// disables decay and returns the rank alone. At one half-life the score is
-/// half the rank, so a newer equal match sorts first.
-pub fn combine_score(bm25: f64, age_secs: f64, half_life_secs: f64) -> f64 {
-    let rank = -bm25;
-    if !rank.is_finite() || rank <= 0.0 {
-        return 0.0;
-    }
-    if !half_life_secs.is_finite() || half_life_secs <= 0.0 {
-        return rank;
-    }
-    let age = if age_secs.is_finite() {
-        age_secs.max(0.0)
-    } else {
-        0.0
-    };
-    rank * (-std::f64::consts::LN_2 * age / half_life_secs).exp()
-}
+pub use grokhub_core::recall_score::combine_score;
 
 pub fn is_flush_command(text: &str) -> bool {
     text.trim() == "/flush"
@@ -948,54 +928,40 @@ pub(crate) fn inject_token_cap_at(dir: &Path) -> u64 {
 }
 
 /// AMR lines for the message's content words (3+ letters), at most
-/// [`AMR_PACK_CAP`]: lines matching the most distinct words first, then the
-/// newest. Recall never creates the store and skips tombstoned and locked nodes.
+/// [`AMR_PACK_CAP`], ranked like `MEMORY.md` recall: BM25 with the
+/// [`HALF_LIFE_SECS`] decay, plus meaning when the embedding model is on disk
+/// (HX-12, M2). Recall never creates the store and skips tombstoned,
+/// superseded and locked nodes.
 fn amr_injection_lines(user_text: &str) -> Vec<String> {
     let words: Vec<String> = content_words(&injection_query(user_text))
         .into_iter()
         .filter(|w| w.chars().count() >= 3)
         .collect();
     let store = amr_store();
+    let model = crate::memory_embed::embedder();
+    let query = model
+        .as_ref()
+        .and_then(|m| m.encode(&injection_query(user_text)));
+    let encode = |text: &str| model.as_ref().and_then(|m| m.encode(text));
+    let opts = grokhub_core::amr::RecallOpts {
+        now_ms: u64::try_from(now_secs()).unwrap_or(0) * 1000,
+        half_life_secs: HALF_LIFE_SECS,
+        cap: AMR_PACK_CAP,
+        meaning: query.as_deref().map(|query| grokhub_core::amr::Meaning {
+            query,
+            encode: &encode,
+            floor: SEMANTIC_FLOOR,
+            weight: SEMANTIC_WEIGHT,
+            only_cap: SEMANTIC_ONLY_CAP,
+        }),
+    };
     let mut out: Vec<String> = Vec::new();
-    for hit in store.recall_ranked(&words) {
-        if out.len() >= AMR_PACK_CAP {
-            break;
-        }
+    for hit in store.recall_hybrid(&words, &opts) {
         if !out.contains(&hit.line) {
             out.push(hit.line);
         }
-    }
-    if let Some(model) = crate::memory_embed::embedder() {
-        amr_semantic_lines(&store, &model, user_text, &mut out);
     }
     out
-}
-
-/// Add up to [`SEMANTIC_ONLY_CAP`] AMR lines found by meaning (HX-12) after
-/// the word matches, within [`AMR_PACK_CAP`]. Superseded facts never come back.
-fn amr_semantic_lines(
-    store: &grokhub_core::amr::AmrStore,
-    model: &grokhub_core::static_embed::StaticModel,
-    user_text: &str,
-    out: &mut Vec<String>,
-) {
-    let Some(query) = model.encode(&injection_query(user_text)) else {
-        return;
-    };
-    let room = AMR_PACK_CAP
-        .saturating_sub(out.len())
-        .min(SEMANTIC_ONLY_CAP);
-    let encode = |text: &str| model.encode(text);
-    let mut added = 0;
-    for hit in store.recall_semantic(&query, &encode, SEMANTIC_FLOOR, AMR_PACK_CAP) {
-        if added >= room {
-            break;
-        }
-        if !out.contains(&hit.line) {
-            out.push(hit.line);
-            added += 1;
-        }
-    }
 }
 
 /// The recalled lines in a history's memory block (Spike-4c), so egress can

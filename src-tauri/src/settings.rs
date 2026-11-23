@@ -58,8 +58,15 @@ pub struct ShellSettings {
     /// The folder the agent works in. Empty means the cabin's default.
     pub workspace: String,
     pub approvals: Approvals,
+    /// Settings → Defaults → Always collapse: thoughts start folded in every
+    /// chat. Off until the person turns it on. Same camelCase key as the
+    /// cabin (`alwaysCollapseThoughts`).
+    pub always_collapse_thoughts: bool,
     /// Settings → Let Grok control the desktop. Off until the person turns it on.
     pub desktop_control: bool,
+    /// Settings → Bot Desktop: the desktop tools work on a private screen
+    /// of their own (Linux). Off until the person turns it on.
+    pub bot_desktop: bool,
     /// Settings → Personality: the preset id. Empty is the default voice.
     pub personality: String,
     /// Settings → Personality → Adults-only personalities. Off hides the
@@ -124,6 +131,102 @@ pub struct ShellSettings {
     /// Outfit pinned from the wardrobe; `None` lets her default mode choose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_nyx_outfit: Option<String>,
+    /// Settings → Appearance → Objectives beside chat: the open objective's
+    /// steps and recent chats on the chat's left, a PC snapshot on its right,
+    /// in place of the companion dock. Off by default. Same camelCase key as
+    /// the cabin (`chatObjectives`).
+    pub chat_objectives: bool,
+    /// Settings → Behavior → Dockable panels. Off until the person turns it
+    /// on; off, the pages keep today's fixed single-page layout.
+    #[serde(default)]
+    pub dock_panels: bool,
+    /// The dock's pane layout, kept across restarts in this file. Read
+    /// leniently: a value this build cannot read resets the layout alone.
+    #[serde(default, deserialize_with = "lenient_dock_layout")]
+    pub dock_layout: DockLayout,
+}
+
+/// One pane of the dock: its page tabs, the tab showing, and its share of
+/// the row. A page id is the shell's page name (`chat`, `pulse`, …).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DockPane {
+    /// The pane's stable name: it survives tab moves, so the page mounted in
+    /// the pane is not remounted when its tabs change.
+    pub id: String,
+    pub tabs: Vec<String>,
+    /// The showing tab: an index into `tabs`.
+    pub active: usize,
+    /// This pane's share of the row, per-mille. 0 reads as an equal share.
+    pub share: u32,
+}
+
+/// Settings → Behavior → Dockable panels: the main pages as rearrangeable
+/// tabs in side-by-side panes (the cabin's dock, kept in `shell.json` here).
+/// A page sits in exactly one pane; the focused pane's active tab is the
+/// page the window is on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DockLayout {
+    pub panes: Vec<DockPane>,
+    /// The pane nav and focus follow: an index into `panes`.
+    pub focused: usize,
+}
+
+impl Default for DockLayout {
+    fn default() -> Self {
+        Self {
+            panes: vec![DockPane {
+                id: "pane-1".to_string(),
+                tabs: vec!["chat".to_string()],
+                active: 0,
+                share: 1000,
+            }],
+            focused: 0,
+        }
+    }
+}
+
+impl DockLayout {
+    /// The same layout with the dock's rules enforced: a page keeps only its
+    /// first pane, no pane is left empty, indexes point at real tabs, and a
+    /// zero share reads as a full share. Nothing usable left is the default.
+    pub fn cleaned(self) -> Self {
+        let mut seen = std::collections::HashSet::new();
+        let mut panes: Vec<DockPane> = Vec::new();
+        for pane in self.panes {
+            let tabs: Vec<String> = pane
+                .tabs
+                .into_iter()
+                .filter(|tab| !tab.is_empty() && seen.insert(tab.clone()))
+                .collect();
+            if tabs.is_empty() {
+                continue;
+            }
+            panes.push(DockPane {
+                id: pane.id,
+                active: pane.active.min(tabs.len() - 1),
+                share: if pane.share == 0 { 1000 } else { pane.share },
+                tabs,
+            });
+        }
+        if panes.is_empty() {
+            return Self::default();
+        }
+        Self {
+            focused: self.focused.min(panes.len() - 1),
+            panes,
+        }
+    }
+}
+
+/// A layout this build cannot read (a hand edit, a newer build's shape)
+/// resets to the default; the rest of the file still loads.
+fn lenient_dock_layout<'de, D: Deserializer<'de>>(d: D) -> Result<DockLayout, D::Error> {
+    let raw = Value::deserialize(d)?;
+    Ok(serde_json::from_value::<DockLayout>(raw)
+        .map(|layout| layout.cleaned())
+        .unwrap_or_default())
 }
 
 /// A size this build doesn't offer reads as the step at or below it.
@@ -139,6 +242,10 @@ fn text_size<'de, D: Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
 pub struct Behavior {
     /// Sentence autocomplete in the composer.
     pub autocomplete: bool,
+    /// Soft light around the composer while a reply comes in. Off until
+    /// Settings turns it on.
+    #[serde(default)]
+    pub composer_glow: bool,
     /// A few next steps to tap, under the box, on Home and after replies.
     /// On until the person turns it off; off, no chip shows and the reply's
     /// chips block leaves the chat's rules.
@@ -151,6 +258,29 @@ pub struct Behavior {
     pub daily_token_budget: u64,
     /// Pause scheduled work over the daily budget.
     pub pause_over_budget: bool,
+    /// Which way the composer's suggestions lean when two are close.
+    #[serde(default)]
+    pub lane: Lane,
+}
+
+/// Coding or Life: the composer's near-tied suggestions lean this way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lane {
+    #[default]
+    Coding,
+    Life,
+}
+
+impl Lane {
+    /// Any spelling of "life" is Life; anything else is Coding.
+    pub fn read(raw: &str) -> Self {
+        if raw.trim().eq_ignore_ascii_case("life") {
+            Lane::Life
+        } else {
+            Lane::Coding
+        }
+    }
 }
 
 fn on() -> bool {
@@ -161,25 +291,27 @@ impl Default for Behavior {
     fn default() -> Self {
         Self {
             autocomplete: false,
+            composer_glow: false,
             suggestions: true,
             quiet_start: String::new(),
             quiet_end: String::new(),
             daily_token_budget: 0,
             pause_over_budget: false,
+            lane: Lane::Coding,
         }
     }
 }
 
 impl Behavior {
-    /// The same choices with the quiet hours written as `HH:MM`, or why not.
+    /// The same choices with quiet hours written as `HH:MM`, or why not.
+    /// Legacy daily token budget caps are always cleared so no internal limit blocks work.
     pub fn checked(self) -> Result<Self, String> {
         let (quiet_start, quiet_end) = quiet_hours(&self.quiet_start, &self.quiet_end)?;
-        if !grokhub_core::TOKEN_BUDGETS.contains(&self.daily_token_budget) {
-            return Err("Pick a daily token budget from the list.".into());
-        }
         Ok(Self {
             quiet_start,
             quiet_end,
+            daily_token_budget: 0,
+            pause_over_budget: false,
             ..self
         })
     }
@@ -219,18 +351,16 @@ fn lenient_behavior<'de, D: Deserializer<'de>>(d: D) -> Result<Behavior, D::Erro
         quiet_hours(text("quietStart"), text("quietEnd")).unwrap_or_default();
     Ok(Behavior {
         autocomplete: flag("autocomplete"),
+        composer_glow: flag("composerGlow"),
         suggestions: raw
             .get("suggestions")
             .and_then(Value::as_bool)
             .unwrap_or(true),
         quiet_start,
         quiet_end,
-        daily_token_budget: raw
-            .get("dailyTokenBudget")
-            .and_then(Value::as_u64)
-            .filter(|b| grokhub_core::TOKEN_BUDGETS.contains(b))
-            .unwrap_or(0),
-        pause_over_budget: flag("pauseOverBudget"),
+        daily_token_budget: 0,
+        pause_over_budget: false,
+        lane: Lane::read(text("lane")),
     })
 }
 
@@ -240,7 +370,9 @@ impl Default for ShellSettings {
             close_to_tray: true,
             workspace: String::new(),
             approvals: Approvals::Ask,
+            always_collapse_thoughts: false,
             desktop_control: false,
+            bot_desktop: false,
             personality: String::new(),
             explicit_personalities: false,
             adult_confirmed: false,
@@ -262,6 +394,9 @@ impl Default for ShellSettings {
             desktop_nyx_pos: None,
             desktop_nyx_adult: false,
             desktop_nyx_outfit: None,
+            chat_objectives: false,
+            dock_panels: false,
+            dock_layout: DockLayout::default(),
         }
     }
 }
@@ -405,7 +540,9 @@ mod tests {
                 close_to_tray: true,
                 workspace: String::new(),
                 approvals: Approvals::Ask,
+                always_collapse_thoughts: false,
                 desktop_control: false,
+                bot_desktop: false,
                 personality: "nyx".into(),
                 explicit_personalities: false,
                 adult_confirmed: false,
@@ -427,6 +564,9 @@ mod tests {
                 desktop_nyx_pos: None,
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
+                chat_objectives: false,
+                dock_panels: false,
+                dock_layout: DockLayout::default(),
             }
         );
     }
@@ -467,7 +607,9 @@ mod tests {
             close_to_tray: false,
             workspace: "/work/notes".into(),
             approvals: Approvals::Always,
+            always_collapse_thoughts: true,
             desktop_control: true,
+            bot_desktop: true,
             personality: "pirate".into(),
             explicit_personalities: true,
             adult_confirmed: true,
@@ -478,12 +620,14 @@ mod tests {
             last_chat: "shell-abc-123".into(),
             behavior: Behavior {
                 autocomplete: true,
+                composer_glow: true,
                 // Off round-trips, though a missing value reads as on.
                 suggestions: false,
                 quiet_start: "22:00".into(),
                 quiet_end: "07:00".into(),
-                daily_token_budget: 1_000_000,
-                pause_over_budget: true,
+                daily_token_budget: 0,
+                pause_over_budget: false,
+                lane: Lane::Life,
             },
             summon_hotkey: true,
             notifications: false,
@@ -497,6 +641,25 @@ mod tests {
             desktop_nyx_pos: Some([100, 200]),
             desktop_nyx_adult: false,
             desktop_nyx_outfit: Some("gaming".into()),
+            chat_objectives: true,
+            dock_panels: true,
+            dock_layout: DockLayout {
+                panes: vec![
+                    DockPane {
+                        id: "left".into(),
+                        tabs: vec!["chat".into(), "pulse".into()],
+                        active: 1,
+                        share: 600,
+                    },
+                    DockPane {
+                        id: "right".into(),
+                        tabs: vec!["skills".into()],
+                        active: 0,
+                        share: 400,
+                    },
+                ],
+                focused: 1,
+            },
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -504,6 +667,7 @@ mod tests {
         assert!(raw.contains("\"closeToTray\": false"), "{raw}");
         assert!(raw.contains("\"workspace\": \"/work/notes\""), "{raw}");
         assert!(raw.contains("\"approvals\": \"always\""), "{raw}");
+        assert!(raw.contains("\"alwaysCollapseThoughts\": true"), "{raw}");
         assert!(raw.contains("\"desktopControl\": true"), "{raw}");
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
@@ -517,14 +681,28 @@ mod tests {
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
         assert!(raw.contains("\"lastChat\": \"shell-abc-123\""), "{raw}");
         assert!(raw.contains("\"quietStart\": \"22:00\""), "{raw}");
-        assert!(raw.contains("\"dailyTokenBudget\": 1000000"), "{raw}");
-        assert!(raw.contains("\"pauseOverBudget\": true"), "{raw}");
+        assert!(raw.contains("\"lane\": \"life\""), "{raw}");
         assert!(raw.contains("\"summonHotkey\": true"), "{raw}");
         assert!(raw.contains("\"notifications\": false"), "{raw}");
         assert!(raw.contains("\"desktopNyx\": true"), "{raw}");
         assert!(raw.contains("\"desktopNyxUndocked\": true"), "{raw}");
         assert!(raw.contains("\"desktopNyxOutfit\": \"gaming\""), "{raw}");
+        assert!(raw.contains("\"chatObjectives\": true"), "{raw}");
+        assert!(raw.contains("\"dockPanels\": true"), "{raw}");
+        assert!(raw.contains("\"dockLayout\""), "{raw}");
+        assert!(raw.contains("\"tabs\": [\n          \"chat\","), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thoughts_start_open_until_always_collapse_is_saved() {
+        let dir = temp_dir("collapse");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"closeToTray":false}"#).expect("write");
+        assert!(!load(&dir).always_collapse_thoughts);
+        std::fs::write(path(&dir), r#"{"alwaysCollapseThoughts":true}"#).expect("write");
+        assert!(load(&dir).always_collapse_thoughts);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -541,7 +719,9 @@ mod tests {
                 close_to_tray: false,
                 workspace: String::new(),
                 approvals: Approvals::Ask,
+                always_collapse_thoughts: false,
                 desktop_control: false,
+                bot_desktop: false,
                 personality: String::new(),
                 explicit_personalities: false,
                 adult_confirmed: false,
@@ -563,6 +743,9 @@ mod tests {
                 desktop_nyx_pos: None,
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
+                chat_objectives: false,
+                dock_panels: false,
+                dock_layout: DockLayout::default(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -584,7 +767,9 @@ mod tests {
                 close_to_tray: false,
                 workspace: String::new(),
                 approvals: Approvals::Auto,
+                always_collapse_thoughts: false,
                 desktop_control: false,
+                bot_desktop: false,
                 personality: "pirate".into(),
                 explicit_personalities: false,
                 adult_confirmed: false,
@@ -606,6 +791,9 @@ mod tests {
                 desktop_nyx_pos: None,
                 desktop_nyx_adult: false,
                 desktop_nyx_outfit: None,
+                chat_objectives: false,
+                dock_panels: false,
+                dock_layout: DockLayout::default(),
             }
         );
         save(&dir, &loaded).expect("save");
@@ -647,18 +835,20 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(
             path(&dir),
-            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1}}"#,
+            r#"{"model":"grok-5","behavior":{"autocomplete":"yes","composerGlow":"on","suggestions":"nope","quietStart":"bedtime","quietEnd":"07:00","dailyTokenBudget":123,"pauseOverBudget":1,"lane":"travel"}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: false,
+                composer_glow: false,
                 suggestions: true,
                 quiet_start: String::new(),
                 quiet_end: String::new(),
                 daily_token_budget: 0,
                 pause_over_budget: false,
+                lane: Lane::Coding,
             }
         );
         std::fs::write(path(&dir), r#"{"model":"grok-5","behavior":"loud"}"#).expect("write");
@@ -666,18 +856,20 @@ mod tests {
         // One bad field leaves the good ones alone.
         std::fs::write(
             path(&dir),
-            r#"{"behavior":{"autocomplete":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots"}}"#,
+            r#"{"behavior":{"autocomplete":true,"composerGlow":true,"suggestions":false,"quietStart":"23:00","quietEnd":"6:30","dailyTokenBudget":"lots","lane":" Life "}}"#,
         )
         .expect("write");
         assert_eq!(
             load(&dir).behavior,
             Behavior {
                 autocomplete: true,
+                composer_glow: true,
                 suggestions: false,
                 quiet_start: "23:00".into(),
                 quiet_end: "06:30".into(),
                 daily_token_budget: 0,
                 pause_over_budget: false,
+                lane: Lane::Life,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -706,20 +898,13 @@ mod tests {
             quiet_start: "9:00".into(),
             quiet_end: "17:00".into(),
             daily_token_budget: 500_000,
+            pause_over_budget: true,
             ..Behavior::default()
         };
-        assert_eq!(
-            picked.clone().checked().map(|b| b.quiet_start),
-            Ok("09:00".to_string())
-        );
-        assert_eq!(
-            Behavior {
-                daily_token_budget: 7,
-                ..picked
-            }
-            .checked(),
-            Err("Pick a daily token budget from the list.".to_string())
-        );
+        let checked = picked.checked().unwrap();
+        assert_eq!(checked.quiet_start, "09:00");
+        assert_eq!(checked.daily_token_budget, 0);
+        assert!(!checked.pause_over_budget);
     }
 
     #[test]
@@ -825,5 +1010,133 @@ mod tests {
         for heat in Heat::DIAL {
             assert_eq!(dial_heat(heat), heat);
         }
+    }
+
+    #[test]
+    fn objectives_beside_chat_is_off_until_turned_on() {
+        assert!(!ShellSettings::default().chat_objectives);
+        let dir = temp_dir("chat-objectives");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"theme":"light"}"#).expect("write");
+        assert!(!load(&dir).chat_objectives);
+        std::fs::write(path(&dir), r#"{"chatObjectives":true}"#).expect("write");
+        assert!(load(&dir).chat_objectives);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dock_layout_round_trips_through_the_file() {
+        let dir = temp_dir("dock-roundtrip");
+        let wanted = ShellSettings {
+            dock_panels: true,
+            dock_layout: DockLayout {
+                panes: vec![
+                    DockPane {
+                        id: "main".into(),
+                        tabs: vec!["chat".into(), "imagine".into()],
+                        active: 0,
+                        share: 700,
+                    },
+                    DockPane {
+                        id: "side".into(),
+                        tabs: vec!["workboard".into()],
+                        active: 0,
+                        share: 300,
+                    },
+                ],
+                focused: 0,
+            },
+            ..ShellSettings::default()
+        };
+        save(&dir, &wanted).expect("save");
+        assert_eq!(load(&dir), wanted);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dock_layout_keeps_a_page_in_one_pane_only() {
+        let messy = DockLayout {
+            panes: vec![
+                DockPane {
+                    id: "a".into(),
+                    tabs: vec!["chat".into(), "pulse".into()],
+                    active: 9,
+                    share: 0,
+                },
+                DockPane {
+                    id: "b".into(),
+                    tabs: vec!["pulse".into(), "skills".into()],
+                    active: 0,
+                    share: 250,
+                },
+                DockPane {
+                    id: "c".into(),
+                    tabs: vec![],
+                    active: 0,
+                    share: 250,
+                },
+            ],
+            focused: 7,
+        };
+        assert_eq!(
+            messy.cleaned(),
+            DockLayout {
+                panes: vec![
+                    DockPane {
+                        id: "a".into(),
+                        tabs: vec!["chat".into(), "pulse".into()],
+                        active: 1,
+                        share: 1000,
+                    },
+                    DockPane {
+                        id: "b".into(),
+                        tabs: vec!["skills".into()],
+                        active: 0,
+                        share: 250,
+                    },
+                ],
+                focused: 1,
+            }
+        );
+        // Nothing usable left is the default layout.
+        let empty = DockLayout {
+            panes: vec![DockPane::default()],
+            focused: 0,
+        };
+        assert_eq!(empty.cleaned(), DockLayout::default());
+    }
+
+    #[test]
+    fn an_unreadable_dock_layout_resets_alone() {
+        let dir = temp_dir("dock-junk");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            path(&dir),
+            r#"{"closeToTray":false,"dockPanels":true,"dockLayout":{"panes":"wide"}}"#,
+        )
+        .expect("write");
+        let loaded = load(&dir);
+        assert!(!loaded.close_to_tray);
+        assert!(loaded.dock_panels);
+        assert_eq!(loaded.dock_layout, DockLayout::default());
+        // A layout saved by hand with a page in two panes loads cleaned.
+        std::fs::write(
+            path(&dir),
+            r#"{"dockLayout":{"panes":[{"tabs":["chat","pulse"],"active":0,"share":500},{"tabs":["pulse"],"active":0,"share":500}],"focused":1}}"#,
+        )
+        .expect("write");
+        assert_eq!(
+            load(&dir).dock_layout,
+            DockLayout {
+                panes: vec![DockPane {
+                    id: String::new(),
+                    tabs: vec!["chat".into(), "pulse".into()],
+                    active: 0,
+                    share: 500,
+                }],
+                focused: 0,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -50,6 +50,10 @@ pub fn good_for(m: &LocalModel) -> String {
             Some(pair) => format!("Makes {} reply faster.", pair.name),
             None => "Makes replies come faster.".into(),
         },
+        ModelKind::VisionProjector => match m.pairs_with.and_then(ls::model_by_id) {
+            Some(pair) => format!("Lets {} see pictures on this PC.", pair.name),
+            None => "Lets a chat model see pictures on this PC.".into(),
+        },
         ModelKind::Chat => match m.run_mb {
             0..=5_000 => "Quick chats and background tasks, even on a laptop.",
             5_001..=9_000 => "Everyday chat and writing on a mid-range PC.",
@@ -98,9 +102,9 @@ fn fit_of(b: Bucket) -> Fit {
 }
 
 /// Every catalog row in catalog order. A draft model fits as its chat model
-/// does; other specialty models fit when the disk has room. The on-device
-/// speech-to-text model shows only once it is on disk (so it can be removed):
-/// nothing transcribes with it yet, so the list doesn't offer it.
+/// does; other specialty models fit when the disk has room. A row the
+/// catalog marks `offered = false` shows only once it is on disk (so it can
+/// be removed).
 pub fn rows(p: &Profile, bench: &BenchCache, on_disk: impl Fn(&LocalModel) -> bool) -> Vec<Row> {
     rows_from(ls::local_models(), p, bench, on_disk)
 }
@@ -116,7 +120,7 @@ fn rows_from(
     catalog
         .iter()
         .map(|m| (m, on_disk(m)))
-        .filter(|&(m, on_disk)| on_disk || m.kind != ModelKind::SpeechToText)
+        .filter(|&(m, on_disk)| on_disk || m.offered)
         .map(|(m, on_disk)| {
             let (fit, why) = if let Some(x) = pick(m.id) {
                 (fit_of(x.bucket), x.reason.clone())
@@ -144,8 +148,8 @@ fn rows_from(
 }
 
 /// What "Download all that fit" fetches, for one tab or (`None`) every tab:
-/// models not on disk that fit, best fits first, each draft model after its
-/// chat model and only with it. Stops before the disk runs out and keeps the
+/// models not on disk that fit, best fits first, each draft model and
+/// vision projector after its chat model and only with it. Stops before the disk runs out and keeps the
 /// standard models at the cap.
 pub fn queue(
     rows: &[Row],
@@ -174,7 +178,7 @@ pub fn queue(
         .flat_map(|f| rows.iter().filter(move |r| r.fit == f));
     for r in ordered.filter(want) {
         let m = r.model;
-        if m.kind == ModelKind::Drafter {
+        if matches!(m.kind, ModelKind::Drafter | ModelKind::VisionProjector) {
             // Only beside its chat model: on disk already or queued here.
             let paired = m.pairs_with.is_some_and(|id| {
                 out.iter().any(|q| q.id == id) || rows.iter().any(|o| o.model.id == id && o.on_disk)
@@ -305,7 +309,7 @@ mod tests {
     #[test]
     fn every_row_is_on_its_tab_and_a_draft_model_fits_as_its_chat_model_does() {
         let rows = rows(&pc(8_192, 500_000), &BenchCache::new(), |_| false);
-        // Every row but the speech-to-text model, which isn't offered.
+        // Every row but the speech-to-text model, which the catalog doesn't offer.
         assert_eq!(rows.len(), ls::local_models().len() - 1);
         let draft = by_id(&rows, MID_DRAFT);
         assert_eq!(draft.tab(), ModelTab::Drafts);
@@ -313,6 +317,17 @@ mod tests {
         assert_eq!(draft.why, "Comes with Gemma 4 12B.");
         assert_eq!(good_for(draft.model), "Makes Gemma 4 12B reply faster.");
         assert!(row_line(by_id(&rows, MID)).contains(" · Uncensored · "));
+        // A vision projector fits as its chat model does too, under Other.
+        let eyes = by_id(&rows, "gemma-4-12b-it-abliterated-mmproj");
+        assert_eq!(eyes.tab(), ModelTab::Other);
+        assert_eq!(eyes.fit, by_id(&rows, MID).fit);
+        assert_eq!(eyes.why, "Comes with Gemma 4 12B.");
+        assert_eq!(
+            good_for(eyes.model),
+            "Lets Gemma 4 12B see pictures on this PC."
+        );
+        // It only reads pictures: it has no refusals to remove.
+        assert!(!row_line(eyes).contains("Uncensored"), "{}", row_line(eyes));
         // The picture models and their guard share the Image tab.
         assert_eq!(
             rows.iter().filter(|r| r.tab() == ModelTab::Image).count(),
@@ -322,10 +337,13 @@ mod tests {
     }
 
     #[test]
-    fn the_speech_to_text_model_shows_only_once_it_is_on_disk() {
+    fn a_row_not_offered_shows_only_once_it_is_on_disk() {
         const STT: &str = "parakeet-tdt-0.6b-v3-int8";
         const TTS: &str = "kokoro-82m-multi-lang-v1_0";
         let p = pc(8_192, 500_000);
+        // The catalog marks it `offered = false`; rows default to offered.
+        assert!(!ls::model_by_id(STT).unwrap().offered);
+        assert!(ls::model_by_id(TTS).unwrap().offered);
         let fresh = rows(&p, &BenchCache::new(), |_| false);
         assert!(fresh.iter().all(|r| r.model.id != STT));
         // Spoken replies still offer their model on the Voice tab.
@@ -350,6 +368,20 @@ mod tests {
         let mid = ids.iter().position(|i| *i == MID).unwrap();
         assert_eq!(ids[mid + 1], MID_DRAFT, "{ids:?}");
         assert_eq!(ids.iter().filter(|i| **i == MID_DRAFT).count(), 1);
+        // A projector comes after its chat model, never without it.
+        for (at, id) in ids.iter().enumerate() {
+            let m = ls::model_by_id(id).unwrap();
+            if m.kind == ModelKind::VisionProjector {
+                let chat = m.pairs_with.unwrap();
+                assert!(ids[..at].contains(&chat), "{id} before {chat}: {ids:?}");
+            }
+        }
+        let big_eyes = "gemma-4-31b-it-abliterated-mmproj";
+        assert_eq!(
+            ids.contains(&big_eyes),
+            ids.contains(&BIG),
+            "the 31B's projector comes only with the 31B: {ids:?}"
+        );
         let first_tight = ids.iter().position(|i| by_id(&rows, i).fit == Fit::Tight);
         let last_yes = ids
             .iter()
@@ -375,6 +407,13 @@ mod tests {
             [MID_DRAFT],
             "on the Drafts tab only a downloaded model's draft model comes"
         );
+        // Likewise on the Other tab only a downloaded model's projector.
+        let eyes: Vec<&str> = queue(&rows, Some(ModelTab::Other), None)
+            .iter()
+            .filter(|m| m.kind == ModelKind::VisionProjector)
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(eyes, ["gemma-4-12b-it-abliterated-mmproj"]);
         assert_eq!(queue_line(&[]), "Everything that fits is downloaded.");
         assert!(queue_line(&q).contains(" in all") || q.len() < 2);
     }

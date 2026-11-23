@@ -2,23 +2,29 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import {
   getFeedPrompt,
   getPulse,
-  openUrl,
   pulseAct,
   pulseDiscuss,
+  pulseDoneStop,
+  pulseDoneUndo,
+  pulseLiveOpen,
   pulseOffer,
+  pulsePauseAutomation,
   pulseRemind,
   pulseReviewApply,
   pulseReviewIssue,
   pulseWhy,
   saveFeedPrompt,
+  type LiveView,
   type PulseAct,
   type PulseChip,
   type PulseIdea,
   type PulsePage,
+  type PulseReviewDone,
 } from "./api";
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
 import { SavedPage } from "./SavedPage";
 import { FixWindow } from "./PulseFix";
+import { LiveWindow } from "./PulseLive";
 import { StatusLine, useNote } from "./ui";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
@@ -28,6 +34,7 @@ export const SAVED_NOTE = "Saved. A new post is on its way.";
 export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
 export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
 export const DISLIKE_NOTE = "Got it. A few less like that.";
+export const SKILL_ADDED = "Skill added. It is on the Skills page.";
 export const FOR_YOU_LABEL = "For You";
 export const DAY_END = "That's all for today";
 export const ADD_INTERESTS = "Add interests";
@@ -167,11 +174,18 @@ function useFeedDwell(listRef: { current: HTMLUListElement | null }, idsKey: str
 export function Pulse({
   onRun,
   onOpenInterests,
+  onOpenModel,
+  remote = false,
 }: {
   /** `conversationId`: the card's own chat, opened (or reopened) first. */
   onRun: (text: string, conversationId?: string) => void;
   /** Settings → Pulse, where interests are added. */
   onOpenInterests?: () => void;
+  /** Settings → Local AI's model library, on a catalog model. Left out
+   * where local models don't run. */
+  onOpenModel?: (id: string) => void;
+  /** A paired browser: Add skill stays on the computer. */
+  remote?: boolean;
 }) {
   const [page, setPage] = useState<PulsePage | null>(null);
   const [tab, setTab] = useState<Tab>("feed");
@@ -181,6 +195,8 @@ export function Pulse({
   const [paged, setPaged] = useState(PAGE_SIZE);
   /** The PC health idea whose options window is open. */
   const [fixing, setFixing] = useState<PulseIdea | null>(null);
+  /** A Live offer's checklist dialog. */
+  const [live, setLive] = useState<LiveView | null>(null);
   const end = useRef<HTMLLIElement>(null);
   const feedList = useRef<HTMLUListElement>(null);
   const polls = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -250,12 +266,14 @@ export function Pulse({
     }
   }
 
-  /** A self-review card's Apply change, Revert or Save idea. */
-  async function review(id: string) {
+  /** A card button that changes something and hands back the new page:
+   * a self-review card's Apply change, Revert or Save idea; Pause it; a
+   * Done for you card's Undo and Stop doing this. */
+  async function apply(work: () => Promise<PulseReviewDone>) {
     setBusy(true);
     acting.current = true;
     try {
-      const done = await pulseReviewApply(id);
+      const done = await work();
       setPage(done.page);
       ok(done.line);
     } catch (err) {
@@ -265,6 +283,10 @@ export function Pulse({
       acting.current = false;
       setBusy(false);
     }
+  }
+
+  function review(id: string) {
+    return apply(() => pulseReviewApply(id));
   }
 
   function copyIssue(id: string) {
@@ -297,16 +319,25 @@ export function Pulse({
     }
   }
 
-  /** A chip under a post: a fix goes to the card's own chat (nothing runs
-   * until it is sent there), Ignore for now hides it, Remind me later brings
-   * it back at a time that fits the day. */
+  /** A chip under a post: a Live fix opens the checklist dialog, other fixes
+   * go to the card's own chat (nothing runs until sent), Ignore for now hides
+   * it, Remind me later brings it back at a time that fits the day. */
   async function chip(id: string, c: PulseChip) {
     if (c.act === "ignore") {
       await act(id, "ignore", IGNORED_NOTE);
       return;
     }
+    // Pause it runs here and now; nothing goes to a chat.
+    if (c.act === "pause") {
+      await apply(() => pulsePauseAutomation(id));
+      return;
+    }
     try {
       if (c.act === "offer") {
+        if (c.mode === "live") {
+          setLive(await pulseLiveOpen(id, c.index));
+          return;
+        }
         const seed = await pulseOffer(id, c.index);
         onRun(seed.text, seed.conversationId);
       } else if (c.act === "remind") {
@@ -416,19 +447,25 @@ export function Pulse({
                 busy={busy}
                 onLove={() => void act(post.id, post.loved ? "unlove" : "love")}
                 onDiscuss={() => void discuss(post.id)}
-                onOpen={() => {
-                  void openUrl(post.link).catch(fail);
-                  // Read it counts as engagement for card taste; quietly.
-                  void pulseAct(post.id, "opened").catch(() => {});
-                }}
+                // Opening the source counts as engagement for card taste; quietly.
+                onOpen={() => void pulseAct(post.id, "opened").catch(() => {})}
+                onOpenFailed={fail}
+                onOpenModel={
+                  onOpenModel &&
+                  (() => {
+                    onOpenModel(post.model);
+                    void pulseAct(post.id, "opened").catch(() => {});
+                  })
+                }
                 onDislike={() => void act(post.id, "dislike", DISLIKE_NOTE)}
-                onDismiss={() => void act(post.id, "dismiss", "Dismissed.")}
                 onWhy={() => pulseWhy(post.id)}
                 onSnooze={() => void act(post.id, "snooze", "Snoozed until 9 AM.")}
                 onSave={() => void act(post.id, "save", "Saved. It's on the Saved page.")}
                 onChip={(c) => void chip(post.id, c)}
                 onReview={() => void review(post.id)}
                 onIssue={() => copyIssue(post.id)}
+                onUndo={() => void apply(() => pulseDoneUndo(post.id))}
+                onStop={() => void apply(() => pulseDoneStop())}
               />
               {i === today - 1 && i < total - 1 && (
                 <li className="day-end" role="separator">
@@ -468,6 +505,9 @@ export function Pulse({
                     idea={idea}
                     busy={busy}
                     onDo={() => void run(idea)}
+                    onAddSkill={
+                      remote ? undefined : () => void act(idea.id, "addSkill", SKILL_ADDED)
+                    }
                     onFix={() => setFixing(idea)}
                     onMoreLike={() =>
                       void act(
@@ -477,7 +517,6 @@ export function Pulse({
                       )
                     }
                     onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
-                    onDismiss={() => void act(idea.id, "dismiss", "Dismissed.")}
                     onChip={(c) => void chip(idea.id, c)}
                     onDiscuss={() => void discuss(idea.id)}
                   />
@@ -496,6 +535,15 @@ export function Pulse({
             const idea = fixing;
             setFixing(null);
             void run(idea);
+          }}
+        />
+      )}
+      {live && (
+        <LiveWindow
+          initial={live}
+          onClose={() => {
+            setLive(null);
+            getPulse().then(setPage, () => {});
           }}
         />
       )}

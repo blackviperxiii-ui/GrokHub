@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import RAW_CSS from "./styles.css?raw";
+import { DOCK_MIN_WIDTH, SIDE_MIN_WIDTH } from "./NyxDock";
 
 // A Windows checkout reads the file with CRLF; the multi-line selectors
 // below are matched with LF.
@@ -69,6 +70,27 @@ function block(selector: string): Record<string, string> {
 
 const PALETTE = block(':root,\n:root[data-theme="dark"],\n:root[data-theme="ops-dark"]');
 
+describe("styles.css concentric nested radii", () => {
+  const nested =
+    "border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));";
+
+  it("keeps the floor and menu tokens on the scale", () => {
+    expect(CSS).toContain("--radius-xs: 4px;");
+    expect(CSS).toContain("--radius-menu: 10px;");
+  });
+
+  it("derives nested menu item radii from outer − pad − border", () => {
+    expect(rule(CSS, ".nyx-desk-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".nyx-desk-menu button {")).toContain(nested);
+    expect(rule(CSS, ".feed-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".feed-menu button {")).toContain(nested);
+    expect(rule(CSS, ".board-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".board-menu button {")).toContain(nested);
+    expect(rule(CSS, ".slash-menu {")).toContain("--r-outer: var(--radius-menu);");
+    expect(rule(CSS, ".slash-row {")).toContain(nested);
+  });
+});
+
 /** A colour, following `var(--x)` through the Ops palette. */
 function resolve(vars: Record<string, string>, name: string): string {
   const value = vars[name] ?? PALETTE[name];
@@ -87,41 +109,70 @@ describe("styles.css OS-dark fallback", () => {
   });
 });
 
-// The window opens 900px wide (src-tauri/tauri.conf.json), where the tabs fold
-// to icons. Fifteen of them, the brand, the Activity dock and Command are wider
-// than that, so the icons wrap to a second row: a page that scrolls sideways
-// puts a scrollbar along the window's bottom edge, over the composer's Send,
-// and a views bar that scrolls in place takes no clicks in WebKitGTK. The shell
-// smoke checks the real width and clicks the tabs.
-describe("styles.css views bar in a narrow window", () => {
-  const narrow = mediaBlocks(CSS, "(max-width: 900px)").find((b) => b.includes(".tab-label")) ?? "";
-
-  it("wraps the icons to another row instead of widening the page", () => {
-    const tabs = rule(narrow, ".tabs {");
-    expect(tabs).toContain("flex-wrap: wrap;");
-    expect(tabs).toContain("min-width: 0;");
-  });
-
-  it("keeps the tab row out of scroll boxes, where WebKitGTK cannot click its tabs", () => {
-    expect(rule(narrow, ".tabs {")).not.toMatch(/overflow/);
-    const base = rule(CSS, ".tabs {");
+// The views live on a left rail. The window opens 900px wide
+// (src-tauri/tauri.conf.json) and can be as short as 360px, so the rail and the
+// top bar must never widen the page (a page that scrolls sideways puts a
+// scrollbar along the window's bottom edge, over the composer's Send) and the
+// rail must never be a scroll box: WebKitGTK's hit test misses buttons inside
+// an overflow container, so no view would take a click. The shell smoke checks
+// the real width and clicks the rail.
+describe("styles.css views rail and top bar", () => {
+  it("lays the rail out as a column that is never a scroll box", () => {
+    const base = rule(CSS, ".rail {");
     expect(base).toContain("display: flex;");
+    expect(base).toContain("flex-direction: column;");
+    expect(base).toContain("flex: none;");
     expect(base).not.toMatch(/overflow/);
+    for (const block of mediaBlocks(CSS, "(max-height: 560px)")) expect(rule(block, ".rail {")).not.toMatch(/overflow/);
   });
 
-  it("keeps each tab at its own width so a row wraps rather than squashing icons", () => {
-    expect(rule(narrow, ".tabs button {")).toContain("flex: none;");
+  it("shrinks the rail's buttons in a short window instead of scrolling it", () => {
+    const short = mediaBlocks(CSS, "(max-height: 560px)").find((b) => b.includes(".rail button {")) ?? "";
+    expect(rule(short, ".rail button {")).toContain("width: 32px;");
+    expect(rule(short, ".rail button {")).toContain("height: 32px;");
   });
 
-  // A phone also matches the 900px query. The phone bar is one fixed 52px row,
-  // so the last phone rule for .tabs must come after the wrap and undo it, or
-  // the icons stack into rows over the composer.
-  it("keeps the phone bar on one row after the narrow-window wrap", () => {
-    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
-    const phones = mediaBlocks(CSS, "(max-width: 600px)").filter((b) => rule(b, ".tabs {") !== "");
+  it("keeps each rail label for screen readers and the tooltip, out of sight", () => {
+    const label = rule(CSS, ".rail-label {");
+    expect(label).toContain("position: absolute;");
+    expect(label).toContain("clip-path: inset(50%);");
+  });
+
+  it("keeps the top bar on one row that gives way rather than widening the page", () => {
+    const bar = rule(CSS, ".topbar {");
+    expect(bar).toContain("flex-wrap: nowrap;");
+    expect(bar).toContain("min-width: 0;");
+    expect(rule(CSS, ".topbar-fill {")).toContain("min-width: 0;");
+  });
+
+  // On a phone the rail is one fixed 52px row at the bottom; it must not wrap
+  // into rows over the composer or scroll in place.
+  it("turns the rail into one fixed row at the bottom of a phone", () => {
+    const phones = mediaBlocks(CSS, "(max-width: 600px)").filter((b) => rule(b, ".rail {") !== "");
     const last = phones[phones.length - 1] ?? "";
-    expect(bare.indexOf(last)).toBeGreaterThan(bare.indexOf(narrow));
-    expect(rule(last, ".tabs {")).toContain("flex-wrap: nowrap;");
+    const row = rule(last, ".rail {");
+    expect(row).toContain("position: fixed;");
+    expect(row).toContain("flex-direction: row;");
+    expect(row).toContain("flex-wrap: nowrap;");
+    expect(row).not.toMatch(/overflow/);
+  });
+
+  it("opens Chat's right column at the widths NyxDock.tsx uses", () => {
+    const dock = mediaBlocks(CSS, `(min-width: ${DOCK_MIN_WIDTH}px)`).find((b) => b.includes(".chat-side {")) ?? "";
+    expect(rule(dock, ".chat-side {")).toContain("width: 180px;");
+    const side = mediaBlocks(CSS, `(min-width: ${SIDE_MIN_WIDTH}px)`).find((b) => b.includes(".chat-side {")) ?? "";
+    expect(rule(side, ".chat-side {")).toContain("width: 320px;");
+  });
+
+  it("opens Objectives beside chat's columns at the same widths, hidden below them", () => {
+    expect(rule(CSS, ".chat-left,\n.chat-snapshot {")).toContain("display: none;");
+    const left = mediaBlocks(CSS, `(min-width: ${DOCK_MIN_WIDTH}px)`).find((b) => b.includes(".chat-left {")) ?? "";
+    expect(rule(left, ".chat-left {")).toContain("width: 260px;");
+    expect(rule(left, ".chat-left {")).toContain("display: flex;");
+    const right =
+      mediaBlocks(CSS, `(min-width: ${SIDE_MIN_WIDTH}px)`).find((b) => b.includes(".chat-snapshot {")) ?? "";
+    expect(rule(right, ".chat-snapshot {")).toContain("width: 240px;");
+    expect(rule(right, ".chat-snapshot {")).toContain("display: flex;");
   });
 
   it("gives the phone composer textarea a full row above its buttons", () => {
@@ -132,6 +183,23 @@ describe("styles.css views bar in a narrow window", () => {
     // Textarea lives inside .composer-ghost-wrap; the wrap takes the full row.
     expect(rule(phone, ".composer-ghost-wrap {")).toContain("order: -1;");
     expect(rule(phone, ".composer-ghost-wrap {")).toContain("flex: 1 0 100%;");
+  });
+
+  it("keeps the composer glow steady outside the motion gate, and breathes on another property", () => {
+    const bare = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    // Outside any @media: the steady light that stays under reduced motion.
+    expect(rule(bare, ".composer.glowing .composer-ghost-wrap::before {")).toBe(
+      ".composer.glowing .composer-ghost-wrap::before { opacity: 0.75; }",
+    );
+    expect(rule(bare, ".composer-ghost-wrap::before {")).toContain("transition: opacity var(--t-base) var(--ease-out);");
+    // The breath moves filter, never opacity, so the fade in and out still runs.
+    const breath = bare.slice(bare.indexOf("@keyframes composer-glow {"));
+    expect(breath.slice(0, breath.indexOf("}\n}") + 3).replace(/\s+/g, " ")).toBe(
+      "@keyframes composer-glow { from { filter: opacity(1); } to { filter: opacity(0.6); } }",
+    );
+    // A narrow Code tab scrolls edge to edge, so the embedded glow stays off the sides.
+    const narrow = mediaBlocks(CSS, "(max-width: 899px)").find((b) => b.includes(".chat.embedded")) ?? "";
+    expect(rule(narrow, ".chat.embedded .composer-ghost-wrap::before {")).toContain("inset: 0 20px;");
   });
 });
 
@@ -153,7 +221,7 @@ describe("styles.css Code tab layout", () => {
       ".code > .code-split > .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }",
     );
     expect(rule(CSS, '.code-file[aria-pressed="true"] {')).toBe(
-      '.code-file[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }',
+      '.code-file[aria-pressed="true"] { border-color: var(--red); background: var(--red-wash); box-shadow: inset 3px 0 0 var(--red); }',
     );
     expect(CSS).not.toContain('.code-tree .code-file[aria-pressed="true"]');
   });

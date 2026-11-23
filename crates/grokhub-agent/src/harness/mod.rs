@@ -75,6 +75,7 @@ mod ladder;
 mod mindcheck;
 mod park;
 mod path_d;
+pub mod post_turn;
 mod proactive;
 pub mod provenance;
 pub mod replay;
@@ -93,9 +94,10 @@ pub use approval::{
     GateOutcome, HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
 pub use at_rest::{
-    forget_key_store_for, has_sealed_data, keyring_name_for, read_key, recheck_keyring,
-    set_default_key_store, use_key_store_for, use_os_keyring, KeyStore, KeyringOs, LearnedVault,
-    Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE, SEALED_PREFIX,
+    forget_key_store_for, has_sealed_data, keyring_name_for, open_with, read_key, recheck_keyring,
+    seal_with, set_default_key_store, use_key_store_for, use_os_keyring, write_key, KeyStore,
+    KeyringOs, LearnedVault, Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE,
+    KEY_SERVICE, SEALED_PREFIX,
 };
 pub use audit::{
     audit_file, audit_spans, pass1, pass2, summarize, Audit, SpanDigest, Window, WindowAudit,
@@ -120,11 +122,11 @@ pub use changes::{
     accept_change, change_id, content_hash, entry_id, findings_path, history_dir, kept_bytes,
     ledger_path, note_proposal_finding, read_scope_findings, record_change, record_outside_edit,
     record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
-    skill_ledger_path, snippet_path, take_self_changes, undo_change, undo_skill_change, Change,
-    ChangeKind, ChangeLedger, ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget,
-    SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR, CONNECTION_LEDGER_FILE,
-    FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE,
-    SKILL_LEDGER_FILE, SNIPPET_LEDGER_FILE,
+    skill_ledger_path, snippet_path, take_self_changes, undo_change, undo_change_at,
+    undo_skill_change, Change, ChangeKind, ChangeLedger, ChangeOp, ChangeTarget, Reverted,
+    RoutineTarget, ScopeFinding, SkillTarget, SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE,
+    CHANGES_DIR, CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP,
+    LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE, SKILL_LEDGER_FILE, SNIPPET_LEDGER_FILE,
 };
 pub use consent::{
     consent_path, grant_destination, grant_premium, grant_scope, revoke_grant, scope_excluded,
@@ -132,11 +134,11 @@ pub use consent::{
     SCOPE_KINDS,
 };
 pub use cua::{
-    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_socket_path,
-    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaChild,
-    CuaGate, CuaProxy, StdioChild, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG, CUA_DRIVER_VERSION,
-    CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_ONLY_MSG, CUA_LINUX_SHA256, CUA_MISSING_MSG,
-    CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
+    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_platform, cua_socket_path,
+    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaAsset,
+    CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG,
+    CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE,
+    CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
 };
 pub use detect::{
     action_loop, approval_gate_violation, claimed_click_no_change, claims_done, claims_success,
@@ -177,8 +179,8 @@ pub use park::{
 pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use proactive::{
     answer_span, ledger_target, note_proactive, proactive_key, proactive_mind, proactive_span,
-    run_approved_once, run_auto_act, step_class, step_undo, AutoRun, DECISION_ASK, DECISION_AUTO,
-    DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
+    run_approved_once, run_auto_act, run_offered_step, step_class, step_undo, AutoRun,
+    DECISION_APPROVE, DECISION_ASK, DECISION_AUTO, DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
 };
 pub use self_improve::{
     guard_span, last_recorded_run, lesson_checks, outcome_from_spans, patch_marks,

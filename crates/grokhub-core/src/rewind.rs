@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::project::{expand_project_root, is_under_project};
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RewindRecord {
@@ -88,28 +86,6 @@ pub fn rewind_copy_cmd(src: &str, dest: &str) -> String {
 /// `run_cmds` already snapshots; a rewind `cp` must not start a nested host job.
 pub fn is_rewind_copy_cmd(cmd: &str) -> bool {
     parse_rewind_copy(cmd).is_some()
-}
-
-pub fn is_rewind_copy_cmd_in(cmd: &str, project_root: &str, home: Option<&str>) -> bool {
-    let Some((src, dest)) = parse_rewind_copy(cmd) else {
-        return false;
-    };
-    let src_store = is_cabin_rewind_store(&src);
-    let dest_store = is_cabin_rewind_store(&dest);
-    if src_store == dest_store {
-        return false;
-    }
-    let project_side = if dest_store { &src } else { &dest };
-    let root = expand_project_root(project_root, home);
-    if root.is_empty() {
-        return false;
-    }
-    is_under_project(&expand_project_root(project_side, home), &root)
-}
-
-fn is_cabin_rewind_store(path: &str) -> bool {
-    let p = path.trim().trim_end_matches('/').trim_end_matches("/.");
-    p.contains("/.config/GrokHub/rewind/") || p.ends_with("/.config/GrokHub/rewind")
 }
 
 fn parse_rewind_copy(cmd: &str) -> Option<(String, String)> {
@@ -253,43 +229,6 @@ mod tests {
         assert!(
             !is_rewind_copy_cmd("cp -a /tmp/rewind/evil/. /etc"),
             "an unquoted cp that merely mentions /rewind/ must not skip the project gate"
-        );
-        assert!(
-            !is_rewind_copy_cmd_in(
-                &rewind_copy_cmd("/home/j/.config/GrokHub/rewind/rw1", "/etc"),
-                "/home/j/proj",
-                Some("/home/j")
-            ),
-            "a quoted rewind cp whose dest is outside the bound tree must still be gated"
-        );
-        assert!(
-            !is_rewind_copy_cmd_in(
-                &rewind_copy_cmd("/home/j/proj", "/tmp/rewind/stolen"),
-                "/home/j/proj",
-                Some("/home/j")
-            ),
-            "a snapshot into a fake /tmp/rewind folder must not skip the project gate"
-        );
-        assert!(
-            !is_rewind_copy_cmd_in(
-                &rewind_copy_cmd("/home/j/proj", "/tmp/evil/GrokHub/rewind/stolen"),
-                "/home/j/proj",
-                Some("/home/j")
-            ),
-            "a dest that only contains /GrokHub/rewind/ is not the cabin store"
-        );
-        assert!(is_rewind_copy_cmd_in(
-            &rewind_copy_cmd("/home/j/.config/GrokHub/rewind/rw1", "/home/j/proj"),
-            "/home/j/proj",
-            Some("/home/j")
-        ));
-        assert!(
-            is_rewind_copy_cmd_in(
-                &rewind_copy_cmd("/home/j/proj", "/home/j/.config/GrokHub/rewind/rw1"),
-                "/home/j/proj",
-                Some("/home/j")
-            ),
-            "cabin snapshots copy the bound tree into GrokHub/rewind"
         );
     }
 }

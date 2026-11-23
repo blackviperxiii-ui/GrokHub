@@ -28,12 +28,13 @@ import {
 } from "./api";
 import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
+import { StatusTracker, statusFromLane } from "./Progress";
 import { CardChat, ownChat } from "./WorkboardChat";
-import { CardTriage, priorityChip } from "./WorkboardTriage";
+import { CardTriage, dueLocalValue, priorityChip } from "./WorkboardTriage";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
 export const BOARD_HELP =
-  "Drag a card to move it, or drop it on a card to put it above that one. Work puts the card in the chat box for you to send. The cabin keeps this same board, and neither overwrites the other's changes.";
+  "Drag a card to move it, or drop it on a card to put it above that one. Work puts the card in the chat box for you to send. Agent runs change the board too, and this page shows their changes within a few seconds.";
 /** How often the page checks whether the cabin saved the board. */
 export const STAMP_EVERY_MS = 3000;
 /** Longest "Left off" text on a compact card, like the cabin's meta line. */
@@ -238,6 +239,8 @@ export function Workboard({
       onResume?.({ conversationId: started.conversationId, prompt: started.prompt });
     } catch (err) {
       setNote(String(err));
+      // A card that is gone leaves the page: show what the file holds now.
+      await getWorkboard().then(setPage, () => {});
     } finally {
       setBusy(false);
     }
@@ -625,6 +628,7 @@ function CardDetail({
 
   return (
     <div className="work-open">
+      <StatusTracker current={statusFromLane(lane)} label="Card status" />
       <CardTriage
         card={card}
         lane={lane}
@@ -874,6 +878,11 @@ function BoardCardRow({
             {card.queued && <span className="work-badge queued">{card.queued}</span>}
             {priorityChip(card.priority) && (
               <span className={`work-badge priority ${card.priority}`}>{priorityChip(card.priority)}</span>
+            )}
+            {card.dueAt != null && (
+              <span className="work-badge due" title={dueLocalValue(card.dueAt)}>
+                Due {new Date(card.dueAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+              </span>
             )}
             {meta.length > 0 && <span className="card-status">{meta.join(" · ")}</span>}
           </div>

@@ -73,6 +73,17 @@ pub fn should_notify(focused: bool, enabled: bool) -> bool {
     enabled && !focused
 }
 
+/// With the game companion's ping on, it goes out only when the
+/// notifications are on and allowed, the window is not the one in front, and
+/// it isn't quiet hours. "Only important" doesn't hold it back: the ping is
+/// its own opt-in.
+pub fn companion_ping_ok(enabled: bool, focused: bool, quiet: bool) -> bool {
+    should_notify(focused, enabled) && !quiet
+}
+
+/// The page's event for the bell: a game companion ping went out.
+pub const GAME_NOTICE_EVENT: &str = "game-companion-notice";
+
 /// The classic app's tray flags. Old systemd units and scripts pass them,
 /// so they start the shell the way a login start does.
 pub const TRAY_ALIASES: [&str; 2] = ["--agent", "--tray"];
@@ -186,6 +197,15 @@ fn short(text: &str, max: usize) -> String {
     cut
 }
 
+/// What a window gets back from its last run. Place and size come back;
+/// visibility doesn't, so a window hidden in the tray never comes back hidden;
+/// and decorations don't, so the window builder alone decides whether there is
+/// a system title bar (a saved one from an older build would sit over the top
+/// bar's own window buttons).
+fn restored_state() -> StateFlags {
+    StateFlags::all() - StateFlags::VISIBLE - StateFlags::DECORATIONS
+}
+
 /// The desktop plugins, single-instance first so a second launch hands over
 /// before anything else starts.
 pub fn plugins(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
@@ -196,11 +216,9 @@ pub fn plugins(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
                 crate::show_main(app);
             }
         }))
-        // Place and size come back; visibility doesn't, so a window hidden
-        // in the tray never comes back hidden.
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .with_state_flags(restored_state())
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -407,6 +425,74 @@ pub fn auto_resume_stopped(app: &AppHandle, text: &str) {
     }
 }
 
+/// Whether it is quiet hours now (Settings → Behavior), in local time.
+fn quiet_now(config_dir: &std::path::Path, now: u64) -> bool {
+    let behavior = settings::load(config_dir).behavior;
+    crate::scheduler::utc_offset().is_some_and(|offset| {
+        let clock = crate::scheduler::local_clock(now, offset);
+        crate::proactive::is_quiet(&behavior, clock.hour, clock.minute)
+    })
+}
+
+/// A game launch card went up with the ping on: one quiet notification with
+/// the card's title and body, and the same line in the bell.
+pub fn game_launch(app: &AppHandle, card: &grokhub_core::UpdateCard) {
+    let state = app.state::<ShellState>();
+    let enabled = crate::current(&state).notifications && capabilities::current().notifications;
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+    let quiet = quiet_now(&state.config_dir, grokhub_core::now_ms());
+    if !companion_ping_ok(enabled, focused, quiet) {
+        return;
+    }
+    let body = card.body.clone().unwrap_or_default();
+    let id = state.notified.fresh_id();
+    notify(app, id, &card.title, &short(&body, DETAIL_CHARS), false);
+    let line = if body.is_empty() {
+        card.title.clone()
+    } else {
+        format!("{} · {}", card.title, short(&body, DETAIL_CHARS))
+    };
+    let _ = app.emit(GAME_NOTICE_EVENT, line);
+}
+
+/// One read-change-write of the day's reminder count at a time.
+static REMINDERS: Mutex<()> = Mutex::new(());
+
+/// A proactive card is due within the hour (Settings → Pulse → Reminder
+/// notifications): one notice, at most three a day, never mid-game or in
+/// quiet hours. The day's count lives in `ping_gate.json` beside
+/// `proactive.json`, so a relaunch keeps it.
+pub fn proactive_reminder(app: &AppHandle, title: &str) {
+    let enabled = crate::current(&app.state::<ShellState>()).notifications
+        && capabilities::current().notifications;
+    if !enabled {
+        return;
+    }
+    let now = grokhub_core::now_ms();
+    let config_dir = app.state::<ShellState>().config_dir.clone();
+    let quiet = quiet_now(&config_dir, now);
+    let day = crate::nudges::local_day(now, crate::scheduler::utc_offset().unwrap_or(0));
+    let ask = grokhub_core::pulse::PingAsk {
+        time_sensitive: true,
+        game_running: grokhub_desktop::game_guard::peek().gaming,
+        quiet_hours: quiet,
+        day: &day,
+    };
+    {
+        let _lock = REMINDERS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut gate = grokhub_core::pulse::PingGate::load(&config_dir);
+        if !gate.take(&ask) {
+            return;
+        }
+        let _ = gate.save(&config_dir);
+    }
+    let id = app.state::<ShellState>().notified.fresh_id();
+    notify(app, id, "Coming up", &short(title, DETAIL_CHARS), false);
+}
+
 fn hotkey(app: &AppHandle, on: bool) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
     let registered = shortcuts.is_registered(SUMMON_HOTKEY);
@@ -479,6 +565,54 @@ pub fn set_notifications(state: State<'_, ShellState>, on: bool) -> Result<Setti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_game_ping_needs_notifications_a_background_window_and_no_quiet_hours() {
+        assert!(companion_ping_ok(true, false, false));
+        assert!(!companion_ping_ok(false, false, false), "notifications off");
+        assert!(!companion_ping_ok(true, true, false), "window in front");
+        assert!(!companion_ping_ok(true, false, true), "quiet hours");
+    }
+
+    #[test]
+    fn reminder_pings_keep_the_day_count_across_a_reload() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-reminders-{}-{}",
+            std::process::id(),
+            grokhub_core::new_token()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let day = "2026-11-18";
+        let ask = grokhub_core::pulse::PingAsk {
+            time_sensitive: true,
+            game_running: false,
+            quiet_hours: false,
+            day,
+        };
+        {
+            let _lock = REMINDERS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut gate = grokhub_core::pulse::PingGate::load(&dir);
+            assert!(gate.take(&ask));
+            assert!(gate.take(&ask));
+            assert!(gate.take(&ask));
+            assert!(!gate.take(&ask));
+            gate.save(&dir).expect("save");
+        }
+        assert!(dir.join(grokhub_core::pulse::PING_GATE_FILE).is_file());
+        let again = grokhub_core::pulse::PingGate::load(&dir);
+        assert_eq!(again.sent_on(day), 3);
+        assert!(!again.may_ping(&ask));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_restart_restores_place_and_size_but_not_visibility_or_decorations() {
+        let flags = restored_state();
+        assert!(flags.contains(StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED));
+        assert!(!flags.contains(StateFlags::VISIBLE));
+        assert!(!flags.contains(StateFlags::DECORATIONS));
+    }
 
     #[test]
     fn deny_and_open_are_the_only_clicks() {

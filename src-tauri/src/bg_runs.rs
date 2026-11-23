@@ -68,6 +68,7 @@ pub fn start(
     model: String,
     workspace: PathBuf,
     task: &str,
+    scratch: bool,
 ) -> Result<String, String> {
     let task = task.trim();
     if task.is_empty() {
@@ -100,7 +101,10 @@ pub fn start(
     let prompt = bg_task_prompt(task);
     std::thread::spawn(move || {
         let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
-        let session = format!("shell-bg-{id}-{}", grokhub_core::now_ms());
+        let session = grokhub_agent::scratch::shell_id(
+            scratch,
+            &format!("bg-{id}-{}", grokhub_core::now_ms()),
+        );
         let done = ask_once(client, &model, workspace, session, prompt, cancel);
         let end = if done.stop_reason == "halted" {
             BgEnd::Stopped
@@ -293,6 +297,7 @@ mod tests {
             "grok-4.7".into(),
             ws.0.clone(),
             "write out.txt with x",
+            false,
         )
         .expect("started");
         assert_eq!(title, "write out.txt with x");
@@ -317,6 +322,64 @@ mod tests {
         assert_eq!(status(), "Done · write out.txt with x\nCould not write.");
     }
 
+    /// Answers every request with the same text.
+    struct Says {
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl ModelClient for Says {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.requests.lock().expect("requests").push(req.clone());
+            sink(StreamEvent::TextDelta("Seven.".into()));
+            Ok(TurnOutput {
+                text: "Seven.".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    #[test]
+    fn work_a_scratch_chat_starts_reads_no_memory() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (cfg, ws) = (temp_dir("scratch-cfg"), temp_dir("scratch-ws"));
+        let _config = grokhub_agent::perm::ConfigGuard::set(&cfg.0);
+        std::fs::write(
+            ws.0.join("MEMORY.md"),
+            "The harbor ferry leaves at seven fifteen.\n",
+        )
+        .expect("memory");
+        let sent = |scratch: bool| {
+            let client = Arc::new(Says {
+                requests: Mutex::new(Vec::new()),
+            });
+            let id = grokhub_agent::scratch::shell_id(scratch, &format!("consult-{scratch}"));
+            let done = ask_once(
+                client.clone(),
+                "grok-4.7",
+                ws.0.clone(),
+                id,
+                "when does the harbor ferry leave".into(),
+                CancelToken::new(),
+            );
+            assert_eq!(done.text, "Seven.");
+            let requests = client.requests.lock().expect("requests");
+            format!("{:?}", requests[0])
+        };
+        let scratch = sent(true);
+        assert!(
+            scratch.contains("when does the harbor ferry leave"),
+            "{scratch}"
+        );
+        assert!(!scratch.contains("seven fifteen"), "{scratch}");
+        let normal = sent(false);
+        assert!(normal.contains("seven fifteen"), "{normal}");
+    }
+
     #[test]
     fn nothing_running_says_so_and_a_blank_task_is_refused() {
         let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -328,7 +391,7 @@ mod tests {
         });
         let (cfg, ws) = (temp_dir("blank"), temp_dir("w"));
         assert_eq!(
-            start(cfg.0.clone(), client, "m".into(), ws.0.clone(), "  ").err(),
+            start(cfg.0.clone(), client, "m".into(), ws.0.clone(), "  ", false).err(),
             Some("Nothing to run".to_string())
         );
     }
@@ -352,7 +415,15 @@ mod tests {
         });
         let (cfg, ws) = (temp_dir("max"), temp_dir("w"));
         assert_eq!(
-            start(cfg.0.clone(), client, "m".into(), ws.0.clone(), "one more").err(),
+            start(
+                cfg.0.clone(),
+                client,
+                "m".into(),
+                ws.0.clone(),
+                "one more",
+                false
+            )
+            .err(),
             Some("3 background tasks are already running. Stop one first.".to_string())
         );
         assert_eq!(stop_text(), "Stopped 3 background tasks");

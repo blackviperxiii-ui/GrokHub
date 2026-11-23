@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
   runLocalSpeedTest: vi.fn<() => Promise<string>>(),
   setLocalKeepLoaded: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   setLocalDynamic: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  setPromptTidy: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
+  setLocalUse: vi.fn<(on: boolean) => Promise<LocalAiView>>(),
   unloadLocalModel: vi.fn<() => Promise<LocalAiView>>(),
   startLocalEngineDownload: vi.fn(),
   cancelLocalEngineDownload: vi.fn(),
@@ -51,8 +53,9 @@ function drafterEvent(event: LocalDrafterEvent) {
 }
 
 vi.mock("./api", () => api);
-// Download models has its own tests.
+// Download models and voice routing have their own tests.
 vi.mock("./ModelLibrary", () => ({ ModelLibrary: () => null }));
+vi.mock("./VoiceRouteSettings", () => ({ VoiceRouteSettings: () => null }));
 
 import { ABLITERATED_NOTICE, LocalAi, MODEL_NOTICE } from "./LocalAi";
 
@@ -111,23 +114,20 @@ function model(
 
 function config(over: Partial<LocalAiConfig> = {}): LocalAiConfig {
   return {
-    mode: "auto",
     pauseForGames: true,
     useIdleTime: true,
     throttleOnBattery: true,
     manual: {
-      backend: "auto",
       ngl: null,
       ctx: null,
       threads: null,
       kv: "auto",
       idleMinutes: 10,
-      caps: { rampUp: 90, normal: 80, throttle: 50 },
       neverUnload: false,
       allowApps: [],
       denyApps: [],
     },
-    localModel: { selected: "" },
+    ownFiles: [],
     noticeSeen: [],
     ...over,
   };
@@ -144,6 +144,11 @@ function missingEngine(): LocalAiView["engine"] {
     error: null,
   };
 }
+
+const LOCAL_ON =
+  "On. While the model is loaded, small background jobs run on this computer, and chats use it when you're offline or the cloud can't answer.";
+const LOCAL_OFF = "Off. Nothing runs on the on-device model.";
+const TIDY_LOCAL_OFF = "Off while Local AI is off. Turn on Use Local AI on this computer first.";
 
 const READY: LocalAiView["engine"] = {
   state: "ready",
@@ -186,6 +191,8 @@ function view(
       dynamic: true,
       dynamicHint: "On: each task runs on the model on disk that's best at it.",
     },
+    localUse: { on: true, hint: LOCAL_ON },
+    tidy: { on: false, available: true, hint: "Off. Your messages go to the model exactly as you type them." },
     ...over,
   };
 }
@@ -273,22 +280,17 @@ const PROFILES: Record<string, LocalAiView> = {
   ),
 };
 
-/** The pre-selected row and the names under one heading. */
-function bucket(title: string): string[] {
-  return within(screen.getByRole("list", { name: title }))
+async function openAdvanced() {
+  await userEvent.click(await screen.findByText("Advanced"));
+}
+
+/** The names in the Added model files list, or [] when it isn't shown. */
+function added(): string[] {
+  const list = screen.queryByRole("list", { name: "Added model files" });
+  if (!list) return [];
+  return within(list)
     .getAllByRole("listitem")
     .map((li) => li.getAttribute("aria-label") ?? "");
-}
-
-function checkedName(): string | null {
-  const radio = screen
-    .getAllByRole("radio")
-    .find((r) => (r as HTMLInputElement).checked);
-  return radio?.closest("li")?.getAttribute("aria-label") ?? null;
-}
-
-async function openManual() {
-  await userEvent.click(await screen.findByRole("button", { name: "Manual" }));
 }
 
 describe("LocalAi", () => {
@@ -298,55 +300,32 @@ describe("LocalAi", () => {
     drafterEvents.length = 0;
   });
 
+  // Auto picks on merit; nothing on the page picks a model, a tier or a mode.
   it.each([
-    ["T1 laptop", "Gemma 4 E2B", ["Gemma 4 E2B"], ["Gemma 4 E4B"], 4],
-    ["8 GB GPU", "Gemma 4 E4B", ["Gemma 4 E4B", "Gemma 4 E2B"], ["Gemma 4 12B"], 0],
-    [
-      "16 GB GPU",
-      "Gemma 4 26B-A4B",
-      ["Gemma 4 26B-A4B", "Gemma 4 12B"],
-      ["Muse Glimmer 30B"],
-      0,
-    ],
-    ["24 GB GPU", "Gemma 4 31B", ["Gemma 4 31B", "Muse Glimmer 30B"], null, 0],
-    ["Apple 16 GB", "Gemma 4 E4B", ["Gemma 4 E4B", "Gemma 4 E2B"], ["Gemma 4 12B"], 1],
-  ] as const)(
-    "%s pre-selects %s with its buckets and reasons",
-    async (profile, preselected, recommended, maySlow, hidden) => {
-      const v = PROFILES[profile];
-      api.getLocalAi.mockResolvedValue(v);
-      render(<LocalAi />);
-      await openManual();
-
-      expect(checkedName()).toBe(preselected);
-      expect(bucket("Recommended")).toEqual(recommended);
-      if (maySlow) expect(bucket("May be slow")).toEqual(maySlow);
-      else expect(screen.queryByRole("list", { name: "May be slow" })).toBeNull();
-      for (const row of v.picker.models.filter((m) => m.bucket !== "hidden")) {
-        expect(screen.getByText(row.reason)).toBeInTheDocument();
-      }
-      // Hidden models only under Show all, with their reasons.
-      expect(screen.queryByRole("list", { name: "Won't run well here" })).toBeNull();
-      if (hidden > 0) {
-        await userEvent.click(screen.getByRole("button", { name: "Show all" }));
-        expect(bucket("Won't run well here")).toHaveLength(hidden);
-        for (const row of v.picker.models.filter((m) => m.bucket === "hidden")) {
-          expect(screen.getByText(row.reason)).toBeInTheDocument();
-        }
-      }
-    },
-  );
-
-  it("labels Muse Glimmer optional and never pre-selects it on a 24 GB GPU", async () => {
-    api.getLocalAi.mockResolvedValue(PROFILES["24 GB GPU"]);
+    ["T1 laptop", "Gemma 4 E2B"],
+    ["8 GB GPU", "Gemma 4 E4B"],
+    ["16 GB GPU", "Gemma 4 26B-A4B"],
+    ["24 GB GPU", "Gemma 4 31B"],
+    ["Apple 16 GB", "Gemma 4 E4B"],
+  ] as const)("%s shows Auto's pick, %s, with no model picker", async (profile, pick) => {
+    const v = PROFILES[profile];
+    api.getLocalAi.mockResolvedValue(v);
     render(<LocalAi />);
-    await openManual();
-    const muse = screen.getByRole("listitem", { name: "Muse Glimmer 30B" });
-    expect(within(muse).getByText("Optional")).toBeInTheDocument();
-    expect(within(muse).getByRole("radio")).not.toBeChecked();
-    expect(muse).toHaveTextContent("5 GB · Q4_K_M · 8K ctx · about 40 tok/s · Apache-2.0");
-    const top = screen.getByRole("listitem", { name: "Gemma 4 31B" });
-    expect(within(top).getByText("Recommended for this PC")).toBeInTheDocument();
+    await openAdvanced();
+    expect(document.querySelector(".local-status")).toHaveTextContent(` · ${pick} · `);
+    expect(screen.queryAllByRole("radio")).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Manual" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Auto" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Local AI mode" })).toBeNull();
+    expect(screen.queryByText("Show all")).toBeNull();
+    for (const row of v.picker.models) {
+      expect(screen.queryByRole("listitem", { name: row.name })).toBeNull();
+    }
+    const options = screen.queryAllByRole("option").map((o) => o.textContent ?? "");
+    expect(options.filter((o) => o in IDS || /gemma|model|tier/i.test(o))).toEqual([]);
+    expect(
+      screen.getByText("Auto picks the model for this PC. These settings only change how it runs."),
+    ).toBeInTheDocument();
   });
 
   it("shows what runs now and keeps it loaded or unloads it on a press", async () => {
@@ -372,8 +351,33 @@ describe("LocalAi", () => {
     expect(await within(rows).findByRole("button", { name: "Let it unload" })).toBeInTheDocument();
     await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
     expect(api.unloadLocalModel).toHaveBeenCalled();
-    expect(await screen.findByText(/Unloaded the model/)).toBeInTheDocument();
+    expect(await screen.findByText("Unloaded the model. It loads again with the next reply.")).toBeInTheDocument();
     expect(within(rows).queryByRole("button", { name: "Unload now" })).toBeNull();
+  });
+
+  it("unloads without promising a reload while Local AI is off", async () => {
+    const off = {
+      ...PROFILES["16 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    };
+    api.getLocalAi.mockResolvedValue({
+      ...off,
+      running: {
+        lines: ["Running now: Gemma 4 12B (Q4_K), loaded on the GPU, 6.9 GB."],
+        loaded: true,
+        keptLoaded: false,
+        dynamic: false,
+        dynamicHint: "Off: your pick answers every task.",
+      },
+    });
+    api.unloadLocalModel.mockResolvedValue(off);
+    render(<LocalAi />);
+    const rows = await screen.findByLabelText("Running now");
+    await userEvent.click(within(rows).getByRole("button", { name: "Unload now" }));
+    expect(api.unloadLocalModel).toHaveBeenCalled();
+    expect(await screen.findByText("Unloaded the model.")).toBeInTheDocument();
+    expect(screen.queryByText("Unloaded the model. It loads again with the next reply.")).toBeNull();
   });
 
   it("turns Dynamic off and on from the running rows", async () => {
@@ -399,6 +403,121 @@ describe("LocalAi", () => {
     expect(rows).toHaveTextContent("Off: your pick answers every task.");
   });
 
+  it("turns Local AI off at once and pauses the tidy, without saving the page", async () => {
+    const v = PROFILES["16 GB GPU"];
+    api.getLocalAi.mockResolvedValue(v);
+    api.setLocalUse.mockResolvedValue({
+      ...v,
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    const sw = within(group).getByRole("switch", { name: "Use Local AI on this computer" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(group).toHaveTextContent(LOCAL_ON);
+    await userEvent.click(sw);
+    expect(api.setLocalUse).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
+    expect(group).toHaveTextContent(LOCAL_OFF);
+    expect(await screen.findByText("Local AI is off: nothing runs on the on-device model.")).toBeInTheDocument();
+    const tidy = screen.getByRole("group", { name: "Typo tidy" });
+    expect(within(tidy).getByRole("switch")).toBeDisabled();
+    expect(tidy).toHaveTextContent(TIDY_LOCAL_OFF);
+    expect(api.saveLocalAi).not.toHaveBeenCalled();
+  });
+
+  it("turns Local AI back on after an older version switched it off", async () => {
+    const off = {
+      ...PROFILES["16 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    };
+    api.getLocalAi.mockResolvedValue(off);
+    api.setLocalUse.mockResolvedValue(PROFILES["16 GB GPU"]);
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    const sw = within(group).getByRole("switch", { name: "Use Local AI on this computer" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(sw);
+    expect(api.setLocalUse).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "true"));
+    expect(await screen.findByText("Local AI is on for this computer.")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Typo tidy" })).getByRole("switch")).toBeEnabled();
+  });
+
+  it("says why Local AI didn't change", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["16 GB GPU"]);
+    api.setLocalUse.mockRejectedValue("app.json is not valid JSON");
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Use Local AI" });
+    await userEvent.click(within(group).getByRole("switch"));
+    expect(await screen.findByText("app.json is not valid JSON")).toBeInTheDocument();
+    expect(within(group).getByRole("switch")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("turns typo tidy on at once, without saving the page", async () => {
+    const v = PROFILES["16 GB GPU"];
+    api.getLocalAi.mockResolvedValue(v);
+    const on =
+      "On. While the on-device model is loaded, it fixes typos first (up to 0.3 s); Keep loaded tidies every message. Your chat keeps what you typed; numbers, names, paths and links are never changed.";
+    api.setPromptTidy.mockResolvedValue({ ...v, tidy: { on: true, available: true, hint: on } });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    const sw = within(group).getByRole("switch", { name: "Tidy typos on this computer (can change wording)" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(group).toHaveTextContent("Off. Your messages go to the model exactly as you type them.");
+    await userEvent.click(sw);
+    expect(api.setPromptTidy).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "true"));
+    expect(group).toHaveTextContent(on);
+    expect(await screen.findByText("Typo tidy is on: the on-device model fixes typos while it's loaded.")).toBeInTheDocument();
+    expect(api.saveLocalAi).not.toHaveBeenCalled();
+  });
+
+  it("keeps typo tidy off until a local model is set up", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["16 GB GPU"],
+      tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    const sw = within(group).getByRole("switch", { name: "Tidy typos on this computer (can change wording)" });
+    expect(sw).toBeDisabled();
+    await userEvent.click(sw);
+    expect(api.setPromptTidy).not.toHaveBeenCalled();
+    expect(group).toHaveTextContent("Off. Set up a local engine and model first.");
+  });
+
+  it("lets a paused typo tidy be turned off without a model", async () => {
+    const paused = { on: true, available: false, hint: "On, but paused. Set up a local engine and model first." };
+    const v = { ...PROFILES["16 GB GPU"], tidy: paused };
+    api.getLocalAi.mockResolvedValue(v);
+    api.setPromptTidy.mockResolvedValue({
+      ...v,
+      tidy: { on: false, available: false, hint: "Off. Set up a local engine and model first." },
+    });
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    const sw = within(group).getByRole("switch", { name: "Tidy typos on this computer (can change wording)" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(group).toHaveTextContent("On, but paused. Set up a local engine and model first.");
+    await userEvent.click(sw);
+    expect(api.setPromptTidy).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "false"));
+    expect(sw).toBeDisabled();
+  });
+
+  it("says why typo tidy didn't change", async () => {
+    api.getLocalAi.mockResolvedValue(PROFILES["16 GB GPU"]);
+    api.setPromptTidy.mockRejectedValue("Set up a local engine and model first.");
+    render(<LocalAi />);
+    const group = await screen.findByRole("group", { name: "Typo tidy" });
+    await userEvent.click(within(group).getByRole("switch"));
+    expect(await screen.findByText("Set up a local engine and model first.")).toBeInTheDocument();
+    expect(within(group).getByRole("switch")).toHaveAttribute("aria-checked", "false");
+  });
+
   it("shows the Auto status line and what detection couldn't see", async () => {
     api.getLocalAi.mockResolvedValue({
       ...PROFILES["16 GB GPU"],
@@ -414,7 +533,6 @@ describe("LocalAi", () => {
     expect(
       screen.getByText("On Wayland GrokHub can't see which app is fullscreen."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("list", { name: "Recommended" })).toBeNull();
   });
 
@@ -432,7 +550,7 @@ describe("LocalAi", () => {
     expect(await screen.findByText("Local AI saved.")).toBeInTheDocument();
   });
 
-  it("a model file with safety training removed asks once before it is picked", async () => {
+  it("a model file with safety training removed asks once before it is added", async () => {
     const v = PROFILES["8 GB GPU"];
     const path = "/models/Llama-3-8B-abliterated.Q4_K_M.gguf";
     const file: LocalFileRow = {
@@ -448,33 +566,33 @@ describe("LocalAi", () => {
     api.checkModelFile.mockResolvedValue(file);
     api.saveLocalAi.mockResolvedValue(v);
     render(<LocalAi />);
-    await openManual();
+    await openAdvanced();
 
     await userEvent.type(screen.getByLabelText("Model file path"), ` ${path} `);
-    await userEvent.click(screen.getByRole("button", { name: "Use a model file" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a model file" }));
     expect(api.checkModelFile).toHaveBeenCalledWith(path);
     const notice = await screen.findByRole("alertdialog", { name: "About this model" });
     expect(notice).toHaveTextContent(MODEL_NOTICE);
-    // Cancel keeps the tier default.
+    // Cancel adds nothing; the file waits under On this PC.
     await userEvent.click(within(notice).getByRole("button", { name: "Cancel" }));
-    expect(checkedName()).toBe("Gemma 4 E4B");
+    expect(added()).toEqual([]);
 
-    const row = screen.getByRole("listitem", { name: file.name });
+    const row = within(screen.getByRole("list", { name: "On this PC" })).getByRole("listitem", {
+      name: file.name,
+    });
     expect(within(row).getByText("Safety training removed")).toBeInTheDocument();
-    await userEvent.click(within(row).getByRole("radio"));
+    await userEvent.click(within(row).getByRole("button", { name: "Add" }));
     await userEvent.click(screen.getByRole("button", { name: "I understand" }));
-    expect(checkedName()).toBe(file.name);
+    expect(added()).toEqual([file.name]);
+    expect(screen.queryByRole("list", { name: "On this PC" })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Save local AI" }));
-    const saved = api.saveLocalAi.mock.calls[0][0];
-    expect(saved.mode).toBe("manual");
-    expect(saved.localModel).toEqual({ selected: path });
-    expect(saved.noticeSeen).toEqual([path]);
+    expect(api.saveLocalAi).toHaveBeenCalledWith(config({ ownFiles: [path], noticeSeen: [path] }));
   });
 
-  it("a file whose notice was read is picked without asking", async () => {
+  it("a file whose notice was read is added without asking, and Remove takes it off", async () => {
     const path = "/models/qwen3-8b.gguf";
-    api.getLocalAi.mockResolvedValue({
+    const v = {
       ...PROFILES["8 GB GPU"],
       picker: {
         ...PROFILES["8 GB GPU"].picker,
@@ -490,51 +608,58 @@ describe("LocalAi", () => {
           },
         ],
       },
-    });
+    };
+    api.getLocalAi.mockResolvedValue(v);
+    api.saveLocalAi.mockResolvedValue(v);
     render(<LocalAi />);
-    await openManual();
+    await openAdvanced();
     const row = screen.getByRole("listitem", { name: "qwen3-8b.gguf" });
     expect(row).toHaveTextContent("Ollama · 4.9 GB · /models/qwen3-8b.gguf");
     expect(within(row).getByText("Third-party")).toBeInTheDocument();
-    await userEvent.click(within(row).getByRole("radio"));
+    await userEvent.click(within(row).getByRole("button", { name: "Add" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(checkedName()).toBe("qwen3-8b.gguf");
+    expect(added()).toEqual(["qwen3-8b.gguf"]);
+    const kept = within(screen.getByRole("list", { name: "Added model files" })).getByRole(
+      "listitem",
+      { name: "qwen3-8b.gguf" },
+    );
+    await userEvent.click(within(kept).getByRole("button", { name: "Remove" }));
+    expect(added()).toEqual([]);
+    expect(screen.getByRole("listitem", { name: "qwen3-8b.gguf" })).toHaveTextContent("Add");
+    await userEvent.click(screen.getByRole("button", { name: "Save local AI" }));
+    expect(api.saveLocalAi).toHaveBeenCalledWith(config());
   });
 
-  it("manual values save with caps held to 90% and app lists by line", async () => {
+  it("Advanced values save idle unload, never unload, and app lists by line", async () => {
     const v = PROFILES["16 GB GPU"];
     api.getLocalAi.mockResolvedValue(v);
     api.saveLocalAi.mockResolvedValue(v);
     render(<LocalAi />);
-    await openManual();
-    await userEvent.selectOptions(screen.getByLabelText("Device"), "vulkan");
+    await openAdvanced();
+    expect(screen.queryByLabelText("Device")).toBeNull();
+    expect(screen.queryByText(/Memory caps/)).toBeNull();
     await userEvent.type(screen.getByLabelText("GPU layers"), "20");
     await userEvent.type(screen.getByLabelText("Context"), "16384");
     await userEvent.selectOptions(screen.getByLabelText("KV cache"), "q4");
-    const idle = screen.getByLabelText("Idle");
-    await userEvent.clear(idle);
-    await userEvent.type(idle, "95");
+    const idle = screen.getByLabelText("Unload after idle (minutes)");
+    await userEvent.tripleClick(idle);
+    await userEvent.keyboard("3");
     await userEvent.click(screen.getByLabelText("Never unload the model"));
     await userEvent.type(
       screen.getByLabelText(/Never pause for these apps/),
       "vlc.exe\n\n mpv ",
     );
     await userEvent.type(screen.getByLabelText(/Always pause for these apps/), "blender");
-    await userEvent.click(screen.getByRole("radio", { name: /Gemma 4 12B/ }));
     await userEvent.click(screen.getByRole("button", { name: "Save local AI" }));
 
     expect(api.saveLocalAi).toHaveBeenCalledWith(
       config({
-        mode: "manual",
-        localModel: { selected: "gemma-4-12b-it-abliterated-q4_k" },
         manual: {
-          backend: "vulkan",
           ngl: 20,
           ctx: 16384,
           threads: null,
           kv: "q4",
-          idleMinutes: 10,
-          caps: { rampUp: 90, normal: 80, throttle: 50 },
+          idleMinutes: 3,
           neverUnload: true,
           allowApps: ["vlc.exe", "mpv"],
           denyApps: ["blender"],
@@ -543,7 +668,19 @@ describe("LocalAi", () => {
     );
   });
 
-  it("re-runs the speed test and resets to Auto", async () => {
+  it("keeps the speed test and Keep loaded off while Local AI is off", async () => {
+    api.getLocalAi.mockResolvedValue({
+      ...PROFILES["8 GB GPU"],
+      localUse: { on: false, hint: LOCAL_OFF },
+      tidy: { on: false, available: false, hint: TIDY_LOCAL_OFF },
+    });
+    render(<LocalAi />);
+    await openAdvanced();
+    expect(screen.getByRole("button", { name: "Re-run speed test" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep loaded" })).toBeDisabled();
+  });
+
+  it("re-runs the speed test and resets Advanced", async () => {
     const v = PROFILES["8 GB GPU"];
     api.getLocalAi.mockResolvedValue(v);
     api.runLocalSpeedTest.mockRejectedValue(
@@ -551,19 +688,18 @@ describe("LocalAi", () => {
     );
     api.resetLocalAi.mockResolvedValue(v);
     render(<LocalAi />);
-    await openManual();
+    await openAdvanced();
     await userEvent.click(screen.getByRole("button", { name: "Re-run speed test" }));
     const failed = await screen.findByText(
       "Set up a local engine and model first, then run the speed test.",
     );
     expect(failed).toHaveAttribute("role", "status");
     expect(failed).toHaveClass("note", "local-note", "error");
-    await userEvent.click(screen.getByRole("button", { name: "Reset to Auto" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reset Advanced" }));
     expect(api.resetLocalAi).toHaveBeenCalledTimes(1);
-    const back = await screen.findByText("Back to Auto.");
+    const back = await screen.findByText("Advanced settings are back to their defaults.");
     expect(back).toHaveAttribute("role", "status");
     expect(back).not.toHaveClass("error");
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("offers Get engine when the local engine is missing", async () => {
@@ -645,19 +781,19 @@ describe("LocalAi", () => {
       picker: { ...PROFILES["8 GB GPU"].picker, onThisPc: [file] },
     });
     render(<LocalAi />);
-    await openManual();
+    await openAdvanced();
     const row = screen.getByRole("listitem", { name: file.name });
     expect(within(row).getByText("Safety training removed")).toBeInTheDocument();
     expect(within(row).queryByText("Third-party")).toBeNull();
-    await userEvent.click(within(row).getByRole("radio"));
+    await userEvent.click(within(row).getByRole("button", { name: "Add" }));
     const notice = await screen.findByRole("alertdialog", { name: "About this model" });
     expect(notice).toHaveTextContent(ABLITERATED_NOTICE);
     expect(notice).not.toHaveTextContent(MODEL_NOTICE);
     await userEvent.click(screen.getByRole("button", { name: "I understand" }));
-    expect(checkedName()).toBe(file.name);
+    expect(added()).toEqual([file.name]);
   });
 
-  it("a running draft download keeps its progress and Cancel in Auto", async () => {
+  it("a running draft download keeps its progress and Cancel in view", async () => {
     api.getLocalAi.mockResolvedValue({
       ...PROFILES["16 GB GPU"],
       draftOffers: [GEMMA_OFFER],
@@ -666,7 +802,7 @@ describe("LocalAi", () => {
     api.cancelLocalDrafterDownload.mockResolvedValue(undefined);
     render(<LocalAi />);
     const offer = await screen.findByLabelText("Draft model offer");
-    expect(screen.getByRole("button", { name: "Auto" })).toHaveAttribute("aria-pressed", "true");
+    expect(offer.closest("details")).toBeNull();
     expect(within(offer).getByText("Downloading Gemma 4 E2B: 1.2 of 3.2 GB")).toHaveClass(
       "local-draft-progress",
     );
@@ -682,9 +818,7 @@ describe("LocalAi", () => {
     const v = { ...PROFILES["16 GB GPU"], draftOffers: [GEMMA_OFFER], draftProgress: GEMMA_PROGRESS };
     api.getLocalAi.mockResolvedValueOnce(v).mockReturnValue(new Promise<LocalAiView>(() => {}));
     render(<LocalAi />);
-    await openManual();
-    await userEvent.click(screen.getByRole("radio", { name: /Gemma 4 12B/ }));
-    expect(screen.getByRole("button", { name: "Cancel draft download" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Cancel draft download" })).toBeInTheDocument();
     drafterEvent({
       state: "paused",
       progress: null,
@@ -692,22 +826,24 @@ describe("LocalAi", () => {
       message: "Paused Gemma 4 E2B at 1.2 of 3.2 GB. Resume picks up where it stopped.",
     });
     expect(screen.getByRole("button", { name: "Resume…" })).toHaveClass("install-draft");
+    api.startLocalDrafterDownload.mockResolvedValue(GEMMA_OFFER);
+    await userEvent.click(screen.getByRole("button", { name: "Resume…" }));
+    expect(api.startLocalDrafterDownload).toHaveBeenCalledWith("gemma-4-12b-it-abliterated-q4_k");
     expect(screen.queryByText(/Downloading Gemma 4 E2B/)).toBeNull();
     expect(api.getLocalAi).toHaveBeenCalledTimes(2);
   });
 
-  it("picking Gemma 4 12B shows the draft install offer when its E2B drafter is missing", async () => {
+  it("offers the draft install for Auto's pick under Advanced when its drafter is missing", async () => {
     api.getLocalAi.mockResolvedValue({
       ...PROFILES["16 GB GPU"],
       draftOffers: [GEMMA_OFFER],
-      draftOffer: null,
+      draftOffer: GEMMA_OFFER,
     });
     api.startLocalDrafterDownload.mockResolvedValue(GEMMA_OFFER);
     render(<LocalAi />);
-    await openManual();
-    expect(screen.queryByLabelText("Draft model offer")).toBeNull();
-    await userEvent.click(screen.getByRole("radio", { name: /Gemma 4 12B/ }));
+    await openAdvanced();
     const offer = await screen.findByLabelText("Draft model offer");
+    expect(offer.closest("details")).toHaveClass("local-advanced");
     expect(offer).toHaveTextContent(
       "Optional: Gemma 4 E2B can draft replies for Gemma 4 12B, which can make them faster on some machines.",
     );

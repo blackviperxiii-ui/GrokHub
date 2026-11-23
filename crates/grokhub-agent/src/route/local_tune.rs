@@ -1,10 +1,10 @@
 //! Auto-tune: a small online bandit per device × model × mode that learns
-//! which slot count, drafter and micro-batch run fastest on this machine.
+//! which slot count and micro-batch run fastest on this machine.
 //!
 //! The planner's own launch is the first promoted arm. The planner proposes
 //! the other arms that pass a shadow check (they need no more memory than
-//! the plan has: no more slots than it sized the KV for, and a drafter only
-//! where one fits). One of them at a time runs as a canary. It takes effect
+//! the plan has: no more slots than it sized the KV for). The drafter is
+//! never tuned: a paired model always runs with it. One of them at a time runs as a canary. It takes effect
 //! at the next launch the app makes anyway (a cold start or a relaunch
 //! already due), never through a restart of its own. A canary that beats
 //! the promoted arm by [`PROMOTE_MARGIN`] over [`CANARY_SAMPLES`] chat
@@ -21,7 +21,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-/// One way to launch: slots, the drafter on or off, the micro-batch.
+/// One way to launch: slots, whether the plan drafts, the micro-batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Arm {
     pub slots: u32,
@@ -73,22 +73,21 @@ pub struct Record {
 }
 
 /// Every arm around the planner's `base` that passes the shadow check:
-/// at most the slots it sized memory for, a drafter only when it planned
-/// one, and the smaller micro-batch only when the engine takes the flag.
+/// at most the slots it sized memory for, the drafter exactly as planned
+/// (a paired model never runs without it), and the smaller micro-batch only
+/// when the engine takes the flag.
 pub fn candidates(base: Arm, has_ubatch: bool) -> Vec<Arm> {
     let mut out = Vec::new();
     for slots in [1, 2, 4].into_iter().filter(|s| *s <= base.slots.max(1)) {
-        for draft in [false, true].into_iter().filter(|d| !d || base.draft) {
-            for ubatch in [UBATCH_DEFAULT, UBATCH_SMALL] {
-                if ubatch != base.ubatch && !has_ubatch {
-                    continue;
-                }
-                out.push(Arm {
-                    slots,
-                    draft,
-                    ubatch,
-                });
+        for ubatch in [UBATCH_DEFAULT, UBATCH_SMALL] {
+            if ubatch != base.ubatch && !has_ubatch {
+                continue;
             }
+            out.push(Arm {
+                slots,
+                draft: base.draft,
+                ubatch,
+            });
         }
     }
     if !out.contains(&base) {

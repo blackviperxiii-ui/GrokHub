@@ -5,7 +5,7 @@ import type { Capabilities, Settings as Shape } from "./api";
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Shape>>(),
-  saveDefaults: vi.fn<(workspace: string, approvals: string) => Promise<Shape>>(),
+  saveDefaults: vi.fn<(workspace: string, approvals: string, alwaysCollapseThoughts: boolean) => Promise<Shape>>(),
   saveSettings:
     vi.fn<
       (
@@ -26,8 +26,20 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+// The profile group has its own tests (Profile.test.tsx).
+vi.mock("./Profile", () => ({
+  ProfileSettings: ({ onProfile }: { onProfile?: (p: unknown) => void }) => (
+    <button type="button" onClick={() => onProfile?.({ shownName: "Pat" })}>
+      Profile panel
+    </button>
+  ),
+}));
 // Local AI has its own tests (LocalAi.test.tsx).
-vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
+vi.mock("./LocalAi", () => ({
+  LocalAi: ({ focus }: { focus?: { id: string; n: number } }) => (
+    <p>Local AI panel{focus && ` on ${focus.id} (${focus.n})`}</p>
+  ),
+}));
 // AI models has its own tests (AiModels.test.tsx).
 vi.mock("./AiModels", () => ({ AiModels: () => <p>AI models panel</p> }));
 vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
@@ -36,6 +48,8 @@ vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> })
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
 vi.mock("./PulseSources", () => ({ PulseSources: () => <p>Pulse sources panel</p> }));
+vi.mock("./PulseAuto", () => ({ PulseAuto: () => <p>Pulse fixes panel</p> }));
+vi.mock("./PcHealth", () => ({ PcHealth: () => <p>PC health panel</p> }));
 vi.mock("./PcHelpers", () => ({ PcHelpers: () => <p>PC helpers panel</p> }));
 vi.mock("./CodeSettings", () => ({ CodeSettings: () => <p>Code panel</p> }));
 vi.mock("./Learned", () => ({ Learned: () => <p>Learned panel</p> }));
@@ -46,7 +60,14 @@ vi.mock("./MemoryRetention", () => ({ MemoryRetention: () => <p>Memory retention
 vi.mock("./ChatArchive", () => ({ ChatArchive: () => <p>Chat archive</p> }));
 vi.mock("./ScreenshotExplain", () => ({ ScreenshotExplain: () => <p>Screenshot explain row</p> }));
 vi.mock("./GameWatch", () => ({ GameWatch: () => <p>Game watcher row</p> }));
+vi.mock("./GameCompanionSetting", () => ({
+  GameCompanionSetting: ({ notifications }: { notifications: boolean }) => (
+    <p>Game companion row{notifications ? " with notifications" : ""}</p>
+  ),
+}));
+vi.mock("./LivingWall", () => ({ LivingWall: () => <p>Living wall row</p> }));
 vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
+vi.mock("./LocalModelsSource", () => ({ LocalModelsSource: () => <p>Local models source</p> }));
 vi.mock("./KnowMe", () => ({ KnowMe: () => <p>Know me panel</p> }));
 vi.mock("./Behavior", () => ({
   Behavior: ({ readOnly, onCloseToTray }: { readOnly?: boolean; onCloseToTray?: (on: boolean) => void }) =>
@@ -63,7 +84,15 @@ vi.mock("./Privacy", () => ({
 }));
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
 
-import { ABOUT_NOTE, DESKTOP_NOTE, GENERAL_EMPTY, HALT_KEYS_LOCAL, HALT_KEYS_NOTE, REMOTE_NOTE, Settings } from "./Settings";
+import {
+  ABOUT_STACK,
+  DESKTOP_NOTE,
+  GENERAL_EMPTY,
+  HALT_KEYS_LOCAL,
+  HALT_KEYS_NOTE,
+  REMOTE_NOTE,
+  Settings,
+} from "./Settings";
 import { CATEGORY_LABELS, SECTION_LABELS, categoryOf, type Section } from "./sections";
 
 /** Opens a page the way a person does: its category up top, then the page in
@@ -114,6 +143,8 @@ function shape(over: Partial<Shape>): Shape {
     summonHotkey: false,
     notifications: true,
     ...over,
+    dockPanels: over.dockPanels ?? false,
+    dockLayout: over.dockLayout ?? { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
   };
 }
 
@@ -141,7 +172,7 @@ describe("Settings", () => {
     await userEvent.type(screen.getByLabelText("Work folder"), "/work");
     await userEvent.selectOptions(screen.getByLabelText("When the AI wants to change things"), "always");
     await userEvent.click(screen.getByRole("button", { name: "Save defaults" }));
-    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always");
+    expect(api.saveDefaults).toHaveBeenCalledWith("/work", "always", false);
     await openSection("Behavior");
     await userEvent.click(screen.getByRole("button", { name: "Behavior panel" }));
 
@@ -150,6 +181,29 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
     expect(api.saveSettings).toHaveBeenCalledWith(false, "/work", "always", true);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+  });
+
+  it("a Pulse model card opens Local AI on its model; the palette opens it plain", async () => {
+    const { rerender } = render(
+      <Settings caps={DESKTOP} goTo={{ section: "localAi", n: 1, model: "gemma-4-31b-it-abliterated-q4_k" }} />,
+    );
+    expect(await screen.findByText("Local AI panel on gemma-4-31b-it-abliterated-q4_k (1)")).toBeInTheDocument();
+    // Another section and back: the card's model isn't shown again.
+    await openSection("Pulse");
+    await openSection("Local AI");
+    expect(screen.getByText("Local AI panel")).toBeInTheDocument();
+    // A palette pick opens Local AI plain.
+    rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 2 }} />);
+    expect(await screen.findByText("Local AI panel")).toBeInTheDocument();
+    // A second card opens on its model again.
+    rerender(<Settings caps={DESKTOP} goTo={{ section: "localAi", n: 3, model: "gemma-4-12b-it-abliterated-q4_k" }} />);
+    expect(await screen.findByText("Local AI panel on gemma-4-12b-it-abliterated-q4_k (3)")).toBeInTheDocument();
+  });
+
+  it("Pulse offers the Local models source only where local models run", async () => {
+    render(<Settings caps={{ ...DESKTOP, localAi: false }} goTo={{ section: "pulse", n: 1 }} />);
+    expect(await screen.findByText("Steam Pulse sources")).toBeInTheDocument();
+    expect(screen.queryByText("Local models source")).toBeNull();
   });
 
   it("desktop control starts off, says what still asks, and saves", async () => {
@@ -188,6 +242,20 @@ describe("Settings", () => {
     expect(api.getHaltKeys).not.toHaveBeenCalled();
   });
 
+  it("Save settings is the one call to action in Settings, and only while there is a change to save", async () => {
+    render(<Settings caps={DESKTOP} />);
+    const save = await screen.findByRole("button", { name: "Save settings" });
+    expect(save).not.toHaveClass("cta");
+    const control = screen.getByRole("switch", { name: /control the desktop/ });
+    await userEvent.click(control);
+    expect(save).toHaveClass("cta");
+    await userEvent.click(control);
+    expect(save).not.toHaveClass("cta");
+    await openSection("Account");
+    await userEvent.type(await screen.findByLabelText("API key"), "sk-abcdefghijklmnopqrstuv");
+    expect(screen.getByRole("button", { name: "Save key" })).not.toHaveClass("cta");
+  });
+
   it("saves a key without echoing it, then removes it", async () => {
     api.setApiKey.mockResolvedValue(shape({ hasApiKey: true }));
     api.clearApiKey.mockResolvedValue(shape({}));
@@ -213,6 +281,17 @@ describe("Settings", () => {
     await openSection("Account");
     expect(await screen.findByRole("region", { name: "Sign in with Grok" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Or use an xAI API key" })).toBeInTheDocument();
+  });
+
+  it("puts the profile first in Account and passes its changes on", async () => {
+    const onProfile = vi.fn();
+    render(<Settings caps={{ ...DESKTOP, grokSignIn: true }} onProfile={onProfile} />);
+    await openSection("Account");
+    const panel = await screen.findByRole("button", { name: "Profile panel" });
+    const signIn = screen.getByRole("region", { name: "Sign in with Grok" });
+    expect(panel.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.click(panel);
+    expect(onProfile).toHaveBeenCalledWith({ shownName: "Pat" });
   });
 
   it("Android has no Grok sign-in yet, only the key", async () => {
@@ -343,6 +422,33 @@ describe("Settings", () => {
     expect(seen).toContain("Account");
   });
 
+  it("Behavior's game companion row knows whether notifications are on, and stays off a browser and a phone", async () => {
+    const { unmount } = render(<Settings caps={BASICS} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+    await openSection("Behavior");
+    expect(screen.getByText("Game companion row with notifications")).toBeInTheDocument();
+    unmount();
+
+    api.getSettings.mockResolvedValue(shape({ notifications: false }));
+    const off = render(<Settings caps={BASICS} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+    await openSection("Behavior");
+    expect(screen.getByText("Game companion row")).toBeInTheDocument();
+    off.unmount();
+
+    const noPulse = render(<Settings caps={{ ...BASICS, pulse: false }} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+    await openSection("Behavior");
+    expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
+    expect(screen.queryByText(/^Game companion row/)).toBeNull();
+    noPulse.unmount();
+
+    // A paired browser gets its own short page, with no Behavior at all.
+    render(<Settings caps={{ ...BASICS, remote: true }} />);
+    expect(await screen.findByText(REMOTE_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(/^Game companion row/)).toBeNull();
+  });
+
   it("opens every section from the nav, one at a time", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
@@ -363,6 +469,9 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Behavior panel" })).toBeInTheDocument();
     expect(screen.getByText("Screenshot explain row")).toBeInTheDocument();
     expect(screen.getByText("Game watcher row")).toBeInTheDocument();
+    // DESKTOP has no notifications, so the ping says it stays quiet.
+    expect(screen.getByText("Game companion row")).toBeInTheDocument();
+    expect(screen.getByText("Living wall row")).toBeInTheDocument();
     expect(screen.queryByLabelText("Work folder")).toBeNull();
 
     await openSection("Appearance");
@@ -370,6 +479,8 @@ describe("Settings", () => {
     expect(screen.queryByRole("button", { name: "Behavior panel" })).toBeNull();
     expect(screen.queryByText("Screenshot explain row")).toBeNull();
     expect(screen.queryByText("Game watcher row")).toBeNull();
+    expect(screen.queryByText(/^Game companion row/)).toBeNull();
+    expect(screen.queryByText("Living wall row")).toBeNull();
 
     await openSection("Personality");
     expect(screen.getByText("Personality panel")).toBeInTheDocument();
@@ -400,14 +511,20 @@ describe("Settings", () => {
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
     expect(screen.getByText("Steam Pulse sources")).toBeInTheDocument();
+    expect(screen.getByText("Local models source")).toBeInTheDocument();
     expect(screen.getByText("Know me panel")).toBeInTheDocument();
+    expect(screen.getByText("Pulse fixes panel")).toBeInTheDocument();
+    expect(screen.getByText("PC health panel")).toBeInTheDocument();
     expect(screen.queryByText("Code panel")).toBeNull();
 
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
     expect(screen.queryByText("Interests panel")).toBeNull();
     expect(screen.queryByText("Steam Pulse sources")).toBeNull();
+    expect(screen.queryByText("Local models source")).toBeNull();
     expect(screen.queryByText("Know me panel")).toBeNull();
+    expect(screen.queryByText("Pulse fixes panel")).toBeNull();
+    expect(screen.queryByText("PC health panel")).toBeNull();
 
     await openSection("AI models");
     expect(screen.getByText("AI models panel")).toBeInTheDocument();
@@ -423,7 +540,9 @@ describe("Settings", () => {
 
     await openSection("About");
     expect(screen.getByText("Version 3.1.0")).toBeInTheDocument();
-    expect(screen.getByText(ABOUT_NOTE)).toBeInTheDocument();
+    expect(screen.getByText(ABOUT_STACK)).toBeInTheDocument();
+    // The retired cabin isn't mentioned any more.
+    expect(screen.queryByText(/cabin/i)).toBeNull();
     expect(screen.queryByText("Labs panel")).toBeNull();
   });
 
@@ -483,6 +602,15 @@ describe("Settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "System" }));
     expect(document.documentElement.dataset.theme).toBeUndefined();
     expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("each theme chip previews that theme's colors", async () => {
+    render(<Settings caps={DESKTOP} />);
+    await openSection("Appearance");
+    const swatches = ["System", "Ops Dark", "OLED Black", "Soft Charcoal", "Light"].map(
+      (name) => screen.getByRole("button", { name }).querySelector(".theme-swatch")?.getAttribute("data-swatch"),
+    );
+    expect(swatches).toEqual(["system", "ops-dark", "oled-black", "soft-charcoal", "light"]);
   });
 
   it("puts the theme back when saving it fails", async () => {

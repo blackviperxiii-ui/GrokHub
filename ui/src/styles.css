@@ -22,6 +22,24 @@
   src: url("/fonts/Inter-SemiBold.woff2") format("woff2");
 }
 
+/* Display face: the wordmark, page titles, tile eyebrows and tab and CTA labels.
+   Inter stays for body text and prose (docs/design/type.md). */
+@font-face {
+  font-family: "Chakra Petch";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/ChakraPetch-Medium.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Chakra Petch";
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/ChakraPetch-SemiBold.woff2") format("woff2");
+}
+
 /* Shared shape, depth and focus tokens. Colors come from the theme blocks below. */
 :root {
   /* The one spacing scale, same as the cabin (docs/design/spacing.md). */
@@ -59,15 +77,36 @@
   --tracking-section: -0.017em;
   --tracking-headline: -0.019em;
   --tracking-display: -0.022em;
+  /* Nested corners: inner = max(--radius-xs, outer − pad − border). No squircles. */
+  --radius-xs: 4px;
   --radius-sm: 8px;
+  --radius-menu: 10px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1);
-  --shadow-2: 0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12);
-  --shadow-3: 0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2);
-  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
+  /* Elevation: bg → surface → raised. The dark themes tint the outer shadow
+     red (--elev-tint) and give raised cards a 1px top highlight. */
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --elev-1:
+    var(--edge-highlight), 0 1px 2px rgb(0 0 0 / 0.18), 0 1px 1px rgb(0 0 0 / 0.1),
+    0 4px 14px color-mix(in srgb, var(--elev-tint) 10%, transparent);
+  --elev-2:
+    0 6px 20px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.12),
+    0 8px 28px color-mix(in srgb, var(--elev-tint) 14%, transparent);
+  --elev-3:
+    0 18px 48px rgb(0 0 0 / 0.38), 0 4px 12px rgb(0 0 0 / 0.2),
+    0 12px 40px color-mix(in srgb, var(--elev-tint) 18%, transparent);
+  /* Glows: red on hover and focus of an outline, amber only on the live CTA and the XP fill. */
+  --glow-red: var(--red-glow);
+  --glow-amber: var(--amber-glow);
+  --glow-xp: 0 0 10px color-mix(in srgb, var(--amber) 55%, transparent);
+  --font-family-display: "Chakra Petch", "Inter", system-ui, sans-serif;
+  /* Uppercase display labels (tabs, the CTA) and tile eyebrows. */
+  --tracking-label: 0.12em;
+  --tracking-eyebrow: 0.14em;
+  --ring: var(--red-glow, 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent));
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --t-fast: 120ms;
+  --t-stroke: 160ms;
   --t-base: 200ms;
 }
 
@@ -81,20 +120,72 @@
   --steel: #6b6b66;
   --accent: #1c1c1a;
   --accent-text: #ffffff;
-  --amber: #ffb000;
+  --primary: var(--accent);
+  --red: #d7263d;
+  --red-hover: #e8384f;
+  --red-dim: #5e1a25;
+  --red-wash: rgb(215 38 61 / 0.1);
+  --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+  --amber: #ff9f1a;
+  --amber-wash: rgb(255 159 26 / 0.12);
+  --amber-glow: 0 0 0 1px rgb(255 159 26 / 0.18), 0 0 18px rgb(255 159 26 / 0.22);
+  /* Text on a solid red or danger fill, and on the amber CTA. */
+  --on-red: #ffffff;
+  --void: #0a0a0b;
+  /* A healthy, all-clear dot (Pulse verdicts). */
+  --ok: #2f9e5b;
+  /* Text over the generated cover art, which is always dark. */
+  --art-text: #f2f2f4;
+  /* Settings → Appearance swatches: each theme's page, red and amber, shown
+     side by side whatever theme is on now. */
+  --swatch-light-bg: #f6f6f4;
+  --swatch-light-red: #d7263d;
+  --swatch-light-amber: #ff9f1a;
+  --swatch-ops-bg: #0b0b0d;
+  --swatch-ops-red: #d7263d;
+  --swatch-ops-amber: #ff9f1a;
+  --swatch-oled-bg: #000000;
+  --swatch-oled-red: #d7263d;
+  --swatch-oled-amber: #ff9f1a;
+  --swatch-soft-bg: #17181b;
+  --swatch-soft-red: #c8304a;
+  --swatch-soft-amber: #ff9f1a;
+  --line: #dcdcd6;
   --user: #e9e9e4;
-  --border: #dcdcd6;
+  --border: var(--line);
   --hover: #ececea;
   --selected: #e0e0dc;
   --danger: #a3261c;
   --signal: #d7263d;
   --danger-text: var(--danger);
   --field-border: #8a8a86;
+  /* The window's 1px frame; the dark (Loadout) themes draw it red. */
+  --frame: transparent;
+  /* The open tab: a solid red fill on light, a red-tinted fill on dark. */
+  --tab-open-bg: var(--red);
+  --tab-open-text: #ffffff;
+  /* Switches: the accent in light, amber on dark. */
+  --toggle-on: var(--accent);
+  --toggle-on-thumb: var(--accent-text);
+  --toggle-off: var(--hover);
+  /* Medium severity and other warnings in text. */
+  --warn-text: var(--accent);
+  /* Red used as small text: brighter than --red on dark so it clears 4.5:1. */
+  --red-text: var(--accent);
+  --section-rule: var(--border);
+  /* A text field under the pointer, and the extra ring a focused one gets. */
+  --field-hover: var(--muted);
+  --field-focus-outline: none;
+  /* Depth on dark only: red-tinted shadows, a red glow in the top-right corner
+     behind the Nyx dock, and a faint 24px grid. */
+  --elev-tint: transparent;
+  --vignette: none;
+  --backdrop-grid: none;
   color-scheme: light dark;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-/* Ops Dark — Loadout baseline (slides 07–08). Also the OS-dark default. */
+/* Ops Dark — Loadout locked palette. Also the OS-dark default. */
 :root,
 :root[data-theme="dark"],
 :root[data-theme="ops-dark"] {
@@ -102,17 +193,22 @@
   --ops-bg: #0b0b0d;
   --ops-surface: #121215;
   --ops-raised: #18191c;
-  --ops-hover: #2a2b2f;
-  --ops-selected: #3a3b40;
+  --ops-hover: #1f1316;
+  --ops-selected: #2a1519;
   --ops-steel: #c9cbd1;
   --ops-bright: #f2f2f4;
   --ops-muted: #8a8c94;
-  --ops-line: #232428;
-  --ops-signal: #d7263d;
-  --ops-amber: #ffb000;
+  --ops-line: #3a161d;
+  --ops-red: #d7263d;
+  --ops-red-hover: #e8384f;
   --ops-red-dim: #5e1a25;
+  --ops-red-wash: rgb(215 38 61 / 0.1);
+  --ops-amber: #ff9f1a;
+  --ops-amber-wash: rgb(255 159 26 / 0.12);
+  --ops-signal: var(--ops-red);
 }
 
+/* Shared dark role mapping (Ops Dark + OS-dark fallback). */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: var(--ops-bg);
@@ -121,17 +217,42 @@
     --text: var(--ops-bright);
     --muted: var(--ops-muted);
     --steel: var(--ops-steel);
-    --accent: var(--ops-amber);
-    --accent-text: var(--ops-void);
+    --void: var(--ops-void);
+    --surface: var(--ops-surface);
+    --red: var(--ops-red);
+    --red-hover: var(--ops-red-hover);
+    --red-dim: var(--ops-red-dim);
+    --red-wash: var(--ops-red-wash);
+    --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+    --primary: var(--red);
+    --accent: var(--red);
+    /* White on primary red clears 4.5:1; --text (#f2f2f4) is 4.44. */
+    --accent-text: #ffffff;
     --amber: var(--ops-amber);
+    --amber-wash: var(--ops-amber-wash);
+    --line: var(--ops-line);
     --user: var(--ops-raised);
-    --border: var(--ops-line);
+    --border: var(--line);
     --hover: var(--ops-hover);
     --selected: var(--ops-selected);
     --danger: var(--ops-signal);
     --signal: var(--ops-signal);
-  --danger-text: #ff6b7d;
-  --field-border: #626266;
+    --danger-text: #ff4d5e;
+    --field-border: #c02a3e;
+    --frame: var(--red);
+    --tab-open-bg: var(--selected);
+    --tab-open-text: var(--text);
+    --toggle-on: var(--red);
+    --toggle-on-thumb: var(--on-red);
+    --toggle-off: var(--red-dim);
+    --warn-text: var(--amber);
+    --red-text: var(--red-hover);
+    --section-rule: var(--red);
+    --field-hover: var(--red-hover);
+    --field-focus-outline: 2px solid var(--red-hover);
+    --elev-tint: var(--red);
+    --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+    --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   }
 }
 
@@ -143,21 +264,45 @@
   --text: var(--ops-bright);
   --muted: var(--ops-muted);
   --steel: var(--ops-steel);
-  --accent: var(--ops-amber);
-  --accent-text: var(--ops-void);
+  --void: var(--ops-void);
+  --surface: var(--ops-surface);
+  --red: var(--ops-red);
+  --red-hover: var(--ops-red-hover);
+  --red-dim: var(--ops-red-dim);
+  --red-wash: var(--ops-red-wash);
+  --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+  --primary: var(--red);
+  --accent: var(--red);
+  --accent-text: #ffffff;
   --amber: var(--ops-amber);
+  --amber-wash: var(--ops-amber-wash);
+  --line: var(--ops-line);
   --user: var(--ops-raised);
-  --border: var(--ops-line);
+  --border: var(--line);
   --hover: var(--ops-hover);
   --selected: var(--ops-selected);
   --danger: var(--ops-signal);
   --signal: var(--ops-signal);
-  --danger-text: #ff6b7d;
-  --field-border: #626266;
+  --danger-text: #ff4d5e;
+  --field-border: #c02a3e;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
+  --toggle-on: var(--red);
+  --toggle-on-thumb: var(--on-red);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: var(--red-hover);
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   color-scheme: dark;
 }
 
-/* OLED Black */
+/* OLED Black — same role map, pure black base. */
 :root[data-theme="oled-black"] {
   --bg: #000000;
   --panel: #050506;
@@ -165,21 +310,45 @@
   --text: #f2f2f4;
   --muted: #8a8c94;
   --steel: #c9cbd1;
-  --accent: #ffb000;
-  --accent-text: #0a0a0b;
-  --amber: #ffb000;
+  --void: #0a0a0b;
+  --surface: #050506;
+  --red: #d7263d;
+  --red-hover: #e8384f;
+  --red-dim: #5e1a25;
+  --red-wash: rgb(215 38 61 / 0.1);
+  --red-glow: 0 0 0 1px rgb(215 38 61 / 0.18), 0 0 18px rgb(215 38 61 / 0.22);
+  --primary: var(--red);
+  --accent: var(--red);
+  --accent-text: #ffffff;
+  --amber: #ff9f1a;
+  --amber-wash: rgb(255 159 26 / 0.12);
+  --line: #3a161d;
   --user: #0a0a0b;
-  --border: #151619;
-  --hover: #25262a;
-  --selected: #34353a;
+  --border: var(--line);
+  --hover: #1f1316;
+  --selected: #2a1519;
   --danger: #d7263d;
   --signal: #d7263d;
-  --danger-text: #ff6b7d;
-  --field-border: #5c5c60;
+  --danger-text: #ff4d5e;
+  --field-border: #c02a3e;
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
+  --toggle-on: var(--red);
+  --toggle-on-thumb: var(--on-red);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: var(--red-hover);
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: none;
   color-scheme: dark;
 }
 
-/* Soft Charcoal */
+/* Soft Charcoal — warmer red from the deck. */
 :root[data-theme="soft-charcoal"] {
   --bg: #17181b;
   --panel: #1d1e22;
@@ -187,17 +356,41 @@
   --text: #f2f2f4;
   --muted: #8a8c94;
   --steel: #c9cbd1;
-  --accent: #ffb000;
-  --accent-text: #0a0a0b;
-  --amber: #ffb000;
+  --void: #0a0a0b;
+  --surface: #1d1e22;
+  --red: #c8304a;
+  --red-hover: #e8384f;
+  --red-dim: #5a2530;
+  --red-wash: rgb(200 48 74 / 0.1);
+  --red-glow: 0 0 0 1px rgb(200 48 74 / 0.18), 0 0 18px rgb(200 48 74 / 0.22);
+  --primary: var(--red);
+  --accent: var(--red);
+  --accent-text: #ffffff;
+  --amber: #ff9f1a;
+  --amber-wash: rgb(255 159 26 / 0.12);
+  --line: #3a161d;
   --user: #232428;
-  --border: #2e2f34;
-  --hover: #2f3035;
-  --selected: #3f4046;
+  --border: var(--line);
+  --hover: #1f1316;
+  --selected: #2a1519;
   --danger: #c8304a;
   --signal: #c8304a;
-  --danger-text: #ff6b7d;
-  --field-border: #6a6a6e;
+  --danger-text: #ff4d5e;
+  --field-border: var(--red);
+  --frame: var(--red);
+  --tab-open-bg: var(--selected);
+  --tab-open-text: var(--text);
+  --toggle-on: var(--red);
+  --toggle-on-thumb: var(--on-red);
+  --toggle-off: var(--red-dim);
+  --warn-text: var(--amber);
+  --red-text: #f05468;
+  --section-rule: var(--red);
+  --field-hover: var(--red-hover);
+  --field-focus-outline: 2px solid var(--red-hover);
+  --elev-tint: var(--red);
+  --vignette: radial-gradient(ellipse 60% 50% at 100% 0%, color-mix(in srgb, var(--red) 10%, transparent), transparent 70%);
+  --backdrop-grid: linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px, linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px) 0 0 / 24px 24px;
   color-scheme: dark;
 }
 
@@ -211,6 +404,69 @@
   gap: 8px;
 }
 
+.appearance .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* A theme chip's preview: the page color with a red and an amber dot. */
+.theme-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--sw-bg);
+}
+
+.theme-swatch i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.theme-swatch i:first-child {
+  background: var(--sw-red);
+}
+
+.theme-swatch i:last-child {
+  background: var(--sw-amber);
+}
+
+.theme-swatch[data-swatch="light"] {
+  --sw-bg: var(--swatch-light-bg);
+  --sw-red: var(--swatch-light-red);
+  --sw-amber: var(--swatch-light-amber);
+}
+
+.theme-swatch[data-swatch="ops-dark"] {
+  --sw-bg: var(--swatch-ops-bg);
+  --sw-red: var(--swatch-ops-red);
+  --sw-amber: var(--swatch-ops-amber);
+}
+
+.theme-swatch[data-swatch="oled-black"] {
+  --sw-bg: var(--swatch-oled-bg);
+  --sw-red: var(--swatch-oled-red);
+  --sw-amber: var(--swatch-oled-amber);
+}
+
+.theme-swatch[data-swatch="soft-charcoal"] {
+  --sw-bg: var(--swatch-soft-bg);
+  --sw-red: var(--swatch-soft-red);
+  --sw-amber: var(--swatch-soft-amber);
+}
+
+/* System: half light, half Ops Dark. */
+.theme-swatch[data-swatch="system"] {
+  --sw-red: var(--swatch-ops-red);
+  --sw-amber: var(--swatch-ops-amber);
+  background: linear-gradient(90deg, var(--swatch-light-bg) 50%, var(--swatch-ops-bg) 50%);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -219,7 +475,8 @@ body {
   margin: 0;
   font-size: var(--font-body);
   line-height: var(--lh-body);
-  background: var(--bg);
+  background: var(--vignette), var(--backdrop-grid), var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -236,25 +493,28 @@ body {
   scrollbar-color: var(--selected) transparent;
 }
 
+/* Default = red outline (Loadout primary). One amber CTA per screen uses .cta. */
 button {
   font: inherit;
   font-weight: 500;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-text);
+  border: 1.5px solid var(--red);
+  background: transparent;
+  color: var(--text);
   border-radius: var(--radius-sm);
   padding: 8px 16px;
   cursor: pointer;
   transition:
     background-color var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out),
-    box-shadow var(--t-fast) var(--ease-out),
+    border-color var(--t-stroke) var(--ease-out),
+    box-shadow var(--t-stroke) var(--ease-out),
     transform var(--t-fast) var(--ease-out),
     filter var(--t-fast) var(--ease-out);
 }
 
 button:hover:not(:disabled) {
-  filter: brightness(1.08);
+  filter: none;
+  background: var(--red-wash);
+  box-shadow: var(--red-glow);
 }
 
 button:active:not(:disabled) {
@@ -262,18 +522,42 @@ button:active:not(:disabled) {
   filter: brightness(0.96);
 }
 
-/* A solid ring: at least 3:1 against every surface in every theme. */
+/* Red focus ring: at least 3:1 against every surface in every theme. */
 button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--red);
   outline-offset: 2px;
 }
 
-/* A disabled button goes quiet and neutral; fading the accent fill turns amber to mud. */
+/* A disabled button goes quiet and neutral. */
 button:disabled {
   background: var(--hover);
   border-color: var(--border);
   color: var(--muted);
   cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* The one primary action per view: amber fill (locked #FF9F1A). */
+button.cta,
+button.primary {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--void);
+}
+
+button.cta:hover:not(:disabled),
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: var(--amber);
+  box-shadow: var(--amber-glow);
+}
+
+button.cta:disabled,
+button.primary:disabled {
+  background: var(--hover);
+  border-color: var(--border);
+  color: var(--muted);
+  box-shadow: none;
 }
 
 /* Outlined and link-style controls keep their look and just fade. */
@@ -281,7 +565,6 @@ button.quiet:disabled,
 button.link:disabled,
 .chip:disabled,
 .quick-chip:disabled,
-.tabs button:disabled,
 .switch button:disabled,
 .settings-nav button:disabled,
 .settings-tabs button:disabled {
@@ -295,7 +578,6 @@ button.link:disabled,
 }
 
 button.quiet,
-.tabs button,
 .switch button,
 .settings-nav button,
 .settings-tabs button {
@@ -305,7 +587,6 @@ button.quiet,
 }
 
 button.quiet:hover:not(:disabled),
-.tabs button:hover:not(:disabled),
 .switch button:hover:not(:disabled),
 .settings-nav button:hover:not(:disabled),
 .settings-tabs button:hover:not(:disabled) {
@@ -313,12 +594,46 @@ button.quiet:hover:not(:disabled),
   background: var(--hover);
 }
 
-.tabs button[aria-pressed="true"],
-.switch button[aria-pressed="true"],
-.settings-nav button[aria-pressed="true"],
-.settings-tabs button[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+.switch button[aria-pressed="true"] {
+  /* Solid red selected chrome — amber stays on the one CTA fill (color-share). */
+  border-color: var(--red);
+  background: var(--red);
+  color: var(--on-red);
+  box-shadow: none;
+}
+
+/* Tabs (the rail, chat tabs, Pulse's views): the open one is a red stroke
+   over a red-tinted fill with an amber underline, never an amber box. */
+.rail button[aria-current="page"],
+.pulse-head .switch button[aria-pressed="true"],
+.chat-tab[aria-selected="true"],
+.settings-tabs button[aria-pressed="true"],
+.settings-nav button[aria-pressed="true"] {
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.rail button[aria-current="page"]:hover:not(:disabled),
+.pulse-head .switch button[aria-pressed="true"]:hover:not(:disabled),
+.chat-tab[aria-selected="true"]:hover:not(:disabled),
+.settings-tabs button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--tab-open-bg);
+  box-shadow: inset 0 -2px 0 var(--amber), var(--red-glow);
+}
+
+/* The rail and the side nav run down the page, so their open item carries
+   the amber bar on the left instead of underneath. */
+.rail button[aria-current="page"],
+.settings-nav button[aria-pressed="true"] {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.rail button[aria-current="page"]:hover:not(:disabled),
+.settings-nav button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--tab-open-bg);
+  box-shadow: inset 2px 0 0 var(--amber), var(--red-glow);
 }
 
 button.link {
@@ -371,13 +686,15 @@ select option {
 input:hover:not(:disabled):not(:focus),
 textarea:hover:not(:disabled):not(:focus),
 select:hover:not(:disabled):not(:focus) {
-  border-color: var(--muted);
+  border-color: var(--field-hover);
 }
 
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: none;
+  /* On dark the resting border is red already, so focus adds a ring a step out. */
+  outline: var(--field-focus-outline);
+  outline-offset: 1px;
   border-color: var(--accent);
   box-shadow: var(--ring);
 }
@@ -386,8 +703,19 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 12px var(--page-pad);
+  padding: 0 var(--page-pad) 12px;
   gap: 12px;
+}
+
+/* The 1px window frame: a fixed layer over everything but dialogs, so the
+   phone's bottom bar never covers it. It takes no clicks. */
+.app::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--frame);
 }
 
 @media (max-width: 899px) {
@@ -401,23 +729,373 @@ select:focus-visible {
   }
 }
 
-.app > div:not([hidden]) {
+/* The shell: the slim top bar, then the rail beside the open page. */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+.views {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 12px;
+}
+
+.views > div:not([hidden]) {
   flex: 1;
   min-height: 0;
   display: flex;
 }
 
+/* Dockable panels: the main pages as tabs in side-by-side panes. The
+ * focused pane carries the border; a drop target shows where the tab lands. */
+.dock {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-pane {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.dock-pane[data-focused] {
+  border-color: var(--border);
+}
+
+.dock-pane[data-drop="in"] {
+  box-shadow: var(--ring);
+}
+
+.dock-pane[data-drop="before"] {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.dock-pane[data-drop="after"] {
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+
+.dock-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+}
+
+.dock-tab {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: grab;
+}
+
+.dock-tab:hover {
+  background: var(--hover);
+}
+
+.dock-tab[data-active] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.dock-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.dock-page > div {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.dock-divider {
+  flex: none;
+  width: 8px;
+  border-radius: 4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.dock-divider:hover {
+  background: var(--border);
+}
+
+/* One row that never wraps or widens the page: the fill between the brand
+   and the controls gives way first. */
 .topbar {
   display: flex;
   gap: 8px;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  /* The bar reaches the window's top edge, so all of it drags the window. */
+  padding-top: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--red-dim);
 }
 
-.tabs {
-  display: flex;
+.topbar-fill {
   flex: 1;
-  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* The window buttons (Linux, Windows): quiet icons at the bar's right end;
+   Close turns red under the pointer. */
+.window-controls {
+  position: relative;
+  /* Over every dialog's backdrop, as a system title bar's buttons would be. */
+  z-index: 70;
+  display: flex;
+  flex: none;
   gap: 4px;
+  margin-left: 8px;
+}
+
+.window-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.window-controls button:hover:not(:disabled),
+.window-controls button:focus-visible {
+  filter: none;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.window-controls .window-close:hover:not(:disabled),
+.window-controls .window-close:focus-visible {
+  background: var(--red);
+  color: var(--on-red);
+}
+
+/* The status pills: the default personality and what left the computer this
+   week. Red strokes and dots; amber stays on the one CTA. */
+.pills {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 8px;
+}
+
+button.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border-color: var(--red);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-family-display);
+  font-size: var(--font-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  white-space: nowrap;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+button.pill:hover:not(:disabled),
+button.pill:focus-visible {
+  filter: none;
+  background: var(--hover);
+  box-shadow: var(--red-glow);
+}
+
+.pill-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.pill-local .pill-dot,
+.pill-quiet .pill-dot {
+  background: var(--muted);
+}
+
+.pill-key,
+.pill-sep {
+  flex: none;
+}
+
+/* A long value gives way first: it ends in an ellipsis (the full text is the
+   pill's name), and a personality name stops at 16 characters. */
+.pill-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill-personality .pill-value {
+  max-width: 16ch;
+}
+
+/* Narrower windows keep each pill's value; the key stays for screen readers. */
+@media (max-width: 1099px) {
+  .pill-personality .pill-sep {
+    display: none;
+  }
+
+  .pill-personality .pill-key {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* The left rail: icons only (each label stays for screen readers and the
+   tooltip), More and Settings at the foot. It is never a scroll box:
+   WebKitGTK's hit test misses buttons inside one, so no item would take a
+   click. Short windows shrink the buttons instead (below). */
+.rail {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 4px;
+  padding: 8px 12px 8px 0;
+  border-right: 1px solid var(--red-dim);
+}
+
+.rail button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border-color: transparent;
+}
+
+.rail button:hover:not(:disabled),
+.rail button:focus-visible {
+  filter: none;
+  color: var(--text);
+  background: var(--hover);
+  border-color: var(--red);
+}
+
+.rail-end {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.rail-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The web app's avatar is a picture, not a button: the same box. */
+span.rail-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+
+/* Your picture, or your initial in a circle (Settings → Account). */
+.rail-avatar-face,
+.profile-avatar {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+span.rail-avatar-face,
+span.profile-avatar {
+  display: inline-grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: var(--font-caption);
+  line-height: 1;
+}
+
+.profile-avatar {
+  width: 48px;
+  height: 48px;
+}
+
+span.profile-avatar {
+  font-size: var(--font-section);
+}
+
+.settings .profile-name {
+  width: 100%;
+}
+
+.settings .profile-picture {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings .profile-picture p {
+  margin: 0;
+}
+
+@media (max-height: 560px) {
+  .rail button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .rail-avatar-face {
+    width: 24px;
+    height: 24px;
+  }
+
+  .rail,
+  .rail-end {
+    gap: 2px;
+  }
+
+  .rail {
+    padding-block: 4px;
+  }
 }
 
 .palette-open {
@@ -426,13 +1104,15 @@ select:focus-visible {
   border-color: var(--border);
 }
 
-.palette-open:hover:not(:disabled) {
+.palette-open:hover:not(:disabled),
+.palette-open:focus-visible {
   color: var(--text);
+  border-color: var(--red);
 }
 
-/* Phones: the views bar sits at the bottom in one row and slides away while
-   the user scrolls down (tabBar.ts). Its space is released with it, so
-   nothing stays hidden behind it. */
+/* Phones: the rail sits at the bottom in one row and slides away while the
+   user scrolls down (tabBar.ts). Its space is released with it, so nothing
+   stays hidden behind it. The top bar stays at the top. */
 @media (max-width: 600px) {
   .app {
     --tabbar: 52px;
@@ -444,7 +1124,7 @@ select:focus-visible {
     padding-bottom: 12px;
   }
 
-  .topbar {
+  .rail {
     position: fixed;
     left: 0;
     right: 0;
@@ -452,25 +1132,29 @@ select:focus-visible {
     z-index: 5;
     box-sizing: border-box;
     height: calc(var(--tabbar) + env(safe-area-inset-bottom));
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
     align-items: center;
     padding: 0 12px env(safe-area-inset-bottom);
     background: var(--panel);
     border-top: 1px solid var(--border);
+    border-right: none;
     transition: transform 200ms ease;
   }
 
-  .bar-away .topbar {
+  .rail-end {
+    flex-direction: row;
+    margin-top: 0;
+  }
+
+  /* The tab bar keeps its count; the profile stays in Settings → Account. */
+  .rail .rail-avatar {
+    display: none;
+  }
+
+  .bar-away .rail {
     transform: translateY(100%);
-  }
-
-  .tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-  }
-
-  .tabs button,
-  .palette-open {
-    flex: none;
   }
 
   /* These scroll the window on wider screens; here they scroll inside the
@@ -486,7 +1170,7 @@ select:focus-visible {
 
 @media (max-width: 600px) and (prefers-reduced-motion: reduce) {
   .app,
-  .topbar {
+  .rail {
     transition: none;
   }
 }
@@ -508,7 +1192,7 @@ select:focus-visible {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--elev-3);
   padding: 12px;
   width: min(420px, 100%);
   display: flex;
@@ -557,6 +1241,12 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.palette-none {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+}
+
 .shortcuts h2 {
   font-size: var(--font-prose);
   margin: 0;
@@ -590,7 +1280,7 @@ select:focus-visible {
 }
 
 .chat-tabs {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--red-dim);
   padding: 0 0 8px;
 }
 
@@ -608,19 +1298,19 @@ select:focus-visible {
   max-width: 180px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  color: var(--fg);
+  border: 1px solid var(--red-dim);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
   font-size: var(--font-body);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.chat-tab[aria-selected="true"] {
-  border-color: var(--fg);
-  background: var(--bg);
+.chat-tab:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--text);
 }
 
 .chat-tab.pinned .chat-tab-pin {
@@ -628,21 +1318,36 @@ select:focus-visible {
   color: var(--muted);
 }
 
+/* Main: always first, never closed. A small house mark in the primary red. */
+.chat-tab.main {
+  flex: 0 0 auto;
+  min-width: 72px;
+}
+
+.chat-tab-main-mark {
+  width: 11px;
+  height: 11px;
+  margin-right: 4px;
+  vertical-align: -1px;
+  color: var(--red);
+}
+
 .chat-tab-plus,
 .chat-tab-tools {
   flex: 0 0 auto;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
 
 .chat-tab-plus:hover,
 .chat-tab-tools:hover {
-  color: var(--fg);
-  border-color: var(--border);
+  color: var(--text);
+  border-color: var(--red);
 }
 
 .chat-tab-rename {
@@ -665,9 +1370,9 @@ select:focus-visible {
   height: 32px;
   padding: 0 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--panel);
-  color: var(--fg);
+  color: var(--text);
 }
 
 .hangout-header {
@@ -695,23 +1400,29 @@ select:focus-visible {
   gap: 8px;
 }
 
+/* TALK / TYPE: red outline tabs; the one on is a full red stroke on the open-tab fill. */
 .hangout-mode {
   min-width: 64px;
   height: 28px;
   padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
+  border: 1px solid var(--red-dim);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
   font-size: var(--font-body);
   letter-spacing: 0.04em;
 }
 
+.hangout-mode:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--text);
+}
+
 .hangout-mode.on,
 .hangout-mode[aria-pressed="true"] {
-  color: var(--fg);
-  border-color: var(--fg);
-  background: var(--bg);
+  color: var(--tab-open-text);
+  border-color: var(--red);
+  background: var(--tab-open-bg);
 }
 
 .log {
@@ -723,8 +1434,22 @@ select:focus-visible {
   padding: 4px 2px 8px;
 }
 
+/* A scratch chat says so above its log for as long as it is open. */
+.scratch-mark {
+  margin: 0 2px 4px;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
 .log:focus-visible {
   outline: none;
+}
+
+/* Wide windows: the conversation is a centered lane, and a message tops out at 70ch. */
+@media (min-width: 1280px) {
+  .log {
+    padding-inline: max(2px, calc(50% - 48ch));
+  }
 }
 
 .empty {
@@ -741,18 +1466,20 @@ select:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--panel);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-1);
+  border: 1.5px solid transparent;
+  box-shadow: var(--elev-1);
 }
 
 .bubble.assistant {
   align-self: flex-start;
+  border-color: var(--red);
   border-bottom-left-radius: 6px;
 }
 
 .bubble.user {
   align-self: flex-end;
   background: var(--user);
+  border-color: transparent;
   border-bottom-right-radius: 6px;
 }
 
@@ -800,36 +1527,74 @@ select:focus-visible {
   margin: 0;
 }
 
-.chat > .nyx-dock {
+/* The empty chat's device glance: Sharing, or the newest screenshot. */
+.device-glance {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+}
+
+.device-glance:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: none;
+}
+
+.device-glance > img {
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+/* Chat with its right column: the docked companion from 900px (DOCK_MIN_WIDTH
+   in NyxDock.tsx), and the side cards under it from 1280px (SIDE_MIN_WIDTH,
+   slides 02 and 20). A narrower window gives the whole width to the chat. */
+.chat-frame {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 24px;
+}
+
+.chat-frame > .chat {
+  min-width: 0;
+}
+
+.chat-side {
   display: none;
 }
 
-/* Keep the width in step with DOCK_MIN_WIDTH in NyxDock.tsx. */
 @media (min-width: 900px) {
-  .chat.has-nyx {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 180px;
-    grid-template-rows: minmax(0, 1fr);
-    column-gap: 12px;
+  .chat-side {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 180px;
+    min-height: 0;
+    gap: 12px;
   }
 
-  .chat.has-nyx > :not(.nyx-dock) {
-    grid-column: 1;
+  .chat-side:empty {
+    display: none;
   }
 
-  .chat.has-nyx > .nyx-dock {
-    grid-column: 2;
-    grid-row: 1;
+  .chat-side > .nyx-dock {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    align-self: start;
     max-width: none;
     padding: 8px;
     overflow: hidden;
   }
 
-  .nyx-dock img {
+  .nyx-dock img,
+  .nyx-dock video {
     width: 100%;
     aspect-ratio: 448 / 350;
     object-fit: cover;
@@ -860,6 +1625,172 @@ select:focus-visible {
   .nyx-dock-outfit select {
     width: 100%;
   }
+}
+
+/* The side column scrolls on its own when its cards outrun a short window;
+   it holds no rail or tab strip, so a scroll box is safe here. */
+@media (min-width: 1280px) {
+  .chat-side {
+    width: 320px;
+    overflow-y: auto;
+  }
+}
+
+/* Each item keeps its own height: the column scrolls instead of squeezing
+   the companion's note or a card's rows out of sight. */
+.chat-side > * {
+  flex: none;
+}
+
+.chat-side > .card {
+  align-self: stretch;
+  max-width: none;
+}
+
+.side-glance {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.side-glance > button {
+  align-self: flex-start;
+}
+
+.side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.side-head h3 {
+  margin: 0;
+  font-family: var(--font-family-display);
+  font-size: var(--font-caption);
+  font-weight: 600;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.side-count {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.side-strong {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.side-steps,
+.side-pairs,
+.side-posts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.side-steps .done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.side-pairs li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.side-posts li {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Objectives beside chat (Settings → Appearance, deck slide 10): the
+   objective and recent chats on the chat's left from 900px (DOCK_MIN_WIDTH),
+   a PC snapshot on its right from 1280px (SIDE_MIN_WIDTH). No companion dock.
+   A narrower window gives the whole width to the chat. */
+.chat-left,
+.chat-snapshot {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .chat-left {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 260px;
+    min-height: 0;
+    gap: 12px;
+    overflow-y: auto;
+  }
+}
+
+@media (min-width: 1280px) {
+  .chat-snapshot {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 240px;
+    min-height: 0;
+    gap: 12px;
+    overflow-y: auto;
+  }
+}
+
+.chat-left > .card,
+.chat-snapshot > .card {
+  flex: none;
+  align-self: stretch;
+  max-width: none;
+}
+
+.side-steps .current {
+  padding-left: 8px;
+  box-shadow: inset 2px 0 0 var(--red);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.snapshot-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.snapshot-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  min-width: 0;
+}
+
+.snapshot-value {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.snapshot-tile.lead .snapshot-value {
+  font-size: var(--font-section);
+  line-height: var(--lh-section);
 }
 
 /* Desktop companion window (NyxDesk.tsx / nyx-desk.html). Transparent stage. */
@@ -902,7 +1833,7 @@ select:focus-visible {
   bottom: 8%;
   height: 28%;
   border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(20, 16, 12, 0.85), rgba(0, 0, 0, 0.55));
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--void) 85%, transparent), rgb(0 0 0 / 0.55));
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 }
 
@@ -912,7 +1843,7 @@ select:focus-visible {
   right: 18%;
   bottom: 22%;
   height: 70%;
-  background: linear-gradient(to top, rgba(255, 176, 0, 0.28), transparent 70%);
+  background: linear-gradient(to top, color-mix(in srgb, var(--amber) 28%, transparent), transparent 70%);
   clip-path: polygon(10% 100%, 90% 100%, 70% 0, 30% 0);
   filter: blur(0.5px);
 }
@@ -924,7 +1855,7 @@ select:focus-visible {
   bottom: 10%;
   height: 24%;
   border-radius: 50%;
-  border: 1.5px dashed rgba(255, 176, 0, 0.55);
+  border: 1.5px dashed color-mix(in srgb, var(--amber) 55%, transparent);
   animation: nyx-desk-spin 14s linear infinite;
 }
 
@@ -933,7 +1864,7 @@ select:focus-visible {
   right: 14%;
   bottom: 14%;
   height: 16%;
-  border-color: rgba(255, 176, 0, 0.4);
+  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
   animation-duration: 9s;
   animation-direction: reverse;
 }
@@ -950,6 +1881,49 @@ select:focus-visible {
   }
 }
 
+/* Her pedestal glows with the chat's voice: brighter while she listens or
+   speaks, flickering while she thinks (steady under reduce motion). */
+.nyx-desk-pedestal {
+  transition: filter 0.3s ease;
+}
+
+.nyx-desk[data-look="listening"] .nyx-desk-pedestal {
+  filter: brightness(1.35);
+}
+
+.nyx-desk[data-look="speaking"] .nyx-desk-pedestal {
+  filter: brightness(1.2);
+}
+
+.nyx-desk[data-look="thinking"] .nyx-desk-pedestal {
+  animation: nyx-desk-think 0.286s ease-in-out infinite alternate;
+}
+
+@keyframes nyx-desk-think {
+  from {
+    filter: brightness(1);
+  }
+  to {
+    filter: brightness(1.18);
+  }
+}
+
+:root[data-reduce-motion="true"] .nyx-desk-ring {
+  animation: none;
+}
+
+:root[data-reduce-motion="true"] .nyx-desk[data-look="thinking"] .nyx-desk-pedestal {
+  animation: none;
+  filter: brightness(1.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nyx-desk[data-look="thinking"] .nyx-desk-pedestal {
+    animation: none;
+    filter: brightness(1.1);
+  }
+}
+
 .nyx-desk-figure {
   position: relative;
   z-index: 1;
@@ -958,22 +1932,45 @@ select:focus-visible {
   object-fit: contain;
   object-position: bottom center;
   filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.35));
-  animation: nyx-desk-bob 5s ease-in-out infinite;
+  /* Breath scales from her feet; the float moves her. Separate properties,
+     so the two cycles never fight over one transform. */
+  transform-origin: 50% 100%;
+  animation:
+    nyx-desk-bob 5s ease-in-out infinite,
+    nyx-desk-breath 4s ease-in-out infinite;
+  /* Her talk hop: her desk page sets --nyx-hop with the spoken voice. */
+  transform: translateY(calc(-1 * var(--nyx-hop, 0px)));
+}
+
+:root[data-reduce-motion="true"] .nyx-desk-figure {
+  animation: none;
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .nyx-desk-figure {
     animation: none;
+    transform: none;
   }
 }
 
 @keyframes nyx-desk-bob {
   0%,
   100% {
-    transform: translateY(0);
+    translate: 0 0;
   }
   50% {
-    transform: translateY(-3px);
+    translate: 0 -3px;
+  }
+}
+
+@keyframes nyx-desk-breath {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.006 1.012;
   }
 }
 
@@ -984,9 +1981,12 @@ select:focus-visible {
   padding: 8px;
   list-style: none;
   min-width: 170px;
-  background: var(--panel, #111113);
-  border: 1px solid var(--border, #333);
-  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 8px;
+  --bw: 1px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
 }
 
@@ -998,12 +1998,12 @@ select:focus-visible {
   border: 0;
   color: inherit;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
   cursor: pointer;
 }
 
 .nyx-desk-menu button:hover {
-  background: var(--hover, #1c1c1f);
+  background: var(--hover);
 }
 
 .nyx-desk-menu-label {
@@ -1125,7 +2125,7 @@ h2.md-heading {
 .md-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .md-strike {
@@ -1237,6 +2237,11 @@ button.md-copy {
   align-items: flex-end;
 }
 
+/* Every composer control is a red outline; Send is the one amber fill. */
+.composer button.quiet:not(:disabled):not(.recording) {
+  border-color: var(--red);
+}
+
 /* Push to talk: held, it reads as on. */
 .composer .mic {
   min-height: 52px;
@@ -1254,8 +2259,27 @@ button.md-copy {
   white-space: nowrap;
 }
 
+/* What voice mode hears so far, quiet, over the composer. Its newest words
+   always show: the caption is cut at its start, and wraps rather than clip. */
+.voice-caption {
+  margin: 0 0 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Which voice heard or spoke and why: a quiet note over the composer, apart
+   from the caption and the error line. */
+.voice-line {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--font-caption);
+  overflow-wrap: anywhere;
+}
+
 .composer .voice-mode[aria-pressed="true"] {
-  border-color: currentColor;
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
 }
 
 .composer-ghost-wrap {
@@ -1297,9 +2321,39 @@ button.md-copy {
   min-height: 52px;
   padding: 12px 16px;
   border-radius: var(--radius-md);
+  border: 1.5px solid var(--red);
   resize: none;
   font-size: var(--font-prose);
   line-height: var(--lh-prose);
+}
+
+.composer textarea:hover:not(:disabled):not(:focus) {
+  border-color: var(--red-hover);
+}
+
+.composer textarea:focus-visible {
+  border-color: var(--red-hover);
+  box-shadow: var(--red-glow);
+}
+
+/* Composer glow (Settings → Behavior): soft red light behind the box while a
+   reply comes in. The light is a layer under the textarea. Its opacity fades it
+   in and out; the breath multiplies in through filter: opacity(), a separate
+   property, so the two never fight and the box never repaints. Less motion
+   keeps it steady. */
+.composer-ghost-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 18px 2px color-mix(in srgb, var(--red) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base) var(--ease-out);
+}
+
+.composer.glowing .composer-ghost-wrap::before {
+  opacity: 0.75;
 }
 
 /* Files waiting on the composer; they wrap on a phone. */
@@ -1411,7 +2465,8 @@ button.md-copy {
   margin-bottom: 12px;
   padding: 4px 0 8px;
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  /* The page title's rule is the section's red line (light keeps it quiet). */
+  border-bottom: 1px solid var(--section-rule);
 }
 
 .settings-head h1 {
@@ -1426,7 +2481,8 @@ button.md-copy {
   width: 200px;
   overflow-y: auto;
   padding-left: 16px;
-  border-left: 1px solid var(--border);
+  /* Same red rule as the page title, standing up beside the section nav. */
+  border-left: 1px solid var(--section-rule);
 }
 
 .settings-side h2 {
@@ -1533,6 +2589,40 @@ button.md-copy {
   align-items: flex-start;
 }
 
+/* Settings → Your browser: the allowed sites, each with Remove. */
+.settings .attach-sites {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings .attach-sites li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings .attach-add {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+/* Settings → Bot Desktop: the hidden screen, scaled to the column. */
+.settings .bot-desktop-preview {
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .settings label {
   display: flex;
   flex-direction: column;
@@ -1556,6 +2646,16 @@ button.md-copy {
 
 .note.warn {
   color: var(--danger-text);
+}
+
+/* Which on-device model answered the reply above it, and why. */
+.note.model-line {
+  margin: 2px 0 8px;
+  font-size: var(--font-body);
+}
+
+.note.model-line .model-tier {
+  color: var(--red);
 }
 
 /* The app's one-line read of a message ("Answering on the side"). */
@@ -1594,15 +2694,18 @@ button.md-copy {
 .card {
   align-self: flex-start;
   max-width: 80%;
-  padding: 8px 12px;
+  padding: 12px 16px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--red);
   background: var(--panel);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
   align-items: baseline;
+  --r-outer: var(--radius-md);
+  --pad: 12px;
+  --bw: 1.5px;
 }
 
 .card pre {
@@ -1618,6 +2721,16 @@ button.md-copy {
 .card-answer {
   color: var(--muted);
   margin: 0;
+}
+
+/* A picture a tool made, on its own row above the detail. */
+.card-picture {
+  flex-basis: 100%;
+  display: block;
+  max-width: min(100%, 512px);
+  max-height: 512px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
 }
 
 .card.permission {
@@ -1636,6 +2749,11 @@ button.md-copy {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Inset actions use the concentric radius, not the global button radius. */
+.card-buttons button {
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 /* Grok's question with options: one tappable row each, recommended first. */
@@ -1659,15 +2777,24 @@ button.md-copy {
   opacity: 0.8;
 }
 
-button.danger {
-  color: var(--danger-text);
-  border-color: var(--danger-text);
+/* Destructive: red fill + bright label + "!" so it is not primary-by-color-alone. */
+button.danger:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--on-red);
 }
 
-/* Outlined like a quiet button: danger text on the accent fill is 1.5:1. A
-   disabled one keeps the disabled fill. */
-button.danger:not(:disabled) {
-  background: transparent;
+button.danger:not(:disabled)::before {
+  content: "! ";
+  color: var(--on-red);
+  font-weight: 600;
+}
+
+button.danger:hover:not(:disabled):not([role="menuitem"]) {
+  filter: none;
+  background: var(--red-hover);
+  border-color: var(--red-hover);
+  box-shadow: var(--red-glow);
 }
 
 /* Turn extras (Order 733): the findings, recap and evidence cards under a
@@ -1712,8 +2839,82 @@ button.danger:not(:disabled) {
 }
 
 .severity-medium {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--warn-text);
+  border-color: var(--warn-text);
+}
+
+/* A show_panel panel: plain text, tables and buttons inside a turn card. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-heading {
+  margin: 0;
+  font-weight: 600;
+}
+
+.panel-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.panel-list {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.panel-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.panel-table {
+  border-collapse: collapse;
+  font-size: var(--font-caption);
+}
+
+.panel-table th,
+.panel-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.panel-pairs {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-pair {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.panel-pair dt {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.panel-pair dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.panel-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
 }
 
 .fix-pills,
@@ -1868,10 +3069,6 @@ button.danger:not(:disabled) {
   margin: 8px 0 0;
 }
 
-button.danger:hover:not(:disabled):not([role="menuitem"]) {
-  filter: none;
-  background: var(--hover);
-}
 
 .automations,
 .memory,
@@ -1953,6 +3150,41 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   gap: 8px;
 }
 
+.automations .blueprints,
+.automations .suggested {
+  margin-top: 16px;
+}
+
+.automations .blueprints h3,
+.automations .suggested h3 {
+  margin: 0 0 4px;
+  font-size: var(--font-prose);
+  color: var(--amber);
+}
+
+.automations .blueprint-fill {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.automations .blueprint-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--font-body);
+}
+
+.automations .blueprint-slot input {
+  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+}
+
+.automations .card.blueprint {
+  border-color: color-mix(in srgb, var(--red) 28%, var(--border));
+}
+
 .card.automation,
 .card.hit {
   max-width: none;
@@ -1964,6 +3196,12 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .card.automation pre,
 .card.hit pre {
   flex-basis: auto;
+}
+
+.card-check {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-body);
 }
 
 .card-health,
@@ -1983,6 +3221,8 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .card.connector,
+.card.hook,
+.card.github-repo,
 .card.post {
   max-width: none;
   flex-direction: column;
@@ -1994,6 +3234,25 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   color: var(--muted);
   font-family: ui-monospace, monospace;
   overflow-wrap: anywhere;
+}
+
+/* Hooks and GitHub follow the list, so an empty list stays at the top. */
+.connectors > .empty {
+  margin: 0;
+}
+
+.hooks,
+.github {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hooks h2,
+.github h2 {
+  font-size: var(--font-prose);
+  margin: 8px 0 0;
 }
 
 .connectors .error,
@@ -2053,13 +3312,9 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   padding-left: 24px;
 }
 
-.local-mode {
-  display: flex;
-  gap: 8px;
-}
-
-.local-mode button[aria-pressed="true"] {
-  border-color: var(--accent);
+.local-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .local-manual {
@@ -2079,24 +3334,18 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   background: var(--panel);
 }
 
-.local-model .check {
-  gap: 8px;
-  flex-wrap: wrap;
+.local-model button {
+  align-self: flex-start;
 }
 
 .local-model-name {
   font-weight: 600;
 }
 
-.local-model-meta,
-.local-model-reason {
+.local-model-meta {
   color: var(--muted);
   font-size: var(--font-body);
   overflow-wrap: anywhere;
-}
-
-.local-model.hidden {
-  opacity: 0.7;
 }
 
 .badge {
@@ -2425,6 +3674,49 @@ textarea.code {
   gap: 8px;
 }
 
+/* A bundle's parts: a label column, then the text, which wraps rather than
+   scrolling sideways. Narrow, the label sits above its text. Scoped under
+   .labs so it beats `.settings dl`. */
+.labs dl.plugin-parts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 8px;
+  margin: 0;
+}
+
+.labs dl.plugin-parts dt {
+  color: var(--muted);
+}
+
+.labs dl.plugin-parts dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* A bundle's description keeps its own line breaks; a summary in another
+   shape shows whole, in the parts' font. */
+.labs .plugin-desc,
+.labs .plugin-whole {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.labs .plugin-whole {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.labs dl.plugin-parts dd.warn {
+  color: var(--danger-text);
+}
+
+@media (max-width: 480px) {
+  .labs dl.plugin-parts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .journal {
   display: flex;
   flex-direction: column;
@@ -2518,13 +3810,18 @@ textarea.code {
 }
 
 .work-badge.queued {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--red);
+  color: var(--red-text);
 }
 
 .work-badge.priority.high {
   border-color: var(--danger-text);
   color: var(--danger-text);
+}
+
+.work-badge.due {
+  border-color: var(--amber);
+  color: var(--amber);
 }
 
 /* A card dragged over another lands just above it. */
@@ -2656,11 +3953,14 @@ textarea.code {
   border-radius: 999px;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--red-dim);
 }
 
 .chip[aria-pressed="true"] {
-  border-color: var(--accent);
+  border-color: var(--red);
+  background: var(--red);
+  color: var(--on-red);
+  box-shadow: none;
   font-weight: 600;
 }
 
@@ -2697,16 +3997,26 @@ span.chip.quiet {
   border-radius: 999px;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.quick-chip.primary {
-  border-color: var(--accent);
-  font-weight: 600;
+  border: 1px solid var(--red-dim);
 }
 
 .quick-chip:hover:not(:disabled) {
   background: var(--hover);
+  border-color: var(--red);
+}
+
+/* The suggested chip: an amber stroke, never a fill (Send is the one amber fill). */
+.quick-chip.primary {
+  background: transparent;
+  border-color: var(--amber);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.quick-chip.primary:hover:not(:disabled) {
+  background: var(--amber-wash);
+  border-color: var(--amber);
+  box-shadow: none;
 }
 
 /* The × sits tight against its chip, still a full-height target. */
@@ -2791,7 +4101,7 @@ label.toggle-row {
   padding: 0;
   border: 1px solid var(--field-border);
   border-radius: 999px;
-  background: var(--hover);
+  background: var(--toggle-off);
   cursor: pointer;
   transition:
     background-color var(--t-base) var(--ease-out),
@@ -2799,8 +4109,18 @@ label.toggle-row {
 }
 
 .toggle[aria-checked="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--toggle-on);
+  border-color: var(--toggle-on);
+}
+
+/* Hover keeps the switch's own track (the generic button hover would wash it
+   red and hide the dark thumb of a switch that is on). */
+.toggle:hover:not(:disabled) {
+  background: var(--toggle-off);
+}
+
+.toggle[aria-checked="true"]:hover:not(:disabled) {
+  background: var(--toggle-on);
 }
 
 .toggle:disabled {
@@ -2826,7 +4146,7 @@ label.toggle-row {
 }
 
 .toggle[aria-checked="true"] .toggle-thumb {
-  background: var(--accent-text);
+  background: var(--toggle-on-thumb);
   transform: translateX(18px);
 }
 
@@ -2860,7 +4180,8 @@ label.toggle-row {
 
 .pulse .rows.feed {
   width: 100%;
-  max-width: 640px;
+  /* Wide enough for body text plus a related image beside it later. */
+  max-width: 880px;
   margin: 0 auto;
 }
 
@@ -2869,8 +4190,164 @@ label.toggle-row {
   max-width: none;
   flex-direction: column;
   align-items: stretch;
+  gap: 12px;
+  padding: 16px 24px;
+  min-height: 96px;
+  border-color: var(--red-dim);
+  transition: border-color var(--t-fast) var(--ease-out);
+  /* The lead image sits beside the text on a wide card, under the head on a narrow one. */
+  container-type: inline-size;
+}
+
+.card.feed-card:hover,
+.card.feed-card:focus-within,
+.card.feed-card.open {
+  border-color: var(--red);
+}
+
+/* Text on the left, the 16:9 lead image (or link tile) on the right. */
+.feed-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "head lead"
+    "text lead";
+  grid-template-rows: auto 1fr;
+  column-gap: 16px;
+  row-gap: 12px;
+}
+
+.feed-main > .feed-head {
+  grid-area: head;
+}
+
+.feed-text {
+  grid-area: text;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.feed-lead {
+  grid-area: lead;
+  width: 240px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--red-dim);
+  border-radius: 10px;
+  background: #000;
+}
+
+.feed-lead .media-item {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.feed-lead .media-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.feed-lead .media-item:focus-visible,
+.feed-expanded .media-item:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: -2px;
+}
+
+/* A link with no image: the topic icon, kept small, and the link's host. */
+.feed-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 12px 16px;
+  height: 100%;
+  padding: 8px;
+}
+
+.feed-tile-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.feed-tile-icon.plain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-section);
+}
+
+.feed-tile-host {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+@container (max-width: 599px) {
+  .feed-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "head"
+      "lead"
+      "text";
+    grid-template-rows: auto;
+  }
+
+  .feed-lead {
+    width: 100%;
+  }
+
+  /* A full-width tile with no picture would be a black band: keep it one row. */
+  .feed-lead:has(> .feed-tile) {
+    aspect-ratio: auto;
+  }
+
+  .feed-tile {
+    flex-direction: row;
+  }
+}
+
+.feed-more {
+  align-self: flex-start;
+  padding: 4px 8px;
+}
+
+.feed-more:focus-visible {
+  outline: 2px solid var(--red);
+}
+
+/* Behind Show more: the full report, images 2 and 3, and why the card is here. */
+.feed-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feed-expanded[hidden] {
+  display: none;
+}
+
+.feed-why {
+  margin: 0;
+  color: var(--muted);
+}
+
+.feed-why-label {
+  display: block;
+  color: var(--text);
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+
+.pulse-head .switch button:not([aria-pressed="true"]) {
+  border-color: var(--red-dim);
 }
 
 .feed-head {
@@ -2902,6 +4379,24 @@ label.toggle-row {
   padding-top: 2px;
 }
 
+/* A title with a source page opens it. */
+a.feed-title {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.feed-title:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--red);
+  text-underline-offset: 2px;
+}
+
+a.feed-title:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .feed-corner {
   position: relative;
   display: flex;
@@ -2921,7 +4416,10 @@ label.toggle-row {
   flex-direction: column;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 4px;
+  --bw: 1px;
   background: var(--panel);
   box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
 }
@@ -2931,6 +4429,7 @@ label.toggle-row {
   background: transparent;
   color: var(--text);
   text-align: left;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 .feed-menu button.danger {
@@ -2954,26 +4453,20 @@ label.toggle-row {
   text-underline-offset: 2px;
 }
 
-.media.hero .media-item img {
-  display: block;
-  height: 170px;
-  width: auto;
-  max-width: 100%;
-  border-radius: 10px;
-}
-
 .media.gallery {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 240px));
   gap: 8px;
 }
 
 .media.gallery .media-item img {
   display: block;
   width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: 16 / 9;
   object-fit: cover;
+  border: 1px solid var(--red-dim);
   border-radius: 10px;
+  background: #000;
 }
 
 .media-item {
@@ -3047,7 +4540,7 @@ label.toggle-row {
 }
 
 .feed-instructions {
-  max-width: 640px;
+  max-width: 880px;
   width: 100%;
   margin: 0 auto;
   flex-direction: column;
@@ -3066,7 +4559,8 @@ label.toggle-row {
   display: block;
   height: 12px;
   border-radius: 6px;
-  background: var(--user);
+  /* Red-tinted, so a loading card reads as part of the palette, not gray. */
+  background: var(--selected);
   animation: skeleton-pulse 1.2s ease-in-out infinite;
 }
 
@@ -3104,7 +4598,7 @@ label.toggle-row {
 /* Pulse Ideas: Muse-style rows, not cards. */
 .pulse .idea-group {
   width: 100%;
-  max-width: 640px;
+  max-width: 880px;
   margin: 0 auto;
 }
 
@@ -3140,7 +4634,8 @@ label.toggle-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 12px 16px;
+  min-height: 64px;
   border: none;
   background: none;
   color: inherit;
@@ -3198,17 +4693,16 @@ label.toggle-row {
 .brand-lockup img {
   width: 1.3em;
   height: 1.3em;
-  background: #0b0b0d;
+  background: var(--void);
   border-radius: 0.2em;
 }
 
 /* Activity Dock: what the agent is running, what waits on the user, and
-   what just finished. It sits in the views bar, so every view shows it; the
+   what just finished. It sits in the top bar, so every view shows it; the
    list drops down from it. */
 .activity-dock {
   position: relative;
   flex: none;
-  margin-left: auto;
 }
 
 .activity-dock + .palette-open {
@@ -3247,7 +4741,7 @@ label.toggle-row {
 }
 
 .activity-dot.running {
-  background: var(--accent);
+  background: var(--amber);
 }
 
 .activity-list {
@@ -3365,7 +4859,6 @@ label.toggle-row {
 .notice-bell {
   position: relative;
   flex: none;
-  margin-left: auto;
 }
 
 .activity-dock + .notice-bell,
@@ -3391,8 +4884,8 @@ label.toggle-row {
   height: 18px;
   padding: 0 4px;
   border-radius: 9px;
-  background: var(--danger);
-  color: #fff;
+  background: var(--amber);
+  color: var(--void);
   font-size: var(--font-badge);
   font-weight: 600;
   line-height: 1;
@@ -3451,8 +4944,8 @@ label.toggle-row {
   color: var(--danger-text);
 }
 
-/* Phones: the bar is at the bottom, so the dock is a dot and a count and its
-   list opens upward across the screen. */
+/* Phones: the dock is a dot and a count, and its list opens across the
+   screen, above the rail at the bottom. */
 @media (max-width: 600px) {
   .activity-label {
     display: none;
@@ -3501,7 +4994,7 @@ label.toggle-row {
 
 /* Switching views: the incoming screen eases up. Chat and Automations stay
    mounted and are shown and hidden, which also restarts the animation. */
-.app > :is(div, section):not(.topbar, .palette-backdrop, [hidden]) {
+.views > :is(div, section):not(.palette-backdrop, [hidden]) {
   animation: view-in var(--t-base) var(--ease-out) backwards;
 }
 
@@ -3512,12 +5005,107 @@ label.toggle-row {
   animation: rise-in var(--t-base) var(--ease-out) backwards;
 }
 
+.log > .thought {
+  animation: rise-in var(--t-base) var(--ease-out) backwards;
+}
+
 .palette-backdrop {
   animation: fade-in var(--t-fast) var(--ease-out) backwards;
 }
 
 .palette {
   animation: pop-in var(--t-base) var(--ease-out) backwards;
+}
+
+/* Glam motion: a running dot that pulses amber, an open tab's underline that
+   slides up, cards that fade up 4px, and an XP bar and streak that fill in.
+   Only when nobody asked for less motion, from the OS or from Settings. */
+@keyframes dot-pulse {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--amber) 60%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes tab-open {
+  from {
+    box-shadow: inset 0 0 0 var(--amber);
+  }
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes xp-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@keyframes streak-fill {
+  from {
+    background: var(--selected);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .activity-dot.running {
+    animation: dot-pulse 1.6s var(--ease-out) infinite;
+  }
+
+  :root:not([data-reduce-motion="true"]) .rail button[aria-current="page"],
+  :root:not([data-reduce-motion="true"]) :is(.settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
+  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
+    animation: tab-open var(--t-base) var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) :is(.home-tile, .card.feed-card) {
+    animation: card-enter var(--t-base) var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .xp-fill {
+    transform-origin: left;
+    transition: width var(--t-base) var(--ease-out);
+    animation: xp-grow 600ms var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .streak-days li.on {
+    animation: streak-fill 600ms var(--ease-out) backwards;
+  }
+
+  :root:not([data-reduce-motion="true"]) .composer.glowing .composer-ghost-wrap::before {
+    animation: composer-glow 1.6s ease-in-out infinite alternate;
+  }
+}
+
+/* Starts at full strength, so the fade-in under it shows no step. */
+@keyframes composer-glow {
+  from {
+    filter: opacity(1);
+  }
+
+  to {
+    filter: opacity(0.6);
+  }
+}
+
+/* Less motion also drops the backdrop grid. */
+:root[data-reduce-motion="true"] {
+  --backdrop-grid: none;
+}
+
+/* :root:root matches the theme blocks' (0,2,0) specificity, so this later rule
+   wins over the dark themes that turn the grid on. */
+@media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --backdrop-grid: none;
+  }
 }
 
 /* People who ask for less motion get none: state changes still happen, instantly. */
@@ -3644,6 +5232,29 @@ label.toggle-row {
   align-items: stretch;
 }
 
+/* Fleet: red outlines, bars in the text colour until 90 % (then red), and
+ * amber only on Refresh. A computer that went to sleep stays, dimmed. */
+.fleet .card.device {
+  border-color: var(--red);
+}
+.fleet-machine--asleep {
+  opacity: 0.55;
+}
+.fleet .glow-bar.fleet-bar {
+  margin-top: 4px;
+}
+.fleet .fleet-refresh {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #000;
+}
+.fleet label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
 /* A page's one-line result (Pulse, Connectors, Journal, Settings, Memory,
  * Labs): an error reads in the error colour with a left rule, a success in
  * the normal muted text. */
@@ -3667,7 +5278,7 @@ label.toggle-row {
   flex: 1 1 100%;
 }
 
-/* Top bar: the brand mark and name, then the view tabs with their icons. */
+/* Top bar: the brand mark and name, then the status pills and controls. */
 .brand-mark {
   display: flex;
   flex: none;
@@ -3682,11 +5293,52 @@ label.toggle-row {
   display: block;
 }
 
-.tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
+/* Display type (Chakra Petch): the wordmark, page titles, tile eyebrows, and
+   the uppercase labels on tabs and the CTA. Body text and prose stay Inter. */
+.brand-mark span,
+.brand-lockup,
+:is(h1, h2):not(.md-heading),
+.settings-title {
+  font-family: var(--font-family-display);
+}
+
+.brand-mark span {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.home-tile h3,
+.xp-line {
+  font-family: var(--font-family-display);
+  letter-spacing: var(--tracking-eyebrow);
+}
+
+.settings-tabs button,
+.settings-nav button,
+.pulse-head .switch button,
+.code-side-tabs [role="tab"],
+.code-run,
+button.cta,
+button.primary:not(.quick-chip) {
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+/* Tracked capitals run wide, so labels step down a size to keep the width
+   they had in mixed case. */
+.settings-nav button,
+.pulse-head .switch button,
+.code-side-tabs [role="tab"],
+.code-run,
+button.cta,
+button.primary:not(.quick-chip) {
+  font-size: var(--font-caption);
+}
+
+.settings-tabs button {
+  font-size: var(--font-body);
 }
 
 .tab-icon {
@@ -3708,45 +5360,17 @@ label.toggle-row {
   min-height: 0;
 }
 
-/* Narrow windows: the tabs fold to their icons. The label stays for screen
-   readers and the tooltip. A full set of icons, the brand, the Activity dock
-   and Command outgrow the 900px default window, so the icons wrap to a second
-   row instead of widening the page: a page that scrolls sideways puts a
-   scrollbar along the bottom edge, over the composer. The row must not be a
-   scroll box either: WebKitGTK's hit test misses buttons inside an
-   overflow-x: auto views bar, so no tab would take a click. */
-@media (max-width: 900px) {
-  .tabs {
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .tabs button {
-    flex: none;
-    padding-inline: 12px;
-  }
-
-  .tab-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+/* Below 800px the pills give their room to the controls (Settings shows
+   both); on phones the name goes too and the logo stays. */
+@media (max-width: 799px) {
+  .pills {
+    display: none;
   }
 }
 
-/* Phones keep the one-row bar from the phone block above (a fixed 52px bar
-   that scrolls sideways). The 900px rule's wrap comes later in this file, so
-   without this the icons stack into rows that spill over the composer. */
 @media (max-width: 600px) {
-  .brand-mark {
+  .brand-mark span {
     display: none;
-  }
-
-  .tabs {
-    justify-content: space-between;
-    flex-wrap: nowrap;
   }
 }
 
@@ -3843,6 +5467,130 @@ label.toggle-row {
   overflow-wrap: anywhere;
 }
 
+/* Find in this chat (Ctrl+F): a slim bar over the log. Matches get a thin
+   outline; the one picked gets the focus ring. */
+.chat-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.chat-find input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-find-count {
+  min-width: 10ch;
+  color: var(--muted);
+  font-size: var(--font-caption);
+  white-space: nowrap;
+}
+
+/* A reply beside Nyx's face is marked on its bubble, not the whole row. */
+.log [data-find]:not(.nyx-row),
+.log .nyx-row[data-find] > .bubble {
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.log [data-find="current"]:not(.nyx-row),
+.log .nyx-row[data-find="current"] > .bubble {
+  outline: 2px solid var(--accent);
+  box-shadow: var(--ring);
+}
+
+/* The model's thinking above its reply: quieter than the reply, with a rule
+   on the left. Folded, it is one "Thought" row with Expand. */
+.thought {
+  display: grid;
+  gap: 4px;
+  max-width: min(80%, 70ch);
+  padding: 4px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+}
+
+.thought.minimized {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thought-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thought-label {
+  font-weight: 600;
+}
+
+.thought-body {
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thought-body > :first-child {
+  margin-top: 0;
+}
+
+.thought-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Find's hidden row marker sits between two rows. */
+.log > .thought + [data-row] + .thought {
+  margin-top: -8px;
+}
+
+/* A web-search reply's Sources list: one quiet pill per site, wrapping, with
+   the link on hover. */
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* min-width 0 lets a long site name shrink to the bubble and end in an
+   ellipsis instead of pushing the chat sideways. */
+.source-chips > li {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bubble .source-chips:first-child {
+  margin-top: 0;
+}
+
+.source-chip {
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-chip:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: none;
+  color: var(--text);
+}
+
 /* A reopened chat's tool steps: one quiet line instead of cards. */
 .tools-ran {
   margin: 0;
@@ -3858,7 +5606,7 @@ label.toggle-row {
 .topbar .halt {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -3931,7 +5679,10 @@ label.toggle-row {
   list-style: none;
   background: var(--panel, var(--bg));
   border: 1px solid var(--line, currentColor);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 4px;
+  --bw: 1px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
 }
 .slash-row {
@@ -3939,11 +5690,11 @@ label.toggle-row {
   gap: 8px;
   align-items: baseline;
   padding: 8px 8px;
-  border-radius: 6px;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
   cursor: pointer;
 }
 .slash-row[aria-selected="true"] {
-  background: var(--accent-soft, rgb(127 127 127 / 0.18));
+  background: var(--selected);
 }
 .slash-row.off {
   opacity: 0.55;
@@ -4053,7 +5804,7 @@ label.toggle-row {
     hsl(var(--art-hue) 45% 32%),
     hsl(calc(var(--art-hue) + 40) 40% 16%)
   );
-  color: #f2f2f4;
+  color: var(--art-text);
   font-size: var(--font-headline);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -4173,7 +5924,7 @@ label.toggle-row {
 
 .game-screen-running {
   margin: 0;
-  color: #f0b429;
+  color: var(--amber);
   font-weight: 600;
   font-size: var(--font-caption);
 }
@@ -4246,6 +5997,9 @@ label.toggle-row {
   padding: 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
+  --r-outer: var(--radius-md);
+  --pad: 8px;
+  --bw: 1px;
 }
 
 .board-column.follow-up {
@@ -4279,6 +6033,10 @@ label.toggle-row {
   flex-wrap: nowrap;
   align-items: stretch;
   gap: 8px;
+}
+
+.board-column .card.board-card {
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 .card.board-card[draggable="true"] {
@@ -4319,9 +6077,20 @@ label.toggle-row {
   flex-direction: column;
   padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-menu);
+  --r-outer: var(--radius-menu);
+  --pad: 4px;
+  --bw: 1px;
   background: var(--panel);
   box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
+}
+
+.board-menu button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  border-radius: max(var(--radius-xs), calc(var(--r-outer) - var(--pad) - var(--bw)));
 }
 
 .board-confirm {
@@ -4544,7 +6313,7 @@ label.toggle-row {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #2f9e5b;
+  background: var(--ok);
   transform: translateY(-1px);
 }
 
@@ -4593,6 +6362,24 @@ label.toggle-row {
 .fix-head h2 {
   margin: 0;
   font-size: var(--font-prose);
+}
+
+/* Home → PC Loadout → Details: one caption over one value per line. */
+.pc-sheet {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.pc-sheet dt {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.pc-sheet dd {
+  margin: 0;
+  font-size: var(--font-body);
+  overflow-wrap: anywhere;
 }
 
 .fix-title {
@@ -4666,6 +6453,66 @@ label.toggle-row {
   top: auto;
   right: auto;
   z-index: 30;
+}
+
+/* A Live offer's checklist dialog (ActionMode::Live). */
+.live-window .live-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.live-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.live-steps li {
+  display: grid;
+  grid-template-columns: 1.25rem 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.live-steps li[data-mark="needsOk"],
+.live-steps li[data-mark="running"] {
+  border-color: var(--amber);
+  background: var(--amber-wash);
+}
+
+.live-steps li[data-mark="done"] .live-mark {
+  color: var(--amber);
+}
+
+.live-steps li[data-mark="failed"] .live-mark {
+  color: var(--red);
+}
+
+.live-mark {
+  font-weight: 600;
+}
+
+.live-status {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.live-result {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--red);
+  background: var(--red-wash);
+}
+
+.live-actions {
+  justify-content: flex-end;
 }
 
 /* A short confirm in the fix window's frame. */
@@ -4773,16 +6620,24 @@ label.toggle-row {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--border);
+  padding: 16px;
+  border: 1.5px solid var(--red-dim);
   border-radius: var(--radius-md);
   background: var(--panel);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--elev-1);
 }
 
 .home-tile.large {
   grid-column: span 2;
   grid-row: span 2;
+}
+
+/* Objectives is the "objective" surface: a red stroke over a faint amber wash. */
+.home-tile.objective-tile {
+  border-color: var(--red);
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--amber) 9%, transparent), color-mix(in srgb, var(--amber) 3%, transparent) 55%, transparent),
+    var(--panel);
 }
 
 .home-tile.medium {
@@ -4798,7 +6653,6 @@ label.toggle-row {
 .home-tile h3 {
   margin: 0;
   font-size: var(--font-caption);
-  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -4822,7 +6676,7 @@ label.toggle-row {
 }
 
 .home-tile:has(.home-go:hover) {
-  border-color: var(--accent);
+  border-color: var(--red);
 }
 
 .home-stack,
@@ -4892,6 +6746,11 @@ label.toggle-row {
   font-size: var(--font-headline);
   letter-spacing: var(--tracking-headline);
   font-weight: 600;
+  color: var(--text);
+}
+
+/* Amber is for objectives, XP and warnings: only the Objectives count wears it. */
+.objective-tile .home-count {
   color: var(--amber);
 }
 
@@ -4914,15 +6773,22 @@ label.toggle-row {
   flex-wrap: wrap;
 }
 
+/* Glance chips: red-dim outline pills. */
 .home-glance button {
   background: transparent;
   color: var(--text);
-  border-color: var(--border);
+  border: 1px solid var(--red-dim);
+  border-radius: 999px;
 }
 
 .home-glance button:hover:not(:disabled) {
   filter: none;
   background: var(--hover);
+  border-color: var(--red);
+}
+
+.home-foot button.link {
+  text-underline-offset: 3px;
 }
 
 .home-foot {
@@ -4968,7 +6834,6 @@ label.toggle-row {
   justify-content: space-between;
   gap: 8px;
   font-size: var(--font-caption);
-  letter-spacing: 0.06em;
 }
 
 .xp-level {
@@ -4985,12 +6850,15 @@ label.toggle-row {
   height: 6px;
   border-radius: 3px;
   background: var(--selected);
-  overflow: hidden;
 }
 
+/* The track no longer clips, so the fill rounds itself and its glow shows. */
 .xp-fill {
   height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
   background: var(--amber);
+  box-shadow: var(--glow-xp);
 }
 
 .streak-days {
@@ -5348,15 +7216,7 @@ label.toggle-row {
   vertical-align: middle;
 }
 
-/* A card's full report, opened under its summary. */
-.feed-card .link-button {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
-  text-decoration: underline;
-}
-
+/* A card's full report, and a digest's items. */
 .feed-report {
   margin: 4px 0 8px;
   color: var(--muted);
@@ -5365,6 +7225,44 @@ label.toggle-row {
 .feed-items {
   margin: 0 0 8px;
   padding-left: 16px;
+}
+
+/* Download models: live HF GGUF browse (Auto pool only). */
+.hf-browse {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, #000 18%, transparent);
+}
+.hf-browse-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.hf-browse-search input {
+  flex: 1;
+  min-width: 0;
+}
+.hf-browse-files h4 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: var(--font-prose);
+}
+.badge.hf-fit-yes {
+  color: var(--text);
+  background: color-mix(in srgb, var(--amber) 35%, transparent);
+  border: 1px solid var(--amber);
+}
+.badge.hf-fit-tight {
+  color: var(--text);
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, #000);
+}
+.badge.hf-fit-no {
+  color: var(--on-red);
+  background: var(--red);
+  border: 1px solid var(--red);
 }
 
 /* Download models: kind tabs, then one row per model. */
@@ -5393,6 +7291,12 @@ label.toggle-row {
   padding: var(--space-8) var(--space-12);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+
+/* The model a Pulse card's Open in Settings landed on. */
+.local-library-row[aria-current="true"] {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
 }
 
 /* Why the last download stopped, right under that row's button. */
@@ -5481,9 +7385,16 @@ label.toggle-row {
   overflow-wrap: anywhere;
 }
 
+/* The open file: a red wash with a red bar down its left edge. */
 .code-file[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--red);
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.code-file[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--red-wash);
+  box-shadow: inset 3px 0 0 var(--red), var(--red-glow);
 }
 
 .code-status {
@@ -5662,27 +7573,36 @@ fieldset.channel label {
   gap: 8px;
 }
 
-/* Every card's buttons: one neat row. Like first, Dismiss last at the far
-   right, the card's own buttons and Not interested between them. Same size and
-   spacing everywhere; a narrow card scrolls the row instead of wrapping. */
+/* Every card's buttons: one neat row. Like first, Not interested last at the
+   far right, the card's own buttons between them. Same size and spacing
+   everywhere; a narrow card scrolls the row instead of wrapping. */
 .card-buttons.card-row {
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
 .card-row > button {
   flex: 0 0 auto;
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 40px;
+  padding: 0 16px;
   font-size: var(--font-body);
   white-space: nowrap;
 }
 
-.card-row > .card-dismiss {
+/* Not interested is the quiet way out: far right, muted until hovered. */
+.card-row > .card-not-interested {
   margin-left: auto;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.card-row > .card-not-interested:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
 }
 
 /* Like → filled heart. The heart keeps the accent colour; a one-shot pop plays
@@ -5935,7 +7855,7 @@ fieldset.channel label {
 
 .code-editor-host .cm-activeLine,
 .code-editor-host .cm-activeLineGutter {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
 }
 
 .code-terminal-host {
@@ -5950,6 +7870,12 @@ fieldset.channel label {
   display: none;
 }
 
+/* Projects / Helpers stay mounted off-tab for live updates; never paint into chat. */
+.code-projects-host[hidden],
+.code-helpers-host[hidden] {
+  display: none;
+}
+
 .code-editor-host .cm-cursor {
   border-left-color: var(--text);
 }
@@ -5957,12 +7883,12 @@ fieldset.channel label {
 .code-editor-host .cm-selectionBackground,
 .code-editor-host .cm-focused .cm-selectionBackground,
 .code-editor-host .cm-content ::selection {
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 28%, transparent);
 }
 
 .code-editor-host .cm-matchingBracket {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--red) 50%, transparent);
 }
 
 .episode {
@@ -6073,7 +7999,7 @@ fieldset.channel label {
 .episode-actions .halt {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -6099,7 +8025,7 @@ fieldset.channel label {
 .topbar .record-stop {
   background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--on-red);
   font-weight: 600;
 }
 
@@ -6129,25 +8055,20 @@ fieldset.channel label {
   margin-top: var(--space-4);
 }
 
-/* Code tab: the project and its workspace on the left, the agent window and
-   its tasks down the right. Each side scrolls by itself. */
+/* Code tab: agent LEFT (wide), editor/side tabs RIGHT (narrow), drag handle. */
 .code-tab {
-  gap: var(--space-8);
-}
-
-.code-tab > .code {
-  min-width: 0;
+  gap: 0;
+  align-items: stretch;
 }
 
 .code-agent {
-  flex: 0 0 clamp(340px, 46%, 560px);
-  min-width: 0;
+  flex: 1 1 var(--code-agent-pct, 62%);
+  min-width: 420px;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
-  padding-left: var(--space-8);
-  border-left: 1px solid var(--border);
+  padding-right: var(--space-8);
 }
 
 .code-agent > .code-head {
@@ -6158,8 +8079,62 @@ fieldset.channel label {
   margin: 0;
 }
 
-/* In the narrow column the message box takes a row of its own, with the
-   buttons under it. */
+.code-split-handle {
+  flex: 0 0 6px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: var(--red-dim);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.code-split-handle:hover,
+.code-split-handle:focus-visible {
+  background: var(--red);
+  outline: none;
+}
+
+.code-tab > .code-side {
+  flex: 1 1 calc(100% - var(--code-agent-pct, 62%));
+  min-width: 300px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding-left: var(--space-8);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.code-side-tabs {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.code-side-tabs [role="tab"] {
+  min-height: 32px;
+  padding: 4px 12px;
+}
+
+.code-side-tabs [role="tab"][aria-selected="true"] {
+  border-color: var(--red);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.code-side-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Wide agent column: composer stays one row when there is room. */
 .chat.embedded .composer {
   flex-wrap: wrap;
 }
@@ -6176,34 +8151,53 @@ fieldset.channel label {
 
 /* The tasks take what they need, up to about a quarter of the column; the
    conversation keeps the rest. */
-.agents.embedded {
-  flex: 0 1 auto;
-  max-height: 28%;
+/* Helpers tab: lead tasks, helpers, helper work, review — not under chat. */
+.agents.helpers-panel {
+  flex: 1 1 auto;
+  min-height: 0;
   max-width: none;
   margin-inline: 0;
-  padding-top: var(--space-8);
-  border-top: 1px solid var(--border);
+  overflow: auto;
 }
 
-.agents.embedded .empty {
+.agents.helpers-panel .empty {
   margin: 0;
 }
 
-/* A narrow window stacks them: the agent window under the workspace. */
+/* Chat fills the agent column once helpers left for the Helpers tab. */
+.code-agent > .chat {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* A narrow window stacks them: agent on top, side column under. */
 @media (max-width: 899px) {
-  .app > .code-tab:not([hidden]) {
+  .views > .code-tab:not([hidden]) {
     flex-direction: column;
     overflow-y: auto;
   }
 
-  .code-tab > .code {
-    flex: 0 0 auto;
-    overflow-y: visible;
-  }
-
   .code-agent {
     flex: 0 0 auto;
-    min-height: 70vh;
+    min-width: 0;
+    min-height: 55vh;
+    padding-right: 0;
+  }
+
+  /* The box spans the scrolling column edge to edge, which would cut the
+     composer glow flat at both sides; keep its light above and below. */
+  .chat.embedded .composer-ghost-wrap::before {
+    inset: 0 20px;
+  }
+
+  .code-split-handle {
+    display: none;
+  }
+
+  .code-tab > .code-side {
+    flex: 0 0 auto;
+    min-width: 0;
+    overflow-y: visible;
     padding-left: 0;
     border-left: none;
     border-top: 1px solid var(--border);
@@ -6280,6 +8274,17 @@ fieldset.channel label {
   flex-wrap: wrap;
 }
 
+/* The chat's ask: the cabin's amber-edged card, up to 720 wide. */
+.mods-requested {
+  border-color: var(--amber);
+  max-width: 720px;
+  margin-bottom: 12px;
+}
+
+.mods-requested h3 {
+  margin: 0;
+}
+
 .mods-head input {
   flex: 0 1 260px;
   min-width: 0;
@@ -6345,5 +8350,303 @@ fieldset.channel label {
 @media (max-width: 720px) {
   .mods-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Settings → Behavior: the companion's ping sits under its switch. */
+.companion-ping {
+  margin-left: 24px;
+}
+
+/* The game note dialog: a short form, its box full width. */
+.game-note textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+/* Progress meters and steppers (Quix Progress & Steppers restyled for Loadout).
+ * Black track, red fill; amber only on the current step mark. Glow animation
+ * runs only when motion is allowed. */
+.status-tracker .sr-only,
+.step-tracker .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.usage-ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: var(--ring-size, 40px);
+  height: var(--ring-size, 40px);
+  flex: none;
+  color: var(--text);
+}
+
+.usage-ring svg {
+  display: block;
+  transform: rotate(-90deg);
+}
+
+.usage-ring-track,
+.usage-ring-fill {
+  fill: none;
+  stroke-width: 3.5;
+}
+
+.usage-ring-track {
+  stroke: var(--red-dim);
+}
+
+.usage-ring-fill {
+  stroke: var(--red);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 240ms var(--ease-out, ease-out);
+}
+
+.usage-ring--hot .usage-ring-fill {
+  stroke: var(--red-hover);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--red) 55%, transparent));
+}
+
+.usage-ring-pct {
+  position: absolute;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+}
+
+.glow-bar {
+  display: block;
+  height: 6px;
+  margin-top: 4px;
+  max-width: 320px;
+  border-radius: 3px;
+  background: var(--red-dim);
+  box-shadow: inset 0 0 0 1px var(--red);
+  overflow: visible;
+}
+
+.glow-bar-fill {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+  background: var(--text);
+  box-shadow: none;
+  transition: width 240ms var(--ease-out, ease-out);
+}
+
+.glow-bar--hot .glow-bar-fill {
+  background: var(--red);
+}
+
+.usage-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.usage-meter-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.status-tracker {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.status-tracker-step {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 8px;
+  align-items: start;
+  position: relative;
+  padding-bottom: 8px;
+  font-size: var(--font-body);
+  color: var(--muted);
+}
+
+.status-tracker-step:last-child {
+  padding-bottom: 0;
+}
+
+.status-tracker-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  bottom: 0;
+  width: 2px;
+  background: var(--red-dim);
+}
+
+.status-tracker-step--done:not(:last-child)::before,
+.status-tracker-step--current:not(:last-child)::before {
+  background: var(--red);
+}
+
+.status-tracker-mark {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--red-dim);
+  background: var(--bg);
+  box-sizing: border-box;
+}
+
+.status-tracker-step--done .status-tracker-mark {
+  border-color: var(--red);
+  background: var(--red);
+}
+
+.status-tracker-step--current .status-tracker-mark {
+  border-color: var(--amber);
+  background: var(--amber);
+  box-shadow: var(--amber-glow);
+}
+
+.status-tracker-step--done,
+.status-tracker-step--current {
+  color: var(--text);
+}
+
+.status-tracker-step--current .status-tracker-label {
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.step-tracker {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+}
+
+.step-tracker-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  font-size: var(--font-caption);
+  color: var(--muted);
+  text-align: center;
+}
+
+.step-tracker-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--red-dim);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.step-tracker-step--done .step-tracker-dot {
+  border-color: var(--red);
+  background: var(--red);
+  color: #000;
+}
+
+.step-tracker-step--current .step-tracker-dot {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: #000;
+  box-shadow: var(--amber-glow);
+}
+
+.step-tracker-step--done,
+.step-tracker-step--current {
+  color: var(--text);
+}
+
+.step-tracker-step--current .step-tracker-label {
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.step-tracker-line {
+  position: absolute;
+  top: 11px;
+  left: calc(50% + 11px);
+  right: calc(-50% + 11px);
+  height: 2px;
+  background: var(--red-dim);
+  z-index: 0;
+}
+
+.step-tracker-step--done .step-tracker-line,
+.step-tracker-step--current .step-tracker-line {
+  background: var(--red);
+}
+
+.step-tracker-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="true"]) .glow-bar--hot .glow-bar-fill {
+    animation: glow-bar-pulse 1.6s ease-in-out infinite;
+  }
+
+  :root:not([data-reduce-motion="true"]) .usage-ring--hot .usage-ring-fill {
+    animation: usage-ring-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes glow-bar-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--red) 55%, transparent);
+  }
+}
+
+@keyframes usage-ring-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--red) 25%, transparent));
+  }
+  50% {
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--red) 65%, transparent));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-ring-fill,
+  .glow-bar-fill {
+    transition: none;
+  }
+
+  .glow-bar--hot .glow-bar-fill,
+  .usage-ring--hot .usage-ring-fill {
+    animation: none;
   }
 }

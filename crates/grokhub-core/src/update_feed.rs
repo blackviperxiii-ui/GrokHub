@@ -644,6 +644,21 @@ pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
     if !names_its_item(&card) {
         return false;
     }
+    post_named(cards, card)
+}
+
+/// [`post_update`] for a card whose title already names its item and whose
+/// body quotes the user's own words, such as a game's launch card with
+/// their note. The vague-words check is for generated text, so a note that
+/// says "finish this task" still gets its card.
+pub fn post_user_worded(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
+    if card.title.trim().is_empty() {
+        return false;
+    }
+    post_named(cards, card)
+}
+
+fn post_named(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
     let now = card.created_at;
     if let Some(key) = feed_group_key(&card) {
         if let Some(existing) = take_live_group(cards, &key) {
@@ -733,6 +748,20 @@ fn merge_event(mut existing: UpdateCard, new: UpdateCard) -> UpdateCard {
     existing.why = new.why;
     existing.dismissed_at = 0;
     existing.source_id = new.source_id;
+    // The newest run's report is the one the card opens to and offers fixes
+    // from; what the app already did for the card stays in its receipts.
+    if let Some(mut report) = new.pulse.report {
+        if let Some(old) = existing.pulse.report.take() {
+            let mut receipts = old.receipts;
+            receipts.append(&mut report.receipts);
+            let extra = receipts
+                .len()
+                .saturating_sub(crate::card_report::RECEIPTS_MAX);
+            receipts.drain(..extra);
+            report.receipts = receipts;
+        }
+        existing.pulse.report = Some(report);
+    }
     refresh_event_why(&mut existing);
     existing
 }
@@ -2848,6 +2877,8 @@ pub fn audio_check_card(
         });
     }
     card.source_id = source;
+    // Pulse names the source line from this; the kind alone reads "Automation".
+    card.pulse.source_name = Some("Audio check".into());
     refresh_event_why(&mut card);
     card
 }
@@ -4649,6 +4680,91 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     }
 
     #[test]
+    fn a_card_quoting_the_users_words_posts_even_when_they_say_this_task() {
+        let card = |title: &str| {
+            digest_card(
+                "source:game-companion:7",
+                title,
+                "No news since you last played. Your note from last time: finish this task",
+                1_000,
+            )
+        };
+        let mut cards = Vec::new();
+        assert!(!post_update(&mut cards, card("Back to Hades")));
+        assert!(cards.is_empty());
+        assert!(post_user_worded(&mut cards, card("Back to Hades")));
+        assert_eq!(
+            cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+            ["Back to Hades"]
+        );
+        let mut blank = card("Back to Celeste");
+        blank.title = "  ".into();
+        assert!(!post_user_worded(&mut cards, blank));
+        assert_eq!(cards.len(), 1);
+    }
+
+    #[test]
+    fn a_later_run_of_the_same_source_brings_its_report_and_keeps_the_receipts() {
+        let mut cards = Vec::new();
+        let first = automation_report_card("a1", "Backup", "Copied 3 files. One failed.", 1_000);
+        assert!(post_update(&mut cards, first));
+        crate::card_report::add_receipt(
+            &mut cards[0],
+            crate::card_report::CardReceipt {
+                at_ms: 1_500,
+                what: "Looked into the failure".into(),
+                result: vec!["The disk was full.".into()],
+            },
+        );
+        let second =
+            automation_report_card("a1", "Backup", "Copied 5 files. All went fine.", 2_000);
+        assert!(post_update(&mut cards, second));
+        assert_eq!(cards.len(), 1);
+        let report = cards[0].pulse.report.as_ref().unwrap();
+        assert_eq!(report.details, "Copied 5 files. All went fine.");
+        assert_eq!(
+            report.receipts,
+            vec![crate::card_report::CardReceipt {
+                at_ms: 1_500,
+                what: "Looked into the failure".into(),
+                result: vec!["The disk was full.".into()],
+            }]
+        );
+        assert_eq!(cards[0].runs, 2);
+        // The receipts keep their cap across folds.
+        for n in 0..crate::card_report::RECEIPTS_MAX as u64 {
+            crate::card_report::add_receipt(
+                &mut cards[0],
+                crate::card_report::CardReceipt {
+                    at_ms: 3_000 + n,
+                    what: format!("Run {n}"),
+                    result: Vec::new(),
+                },
+            );
+        }
+        let mut third = automation_report_card("a1", "Backup", "Copied 6 files.", 4_000);
+        crate::card_report::add_receipt(
+            &mut third,
+            crate::card_report::CardReceipt {
+                at_ms: 4_000,
+                what: "Newest".into(),
+                result: Vec::new(),
+            },
+        );
+        assert!(post_update(&mut cards, third));
+        let whats: Vec<String> = cards[0]
+            .pulse
+            .report
+            .as_ref()
+            .unwrap()
+            .receipts
+            .iter()
+            .map(|r| r.what.clone())
+            .collect();
+        assert_eq!(whats, vec!["Run 1", "Run 2", "Run 3", "Run 4", "Newest"]);
+    }
+
+    #[test]
     fn a_screen_recording_card_names_the_recording_and_keeps_its_folder() {
         let c = screen_recording_card(
             "/home/ada/GrokHub/recordings/r1",
@@ -4704,6 +4820,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             })
         );
         assert_eq!(c.source_id, "audiocheck:alsa_input.usb-Yeti");
+        assert_eq!(c.pulse.source_name.as_deref(), Some("Audio check"));
         assert_eq!(c.id, "audiocheck-audiocheck:alsa_input.usb-Yeti");
         assert_eq!(
             audio_check_card("alsa_input.usb-Yeti", "Audio check: later", "", "", 9).id,
@@ -5406,10 +5523,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             why: "You follow Rust.".into(),
             cites: vec!["https://blog.rust-lang.org/".into()],
             traits: Vec::new(),
+            details: Vec::new(),
         };
         rows.push((
             "post_card",
-            crate::pulse_writer::post_card(&written, &[], at),
+            crate::pulse_writer::post_card(&written, &[], at, None),
             "Async closures",
         ));
         let idea = crate::pulse_ideas::MuseIdea {

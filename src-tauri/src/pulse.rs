@@ -114,6 +114,9 @@ pub struct Post {
     pub ago: String,
     /// The first source link the research step returned.
     pub link: String,
+    /// A catalog upgrade card's model id, for Open in Settings. Empty on
+    /// other posts.
+    pub model: String,
     pub loved: bool,
     /// One line on what the card's numbers mean, when it has one.
     pub verdict: Option<Verdict>,
@@ -139,6 +142,15 @@ pub struct Post {
     pub review: String,
     /// A code-idea card also offers Copy as GitHub issue.
     pub issue: bool,
+    /// A Done for you card: its Undo and Stop doing this show until answered.
+    pub done: Option<DoneView>,
+}
+
+/// A Done for you card's state, as the page needs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoneView {
+    pub answered: bool,
 }
 
 /// One update inside a digest card.
@@ -150,14 +162,32 @@ pub struct Item {
     pub summary: String,
 }
 
-/// One chip under a card. `act` is "offer", "discuss", "ignore" or "remind";
-/// `index` is the offer's place on the card.
+/// One chip under a card. `act` is "offer", "discuss", "ignore", "remind"
+/// or "pause" (Pause it on a failing automation's card); `index` is the
+/// offer's place on the card. `mode` is how an offer runs: "chat", "live"
+/// or "background" (empty on non-offer chips).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chip {
     pub label: String,
     pub act: &'static str,
     pub index: usize,
+    pub mode: &'static str,
+}
+
+fn offer_mode(card: &UpdateCard, index: usize) -> &'static str {
+    use grokhub_core::action_mode::{action_mode, offer_shape, ActionMode};
+    match card
+        .pulse
+        .report
+        .as_ref()
+        .and_then(|r| r.offers.get(index))
+        .map(|o| action_mode(&offer_shape(o)))
+    {
+        Some(ActionMode::Live) => "live",
+        Some(ActionMode::Background) => "background",
+        Some(ActionMode::Chat) | None => "chat",
+    }
 }
 
 fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
@@ -170,22 +200,40 @@ fn chips(card: &UpdateCard, now_ms: u64) -> Vec<Chip> {
         wind_down: None,
         start: None,
     };
-    card_chips(card, &day, None)
+    let mut out: Vec<Chip> = card_chips(card, &day, None)
         .into_iter()
         .map(|c| {
-            let (act, index) = match c.act {
-                ChipAct::Offer(i) => ("offer", i),
-                ChipAct::Discuss | ChipAct::Primary => ("discuss", 0),
-                ChipAct::Ignore => ("ignore", 0),
-                ChipAct::RemindAt(_) => ("remind", 0),
+            let (act, index, mode) = match c.act {
+                ChipAct::Offer(i) => ("offer", i, offer_mode(card, i)),
+                ChipAct::Discuss | ChipAct::Primary => ("discuss", 0, ""),
+                ChipAct::Ignore => ("ignore", 0, ""),
+                ChipAct::RemindAt(_) => ("remind", 0, ""),
             };
             Chip {
                 label: c.label,
                 act,
                 index,
+                mode,
             }
         })
-        .collect()
+        .collect();
+    // Pause it sits right after the card's own fixes (Find out why).
+    if crate::done_for_you::offers_pause(card) {
+        let at = out
+            .iter()
+            .rposition(|c| c.act == "offer")
+            .map_or(0, |i| i + 1);
+        out.insert(
+            at,
+            Chip {
+                label: "Pause it".into(),
+                act: "pause",
+                index: 0,
+                mode: "",
+            },
+        );
+    }
+    out
 }
 
 /// A card's one-line read of its own numbers, with how worried to be.
@@ -232,6 +280,9 @@ pub struct Idea {
     pub chips: Vec<Chip>,
     /// Like was tapped and is still on: the row shows a filled heart.
     pub loved: bool,
+    /// A skill the nightly review suggested: the main button is Add skill,
+    /// which saves it.
+    pub skill: bool,
 }
 
 /// A PC health card's options window: the verdict, what to try, and the
@@ -287,6 +338,8 @@ pub enum Act {
     Opened,
     /// Let's do it (or Run) took the idea to chat.
     Accept,
+    /// Add skill on a skill idea: the skill is saved and the idea goes.
+    AddSkill,
     /// More like this: the next idea run writes more in its spirit.
     MoreLike,
     /// Not interested: the idea goes, and so does some of its topics' weight.
@@ -311,19 +364,27 @@ pub struct Day {
 }
 
 fn load_unlocked(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
-    let path = path(config_dir);
-    if !path.is_file() {
+    if !path(config_dir).is_file() {
         return Ok(Vec::new());
     }
+    Ok(read_unlocked(config_dir)?.unwrap_or_default())
+}
+
+/// The store as written: `None` when it is blank, an error when it is
+/// missing, too large, unreadable or not a feed.
+fn read_unlocked(config_dir: &Path) -> Result<Option<Vec<UpdateCard>>, String> {
+    let path = path(config_dir);
     let len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
     if len > STORE_CAP {
         return Err(format!("{FILE} is too large to be a feed."));
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     if raw.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    serde_json::from_str(&raw).map_err(|e| format!("{FILE}: {e}"))
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| format!("{FILE}: {e}"))
 }
 
 /// Writes through a temp file and a rename, like the cabin. Callers hold
@@ -392,6 +453,14 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
 pub fn cards(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
     let _store = store();
     load_unlocked(config_dir)
+}
+
+/// The cards for a caller that deletes what no card names: a missing or
+/// blank store is an error here, not an empty feed, since a crash or another
+/// process's rename can leave it that way for a moment.
+pub fn stored_cards(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
+    let _store = store();
+    read_unlocked(config_dir)?.ok_or_else(|| format!("{FILE} is blank."))
 }
 
 /// Add one written post.
@@ -508,6 +577,7 @@ fn post(
             .find(|url| grokhub_core::public_http_url(url))
             .cloned()
             .unwrap_or_default(),
+        model: upgrade_model(card).unwrap_or_default().to_string(),
         loved: card.reaction == Some(CardReaction::Up),
         verdict: verdict(card),
         more: report_more(card)
@@ -535,6 +605,21 @@ fn post(
             crate::review_cards::label(card).to_string()
         },
         issue: crate::review_cards::copies_issue(card),
+        done: card.done_for_you.as_ref().map(|d| DoneView {
+            answered: d.answered,
+        }),
+    }
+}
+
+/// The catalog model a Local models upgrade card offers. Only an id this
+/// app's catalog knows, so the page never focuses a made-up row.
+fn upgrade_model(card: &UpdateCard) -> Option<&str> {
+    use grokhub_core::local_model_news as lm;
+    match &card.action {
+        Some(grokhub_core::UpdateAction::DeepLink { href }) if lm::is_upgrade_card(card) => {
+            lm::picker_link_id(href)
+        }
+        _ => None,
     }
 }
 
@@ -565,6 +650,7 @@ fn idea(card: &UpdateCard, now_ms: u64) -> Idea {
             Vec::new()
         },
         loved: card.reaction == Some(CardReaction::Up),
+        skill: card.skill.is_some(),
     }
 }
 
@@ -750,7 +836,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::NotThis | Act::NotInterested => (Some(Outcome::Dismissed), Some(false)),
         // Love on a source post also absorbs More like this (shift true).
         Act::Love if source => (Some(Outcome::Accepted), Some(true)),
-        Act::Love | Act::Accept | Act::Save => (Some(Outcome::Accepted), None),
+        Act::Love | Act::Accept | Act::AddSkill | Act::Save => (Some(Outcome::Accepted), None),
         Act::Unlove => (None, None),
         Act::MoreLike if card.reaction == Some(CardReaction::Up) => (None, None),
         Act::MoreLike => (Some(Outcome::Accepted), Some(true)),
@@ -867,6 +953,20 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             note(&card.title, LedgerReason::Accepted, &day.date)?;
             grokhub_core::mark_update_opened(&mut cards, id)
         }
+        Act::AddSkill => {
+            // Checked before the ledger note, so a refusal changes nothing.
+            let (md, write) = skill_to_add(config_dir, &card)?;
+            note(&card.title, LedgerReason::Accepted, &day.date)?;
+            if write {
+                grokhub_agent::skill_write::save_skill_logged(
+                    config_dir,
+                    &md,
+                    grokhub_agent::harness::Origin::User,
+                    "added from Suggested",
+                )?;
+            }
+            grokhub_core::dismiss_idea(&mut cards, id)
+        }
         Act::MoreLike => {
             if card.reaction == Some(CardReaction::Up) {
                 false
@@ -917,7 +1017,7 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         Act::Snooze => Some(crate::proactive::Feedback::Later(pc::snooze_until(
             now_ms, day.hour, day.minute,
         ))),
-        Act::Accept | Act::Love => Some(crate::proactive::Feedback::Used),
+        Act::Accept | Act::AddSkill | Act::Love => Some(crate::proactive::Feedback::Used),
         Act::Unlove | Act::Opened | Act::MoreLike | Act::Save | Act::Dwell => None,
     };
     if let Some(feedback) = feedback {
@@ -927,6 +1027,34 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
         crate::nudges::dismissed(config_dir, &card);
     }
     Ok(page(config_dir, &cards, now_ms))
+}
+
+/// A skill idea's skill, with the steps as the idea now reads them, and
+/// whether it still needs writing: `false` when that very skill is already
+/// saved (an earlier Add whose card stayed up). A different skill you
+/// already have by that name is left alone.
+fn skill_to_add(
+    config_dir: &Path,
+    card: &UpdateCard,
+) -> Result<(grokhub_core::SkillMd, bool), String> {
+    let mut skill = card
+        .skill
+        .clone()
+        .ok_or_else(|| "This idea is not a skill.".to_string())?;
+    let steps = card.idea_action();
+    if !steps.is_empty() {
+        skill.instructions = Some(steps);
+    }
+    let md = grokhub_core::skill_from_suggestion(&skill)
+        .ok_or_else(|| "Need a real skill name and steps.".to_string())?;
+    let path = grokhub_agent::skill_write::skill_folder(config_dir, &md.name).join("SKILL.md");
+    if !path.exists() {
+        return Ok((md, true));
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(saved) if saved == grokhub_core::render_skill_md(&md) => Ok((md, false)),
+        _ => Err(format!("You already have a skill called {}.", md.name)),
+    }
 }
 
 /// More like this on a source post: topic weight, source nudge, related search, place.
@@ -1046,7 +1174,7 @@ fn retract_idea_like_learned(config_dir: &Path, card: &UpdateCard) {
     }
 }
 
-fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
+pub(crate) fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
     cards(config_dir)?
         .into_iter()
         .find(|c| c.id == id)
@@ -1081,7 +1209,7 @@ pub fn card_chat_id(id: &str) -> String {
 /// Words for the box when Discuss opens a reported card's chat.
 pub const DISCUSS_ASK: &str = "Tell me more about this.";
 
-fn engaged(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
+pub(crate) fn engaged(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Result<(), String> {
     react(config_dir, card, Outcome::Tapped, None, now_ms);
     if card.kind != UpdateKind::Idea {
         learn_taste(config_dir, card, Some(Reaction::Engage), None, now_ms)?;
@@ -1111,17 +1239,24 @@ pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<Seed, String>
 }
 
 /// A card's offered fix: its words in the card's own chat, with the report.
-/// Nothing runs until the person sends it.
+/// Nothing runs until the person sends it. Live offers open the checklist
+/// dialog instead (`pulse_live::open`).
 pub fn offer(config_dir: &Path, id: &str, index: usize, now_ms: u64) -> Result<Seed, String> {
+    use grokhub_core::action_mode::{action_mode, offer_shape, ActionMode};
     let card = find(config_dir, id)?;
-    let prompt = card
+    let offer = card
         .pulse
         .report
         .as_ref()
         .and_then(|r| r.offers.get(index))
-        .map(|o| o.prompt.trim().to_string())
-        .filter(|p| !p.is_empty())
         .ok_or("That fix is gone from the card. The page now shows what is left.")?;
+    if action_mode(&offer_shape(offer)) == ActionMode::Live {
+        return Err("That fix opens as a live checklist, not in chat.".into());
+    }
+    let prompt = offer.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("That fix is gone from the card. The page now shows what is left.".into());
+    }
     engaged(config_dir, &card, now_ms)?;
     Ok(Seed {
         conversation_id: card_chat_id(&card.id),
@@ -1199,17 +1334,6 @@ pub fn remind(config_dir: &Path, id: &str, day: &Day, now_ms: u64) -> Result<Rem
     })
 }
 
-/// The PC health settings the desktop app saved in its `app.json`, or the
-/// defaults when it has none.
-fn pc_health_settings(config_dir: &Path) -> grokhub_core::PcHealthSettings {
-    std::fs::read_to_string(config_dir.join("app.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get("pcHealth").cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
 /// The options window for a PC health card. Sessions come from the same
 /// ledger the desktop app writes; nothing here changes the PC.
 pub fn fix(config_dir: &Path, id: &str) -> Result<FixView, String> {
@@ -1222,7 +1346,7 @@ pub fn fix(config_dir: &Path, id: &str) -> Result<FixView, String> {
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
-    let settings = pc_health_settings(config_dir);
+    let settings = crate::pc_health::settings(config_dir);
     let stat = advice::card_session(&card.source_id, &ledger.history);
     let options = advice::sheet_options(stat, &ledger.history, &settings)
         .into_iter()
@@ -1294,20 +1418,20 @@ pub fn save_prompt(config_dir: &Path, text: &str) -> Result<Prompt, String> {
 }
 
 /// A cached gallery image as a data URL, so no page (desktop or web) ever
-/// loads it from the source site. Only names the writer made are read.
+/// loads it from the source site. Only names the writer made are read, and
+/// the type comes from the file's own bytes: a URL with no image extension
+/// is cached as `.img`.
 pub fn image(config_dir: &Path, name: &str) -> Result<String, String> {
     let (stem, ext) = name.split_once('.').ok_or("Not a Pulse image.")?;
-    let mime = match ext {
-        "jpg" => "image/jpeg",
-        "png" => "image/png",
-        "webp" => "image/webp",
-        _ => return Err("Not a Pulse image.".into()),
-    };
-    if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !matches!(ext, "jpg" | "png" | "webp" | "img")
+        || stem.len() != 16
+        || !stem.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Err("Not a Pulse image.".into());
     }
     let bytes = std::fs::read(pulse_feed::images_dir(config_dir).join(name))
         .map_err(|_| "That image is no longer cached.".to_string())?;
+    let mime = pc::image_mime(&bytes).ok_or("Not a Pulse image.")?;
     use base64::Engine as _;
     Ok(format!(
         "data:{mime};base64,{}",
@@ -1403,12 +1527,14 @@ mod tests {
                     prompt: "Read bluetoothd's crash history.".into(),
                     kind: OfferKind::Look,
                     fix_type: None,
+                    steps: vec![],
                 },
                 FixOffer {
                     label: "Restart bluetooth".into(),
                     prompt: "Restart the bluetooth service.".into(),
                     kind: OfferKind::Chat,
                     fix_type: None,
+                    steps: vec![],
                 },
             ],
             ..Default::default()
@@ -1434,18 +1560,18 @@ mod tests {
             post.more,
             "It stopped with a segfault each time.\n\n**What was checked**\n- 4 crash reports since 9 AM"
         );
-        let chips: Vec<(&str, &str, usize)> = post
+        let chips: Vec<(&str, &str, usize, &str)> = post
             .chips
             .iter()
-            .map(|c| (c.label.as_str(), c.act, c.index))
+            .map(|c| (c.label.as_str(), c.act, c.index, c.mode))
             .collect();
         assert_eq!(
             chips,
             vec![
-                ("Find out why", "offer", 0),
-                ("Restart bluetooth", "offer", 1),
-                ("Ignore for now", "ignore", 0),
-                ("Remind me later", "remind", 0),
+                ("Find out why", "offer", 0, "background"),
+                ("Restart bluetooth", "offer", 1, "chat"),
+                ("Ignore for now", "ignore", 0, ""),
+                ("Remind me later", "remind", 0, ""),
             ]
         );
 
@@ -2142,6 +2268,29 @@ mod tests {
         assert!(image(&d.config, "0123456789abcdef.svg").is_err());
     }
 
+    #[test]
+    fn an_img_file_serves_by_its_bytes() {
+        let d = dirs("images-img", &[]);
+        let dir = pulse_feed::images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let png = [0x89, b'P', b'N', b'G'];
+        std::fs::write(dir.join("0123456789abcdef.img"), png).expect("img");
+        std::fs::write(dir.join("fedcba9876543210.jpg"), png).expect("jpg");
+        std::fs::write(dir.join("1111111111111111.img"), b"<html>").expect("html");
+        assert_eq!(
+            image(&d.config, "0123456789abcdef.img"),
+            Ok("data:image/png;base64,iVBORw==".to_string())
+        );
+        assert_eq!(
+            image(&d.config, "fedcba9876543210.jpg"),
+            Ok("data:image/png;base64,iVBORw==".to_string())
+        );
+        assert_eq!(
+            image(&d.config, "1111111111111111.img"),
+            Err("Not a Pulse image.".to_string())
+        );
+    }
+
     /// A PC health card reads its verdict on the Ideas row and opens an
     /// options window from the desktop app's session ledger. The window
     /// leaves out the settings rows, which only the desktop app changes.
@@ -2243,5 +2392,74 @@ mod tests {
         let taste = card_taste::load(&d.config);
         assert_eq!(taste.events.len(), 1);
         assert_eq!(taste.events[0].reaction, Reaction::Like);
+    }
+
+    #[test]
+    fn an_old_written_post_without_a_report_has_no_more() {
+        let d = dirs("old-written", &[]);
+        let json = r#"{"id":"w","kind":"digest","title":"Async closures are stable","body":"Rust 1.99 makes [them stable](https://blog.rust-lang.org/).","sourceId":"pulse:writer:1","citations":["https://blog.rust-lang.org/"],"createdAt":1,"status":"unread"}"#;
+        let card: UpdateCard = serde_json::from_str(json).expect("an old post loads");
+        assert_eq!(card.pulse.report, None);
+        let p = post(&d.config, &card, &[], &[], NOW);
+        assert_eq!(p.more, "");
+        assert_eq!(
+            p.summary,
+            "Rust 1.99 makes [them stable](https://blog.rust-lang.org/)."
+        );
+        assert_eq!(p.title, "Async closures are stable");
+    }
+
+    #[test]
+    fn an_upgrade_card_names_its_model_and_a_release_card_only_links_out() {
+        use grokhub_core::local_model_news::{self as lm, Suggestion};
+        use grokhub_core::local_picker::{BenchCache, CpuSimd, Memory, Profile};
+        let d = dirs("local-model-post", &[]);
+        let gpu24 = Profile {
+            gpus_vram_mb: vec![24_576],
+            unified: false,
+            ram_mb: 32_768,
+            free_disk_mb: 200_000,
+            simd: CpuSimd::Avx2,
+            llama_build: Some(99_999),
+        };
+        let up = lm::upgrade(
+            &gpu24,
+            "gemma-4-12b-it-abliterated-q4_k",
+            &BenchCache::new(),
+        )
+        .expect("the 31B fits")
+        .card(5);
+        let p = post(&d.config, &up, &[], &[], NOW);
+        assert_eq!(p.model, "gemma-4-31b-it-abliterated-q4_k");
+        assert_eq!(p.link, "");
+        assert_eq!(p.title, "Gemma 4 31B fits this PC");
+        assert_eq!(p.source, "Local models");
+
+        let release = Suggestion::Release {
+            repo: "huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF".into(),
+            run_mb: 10_020,
+            budget_mb: 16_384,
+            mem: Memory::Gpu,
+            like: None,
+        }
+        .card(5);
+        let p = post(&d.config, &release, &[], &[], NOW);
+        assert_eq!(
+            p.link,
+            "https://huggingface.co/huihui-ai/Huihui-Qwen3-14B-abliterated-GGUF"
+        );
+        assert_eq!(p.model, "");
+
+        // A hand-edited card naming a model this app doesn't ship.
+        let mut edited = up.clone();
+        edited.action = Some(grokhub_core::UpdateAction::DeepLink {
+            href: "grokhub://local-model/not-a-model".into(),
+        });
+        assert_eq!(post(&d.config, &edited, &[], &[], NOW).model, "");
+        // The link alone isn't enough: only a Local models upgrade card offers it.
+        let mut other = edited.clone();
+        other.source_id = "release-radar:gemma".into();
+        other.action = up.action.clone();
+        assert_eq!(post(&d.config, &other, &[], &[], NOW).model, "");
     }
 }

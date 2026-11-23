@@ -237,45 +237,9 @@ pub fn take_text_body(s: &str) -> String {
     }
 }
 
-pub fn next_chat_image<'a>(user: Option<&'a str>, cabin: Option<&'a str>) -> Option<&'a str> {
-    user.filter(|s| !s.is_empty())
-        .or_else(|| cabin.filter(|s| !s.is_empty()))
-}
-
 /// Only a typed send / retry should consume the plus-button image.
 pub fn kick_consumes_attach(user_originated: bool) -> bool {
     user_originated
-}
-
-/// Only a frame captured on this turn may go to the model.
-/// A leftover desktop or webcam JPEG is not a this-turn capture.
-pub fn this_turn_cabin_frame(
-    eyes_turn: bool,
-    hands_turn: bool,
-    captured_this_turn: Option<&str>,
-) -> Option<&str> {
-    let url = captured_this_turn.filter(|s| !s.is_empty())?;
-    if crate::recipe::should_attach_hands_frame(eyes_turn, hands_turn, true) {
-        Some(url)
-    } else {
-        None
-    }
-}
-
-/// True when the pixel is a cabin/hands frame, not a user drop.
-pub fn cabin_frame_only(user: Option<&str>, cabin: Option<&str>) -> bool {
-    user.filter(|s| !s.is_empty()).is_none() && cabin.filter(|s| !s.is_empty()).is_some()
-}
-
-/// Request-only note so the model does not narrate “an image is attached”.
-pub fn cabin_eyes_request_text(user_text: &str) -> String {
-    const NOTE: &str = "Cabin eyes sent a desktop frame. Do not say an image is attached.";
-    let t = user_text.trim_end();
-    if t.is_empty() {
-        NOTE.to_string()
-    } else {
-        format!("{t}\n\n{NOTE}")
-    }
 }
 
 pub fn plus_menu_rows() -> &'static [(&'static str, PlusAct)] {
@@ -618,52 +582,10 @@ mod tests {
             take_text_body(&"x".repeat(TEXT_FILE_CAP + 8)).len(),
             TEXT_FILE_CAP
         );
-    }
-
-    #[test]
-    fn user_image_wins_over_cabin_frame() {
-        assert_eq!(
-            next_chat_image(Some("data:user"), Some("data:cabin")),
-            Some("data:user")
-        );
-        assert_eq!(
-            next_chat_image(None, Some("data:cabin")),
-            Some("data:cabin")
-        );
-        assert_eq!(
-            next_chat_image(Some(""), Some("data:cabin")),
-            Some("data:cabin")
-        );
-        assert_eq!(next_chat_image(None, None), None);
         assert!(kick_consumes_attach(true));
         assert!(
             !kick_consumes_attach(false),
             "followup/host/goal kicks must leave the attached image for the next send"
-        );
-        assert!(!cabin_frame_only(Some("data:user"), Some("data:cabin")));
-        assert!(cabin_frame_only(None, Some("data:cabin")));
-        assert!(cabin_frame_only(Some(""), Some("data:cabin")));
-        assert!(!cabin_frame_only(None, None));
-        assert_eq!(
-            cabin_eyes_request_text("what's in the bowl"),
-            "what's in the bowl\n\nCabin eyes sent a desktop frame. Do not say an image is attached."
-        );
-        assert_eq!(
-            cabin_eyes_request_text("  "),
-            "Cabin eyes sent a desktop frame. Do not say an image is attached."
-        );
-        assert_eq!(
-            this_turn_cabin_frame(true, false, None),
-            None,
-            "a failed capture must not attach a stale or webcam frame"
-        );
-        assert_eq!(
-            this_turn_cabin_frame(true, false, Some("data:cabin-now")),
-            Some("data:cabin-now")
-        );
-        assert_eq!(
-            this_turn_cabin_frame(false, false, Some("data:stale")),
-            None
         );
     }
 

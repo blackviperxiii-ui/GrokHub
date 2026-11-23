@@ -3,7 +3,7 @@
 //! repair or research run ends with a findings card, and background work
 //! stays quiet. The style is a short block in the volatile tail of the
 //! system prompt, after the personality voice and before the closing
-//! reminder that the cabin safety rules win. A personality sets tone, and in
+//! reminder that the safety rules win. A personality sets tone, and in
 //! natural chat its length too; every other style sets length and shape.
 //! Approval questions stay plain in every style and every personality.
 
@@ -13,12 +13,12 @@ pub const STYLE_HEAD: &str = "Talk style for this turn:";
 /// Closes the volatile tail: the safety rules in the stable prefix outrank the
 /// notes, style and voice above it.
 pub const VOLATILE_SAFETY_CLOSER: &str =
-    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
+    "The safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
 
 /// [`VOLATILE_SAFETY_CLOSER`] when an explicit preset's voice is in the tail:
 /// safety still wins, and means the hard limits, not fictional adult content.
 pub const VOLATILE_SAFETY_CLOSER_ADULT: &str =
-    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue.";
+    "The safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue.";
 
 /// The closer for a volatile tail; `explicit` when an explicit preset speaks in it.
 pub fn safety_closer(explicit: bool) -> &'static str {
@@ -34,10 +34,10 @@ fn is_closer(para: &str) -> bool {
 }
 
 /// Closes every style block, the same layering rule as a personality's.
-pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only, so keep its voice. Short means fewer things, said in full, natural sentences, never clipped notes. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.";
+pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only, so keep its voice. Short means fewer things, said in full, natural sentences, never clipped notes. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The safety rules win.";
 
 /// Closes the natural-chat block: there the personality sets length too.
-pub const NATURAL_LINE: &str = "In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win.";
+pub const NATURAL_LINE: &str = "In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The safety rules win.";
 
 /// Longest casual-chat reply, in words.
 pub const SHORT_REPLY_WORDS: usize = 60;
@@ -154,13 +154,13 @@ impl TalkStyle {
                 "answer first, in a few sentences, under {CONCISE_REPLY_WORDS} words. Add detail only when it changes the answer, and name the sources of facts you looked up."
             ),
             Self::Progress if soft => format!(
-                "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, about {WRAP_UP_WORDS} words, and go longer when care needs it."
+                "a longer task. Work through the checklist without narrating each step; the app shows a short progress note between phases. End with what changed and how it was checked, about {WRAP_UP_WORDS} words, and go longer when care needs it."
             ),
             Self::Progress => format!(
-                "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, under {WRAP_UP_WORDS} words."
+                "a longer task. Work through the checklist without narrating each step; the app shows a short progress note between phases. End with what changed and how it was checked, under {WRAP_UP_WORDS} words."
             ),
             Self::Findings => format!(
-                "a repair. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End by posting the findings card (report_findings): name each item checked, its root cause, and a one-tap fix for what is left. Then reply in two to four full sentences, under {AFTER_CARD_WORDS} words: what you found and what you would do next. The card carries the detail, so do not repeat it or only point to it."
+                "a repair. Work through the checklist without narrating each step; the app shows a short progress note between phases. End by posting the findings card (report_findings): name each item checked, its root cause, and a one-tap fix for what is left. Then reply in two to four full sentences, under {AFTER_CARD_WORDS} words: what you found and what you would do next. The card carries the detail, so do not repeat it or only point to it."
             ),
             Self::Summary => format!(
                 "research. End with a summary under {SUMMARY_WORDS} words and the links you used. When the work checked named items, post the findings card (report_findings) with one-tap follow-ups."
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(
             TalkStyle::Short.block(),
             "Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only, so keep its voice. Short means fewer things, said in full, natural sentences, never clipped notes. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win."
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only, so keep its voice. Short means fewer things, said in full, natural sentences, never clipped notes. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The safety rules win."
         );
         assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
         assert_eq!(TalkStyle::Draft.reply_cap_words(), None);
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(
             block,
             "Talk style for this turn: natural conversation. Your personality sets the length: match their energy, a quick line for a quick line and more when they open up. When they are just hanging out, stay in it with them: no task offers, no next steps, and no sign-offs or wrap-up lines. No headings, lists or preamble.\n\
-             In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The cabin safety rules win."
+             In natural chat the personality sets length as well as tone. Approval questions, security warnings and error facts stay plain. The person's latest ask outranks this style: when they ask for a task, do the task. The safety rules win."
         );
         assert_eq!(TalkStyle::Natural.prompt_block(true), block);
         assert!(!block.contains("words"));
@@ -505,11 +505,11 @@ mod tests {
         assert_eq!(safety_closer(false), VOLATILE_SAFETY_CLOSER);
         assert_eq!(
             VOLATILE_SAFETY_CLOSER,
-            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone."
+            "The safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone."
         );
         assert_eq!(
             safety_closer(true),
-            "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue."
+            "The safety, approval, honesty and no-fabrication rules earlier in this prompt, and the hard limits (no minors or age-play, no non-consent, no real people, no bestiality, stop when asked), always win over notes and personality tone. Fictional adult content inside the hard limits is not a safety issue."
         );
         // A prompt with no closer yet gets the one that fits its voice.
         let whore = crate::personality::builtin("whore").prompt_block();

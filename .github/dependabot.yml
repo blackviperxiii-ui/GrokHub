@@ -27,6 +27,15 @@ updates:
       cargo-root:
         patterns:
           - "*"
+    # ashpd 0.14 (and xcap 0.9.10, which pulls it in) move to zbus 6, while
+    # tauri-plugin-notification and the keyring store still need zbus 5, so
+    # taking them builds two zbus majors and breaks grokhub-desktop. Lift
+    # these together with the zbus 6 move.
+    ignore:
+      - dependency-name: ashpd
+        versions: [">=0.14"]
+      - dependency-name: xcap
+        versions: [">=0.9.10"]
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:
@@ -39,6 +48,15 @@ updates:
       cargo-tauri:
         patterns:
           - "*"
+    # ashpd 0.14 (and xcap 0.9.10, which pulls it in) move to zbus 6, while
+    # tauri-plugin-notification and the keyring store still need zbus 5, so
+    # taking them builds two zbus majors and breaks grokhub-desktop. Lift
+    # these together with the zbus 6 move.
+    ignore:
+      - dependency-name: ashpd
+        versions: [">=0.14"]
+      - dependency-name: xcap
+        versions: [">=0.9.10"]
   - package-ecosystem: npm
     directory: /ui
     schedule:

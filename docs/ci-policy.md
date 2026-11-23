@@ -49,18 +49,16 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | Job | Beta | Tag | Nightly | Manual on `beta` |
 |---|---|---|---|---|
 | `plan` | yes | yes | yes | yes |
-| `linux-bundle` | yes, cached | yes | yes ⁷ | yes, cached |
-| `windows-installer` (pack-script tests after Package) | yes, cached | yes, signed ⁸ | yes ⁷ | yes, cached |
 | `shell bundles` | ubuntu, windows; cached | 3 OS | 3 OS ⁷ | 3 OS, cached |
 | `publish` | `vX.Y.Z-beta.N` pre-release | release (Latest only for `vX.Y.Z`) | pre-release ⁷ | pre-release |
 
 7. The nightly skips everything after `plan` when `vX.Y.Z-beta.N` already exists, which means nothing new landed on `beta`.
-8. SignPath signs tag builds when its secrets are configured. Beta builds stay unsigned.
 
-- Rust caches (`linux-release`, `windows-release`, `shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
+- Rust caches (`shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
 - A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing, and the `guards` job fails when that call is missing or is not the first command for a tag (`scripts/ci-guards.sh`).
-- `publish` downloads only the `linux`, `windows` and `shell-*` artifacts, so the unsigned Windows files staged for SignPath never reach a release (`scripts/ci-guards.sh`).
+- `publish` downloads only the `shell-*` artifacts.
+- Windows and macOS ignore letter case in file names, and Linux CI doesn't. The `guards` job fails when two tracked names in one folder (files, folders or links) or two JS/TS import names differ only by case, because a Windows checkout keeps only one of them and the Windows `ui` build would load the wrong file (`scripts/ci-guards.sh`). An import name counts `games/index.tsx` as `games` too.
 - A manual run on any branch other than `beta` builds nothing.
 - Pull requests and pushes to `main` never run release.yml.
 
@@ -73,9 +71,18 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | `retarget.yml` | PRs opened against `main`. Moves them to `beta`. Builds nothing. |
 | `cards-sync.yml`, `claude.yml` | Bot workflows: schedule, issue, review and manual triggers. They build nothing. |
 
+## Live eval (offline by default)
+
+`cargo run -p grokhub-agent --example eval -- --live` is opt-in. It needs
+`GROKHUB_EVAL_API_KEY` and `--budget-usd` with `0 < amount <= 0.20`, and every
+model call is held under that dollar/token cap. Default PR CI, the merge
+queue, and push builds never pass `--live` or set that key: they stay on the
+offline dry-run path (and the separate `live_eval` example is manual only).
+
 ## Rules for workflow changes
 
 - Heavy jobs stay off pull requests: release builds, screenshots, packaging, macOS and full matrices. PRs run the light gate.
+- Never add `--live` or `GROKHUB_EVAL_API_KEY` to a required PR job.
 - Every job sets `timeout-minutes`.
 - `actions/upload-artifact` steps for CI evidence (smoke and deck screenshots) keep files for 7 days or less. release.yml's build artifacts only carry files to `publish`, and the files ship on the GitHub release.
 - Required check names (`fmt`, `guards`, `linux`, `windows`, `pii-guard`) don't change without the matching ruleset change.

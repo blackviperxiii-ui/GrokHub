@@ -2,11 +2,11 @@
 
 ## Owns
 - Local clustering of the user's own typed asks by intent (`same_topic`) and hour, then one Pulse Automate / Skill offer after `OFFER_MIN_COUNT` hits.
-- Pure rules in `crates/grokhub-core/src/ask_offers.rs`; cabin log + tick + dismiss in `ask_offers_ui.rs`. Asks stay in `{config}/ask-offers.json`.
+- Pure rules in `crates/grokhub-core/src/ask_offers.rs`; shell Pulse tick in `src-tauri/src/pulse_digests.rs`. Asks stay in `{config}/ask-offers.json`.
 
 ## Quick commands
 - `cargo test -p grokhub-core ask_offers --locked -- --test-threads=1`
-- `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app ask_offer -- --test-threads=1`
+- `GROKHUB_CONFIG=$(mktemp -d) cargo test --manifest-path src-tauri/Cargo.toml ask_offer -- --test-threads=1`
 
 ## Key files
 - `crates/grokhub-core/src/ask_offers.rs`: `append_ask`, `cluster_asks`, `offer_preview`, `build_offer_card`, `tick`, `dismiss_cluster`.

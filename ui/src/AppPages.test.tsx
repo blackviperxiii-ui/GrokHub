@@ -19,7 +19,7 @@ const api = vi.hoisted(() => ({
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn<() => Promise<Settings>>(),
   getMemory: vi.fn<() => Promise<MemoryNotes>>(),
-  getLastChat: vi.fn<() => Promise<null>>(),
+  getStartChat: vi.fn<() => Promise<null>>(),
   // False for a plain browser, true for the desktop app's own window.
   shell: false,
 }));
@@ -34,7 +34,7 @@ vi.mock("./api", async () => {
   return {
   ...chatTabApiStubs(),
   // No chat saved from an earlier launch.
-  getLastChat: api.getLastChat,
+  getStartChat: api.getStartChat,
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
   loadChat: vi.fn(),
@@ -42,6 +42,8 @@ vi.mock("./api", async () => {
   WEB: { ...api.CORE_ONLY, pulse: true, remote: true },
   getCapabilities: api.getCapabilities,
   getSettings: api.getSettings,
+  saveDockLayout: () => Promise.resolve(settings()),
+  setDockPanels: () => Promise.resolve(settings()),
   getMemory: api.getMemory,
   getMemoryFiles: () =>
     Promise.resolve({
@@ -95,6 +97,8 @@ function settings(over: Partial<Settings> = {}): Settings {
     version: "3.1.0",
     summonHotkey: false,
     notifications: true,
+    dockPanels: false,
+    dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
     ...over,
   };
 }
@@ -103,6 +107,54 @@ function tab(name: string) {
   return within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name });
 }
 
+/** Opens a page that is not on the rail, through More. */
+async function openPage(name: string) {
+  await userEvent.click(tab("More"));
+  await userEvent.click(await within(screen.getByRole("dialog", { name: "More pages" })).findByRole("option", { name }));
+}
+
+describe("App pages with dockable panels", () => {
+  beforeEach(() => {
+    api.chatHandlers.length = 0;
+    api.sentTo.length = 0;
+    api.getCapabilities.mockReset().mockResolvedValue(api.CORE_ONLY);
+    api.getSettings.mockReset().mockResolvedValue(settings());
+    api.getMemory.mockReset();
+    api.getStartChat.mockReset().mockResolvedValue(null);
+    api.shell = false;
+  });
+
+  it("off: pages render as they always have, with no dock", async () => {
+    api.shell = true;
+    const { container } = render(<App />);
+    expect(await screen.findByRole("navigation", { name: "Views" })).toBeInTheDocument();
+    expect(container.querySelector(".dock")).toBeNull();
+  });
+
+  it("on: a saved two-pane layout shows both pages side by side", async () => {
+    api.shell = true;
+    api.getSettings.mockResolvedValue(
+      settings({
+        dockPanels: true,
+        dockLayout: {
+          panes: [
+            { id: "left", tabs: ["chat"], active: 0, share: 500 },
+            { id: "right", tabs: ["automations"], active: 0, share: 500 },
+          ],
+          focused: 0,
+        },
+      }),
+    );
+    const { container } = render(<App />);
+    await waitFor(() => expect(container.querySelectorAll(".dock-pane")).toHaveLength(2));
+    // Chat's tab in one pane, Automations' in the other; the pages this
+    // window has but the layout had not placed fold into the focused pane.
+    expect(screen.getByRole("tab", { name: "Chat" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Automations" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Skills" })).toBeInTheDocument());
+  });
+});
+
 describe("App pages", () => {
   beforeEach(() => {
     api.chatHandlers.length = 0;
@@ -110,11 +162,11 @@ describe("App pages", () => {
     api.getCapabilities.mockReset().mockResolvedValue(api.CORE_ONLY);
     api.getSettings.mockReset().mockResolvedValue(settings());
     api.getMemory.mockReset();
-    api.getLastChat.mockReset().mockResolvedValue(null);
+    api.getStartChat.mockReset().mockResolvedValue(null);
     api.shell = false;
   });
 
-  // The desktop refuses get_last_chat from a browser, so the web app must not
+  // The desktop refuses get_start_chat from a browser, so the web app must not
   // ask for it, not even in the render before its capabilities arrive.
   it("a browser never asks the desktop for the last chat", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, pulse: true, remote: true });
@@ -122,16 +174,16 @@ describe("App pages", () => {
     await waitFor(() => expect(api.getCapabilities).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("navigation", { name: "Views" })).toBeInTheDocument();
     await act(() => new Promise<void>((done) => setTimeout(done, 0)));
-    expect(api.getLastChat).toHaveBeenCalledTimes(0);
+    expect(api.getStartChat).toHaveBeenCalledTimes(0);
   });
 
   it("the desktop app asks for the last chat once", async () => {
     api.shell = true;
     render(<App />);
     expect(await screen.findByRole("navigation", { name: "Views" })).toBeInTheDocument();
-    await waitFor(() => expect(api.getLastChat).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getStartChat).toHaveBeenCalledTimes(1));
     await act(() => new Promise<void>((done) => setTimeout(done, 0)));
-    expect(api.getLastChat).toHaveBeenCalledTimes(1);
+    expect(api.getStartChat).toHaveBeenCalledTimes(1);
   });
 
   it("Settings keeps an unsaved edit after Chat, and an untouched field takes the fresh value", async () => {
@@ -169,7 +221,7 @@ describe("App pages", () => {
     expect(within(nav).getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     // The way out names the screen it goes back to.
     await userEvent.click(screen.getByRole("button", { name: "Back to Chat" }));
-    expect(tab("Chat")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("a reply that streams in while Settings shows is in the chat log", async () => {
@@ -200,13 +252,13 @@ describe("App pages", () => {
     };
     api.getMemory.mockResolvedValue(notes);
     render(<App />);
-    await userEvent.click(tab("Personal"));
+    await openPage("Personal");
     const project = await screen.findByLabelText("Project notes");
     await userEvent.type(project, "half typed");
 
     api.getMemory.mockResolvedValue({ ...notes, global: "I like long answers\n" });
     await userEvent.click(tab("Chat"));
-    await userEvent.click(tab("Personal"));
+    await openPage("Personal");
 
     await waitFor(() => expect(screen.getByLabelText("Global notes")).toHaveValue("I like long answers\n"));
     expect(screen.getByLabelText("Project notes")).toHaveValue("the build needs node 22\nhalf typed");

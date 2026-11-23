@@ -12,13 +12,17 @@ mod html_md;
 mod list_dir;
 pub(crate) mod local_ai;
 mod lock;
-mod media;
+pub(crate) mod media;
 mod models_check;
 pub(crate) mod mods;
 pub(crate) mod ports;
+pub(crate) mod ptc;
 mod read_file;
 pub(crate) mod registry;
+pub(crate) mod run_routine;
+pub(crate) mod save_routine;
 mod search_replace;
+mod session_search;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
@@ -33,7 +37,8 @@ pub use registry::Settings as DeferredToolsSettings;
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
 pub use web_search::{
-    brave_key_present, seal_brave_key, Backend as WebSearchBackend, Settings as WebSearchSettings,
+    brave_key_present, seal_brave_key, searxng_url_problem, Backend as WebSearchBackend,
+    Settings as WebSearchSettings, BACKENDS as WEB_SEARCH_BACKENDS,
 };
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
@@ -160,7 +165,8 @@ pub fn note_turn_brief(session: &str, brief: &crate::brain::Brief) {
     registry::note_brief(session, brief);
 }
 
-pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
+/// A read-only tool for `session`'s chat, off the loop's thread.
+pub fn execute(workspace: &Path, session: &str, name: &str, arguments: &str) -> ToolOutput {
     if !is_readonly(name) {
         return ToolOutput::err(gate::readonly_refusal(name));
     }
@@ -168,6 +174,9 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         Ok(args) => args,
         Err(output) => return output,
     };
+    if let Some(refused) = crate::scratch::refuse_tool(session, name, &args) {
+        return ToolOutput::err(refused);
+    }
     let stop = || false;
     let ctx = ToolCtx {
         workspace,
@@ -175,7 +184,7 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         stop: &stop,
         tasks: None,
         owner: None,
-        session: None,
+        session: Some(session),
     };
     dispatch_readonly(&ctx, name, &args)
 }
@@ -206,6 +215,12 @@ pub fn dispatch_for_job(
         Ok(args) => args,
         Err(output) => return output,
     };
+    if let Some(refused) = ctx
+        .session
+        .and_then(|session| crate::scratch::refuse_tool(session, name, &args))
+    {
+        return ToolOutput::err(refused);
+    }
     if name == registry::LOAD_TOOL_SCHEMA {
         return registry::run_load_tool_schema(&args);
     }
@@ -231,6 +246,8 @@ pub fn dispatch_for_job(
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
+        run_routine::NAME => run_routine::run(ctx, &args),
+        save_routine::NAME => save_routine::run(ctx, &args),
         "connection_delete" => connections::delete(&args),
         local_ai::SELFTEST => local_ai::selftest(&args),
         mods::PREPARE => mods::run(name, &args),
@@ -321,6 +338,10 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
     match name {
         "read_file" => read_file::run(ctx.workspace, args),
         "list_dir" => list_dir::run(ctx.workspace, args),
+        // A scratch chat's search skips every MEMORY.md.
+        "grep" if ctx.session.is_some_and(crate::scratch::is_scratch) => {
+            grep::run_in(ctx.workspace, args, true)
+        }
         "grep" => grep::run(ctx.workspace, args),
         "glob" => glob::run(ctx.workspace, args),
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
@@ -331,6 +352,8 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "diagnose" => crate::repair::tool_run(args),
         local_ai::STATUS => local_ai::status(args),
         models_check::NAME => models_check::run(args),
+        session_search::NAME => session_search::run(ctx.session, args),
+        ptc::NAME => ptc::run(ctx, args),
         mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
@@ -428,6 +451,49 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(acc)
 }
 
+/// The consent ledger or the routine consent store, which only the
+/// person's click writes. The write and edit tools refuse them however the
+/// path is spelled, through a symlinked folder too; a file of the same name
+/// in a project is fine.
+pub(crate) fn person_only_file(config_dir: &Path, path: &Path) -> Option<String> {
+    let real = resolved(path)?;
+    let stores = [
+        crate::harness::consent_path(config_dir),
+        crate::routine_consent::path(config_dir),
+    ];
+    stores
+        .iter()
+        .any(|s| resolved(s).as_ref() == Some(&real) || same_file(s, path))
+        .then(|| "only your click changes the consent files".to_string())
+}
+
+/// Two names for one file, as a hard link makes.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file(_: &Path, _: &Path) -> bool {
+    false
+}
+
+/// `path` with its folder's symlinks resolved, in lowercase for file
+/// systems that ignore case. The file itself may not exist yet.
+fn resolved(path: &Path) -> Option<String> {
+    let folder = path.parent()?.canonicalize().ok()?;
+    Some(
+        folder
+            .join(path.file_name()?)
+            .to_string_lossy()
+            .to_lowercase(),
+    )
+}
+
 /// A native tool's full schema by name, whatever the gate or the deferred
 /// index say: the caller decides whether it is offered.
 pub(crate) fn native_schema(name: &str) -> Option<Value> {
@@ -440,27 +506,35 @@ pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
     Ok(media::build_media_call("image_generate", args)?.body)
 }
 
-pub use media::{imagine_client, run_media_tool, ImagineApi};
+pub use media::{imagine_client, run_media_tool, ImagineApi, ImagineSource};
+pub use show_panel::SHOW_PANEL;
 
-/// Install fetch and Imagine clients for this thread. An empty bearer installs
-/// adapters that refuse without dialing. The guard restores the previous ports.
-/// `session` picks the media folder (`sessions/<id>/media`).
-pub(crate) fn install_network(bearer: &str, session: &str) -> ports::Guard {
-    let bearer = bearer.trim();
-    let media_dir = crate::session::media_dir(session).ok();
-    if bearer.is_empty() {
-        ports::enter(ports::Ports {
-            fetch: Some(Arc::new(web_fetch::BlockedFetch)),
-            imagine: Some(Arc::new(media::BlockedImagine)),
-            media_dir,
-        })
-    } else {
-        ports::enter(ports::Ports {
-            fetch: Some(Arc::new(web_fetch::UreqFetch::new())),
-            imagine: Some(Arc::new(media::UreqImagine::new(bearer.to_string()))),
-            media_dir,
-        })
-    }
+/// `web_fetch` and `web_search` outside a turn that installed the network:
+/// neither needs a sign-in, so the note names none.
+pub(crate) const NO_WEB_PORT: &str = "Web access isn't set up for this run.";
+
+/// Install fetch and Imagine clients for this thread. `web_fetch` and
+/// `web_search` never send the bearer, so they work without one; each hop still
+/// passes the permission gate, the public-only resolver and the egress guard.
+/// `None` leaves Imagine unset, so a picture falls back to the on-device model
+/// or asks to sign in. A source gets a fresh lazy client for this prompt: its
+/// bearer is read on the first media call, never before. The guard restores
+/// the previous ports. `session` picks the media folder (`sessions/<id>/media`).
+pub(crate) fn install_network(
+    imagine: Option<&Arc<dyn ImagineSource>>,
+    session: &str,
+) -> ports::Guard {
+    let imagine = imagine.map(|source| {
+        Arc::new(media::LazyImagine::new(
+            Arc::clone(source),
+            Box::new(media::dial_xai),
+        )) as Arc<dyn ImagineApi>
+    });
+    ports::enter(ports::Ports {
+        fetch: Some(Arc::new(web_fetch::UreqFetch::new())),
+        imagine,
+        media_dir: crate::session::media_dir(session).ok(),
+    })
 }
 
 pub fn str_field(v: &Value, key: &str) -> String {
@@ -514,6 +588,49 @@ mod arg_roundtrip_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::IpAddr;
+    use web_fetch::PageFetch;
+
+    #[test]
+    fn web_fetch_works_without_a_bearer_and_imagine_waits_for_one() {
+        let tmp = std::env::temp_dir().join(format!(
+            "grokhub-install-network-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _cfg = crate::perm::ConfigGuard::set(&tmp);
+        let _offline = grokhub_core::offline::force_for_thread(false);
+        let one = Ok(vec![IpAddr::from([1, 1, 1, 1])]);
+        {
+            let _g = install_network(None, "s");
+            let p = ports::current();
+            assert_eq!(p.fetch.expect("fetch").resolve("1.1.1.1", 443), one);
+            assert!(p.imagine.is_none(), "no Imagine without a sign-in");
+        }
+        let src = Arc::new(media::tests::FakeSource::signed_in());
+        let source: Arc<dyn ImagineSource> = src.clone();
+        let _g = install_network(Some(&source), "s");
+        let p = ports::current();
+        assert_eq!(p.fetch.expect("fetch").resolve("1.1.1.1", 443), one);
+        assert!(p.imagine.is_some());
+        assert!(src.calls().is_empty(), "installing reads no sign-in");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn offline_only_refuses_before_any_dns_lookup() {
+        let _offline = grokhub_core::offline::force_for_thread(true);
+        let fetch = web_fetch::UreqFetch::new();
+        assert_eq!(
+            fetch.resolve("example.com", 443),
+            Err(grokhub_core::offline::OFFLINE_MSG.to_string())
+        );
+        assert_eq!(
+            fetch.resolve("127.0.0.1", 443),
+            Ok(vec![IpAddr::from([127, 0, 0, 1])]),
+            "this computer still resolves"
+        );
+    }
 
     #[test]
     fn tool_path_arg_reads_each_path_tool() {
@@ -616,7 +733,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gh-tools-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let out = execute(&dir, "write", r#"{"path":"x.txt","content":"no"}"#);
+        let out = execute(
+            &dir,
+            "shell-a-b",
+            "write",
+            r#"{"path":"x.txt","content":"no"}"#,
+        );
         assert!(out.failed);
         assert!(out.text.contains(READ_ONLY_PHASE));
         assert!(!dir.join("x.txt").exists());
@@ -627,7 +749,7 @@ mod tests {
             "bash",
             "run_terminal_command",
         ] {
-            let out = execute(&dir, name, "{}");
+            let out = execute(&dir, "shell-a-b", name, "{}");
             assert!(out.text.contains(READ_ONLY_PHASE), "{name}");
         }
         assert!(confine(&dir, "../outside").is_err());
@@ -653,5 +775,35 @@ mod tests {
         assert!(confine(&dir, "leak").is_err());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_write_tools_never_reach_the_consent_files_however_the_path_reads() {
+        let home = std::env::temp_dir().join(format!("person-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let config = home.join(".config/GrokHub");
+        std::fs::create_dir_all(config.join("routines")).unwrap();
+        std::fs::create_dir_all(home.join("src/routines")).unwrap();
+        std::os::unix::fs::symlink(config.join("routines"), home.join("rr")).unwrap();
+        let refused = |rel: &str| person_only_file(&config, &confine(&home, rel).unwrap());
+        let why = Some("only your click changes the consent files".to_string());
+        assert_eq!(refused(".config/GrokHub/routines/consent.json"), why);
+        assert_eq!(refused(".config/GrokHub/routines/Consent.JSON"), why);
+        assert_eq!(refused(".config/GrokHub/consent.jsonl"), why);
+        // Through a symlink to the routines folder.
+        assert_eq!(refused("rr/consent.json"), why);
+        // Through a hard link to the store.
+        std::fs::write(config.join("routines/consent.json"), "{}").unwrap();
+        std::fs::hard_link(
+            config.join("routines/consent.json"),
+            home.join("notes.json"),
+        )
+        .unwrap();
+        assert_eq!(refused("notes.json"), why);
+        // A project's own file of the same name.
+        assert_eq!(refused("src/routines/consent.json"), None);
+        assert_eq!(refused(".config/GrokHub/routines/note/routine.json"), None);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

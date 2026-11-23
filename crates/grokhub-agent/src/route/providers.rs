@@ -74,6 +74,30 @@ const BODY_CAP: u64 = 8 * 1024 * 1024;
 /// Provider ids GrokHub keeps for itself.
 const RESERVED_IDS: &[&str] = &["xai", "local", "grok_build", "grok", "x"];
 
+/// A key saved in the provider keys' vault that isn't a provider's. Provider
+/// keys are saved under the provider's id, so no provider may take one of
+/// these accounts: [`parse_base_url`] refuses them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedKey {
+    /// Web search through Brave (Settings → AI models → Web search).
+    BraveSearch,
+    /// The GitHub personal access token (Connectors → GitHub).
+    GithubToken,
+}
+
+impl NamedKey {
+    pub const ALL: [NamedKey; 2] = [NamedKey::BraveSearch, NamedKey::GithubToken];
+
+    /// The keyring account. The GitHub one has a dot, which no provider id
+    /// can hold; the Brave one keeps the name older versions saved under.
+    pub const fn account(self) -> &'static str {
+        match self {
+            Self::BraveSearch => "cabin-web-search-brave",
+            Self::GithubToken => "connectors.github-pat",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -208,7 +232,10 @@ pub fn parse_base_url(raw: &str) -> Result<(String, ProviderKind, String), Strin
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect::<String>()
         .to_ascii_lowercase();
-    if id.is_empty() || RESERVED_IDS.contains(&id.as_str()) {
+    if id.is_empty()
+        || RESERVED_IDS.contains(&id.as_str())
+        || NamedKey::ALL.iter().any(|k| k.account() == id)
+    {
         return Err("That provider name is reserved.".into());
     }
     Ok((url.to_string(), kind, id))
@@ -418,12 +445,15 @@ pub fn openrouter_auth_url(callback: &str, challenge: &str, state: &str) -> Stri
 /// new key. Nothing is saved here: the cabin asks you on a credentials card
 /// first. The callback must carry this sign-in's `state`, and the code only
 /// buys a key together with this verifier (PKCE). The exchange carries no
-/// user data.
+/// user data. The wait ends early, with nothing bought, once `stop` says so.
 pub fn openrouter_key(
     config_dir: &Path,
     open: &dyn Fn(&str) -> Result<(), String>,
     wait: Duration,
+    stop: &dyn Fn() -> bool,
 ) -> Result<Zeroizing<String>, String> {
+    // Offline only: no browser page and no port, not a refusal after signing in.
+    grokhub_core::offline::check_url(OPENROUTER_KEYS).map_err(String::from)?;
     let (listener, redirect) = crate::loopback::bind()?;
     let verifier = grokhub_core::pkce::pkce_verifier();
     let state = grokhub_core::pkce::oauth_nonce();
@@ -432,7 +462,8 @@ pub fn openrouter_key(
         &grokhub_core::pkce::pkce_challenge(&verifier),
         &state,
     ))?;
-    let code = crate::loopback::wait_code(&listener, &state, "OpenRouter sign-in", wait)?;
+    let code =
+        crate::loopback::wait_code_until(&listener, &state, "OpenRouter sign-in", wait, stop)?;
     crate::harness::guard_quiet(config_dir, &EgressReq::new(OPENROUTER_KEYS, &[]))?;
     let body = json!({"code": code, "code_verifier": verifier, "code_challenge_method": "S256"})
         .to_string();
@@ -470,27 +501,25 @@ pub trait KeyVault: Send + Sync {
 /// The OS keyring through `keyring` 4: Secret Service, Windows Credential Manager, Keychain.
 pub struct OsKeyVault;
 
+fn keyvault_message(err: keyring::Error) -> String {
+    err.to_string()
+}
+
+fn keyvault_backend() -> crate::keyring_blob::OsBackend {
+    crate::keyring_blob::OsBackend::new(KEY_SERVICE, keyvault_message)
+}
+
 impl KeyVault for OsKeyVault {
     fn get(&self, id: &str) -> Result<Option<Zeroizing<String>>, String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, id).map_err(|e| e.to_string())?;
-        match entry.get_password() {
-            Ok(k) => Ok(Some(Zeroizing::new(k))),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(crate::keyring_blob::get(&keyvault_backend(), id)?.map(Zeroizing::new))
     }
 
     fn set(&self, id: &str, key: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, id).map_err(|e| e.to_string())?;
-        entry.set_password(key).map_err(|e| e.to_string())
+        crate::keyring_blob::set(&keyvault_backend(), id, key)
     }
 
     fn delete(&self, id: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, id).map_err(|e| e.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        crate::keyring_blob::delete(&keyvault_backend(), id)
     }
 }
 
@@ -588,6 +617,27 @@ fn vault_for(config_dir: &Path) -> Option<Arc<dyn KeyVault>> {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     })
+}
+
+/// A key under its own keyring account (not a provider's), such as the Brave
+/// Search key. A blank stored value reads as none.
+pub fn named_key(config_dir: &Path, key: NamedKey) -> Result<Option<Zeroizing<String>>, String> {
+    let vault = vault_for(config_dir).ok_or_else(|| KEYRING_OFF.to_string())?;
+    Ok(vault.get(key.account())?.filter(|k| !k.trim().is_empty()))
+}
+
+/// Save a key under its own keyring account; empty (after trimming) deletes it.
+pub fn set_named_key(config_dir: &Path, key: NamedKey, value: &str) -> Result<(), String> {
+    let vault = vault_for(config_dir).ok_or_else(|| KEYRING_OFF.to_string())?;
+    let account = key.account();
+    let value = value.trim();
+    let done = if value.is_empty() {
+        vault.delete(account)
+    } else {
+        vault.set(account, value)
+    };
+    forget_key_cache(config_dir, account);
+    done.map_err(|_| KEYRING_OFF.to_string())
 }
 
 fn forget_key_cache(config_dir: &Path, id: &str) {

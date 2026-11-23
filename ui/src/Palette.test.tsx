@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, QuickChip } from "./api";
-import { hasPage, NO_SOURCES, Palette, paletteRows, type PaletteExtras, type PaletteSources } from "./Palette";
+import { hasPage, moreViews, NO_SOURCES, Palette, paletteRows, railViews, type PaletteExtras, type PaletteSources } from "./Palette";
 import { answersTo, PALETTE_SYNONYMS, shellKeys, type ChatHit, type CommandRunners } from "./paletteCommands";
 
 vi.mock("./api", () => ({}));
@@ -51,7 +51,9 @@ describe("paletteRows", () => {
       "Connectors",
       "Workboard",
       "Devices",
+      "Fleet",
       "Library",
+      "Updates & Drivers",
       "Settings",
       "Settings: General",
       "Settings: Account",
@@ -85,6 +87,7 @@ describe("paletteRows", () => {
       "Skills",
       "Connectors",
       "Workboard",
+      "Updates & Drivers",
       "Settings",
       "Settings: General",
       "Settings: Account",
@@ -139,7 +142,7 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(13, 16)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(14, 17)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Home",
       "Objectives",
@@ -202,7 +205,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(16, 22)).toEqual([
+    expect(rows.slice(17, 23)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -225,10 +228,77 @@ describe("hasPage", () => {
     expect(hasPage(DESKTOP, "devices")).toBe(true);
     expect(hasPage(PHONE, "devices")).toBe(false);
     expect(hasPage({ ...DESKTOP, remote: true }, "devices")).toBe(false);
+    expect(hasPage(DESKTOP, "fleet")).toBe(true);
+    expect(hasPage(PHONE, "fleet")).toBe(false);
+    expect(hasPage({ ...DESKTOP, remote: true }, "fleet")).toBe(false);
     expect(hasPage(DESKTOP, "updates")).toBe(true);
     expect(hasPage(WEB, "updates")).toBe(false);
     expect(hasPage(WEB, "workboard")).toBe(true);
     expect(hasPage(WEB, "history")).toBe(false);
+  });
+});
+
+describe("the rail and its More list", () => {
+  it("puts six pages on the rail and the rest under More, by platform", () => {
+    expect(railViews(DESKTOP)).toEqual(["home", "chat", "pulse", "library", "settings"]);
+    expect(railViews({ ...DESKTOP, code: true })).toEqual(["home", "chat", "code", "pulse", "library", "settings"]);
+    expect(railViews(WEB)).toEqual(["home", "chat", "settings"]);
+    expect(moreViews(DESKTOP)).toEqual([
+      "objectives",
+      "history",
+      "imagine",
+      "journal",
+      "automations",
+      "agents",
+      "memory",
+      "skills",
+      "connectors",
+      "workboard",
+      "devices",
+      "fleet",
+      "updates",
+    ]);
+    expect(moreViews(WEB)).toEqual(["objectives", "imagine", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
+  });
+
+  it("lists only the given pages: no suggestions, commands, chats, sections or Ask", () => {
+    const extras = { ...EXTRAS, chips: [PLAN], chats: [{ id: "c1", title: "Journal trip" }], only: moreViews(DESKTOP) };
+    expect(withExtras(DESKTOP, "", extras)).toEqual([
+      "Objectives",
+      "History",
+      "Imagine",
+      "Journal",
+      "Automations",
+      "Agents",
+      "Personal",
+      "Skills",
+      "Connectors",
+      "Workboard",
+      "Devices",
+      "Fleet",
+      "Updates & Drivers",
+    ]);
+    expect(withExtras(DESKTOP, "jour", extras)).toEqual(["Journal"]);
+    expect(withExtras(DESKTOP, "zzz", extras)).toEqual([]);
+  });
+
+  it("opens as More pages, and an empty match says so without picking", async () => {
+    const onPick = vi.fn();
+    const onClose = vi.fn();
+    render(<Palette caps={DESKTOP} only={moreViews(DESKTOP)} onPick={onPick} onClose={onClose} />);
+    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
+    const search = screen.getByRole("combobox", { name: "Search pages" });
+    expect(search).toHaveAttribute("aria-activedescendant", "palette-row-0");
+    await userEvent.type(search, "zzz");
+    expect(screen.queryAllByRole("option")).toEqual([]);
+    expect(screen.getByText("No page matches “zzz”.")).toBeInTheDocument();
+    expect(search).not.toHaveAttribute("aria-activedescendant");
+    await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+    expect(onPick).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.clear(search);
+    await userEvent.type(search, "upd{Enter}");
+    expect(onPick).toHaveBeenCalledExactlyOnceWith({ kind: "view", view: "updates" });
   });
 });
 
@@ -246,18 +316,24 @@ describe("paletteRows suggestions", () => {
 });
 
 describe("shellKeys", () => {
-  it("lists the palette, the commands the shell can run, Settings and the chat box", () => {
+  it("lists the palette, the commands the shell can run, Settings, the chat and the chat box", () => {
     expect(shellKeys(DESKTOP, { "new-chat": run, shortcuts: run, "sign-in": run })).toEqual([
       { keys: "Ctrl+K", action: "Command palette" },
       { keys: "Ctrl+N", action: "New chat" },
       { keys: "Ctrl+/", action: "This sheet" },
       { keys: "Ctrl+,", action: "Settings" },
+      { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)" },
+      { keys: "Ctrl+Shift+A", action: "Archive or unarchive this chat" },
       { keys: "Enter", action: "Send message" },
       { keys: "Shift+Enter", action: "New line" },
       { keys: "Esc", action: "Close the palette or this sheet" },
     ]);
     expect(shellKeys(DESKTOP, ALL_RUNNERS)[2]).toEqual({ keys: "Ctrl+Alt+H", action: "Halt" });
     expect(shellKeys(PHONE, ALL_RUNNERS).map((k) => k.keys)).not.toContain("Ctrl+Alt+H");
+    // The web app finds in the chat but has no chat tabs to archive.
+    const web = shellKeys({ ...DESKTOP, remote: true }, ALL_RUNNERS).map((k) => k.keys);
+    expect(web).toContain("Ctrl+F");
+    expect(web).not.toContain("Ctrl+Shift+A");
   });
 });
 
@@ -398,8 +474,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 23, the last, ends at 956.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 856, behavior: "auto" });
+      // Row 24, the last, ends at 996.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 896, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

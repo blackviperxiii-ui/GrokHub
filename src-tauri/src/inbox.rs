@@ -49,13 +49,18 @@ fn clip(text: &str) -> String {
 /// The plain-words line for one ask, mirroring the cabin inbox's words.
 fn ask_words(ui: &UiEvent) -> Option<(String, bool)> {
     match ui {
-        UiEvent::Permission { title, action, .. } => Some((
+        UiEvent::Permission {
+            title,
+            action,
+            hard,
+            ..
+        } => Some((
             if action.trim().is_empty() {
                 title.clone()
             } else {
                 format!("{title}: {action}")
             },
-            false,
+            *hard,
         )),
         UiEvent::Elicit {
             server, message, ..
@@ -243,6 +248,8 @@ mod tests {
             title: "run_command".into(),
             action: "cargo test".into(),
             reason: "check the fix".into(),
+            asks_every_time: false,
+            hard: false,
         }
     }
 
@@ -260,6 +267,41 @@ mod tests {
         assert!(!rows[0].hard);
         noted.answered("chat-1", "c1");
         assert!(build(&config, noted.all(), Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn a_hard_permission_is_a_hard_row_and_a_helpers_delete_is_too() {
+        let config = temp_dir("hard-permission");
+        let noted = Noted::default();
+        noted.note(
+            "chat-1",
+            &UiEvent::Permission {
+                id: "c1".into(),
+                title: "run_terminal_command".into(),
+                action: "rm -rf ~/old".into(),
+                reason: String::new(),
+                asks_every_time: false,
+                hard: true,
+            },
+        );
+        let rows = build(&config, noted.all(), Vec::new());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "permission");
+        assert!(rows[0].hard);
+        // A helper agent's ask doesn't say: its command line is read instead.
+        let helper = |action: &str| grokhub_core::wire::PermissionAsk {
+            rpc_id: serde_json::Value::Null,
+            session_id: "s".into(),
+            title: "run_command".into(),
+            tool_call_id: "h1".into(),
+            action: action.into(),
+            reason: String::new(),
+            reject_option: None,
+            hard: false,
+        };
+        assert!(crate::agent::ask_is_hard(&helper("rm -rf ~/old")));
+        assert!(!crate::agent::ask_is_hard(&helper("cargo test")));
+        let _ = std::fs::remove_dir_all(&config);
     }
 
     #[test]

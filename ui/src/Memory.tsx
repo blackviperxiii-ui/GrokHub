@@ -7,6 +7,7 @@ import {
   approveMemoryRow,
   dismissMemoryRawTidy,
   editMemoryRow,
+  exportMemoryWiki,
   exportPersonal,
   forgetMemoryRow,
   getMemory,
@@ -316,6 +317,14 @@ export function Memory() {
     }
   }
 
+  async function exportWiki() {
+    try {
+      ok(await exportMemoryWiki());
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function wipe() {
     setBusy(true);
     try {
@@ -535,6 +544,9 @@ export function Memory() {
           <button type="button" className="quiet" onClick={() => void exportCopy()}>
             Export to Downloads
           </button>
+          <button type="button" className="quiet" onClick={() => void exportWiki()}>
+            Update wiki
+          </button>
           {wipeAsk ? (
             <ConfirmRow
               question="Wipe everything?"
@@ -669,7 +681,7 @@ export function Memory() {
         )}
         {notes.amr && (
           <p className="note">
-            The cabin keeps memory in its AMR store, so chat recall does not read these files.
+            Memory is kept in the AMR store, so chat recall does not read these files.
           </p>
         )}
         <details open>

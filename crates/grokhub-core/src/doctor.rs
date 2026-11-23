@@ -1,14 +1,25 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorLine {
     pub ok: bool,
     pub text: String,
 }
 
-pub fn doctor_lines(has_key: bool, memory_dir_ok: bool, hub_kind: &str) -> Vec<DoctorLine> {
+/// Service rows for doctor / diagnostics. `has_key` is an xAI sign-in or
+/// key. `other_ai` is a provider key or a local model that can answer — xAI
+/// is one source, not a requirement (same idea as the shell's `ai_ready`).
+pub fn doctor_lines(
+    has_key: bool,
+    other_ai: bool,
+    memory_dir_ok: bool,
+    hub_kind: &str,
+) -> Vec<DoctorLine> {
     vec![
         DoctorLine {
-            ok: has_key,
+            ok: has_key || other_ai,
             text: if has_key {
                 "xAI auth present".into()
+            } else if other_ai {
+                "xAI auth missing — another AI source can answer".into()
             } else {
                 "xAI auth missing — Connect Grok OAuth in Settings".into()
             },
@@ -110,18 +121,27 @@ mod tests {
 
     #[test]
     fn doctor_fails_without_key() {
-        let lines = doctor_lines(false, true, HUB_KIND);
+        let lines = doctor_lines(false, false, true, HUB_KIND);
         assert!(!doctor_ok(&lines));
         assert!(lines[0].text.contains("Connect Grok"));
     }
 
     #[test]
+    fn doctor_passes_when_another_ai_source_answers() {
+        let lines = doctor_lines(false, true, true, HUB_KIND);
+        assert!(doctor_ok(&lines));
+        assert!(lines[0].text.contains("another AI source can answer"));
+        assert!(!lines[0].text.contains("Connect Grok"));
+    }
+
+    #[test]
     fn doctor_ok_when_ready() {
-        let lines = doctor_lines(true, true, HUB_KIND);
+        let lines = doctor_lines(true, false, true, HUB_KIND);
         assert!(doctor_ok(&lines));
         assert_eq!(hub_kind_from_health(None), "unreachable");
         assert!(!doctor_ok(&doctor_lines(
             true,
+            false,
             true,
             &hub_kind_from_health(None)
         )));
@@ -132,7 +152,7 @@ mod tests {
             HUB_KIND
         );
         assert_eq!(hub_kind_from_health(Some("not-json")), "unknown");
-        assert!(!doctor_ok(&doctor_lines(true, true, "unknown")));
+        assert!(!doctor_ok(&doctor_lines(true, false, true, "unknown")));
         let extra = doctor_extras(Some(false), 3);
         assert!(!doctor_ok(&extra));
         assert!(extra[1].text.contains("3 skills"));

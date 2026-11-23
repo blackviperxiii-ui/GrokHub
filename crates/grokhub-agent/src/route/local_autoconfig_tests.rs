@@ -145,6 +145,7 @@ fn a_sliding_window_12b_on_a_12_gb_gpu_gets_twice_the_context_at_q8_and_two_slot
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!(
         (a.ngl, a.ctx, a.kv, a.run.seqs()),
@@ -158,6 +159,7 @@ fn a_sliding_window_12b_on_a_12_gb_gpu_gets_twice_the_context_at_q8_and_two_slot
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!((dense.ctx, dense.run.seqs()), (8_192, 1));
 }
@@ -170,6 +172,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!(
         a,
@@ -188,6 +191,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             draft: None,
             cpu_only: false,
             run: run_with_slots(1),
+            projector: None,
         }
     );
     assert_eq!(
@@ -204,6 +208,7 @@ fn throttle_halves_the_budget_and_offloads_part_of_the_layers() {
         Backend::Cuda,
         GovState::Throttle,
         &Overrides::default(),
+        None,
     );
     assert_eq!((a.ngl, a.ctx, a.kv, a.threads), (24, 8_192, KvType::Q8, 2));
 }
@@ -217,6 +222,7 @@ fn cpu_only_runs_no_gpu_layers_and_keeps_context_short() {
         Backend::Cpu,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!(
         (a.ngl, a.ctx, a.kv, a.threads, a.flash_attn, a.mlock),
@@ -235,6 +241,7 @@ fn moe_on_a_16_gb_gpu_keeps_every_layer_and_moves_experts_to_ram() {
         Backend::Rocm,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!(
         (a.ngl, a.n_cpu_moe, a.ctx, a.kv, a.threads),
@@ -251,6 +258,7 @@ fn moe_on_a_16_gb_gpu_keeps_every_layer_and_moves_experts_to_ram() {
         Backend::Rocm,
         GovState::RampUp,
         &Overrides::default(),
+        None,
     );
     assert_eq!(
         (r.n_cpu_moe, r.threads, r.threads_batch),
@@ -280,6 +288,7 @@ fn apple_unified_memory_offloads_every_layer_when_it_fits() {
         Backend::Metal,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!(
         (a.ngl, a.n_cpu_moe, a.ctx, a.kv, a.threads),
@@ -304,6 +313,7 @@ fn two_gpus_split_the_31b_by_vram() {
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!((a.ngl, a.ctx, a.kv), (61, 32_768, KvType::Q8));
     let args = a.to_args().join(" ");
@@ -326,8 +336,71 @@ fn overrides_are_clamped_to_the_model_and_the_cpu() {
             threads: Some(99),
             kv: None,
         },
+        None,
     );
     assert_eq!((a.ngl, a.ctx, a.kv, a.threads), (49, 4_096, KvType::Q8, 16));
+}
+
+#[test]
+fn a_drafter_is_reserved_before_the_context_is_sized() {
+    // A 12 GB card with 12,000 MB free: 9,600 MB to plan for.
+    let p = machine(
+        vec![gpu(
+            GpuVendor::Nvidia,
+            "NVIDIA GeForce RTX 3060",
+            12_288,
+            Some(12_000),
+        )],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+    );
+    let meta = dense_12b();
+    // The 12B's MTP heads file: one layer, 822 MB.
+    let heads = GgufMeta {
+        block_count: 1,
+        file_mb: 822,
+        ..dense_12b()
+    };
+    let plan = |reserve: Option<&GgufMeta>| {
+        autoconfig(
+            &p,
+            &meta,
+            Backend::Cuda,
+            GovState::Normal,
+            &Overrides::default(),
+            reserve,
+        )
+    };
+    let alone = plan(None);
+    let paired = plan(Some(&heads));
+    // The context shrinks so the pair stays whole on the GPU.
+    assert_eq!((alone.ngl, alone.ctx, alone.kv), (49, 8_192, KvType::Q8));
+    assert_eq!((paired.ngl, paired.ctx, paired.kv), (49, 4_096, KvType::Q4));
+    assert_eq!(
+        local_spec::fits(&p, &meta, &alone, GovState::Normal, &heads),
+        None
+    );
+    assert_eq!(
+        local_spec::fits(&p, &meta, &paired, GovState::Normal, &heads),
+        Some(true)
+    );
+    // An E2B-sized draft model can't fit beside the whole 12B on this card at
+    // any context: the plan can't keep the pair, and the launch is refused.
+    let e2b = GgufMeta {
+        block_count: 35,
+        embedding_length: 1_536,
+        head_count: 8,
+        head_count_kv: 1,
+        file_mb: 3_100,
+        ..dense_12b()
+    };
+    let split = plan(Some(&e2b));
+    assert_eq!((split.ngl, split.ctx), (11, 16_384));
+    assert_eq!(
+        local_spec::fits(&p, &meta, &split, GovState::Normal, &e2b),
+        None
+    );
 }
 
 #[test]
@@ -338,6 +411,7 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     let mut ngls = Vec::new();
     let mut cur = a.clone();
@@ -354,7 +428,7 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
     assert_eq!(after_oom(&cur, 4), Retry::SmallerModel);
     let cpu = LaunchArgs { ngl: 0, ..cur };
     assert_eq!(after_oom(&cpu, 1), Retry::SmallerModel);
-    // A launch with a drafter drops it before giving up any layers.
+    // A launch with a drafter never drops it: a smaller model runs instead.
     let drafted = LaunchArgs {
         draft: Some(Box::new(DraftArgs {
             kind: grokhub_core::local_draft::DraftKind::Simple,
@@ -364,16 +438,19 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
         })),
         ..a.clone()
     };
-    match after_oom(&drafted, 1) {
-        Retry::Again(next) => assert_eq!((next.ngl, next.draft), (a.ngl, None)),
-        Retry::SmallerModel => panic!("dropped the model, not the drafter"),
-    }
-    let cpu_drafted = LaunchArgs { ngl: 0, ..drafted };
-    match after_oom(&cpu_drafted, 2) {
-        Retry::Again(next) => assert_eq!((next.ngl, next.draft), (0, None)),
-        Retry::SmallerModel => panic!("a CPU launch keeps trying without its drafter"),
-    }
-    assert_eq!(after_oom(&cpu_drafted, 4), Retry::SmallerModel);
+    assert_eq!(after_oom(&drafted, 1), Retry::SmallerModel);
+    let cpu_drafted = LaunchArgs {
+        ngl: 0,
+        ..drafted.clone()
+    };
+    assert_eq!(after_oom(&cpu_drafted, 1), Retry::SmallerModel);
+    // The GPU crashed: the pair moves to the CPU together.
+    let cpu = on_cpu(&drafted);
+    assert_eq!((cpu.ngl, cpu.cpu_only), (0, true));
+    assert_eq!(
+        cpu.draft.map(|d| (d.model, d.on_gpu)),
+        Some((Some(PathBuf::from("drafters/e2b.gguf")), false))
+    );
 
     let moe = autoconfig(
         &amd_16gb_desktop(),
@@ -381,6 +458,7 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
         Backend::Rocm,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     match after_oom(&moe, 1) {
         Retry::Again(next) => assert_eq!((next.ngl, next.n_cpu_moe), (31, Some(17))),
@@ -453,6 +531,7 @@ fn autotune_records_cap_the_next_plan_per_model_device_and_driver() {
         Backend::Cuda,
         GovState::RampUp,
         &Overrides::default(),
+        None,
     );
     let capped = apply_tuned(fresh.clone(), &t);
     assert_eq!((capped.ngl, capped.ctx, capped.kv), (39, 8_192, KvType::Q4));
@@ -502,16 +581,20 @@ fn launch_for_reads_the_header_the_engine_and_the_stored_profile() {
     let model = root.join("tiny.gguf");
     std::fs::write(&model, tiny_gguf()).unwrap();
 
-    assert_eq!(launch_for(&binary, &model), None, "no hardware read yet");
+    assert_eq!(
+        launch_for(&binary, &model),
+        Ok(None),
+        "no hardware read yet"
+    );
     set_profile(rtx_4070_laptop(), root.join("local"));
-    let (args, key, dir) = launch_for(&binary, &model).expect("planned");
+    let (args, key, dir) = launch_for(&binary, &model).unwrap().expect("planned");
     assert_eq!(args.backend, Backend::Cuda);
     assert_eq!((args.ngl, args.ctx, args.kv), (17, 8_192, KvType::Q8));
     assert!(key.starts_with("tiny.gguf:"), "{key}");
     assert_eq!(dir, root.join("local"));
     // A file that isn't GGUF falls back to the one-shot defaults.
     std::fs::write(&model, b"not gguf").unwrap();
-    assert_eq!(launch_for(&binary, &model), None);
+    assert_eq!(launch_for(&binary, &model), Ok(None));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -538,6 +621,7 @@ fn an_igpu_only_machine_offloads_into_shared_ram_on_vulkan() {
         Backend::Vulkan,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert_eq!(a.ngl, 37, "every layer fits in the iGPU's half");
     // No GPU at all on a GPU backend still runs on the CPU.
@@ -563,6 +647,7 @@ fn a_remembered_cpu_fallback_keeps_the_next_start_off_the_gpu() {
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     assert!(gpu.ngl > 0 && !gpu.cpu_only);
     let t = Tuned {
@@ -609,6 +694,7 @@ fn a_launch_is_sized_to_the_memory_a_game_leaves_free_and_grows_back_after() {
         Backend::Cuda,
         GovState::Normal,
         &Overrides::default(),
+        None,
     );
     let shared = autoconfig(
         &game,
@@ -616,6 +702,7 @@ fn a_launch_is_sized_to_the_memory_a_game_leaves_free_and_grows_back_after() {
         Backend::Cuda,
         GovState::Throttle,
         &Overrides::default(),
+        None,
     );
     assert_eq!(full.ngl, full.all_layers);
     assert!(shared.ngl < shared.all_layers, "{shared:?}");
@@ -700,6 +787,7 @@ fn whole_gpu_12b() -> LaunchArgs {
         draft: None,
         cpu_only: false,
         run: Default::default(),
+        projector: None,
     }
 }
 
@@ -817,7 +905,7 @@ fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
     std::fs::write(&model, tiny_gguf()).unwrap();
     set_profile(rtx_4070_laptop(), root.join("local"));
     set_state(GovState::Normal);
-    let (normal, _, _) = launch_for(&binary, &model).expect("planned");
+    let (normal, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
     // Normal is tuned (one slot at 8k, no drafter); Throttle never is.
     let tag = normal.run.tune.clone().expect("tuned");
     assert_eq!(tag.arm.label(), "np1-plain-ub512");
@@ -829,7 +917,7 @@ fn a_model_kept_up_under_throttle_gets_the_sharing_flags_its_engine_knows() {
         }
     );
     set_state(GovState::Throttle);
-    let (shared, _, _) = launch_for(&binary, &model).expect("planned");
+    let (shared, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
     set_state(GovState::Normal);
     assert_eq!(shared.run.poll, Some(0));
     assert_eq!(shared.run.prio, Some(-1));
@@ -896,4 +984,520 @@ fn an_out_of_memory_cap_grows_back_a_step_after_two_clean_starts() {
     clean_start(&dir, "c", 31).unwrap();
     clean_start(&dir, "c", 31).unwrap();
     assert_eq!(load_tuned(&dir).get("c"), Some(&crashed));
+}
+
+/// The 12B's file and its catalog MTP heads, as they sit on disk (for the
+/// unix-only pair rig).
+#[cfg(unix)]
+const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf";
+#[cfg(unix)]
+const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
+
+/// An NVIDIA card with `free_vram_mb` free and `free_ram_mb` of RAM free.
+fn card(free_vram_mb: u64, free_ram_mb: u64) -> LocalProfile {
+    machine(
+        vec![gpu(
+            GpuVendor::Nvidia,
+            "NVIDIA GeForce RTX",
+            8_192,
+            Some(free_vram_mb),
+        )],
+        32_768,
+        Some(free_ram_mb),
+        CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+    )
+}
+
+/// A folder with an engine that lists the draft flags, the 12B (a tiny
+/// header) and its MTP heads in `drafters/`.
+#[cfg(unix)]
+fn pair_rig(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("grokhub-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("drafters")).unwrap();
+    let binary = root.join("bin").join("llama-server");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\ncat <<'EOF'\n--spec-draft-n-max N   number of tokens to draft\n--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N\n--spec-draft-model, -md, --model-draft FNAME\n--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash\nEOF\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join("bin").join("libggml-cuda.so"), b"").unwrap();
+    let model = root.join(G12B_FILE);
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    std::fs::write(root.join("drafters").join(G12B_MTP), tiny_gguf()).unwrap();
+    (root, binary, model)
+}
+
+/// Settings reads no drafter until a launch says what runs.
+#[cfg(unix)]
+fn forget_draft_status() {
+    local_spec::launched(
+        &local_spec::Plan {
+            decision: grokhub_core::local_draft::Decision::NeedsTest,
+            draft: None,
+            key: None,
+            name: None,
+        },
+        Path::new("/home/user"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pair_that_does_not_fit_is_refused_and_one_that_does_loads_its_drafter() {
+    use grokhub_core::local_draft::Decision;
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, binary, model) = pair_rig("pair-launch");
+    let heads = root.join("drafters").join(G12B_MTP);
+    let before = local_spec::Plan {
+        decision: Decision::On,
+        draft: None,
+        key: None,
+        name: Some("what ran before".into()),
+    };
+    local_spec::launched(&before, &root);
+    // 1,000 MB of VRAM free plans for 800: the pair needs 1,160 at the
+    // shortest context, so the launch is refused and nothing is launched.
+    set_profile(card(1_000, 24_000), root.join("local"));
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(1_000),
+        ram_free_mb: Some(24_000),
+    }));
+    assert_eq!(launch_for(&binary, &model), Err(PAIR_NO_ROOM.to_string()));
+    // The refusal keeps where the launch sized the pair and what was free
+    // there, for the hold; it is taken once, and only for that model.
+    assert_eq!(take_refusal(&root.join("other.gguf")), None);
+    assert_eq!(
+        take_refusal(&model),
+        Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: Some(1_000),
+            state: GovState::Normal,
+            on_gpu: true,
+        })
+    );
+    assert_eq!(take_refusal(&model), None);
+    // Without a VRAM reading the GPU pair has no baseline: more free RAM
+    // can't release it, only an unload or a new governor state.
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: None,
+        ram_free_mb: Some(24_000),
+    }));
+    assert_eq!(launch_for(&binary, &model), Err(PAIR_NO_ROOM.to_string()));
+    assert_eq!(
+        take_refusal(&model),
+        Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: None,
+            state: GovState::Normal,
+            on_gpu: true,
+        })
+    );
+    // A resident pair whose own 1,000 MB of VRAM leaves 1,000 free reads
+    // as no room against the probe alone, and fits once its own memory is
+    // added back, as a fresh start of it (or a speed test) would see.
+    let probe = |vram: u64| {
+        set_free_probe(Arc::new(move || FreeNow {
+            vram_free_mb: Some(vram),
+            ram_free_mb: Some(24_000),
+        }));
+    };
+    probe(2_000);
+    clear_resident();
+    probe(1_000);
+    mark_resident();
+    assert_eq!(
+        draft_plan(&binary, &model).map(|p| p.decision),
+        Some(Decision::NoRoom)
+    );
+    assert_eq!(
+        draft_plan_with(&binary, &model, Some(replan_free())).map(|p| p.decision),
+        Some(Decision::NeedsTest)
+    );
+    // With nothing loaded, that pick's pair can't start, so the refusal
+    // check leaves the running model alone though no start refused it yet.
+    let paths = super::super::local_sidecar::SidecarPaths {
+        binary: binary.clone(),
+        model: model.clone(),
+    };
+    assert!(local_spec::pair_wont_start(&paths));
+    probe(1_600);
+    assert!(
+        !local_spec::pair_wont_start(&paths),
+        "1,600 MB fits the pair"
+    );
+    reset_free_probe();
+    assert_eq!(replan_for(&binary, &model), None);
+    assert_eq!(
+        local_spec::draft_status(),
+        Some(("what ran before".to_string(), Decision::On))
+    );
+    // 1,563 MB free plans for 1,250: alone the model takes 8,192 tokens at
+    // q8 (712 MB), but the pair (1,424) fits only at 4,096 (1,224), so the
+    // context shrinks and the heads load beside it on the GPU.
+    set_profile(card(1_563, 24_000), root.join("local"));
+    let (args, key, dir) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!(
+        (args.ngl, args.all_layers, args.ctx, args.kv),
+        (17, 17, 4_096, KvType::Q8)
+    );
+    let draft = args.draft.clone().expect("the pair loads together");
+    assert_eq!(
+        (draft.kind, draft.model.as_deref(), draft.on_gpu),
+        (
+            grokhub_core::local_draft::DraftKind::Mtp,
+            Some(heads.as_path()),
+            true
+        )
+    );
+    assert_eq!(
+        local_spec::draft_status(),
+        Some(("Gemma 4 12B draft model".to_string(), Decision::NeedsTest))
+    );
+    // The planner sees the same pair.
+    let g12b = local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").unwrap();
+    assert_eq!(
+        pair_view(&binary, &[(g12b, model.clone())]),
+        vec!["gemma-4-12b-it-abliterated-q4_k"]
+    );
+    // An older out-of-memory record capped the layers: a pair ignores the
+    // cap (it would refuse it on every launch) but keeps the context cap.
+    let capped = Tuned {
+        ngl: 10,
+        n_cpu_moe: None,
+        ctx: 4_096,
+        kv: KvType::Q8,
+        cpu_only: false,
+        clean: 0,
+    };
+    save_tuned(&dir, &key, &capped).unwrap();
+    let (paired, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!((paired.ngl, paired.ctx), (17, 4_096));
+    // The Settings GPU layers override is what refuses it, and says so.
+    set_overrides(Overrides {
+        ngl: Some(10),
+        ..Overrides::default()
+    });
+    assert_eq!(
+        launch_for(&binary, &model),
+        Err(format!("{PAIR_NO_ROOM}, because {PAIR_OVERRIDE}"))
+    );
+    set_overrides(Overrides::default());
+    // In the gaming setup the pair moves to RAM: 1,563 MB free plans for
+    // 1,250 there too, so the context shrinks before the tier does.
+    std::fs::remove_file(dir.join(AUTOTUNE_FILE)).unwrap();
+    set_profile(card(6_000, 1_563), root.join("local"));
+    let (gpu, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!((gpu.ctx, gpu.kv), (8_192, KvType::Q8));
+    set_gaming_test(true);
+    let gaming = launch_for(&binary, &model);
+    set_gaming_test(false);
+    let (gaming, _, _) = gaming.unwrap().expect("planned");
+    assert_eq!(
+        (gaming.ngl, gaming.cpu_only, gaming.ctx, gaming.kv),
+        (0, true, 4_096, KvType::Q8)
+    );
+    assert_eq!(gaming.draft.map(|d| d.on_gpu), Some(false));
+    // A standing verdict against the heads: the model loads alone, and the
+    // planner no longer counts the drafter.
+    let device = "NVIDIA GeForce RTX";
+    grokhub_core::local_draft::save_verdict(
+        &dir,
+        &grokhub_core::local_draft::verdict_key(device, G12B_FILE, G12B_MTP),
+        grokhub_core::local_draft::Verdict {
+            keep: false,
+            acceptance: 0.2,
+            gain: 0.9,
+            retest_at: None,
+        },
+    )
+    .unwrap();
+    let (alone, _, _) = launch_for(&binary, &model).unwrap().expect("planned");
+    assert_eq!((alone.ctx, alone.draft), (8_192, None));
+    assert_eq!(
+        pair_view(&binary, &[(g12b, model.clone())]),
+        Vec::<&str>::new()
+    );
+    forget_draft_status();
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_pair_refusal_names_the_gpu_layers_override_only_when_it_is_why() {
+    let whole = LaunchArgs {
+        ngl: 17,
+        all_layers: 17,
+        ..autoconfig(
+            &card(6_000, 24_000),
+            &dense_12b(),
+            Backend::Cuda,
+            GovState::Normal,
+            &Overrides::default(),
+            None,
+        )
+    };
+    let because = "there isn't room for the model and its draft model together, because the GPU layers override keeps part of the model off the GPU";
+    assert_eq!(pair_refusal(Some(10), &whole, true), because);
+    assert_eq!(pair_refusal(Some(17), &whole, true), PAIR_NO_ROOM);
+    assert_eq!(pair_refusal(None, &whole, true), PAIR_NO_ROOM);
+    assert_eq!(
+        pair_refusal(Some(10), &whole, false),
+        PAIR_NO_ROOM,
+        "the pair runs in RAM"
+    );
+}
+
+fn projector(off_gpu_flag: bool) -> Option<Box<ProjectorArgs>> {
+    Some(Box::new(ProjectorArgs {
+        file: PathBuf::from("/home/user/models/mmproj.gguf"),
+        mb: 1_083,
+        off_gpu_flag,
+    }))
+}
+
+#[test]
+fn a_projector_loads_with_mmproj_and_stays_off_the_gpu_with_the_model() {
+    let gpu = LaunchArgs {
+        projector: projector(true),
+        ..whole_gpu_12b()
+    };
+    let a = gpu.to_args();
+    let at = a.iter().position(|x| x == "--mmproj").expect("--mmproj");
+    assert_eq!(a[at + 1], "/home/user/models/mmproj.gguf");
+    assert!(!a.contains(&"--no-mmproj-offload".to_string()), "{a:?}");
+    // On the CPU the picture encoder would still start the GPU backend.
+    let cpu = on_cpu(&gpu).to_args();
+    assert!(cpu.contains(&"--no-mmproj-offload".to_string()), "{cpu:?}");
+    assert!(cpu.contains(&"--mmproj".to_string()));
+    let no_layers = LaunchArgs {
+        ngl: 0,
+        ..gpu.clone()
+    }
+    .to_args();
+    assert!(no_layers.contains(&"--no-mmproj-offload".to_string()));
+    // An engine without the flag never gets it.
+    let older = LaunchArgs {
+        projector: projector(false),
+        ..on_cpu(&gpu)
+    };
+    assert!(!older.to_args().contains(&"--no-mmproj-offload".to_string()));
+    assert!(!whole_gpu_12b().to_args().contains(&"--mmproj".to_string()));
+}
+
+#[test]
+fn a_projector_takes_its_file_and_a_seventh_more() {
+    assert_eq!(projector_mb(986_833_408), 1_083);
+    assert_eq!(projector_mb(175_115_776), 193);
+    assert_eq!(projector_mb(0), 0);
+    // The catalog's projector rows say the same.
+    for m in local_setup::local_models()
+        .iter()
+        .filter(|m| m.kind == local_setup::ModelKind::VisionProjector)
+    {
+        assert_eq!(
+            projector_mb(m.download_mb * 1024 * 1024),
+            m.run_mb,
+            "{}",
+            m.id
+        );
+    }
+}
+
+#[test]
+fn a_projector_comes_out_of_the_room_before_the_layers_and_the_context() {
+    // A 12 GB card with 12,000 MB free: 9,600 MB to plan for.
+    let p = machine(
+        vec![gpu(
+            GpuVendor::Nvidia,
+            "NVIDIA GeForce RTX 3060",
+            12_288,
+            Some(12_000),
+        )],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+    );
+    let meta = dense_12b();
+    let heads = GgufMeta {
+        block_count: 1,
+        file_mb: 822,
+        ..dense_12b()
+    };
+    let plan = |drafter: Option<&GgufMeta>, projector_mb: u64| {
+        autoconfig_beside(
+            &p,
+            &meta,
+            Backend::Cuda,
+            GovState::Normal,
+            &Overrides::default(),
+            Beside {
+                drafter,
+                projector_mb,
+            },
+        )
+    };
+    // Alone the 12B keeps 8k whole on the GPU. A 1,311 MB projector leaves
+    // no whole-GPU room at 8k, so, like any model alone, it keeps its
+    // context and moves layers to RAM instead.
+    let alone = plan(None, 0);
+    assert_eq!((alone.ngl, alone.ctx), (49, 8_192));
+    let plain = autoconfig(
+        &p,
+        &meta,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        None,
+    );
+    assert_eq!(alone, plain);
+    let seeing = plan(None, 1_311);
+    assert_eq!(
+        (seeing.ngl, seeing.ctx, seeing.kv),
+        (30, 16_384, KvType::Q8)
+    );
+    // With its drafter too there is no whole-GPU room left, so the drafter's
+    // check refuses the pair once the projector is counted in it.
+    let pair = plan(Some(&heads), 1_311);
+    let with = LaunchArgs {
+        projector: Some(Box::new(ProjectorArgs {
+            file: PathBuf::from("/home/user/models/mmproj.gguf"),
+            mb: 1_311,
+            off_gpu_flag: true,
+        })),
+        ..pair.clone()
+    };
+    assert_eq!(
+        local_spec::fits(&p, &meta, &with, GovState::Normal, &heads),
+        None
+    );
+    assert_eq!(
+        local_spec::pair_need_mb(&meta, &with, &heads),
+        local_spec::pair_need_mb(&meta, &pair, &heads) + 1_311
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_warm_relaunch_never_starts_a_projector_beside_the_running_server() {
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let root = std::env::temp_dir().join(format!("grokhub-warm-vision-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let model = root.join("tiny.gguf");
+    std::fs::write(&model, tiny_gguf()).unwrap();
+    set_free_probe(Arc::new(|| FreeNow {
+        vram_free_mb: Some(64_000),
+        ram_free_mb: Some(64_000),
+    }));
+    let next = whole_gpu_12b();
+    assert!(warm_fits(&model, &next));
+    let seeing = LaunchArgs {
+        projector: projector(true),
+        ..next
+    };
+    assert!(!warm_fits(&model, &seeing));
+    reset_free_probe();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// [`pair_rig`] with an engine that also lists the projector flags, and the
+/// 12B's projector (`mb` MiB, sparse) beside the model.
+#[cfg(unix)]
+fn vision_rig(label: &str, mb: u64) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, binary, model) = pair_rig(label);
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\ncat <<'EOF'\n--spec-draft-n-max N   number of tokens to draft\n--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N\n--spec-draft-model, -md, --model-draft FNAME\n--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash\n-mm,   --mmproj FILE                    path to a multimodal projector file\n--mmproj-offload, --no-mmproj-offload   whether to enable GPU offloading for multimodal projector\nEOF\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let file = root.join("mmproj-Huihui-gemma-4-12B-it-abliterated-BF16.gguf");
+    std::fs::File::create(&file)
+        .unwrap()
+        .set_len(mb * 1024 * 1024)
+        .unwrap();
+    (root, binary, model, file)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_vision_launch_counts_its_projector_and_never_leaves_a_pair_refusal() {
+    let _one = LIVE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, binary, model, file) = vision_rig("vision-launch", 200);
+    let probe = |vram: u64| {
+        set_free_probe(Arc::new(move || FreeNow {
+            vram_free_mb: Some(vram),
+            ram_free_mb: Some(24_000),
+        }));
+    };
+    // 1,600 MB free plans for 1,280: the pair (1,160 at the shortest
+    // context) fits, and the pair with a 230 MB projector doesn't.
+    set_profile(card(1_600, 24_000), root.join("local"));
+    probe(1_600);
+    let (alone, _, _) = launch_for(&binary, &model)
+        .unwrap()
+        .expect("the pair plans");
+    assert!(alone.draft.is_some() && alone.projector.is_none());
+    assert_eq!(
+        vision_launch_with(&binary, &model, None),
+        Err(PROJECTOR_NO_ROOM.to_string())
+    );
+    // The pair itself fits, so nothing holds it.
+    assert_eq!(take_refusal(&model), None);
+    // The check a picture turn makes before it stops anything says the same,
+    // and where it was sized, for its own hold.
+    assert_eq!(
+        vision_fit(&binary, &model, None),
+        Err(Some(PairRefusal {
+            pool: Pool::Vram,
+            free_mb: Some(1_600),
+            state: GovState::Normal,
+            on_gpu: true,
+        }))
+    );
+    assert_eq!(take_refusal(&model), None);
+    probe(4_000);
+    assert_eq!(vision_fit(&binary, &model, None), Ok(()));
+    let (seeing, _, _) = vision_launch_with(&binary, &model, None)
+        .unwrap()
+        .expect("planned");
+    assert_eq!(
+        seeing.projector.as_deref(),
+        Some(&ProjectorArgs {
+            file: file.clone(),
+            mb: 230,
+            off_gpu_flag: true,
+        })
+    );
+    assert!(seeing.draft.is_some(), "the drafter stays with its model");
+    // An engine that refused this projector with this model is not asked again.
+    super::super::local_vision::note_refused(&binary, &model);
+    assert_eq!(
+        vision_launch_with(&binary, &model, None),
+        Err(NO_PROJECTOR.to_string())
+    );
+    assert_eq!(vision_view(&binary, &[]), Vec::<&str>::new());
+    assert_eq!(vision_fit(&binary, &model, None), Err(None));
+    std::fs::remove_file(
+        root.join("local")
+            .join(super::super::local_vision::REFUSED_FILE),
+    )
+    .unwrap();
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(
+        vision_launch_with(&binary, &model, None),
+        Err(NO_PROJECTOR.to_string())
+    );
+    reset_free_probe();
+    forget_profile();
+    forget_draft_status();
+    let _ = std::fs::remove_dir_all(root);
 }

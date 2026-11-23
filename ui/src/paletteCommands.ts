@@ -122,7 +122,7 @@ export function answersTo(label: string, q: string): boolean {
 }
 
 /** The keys the shortcut sheet lists: the palette, each command the shell can
- * run, Settings, and the chat box. */
+ * run, Settings, the chat, and the chat box. */
 export function shellKeys(caps: Capabilities, runners: CommandRunners): { keys: string; action: string }[] {
   const state = { runners, signedOut: false };
   return [
@@ -133,6 +133,10 @@ export function shellKeys(caps: Capabilities, runners: CommandRunners): { keys: 
         : [],
     ),
     { keys: SETTINGS_KEYS, action: "Settings" },
+    // The chat's own keys, worded as grokhub_core::shortcuts words them. The
+    // web app has no chat tabs to archive.
+    { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)" },
+    ...(caps.remote ? [] : [{ keys: "Ctrl+Shift+A", action: "Archive or unarchive this chat" }]),
     { keys: "Enter", action: "Send message" },
     { keys: "Shift+Enter", action: "New line" },
     { keys: "Esc", action: "Close the palette or this sheet" },

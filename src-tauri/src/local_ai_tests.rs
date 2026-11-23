@@ -181,6 +181,7 @@ fn an_apple_16_gb_mac_preselects_e4b_on_unified_memory() {
         &picker,
         &BenchCache::new(),
         true,
+        true,
         Level::Normal,
         "normal use",
     );
@@ -199,71 +200,66 @@ fn an_apple_16_gb_mac_preselects_e4b_on_unified_memory() {
 }
 
 #[test]
-fn a_saved_pick_wins_and_status_says_when_nothing_is_set_up() {
+fn status_names_the_model_picked_for_this_pc_and_says_when_nothing_is_set_up() {
     let m = machine(vec![gpu("RTX 4090", 24_576)], 65_536);
-    let config = LocalAiConfig {
-        local_model: Selected {
-            selected: "gemma-4-12b-it-abliterated-q4_k".into(),
-        },
-        ..LocalAiConfig::default()
-    };
     let p = m.profile();
-    let picker = picker(&p, &BenchCache::new(), &[], &config);
-    assert_eq!(picker.selected, "gemma-4-12b-it-abliterated-q4_k");
-    let s = status(&p, &picker, &BenchCache::new(), false, Level::Normal, "x");
+    let picker = picker(&p, &BenchCache::new(), &[], &LocalAiConfig::default());
+    assert_eq!(picker.selected, "gemma-4-26b-a4b-it-abliterated-q4_k");
+    let s = status(
+        &p,
+        &picker,
+        &BenchCache::new(),
+        true,
+        false,
+        Level::Normal,
+        "x",
+    );
     assert_eq!(
         (s.model.as_str(), s.state.as_str(), s.reason.as_str()),
         (
-            "Gemma 4 12B",
+            "Gemma 4 26B-A4B",
             "Not set up",
             "No local engine or model is installed yet."
         )
-    );
-    // A stock Gemma 4 id saved by an older catalog is no catalog model now:
-    // it shows as saved, with no speed estimate.
-    let stale = super::picker(
-        &p,
-        &BenchCache::new(),
-        &[],
-        &LocalAiConfig {
-            local_model: Selected {
-                selected: "gemma-4-12b-it-q4_k_m".into(),
-            },
-            ..LocalAiConfig::default()
-        },
-    );
-    let s = status(&p, &stale, &BenchCache::new(), true, Level::Normal, "x");
-    assert_eq!(
-        (s.model.as_str(), s.tok_s.as_str()),
-        ("gemma-4-12b-it-q4_k_m", "")
     );
     let paused = status(
         &p,
         &picker,
         &BenchCache::new(),
         true,
+        true,
         Level::Unload,
         "a game is running",
     );
     assert_eq!(tray_label(&paused), "Local AI: Paused");
+    for set_up in [true, false] {
+        let off = status(
+            &p,
+            &picker,
+            &BenchCache::new(),
+            false,
+            set_up,
+            Level::Normal,
+            "normal use",
+        );
+        assert_eq!(
+            (off.state.as_str(), off.reason.as_str()),
+            ("Off", "Use Local AI on this computer is off.")
+        );
+        assert_eq!(tray_label(&off), "Local AI: Off");
+    }
 }
 
 #[test]
-fn values_are_clamped_and_caps_never_pass_90_percent() {
+fn values_are_clamped_and_idle_unload_follows_never_unload() {
     let wild = LocalAiConfig {
-        mode: Mode::Manual,
+        own_files: vec![" /m/a.gguf ".into(), "/m/a.gguf".into(), "".into()],
         manual: Manual {
-            backend: "Vulkan".into(),
             ngl: Some(5_000),
             ctx: Some(100),
             threads: Some(64),
             kv: "q4".into(),
             idle_minutes: 0,
-            caps: Caps {
-                ramp_up: 100,
-                normal: 95,
-                throttle: 0,
-            },
             never_unload: true,
             allow_apps: vec![" vlc.exe ".into(), "VLC.exe".into(), "".into()],
             deny_apps: vec!["blender".into()],
@@ -272,20 +268,13 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
     }
     .clamped(16);
     let m = &wild.manual;
-    assert_eq!((m.backend.as_str(), m.kv.as_str()), ("vulkan", "q4"));
+    assert_eq!(m.kv.as_str(), "q4");
     assert_eq!(
         (m.ngl, m.ctx, m.threads),
         (Some(999), Some(2_048), Some(16))
     );
     assert_eq!(m.idle_minutes, 1);
-    assert_eq!(
-        m.caps,
-        Caps {
-            ramp_up: 90,
-            normal: 90,
-            throttle: 10
-        }
-    );
+    assert_eq!(wild.idle_unload_secs(), u64::MAX);
     assert_eq!(m.allow_apps, ["vlc.exe"]);
     assert_eq!(
         wild.overrides(),
@@ -296,15 +285,35 @@ fn values_are_clamped_and_caps_never_pass_90_percent() {
             kv: Some(local_autoconfig::KvType::Q4),
         }
     );
-    let auto = LocalAiConfig {
-        mode: Mode::Auto,
-        ..wild.clone()
-    };
-    assert_eq!(auto.overrides(), local_autoconfig::Overrides::default());
+    assert_eq!(wild.own_files, ["/m/a.gguf"]);
 }
 
 #[test]
-fn saving_writes_the_pick_and_the_governors_rules() {
+fn saving_applies_idle_minutes_and_never_unload() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-idle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut config = LocalAiConfig {
+        manual: Manual {
+            idle_minutes: 3,
+            ..Manual::default()
+        },
+        ..LocalAiConfig::default()
+    };
+    save(&dir, &config).unwrap();
+    assert_eq!(local_perf::current_defaults().idle_unload_secs, 180);
+    assert_eq!(config.idle_unload_secs(), 180);
+
+    config.manual.never_unload = true;
+    save(&dir, &config).unwrap();
+    assert_eq!(local_perf::current_defaults().idle_unload_secs, u64::MAX);
+    assert_eq!(config.idle_unload_secs(), u64::MAX);
+
+    local_perf::set_idle_unload_secs(None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn saving_writes_the_added_files_and_the_governors_rules() {
     let dir = std::env::temp_dir().join(format!("grokhub-local-ai-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(load(&dir), LocalAiConfig::default());
@@ -312,9 +321,7 @@ fn saving_writes_the_pick_and_the_governors_rules() {
         pause_for_games: false,
         use_idle_time: false,
         throttle_on_battery: false,
-        local_model: Selected {
-            selected: "/models/x.gguf".into(),
-        },
+        own_files: vec!["/models/x.gguf".into()],
         manual: Manual {
             deny_apps: vec!["blender".into()],
             ..Manual::default()
@@ -325,8 +332,9 @@ fn saving_writes_the_pick_and_the_governors_rules() {
     assert_eq!(load(&dir), config);
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
-    assert_eq!(raw["localModel"]["selected"], "/models/x.gguf");
-    assert_eq!(raw["mode"], "auto");
+    assert_eq!(raw["ownFiles"], serde_json::json!(["/models/x.gguf"]));
+    assert_eq!(raw.get("mode"), None);
+    assert_eq!(raw.get("localModel"), None);
     let rules = Rules::from_json(
         &std::fs::read_to_string(dir.join("local").join("governor.json")).unwrap(),
     );
@@ -521,17 +529,29 @@ fn saving_keeps_the_cabins_unload_choice() {
 
 #[test]
 fn a_settings_file_from_before_the_draft_choice_went_away_still_loads() {
-    let old = r#"{"backend":"cuda","draft":"on","idleMinutes":5}"#;
+    // Old Device / draft / caps keys are ignored; idle still loads.
+    let old = r#"{"backend":"cuda","draft":"on","idleMinutes":5,"caps":{"rampUp":90}}"#;
     let m: Manual = serde_json::from_str(old).unwrap();
-    assert_eq!((m.backend.as_str(), m.idle_minutes), ("cuda", 5));
+    assert_eq!(m.idle_minutes, 5);
+    assert!(!m.never_unload);
 }
 
 #[test]
 fn the_running_rows_offer_keep_loaded_and_say_when_nothing_runs() {
     let dir = std::env::temp_dir().join(format!("gh-shell-running-{}", std::process::id()));
-    let r = running(&dir);
+    let r = running(&dir, true);
     assert!(r.lines[0].starts_with("Running now: "), "{:?}", r.lines);
     assert_eq!(r.kept_loaded, local_sidecar::keep_loaded());
+}
+
+#[test]
+fn the_running_rows_say_nothing_loads_while_local_ai_is_off() {
+    let dir = std::env::temp_dir().join(format!("gh-shell-running-off-{}", std::process::id()));
+    assert_eq!(
+        running(&dir, false).lines,
+        vec!["Running now: nothing. Local AI is off, so no model loads.".to_string()]
+    );
+    assert_ne!(running(&dir, true).lines, running(&dir, false).lines);
 }
 
 #[test]
@@ -557,4 +577,65 @@ fn optional_makers_follow_the_defaults_and_are_never_preselected() {
             }
         }
     }
+}
+
+#[test]
+fn the_speed_test_waits_while_local_ai_is_switched_off() {
+    let d = std::env::temp_dir().join(format!(
+        "grokhub-shell-speed-off-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("app.json"), r#"{"localModel":false}"#).unwrap();
+    grokhub_agent::route::host::sync(&d);
+    assert_eq!(
+        speed_test(&d),
+        Err("Turn on Use Local AI on this computer first, then run the speed test.".to_string())
+    );
+    assert!(
+        !grokhub_agent::route::local::switched_on(),
+        "the router's local route stays off"
+    );
+    std::fs::write(d.join("app.json"), "{}").unwrap();
+    assert_eq!(
+        speed_test(&d),
+        Err("Set up a local engine and model first, then run the speed test.".to_string())
+    );
+}
+
+#[test]
+fn an_old_manual_pick_becomes_an_added_file_and_old_auto_drops_its_tuning() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-old-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manual = r#"{"mode":"manual","localModel":{"selected":"/models/mine.gguf"},
+        "manual":{"ngl":20,"ctx":8192,"kv":"q8","denyApps":["blender"]}}"#;
+    std::fs::write(dir.join(FILE), manual).unwrap();
+    let c = load(&dir);
+    assert_eq!(c.own_files, ["/models/mine.gguf"]);
+    assert_eq!(
+        (c.manual.ngl, c.manual.ctx, c.manual.kv.as_str()),
+        (Some(20), Some(8_192), "q8")
+    );
+    assert_eq!(c.manual.deny_apps, ["blender"]);
+    // Auto never applied the tuning, so it must not start applying now; a
+    // catalog id is no file and is dropped.
+    let auto = r#"{"mode":"auto","localModel":{"selected":"gemma-4-12b-it-abliterated-q4_k"},
+        "manual":{"ngl":20,"ctx":8192,"kv":"q8","denyApps":["blender"]}}"#;
+    std::fs::write(dir.join(FILE), auto).unwrap();
+    let c = load(&dir);
+    assert_eq!(c.own_files, Vec::<String>::new());
+    assert_eq!(
+        (
+            c.manual.ngl,
+            c.manual.ctx,
+            c.manual.threads,
+            c.manual.kv.as_str()
+        ),
+        (None, None, None, "auto")
+    );
+    assert_eq!(c.manual.deny_apps, ["blender"]);
+    assert_eq!(c.overrides(), local_autoconfig::Overrides::default());
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -91,6 +91,8 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
         Op::Delete { yes } => {
             let id = chat(cx)?;
             let info = saved(cx, id)?;
+            // Refused before the confirm, so Main never asks a question it can't honour.
+            crate::chat_tabs::refuse_main(cx.config_dir, id)?;
             if !yes {
                 return confirm(
                     format!(
@@ -535,6 +537,31 @@ mod tests {
             Ok(Effect::Notice { text }) => text,
             other => panic!("not a notice: {other:?}"),
         }
+    }
+
+    #[test]
+    fn delete_on_main_is_refused_before_it_asks() {
+        let h = home("main-delete");
+        let main = crate::chat_tabs::ensure_main(&h.config, 0x5).expect("main");
+        let bound = h.ws.display().to_string();
+        for yes in [false, true] {
+            let got = run(
+                Op::Delete { yes },
+                &Ctx {
+                    config_dir: &h.config,
+                    conversation_id: Some(&main),
+                    bound: &bound,
+                    owned: None,
+                },
+            )
+            .map(|a| a.effect);
+            assert_eq!(got, Err(crate::chat_tabs::MAIN_FIXED.to_string()));
+        }
+        assert!(h
+            .config
+            .join("sessions")
+            .join(format!("{main}.jsonl"))
+            .is_file());
     }
 
     #[test]

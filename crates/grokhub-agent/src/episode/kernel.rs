@@ -763,6 +763,10 @@ impl Run<'_, '_> {
     /// The best past lessons for this goal go at the top of the view, and a
     /// quiet `lesson_used` marker names each one.
     fn recall_lessons(&mut self) {
+        // A scratch chat reads no past lessons.
+        if crate::scratch::is_scratch(&self.ep.chat_id) {
+            return;
+        }
         let (block, used) = lessons::past_lessons(
             &lessons::load(self.k.config_dir),
             &self.ep.goal,
@@ -780,6 +784,10 @@ impl Run<'_, '_> {
     /// `lesson` marker names it. A trivial run writes nothing. Lessons it
     /// started with count a failure when it still didn't finish.
     fn learn(&mut self, why: EpisodeEnd) {
+        // A scratch chat writes no lessons.
+        if crate::scratch::is_scratch(&self.ep.chat_id) {
+            return;
+        }
         let _ = lessons::note_used(self.k.config_dir, &self.ep.used_lessons, why);
         let Some(lesson) = lessons::derive(self.ep, why, self.now(), self.k.held) else {
             return;
@@ -998,6 +1006,7 @@ impl Run<'_, '_> {
     fn fan(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) {
         let take = calls.len().min(FANOUT_CAP);
         let workspace = self.k.workspace;
+        let chat = self.ep.chat_id.as_str();
         let view = &*self.view;
         let jobs: Vec<Box<dyn FnOnce() -> ToolOutput + Send + '_>> = calls[..take]
             .iter()
@@ -1007,7 +1016,7 @@ impl Run<'_, '_> {
                     let opened = zoom(view, &args);
                     Box::new(move || opened)
                 } else {
-                    Box::new(move || tools::execute(workspace, &name, &args))
+                    Box::new(move || tools::execute(workspace, chat, &name, &args))
                 };
                 job
             })
@@ -1230,6 +1239,7 @@ impl Run<'_, '_> {
                 None => arg_line(&call.name, &call.arguments),
             },
             reason: reason.into(),
+            hard: harness::hard_class(&call.name, &call.arguments).is_some(),
         });
         let halt = self.k.halt;
         matches!(
@@ -1408,12 +1418,18 @@ fn emit(
     detail: &str,
     image: Option<String>,
 ) {
+    let id = if call.call_id.is_empty() {
+        format!("tool-{}", call.name)
+    } else {
+        call.call_id.clone()
+    };
+    // A parked call also reads "completed", but show_panel is read-only and
+    // never parks; only a call that ran draws its panel.
+    if detail != PARKED {
+        crate::run::emit_panel(on_event, &id, call, status);
+    }
     on_event(LoopEvent::Tool {
-        id: if call.call_id.is_empty() {
-            format!("tool-{}", call.name)
-        } else {
-            call.call_id.clone()
-        },
+        id,
         name: call.name.clone(),
         status: status.into(),
         detail: crate::tools::fence::display_text(detail)

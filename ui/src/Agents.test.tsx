@@ -77,6 +77,7 @@ import {
   secretLine,
   sessionCommitsLine,
   taskProgress,
+  taskRoute,
   TASKS_EMPTY,
   TASKS_NOTE,
   TESTS_CHANGED_FILES,
@@ -104,7 +105,21 @@ const QUEUE: Queue = {
 const PROGRESS_QUEUE: Queue = {
   ...QUEUE,
   tasks: QUEUE.tasks.map((task) =>
-    task.id === "s2" ? { ...task, progress: { steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125 } } : task,
+    task.id === "s2"
+      ? {
+          ...task,
+          model: "grok-4.7",
+          progress: {
+            steps: 3,
+            lastStep: "read_file",
+            tokens: 1234,
+            seconds: 125,
+            model: "grok-4.7",
+            effort: "high",
+            why: "quality · High: debugging.",
+          },
+        }
+      : task,
   ),
 };
 
@@ -413,7 +428,7 @@ describe("Agents", () => {
     api.stopTask.mockResolvedValue({ ...QUEUE, tasks: QUEUE.tasks.map((t) => ({ ...t, live: false })) });
     render(<Agents conversationId="shell-c1" />);
 
-    const panel = screen.getByRole("region", { name: "Agent tasks" });
+    const panel = screen.getByRole("region", { name: "Helpers" });
     expect(within(panel).getByText(TASKS_NOTE)).toBeInTheDocument();
     expect(TASKS_NOTE).toBe("The lead's tasks and helpers for this session.");
     expect(await within(panel).findByText("Write the page")).toBeInTheDocument();
@@ -1010,6 +1025,23 @@ describe("Agents", () => {
     expect(await within(row).findByRole("alert")).toHaveTextContent("that helper is still running");
     expect(buttons(row)).toEqual(["Merge", "Discard"]);
     // The window gave focus back to the button that opened it.
+    expect(within(row).getByRole("button", { name: "Discard" })).toHaveFocus();
+  });
+
+  it("a slow refused Discard still gives focus back to Discard, not Merge", async () => {
+    api.getQueue.mockResolvedValue(workQueue(work({ counts: { added: 1, changed: 0, deleted: 0 }, files: ["a.rs"] })));
+    let refuse: (why: string) => void = () => {};
+    api.discardTaskWork.mockImplementation(() => new Promise((_, reject) => (refuse = reject)));
+    render(<Agents conversationId="shell-c1" />);
+
+    const row = await workRow("task-1: Add the parser");
+    await userEvent.click(within(row).getByRole("button", { name: "Discard" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard" }));
+    expect(within(row).getByRole("button", { name: "Deleting…" })).toBeDisabled();
+    // While the call is out the browser takes focus off the disabled button.
+    await waitFor(() => expect(document.activeElement).toBe(document.body));
+    await act(async () => refuse("that helper is still running"));
+    expect(within(row).getByRole("alert")).toHaveTextContent("that helper is still running");
     expect(within(row).getByRole("button", { name: "Discard" })).toHaveFocus();
   });
 
@@ -1991,6 +2023,15 @@ describe("Agents", () => {
     expect(api.getQueue).toHaveBeenCalledTimes(2);
   });
 
+  it("says which model a helper ran on and why, once a step was routed", () => {
+    const base = { steps: 1, lastStep: "shell", tokens: 0, seconds: 1 };
+    expect(taskRoute(base)).toBeNull();
+    expect(taskRoute({ ...base, model: "grok-4.7" })).toBe("Ran on grok-4.7");
+    expect(
+      taskRoute({ ...base, model: "grok-4.3", effort: "high", why: "quality · High: a multi-file change." }),
+    ).toBe("Ran on grok-4.3 · quality · High: a multi-file change.");
+  });
+
   it("says a helper's progress in one line", () => {
     expect(taskProgress({ steps: 3, lastStep: "read_file", tokens: 1234, seconds: 125 })).toBe(
       "Step 3: read_file · 1.2k tokens · 2m 5s",
@@ -2008,15 +2049,22 @@ describe("Agents", () => {
     const tasks = await screen.findByRole("list", { name: "Tasks" });
     expect(within(tasks).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
       "Read the specDone",
-      "Write the pageRunning · helper s2Step 3: read_file · 1.2k tokens · 2m 5s",
+      "Write the pageRunning · helper s2Step 3: read_file · 1.2k tokens · 2m 5sRan on grok-4.7 · quality · High: debugging.",
     ]);
     const hub = screen.getByRole("list", { name: "Helpers and commands" });
     expect(within(hub).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
       "cargo test --workspaceRunning · t1Stop",
-      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sStopDetails",
+      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sRan on grok-4.7 · quality · High: debugging.StopDetails",
       "npm run buildFailed · t3",
       "Monitor: build logDone · m4",
     ]);
+    expect(within(hub).getByRole("listitem", { name: "failed to fetch the docs" })).toHaveAttribute(
+      "data-model",
+      "grok-4.7",
+    );
+    const route = within(hub).getByText("Ran on grok-4.7 · quality · High: debugging.");
+    expect(route).toHaveClass("task-route");
+    expect(route).toHaveAttribute("data-effort", "high");
     expect(screen.getAllByRole("button", { name: /details$/ }).map((b) => b.getAttribute("aria-label"))).toEqual([
       "Helper s2 details",
     ]);

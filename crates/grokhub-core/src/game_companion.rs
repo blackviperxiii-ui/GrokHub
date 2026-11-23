@@ -23,6 +23,19 @@ pub const NEWS_MAX: usize = 3;
 pub const NOTE_CHARS: usize = 500;
 pub const GUIDES_PREFIX: &str = "game:guides:";
 pub const NOTE_PREFIX: &str = "game:note:";
+/// The note offer after a game closes has its own id, so the chip row's
+/// memory of the in-play chip (shows, hides) never spends the offer's.
+pub const NOTE_AFTER_PREFIX: &str = "game:note:after:";
+
+/// The game a note chip (`game:note:<app id>` or
+/// `game:note:after:<app id>`) is for.
+pub fn note_app_id(id: &str) -> Option<u32> {
+    id.strip_prefix(NOTE_AFTER_PREFIX)
+        .or_else(|| id.strip_prefix(NOTE_PREFIX))?
+        .parse()
+        .ok()
+        .filter(|id| *id != 0)
+}
 
 /// The app id in Steam's launch wrapper (`reaper SteamLaunch AppId=570 -- …`).
 pub fn running_from_cmdlines(procs: &[(String, String)]) -> Option<u32> {
@@ -197,9 +210,17 @@ pub fn chips(game: &SteamGame, ended: bool) -> Vec<QuickChip> {
         primary: false,
     };
     let note = chip(
-        format!("{NOTE_PREFIX}{}", game.app_id),
+        format!(
+            "{}{}",
+            if ended {
+                NOTE_AFTER_PREFIX
+            } else {
+                NOTE_PREFIX
+            },
+            game.app_id
+        ),
         if ended {
-            "Leave a note for next time".into()
+            format!("Leave a note for {} next time", game.name)
         } else {
             format!("Note for {}", game.name)
         },
@@ -378,7 +399,19 @@ mod tests {
                 "Note for Deep Rock Galactic"
             ]
         );
-        assert_eq!(labels(true), vec!["Leave a note for next time"]);
+        assert_eq!(
+            labels(true),
+            vec!["Leave a note for Deep Rock Galactic next time"]
+        );
+        let ids =
+            |ended| -> Vec<String> { chips(&game(), ended).into_iter().map(|c| c.id).collect() };
+        assert_eq!(ids(false), ["game:guides:548430", "game:note:548430"]);
+        assert_eq!(ids(true), ["game:note:after:548430"]);
+        assert_eq!(note_app_id("game:note:548430"), Some(548430));
+        assert_eq!(note_app_id("game:note:after:548430"), Some(548430));
+        assert_eq!(note_app_id("game:note:0"), None);
+        assert_eq!(note_app_id("game:note:after:x"), None);
+        assert_eq!(note_app_id("game:guides:548430"), None);
         assert_eq!(
             guides_url(548430),
             "https://steamcommunity.com/app/548430/guides/?browsefilter=toprated"

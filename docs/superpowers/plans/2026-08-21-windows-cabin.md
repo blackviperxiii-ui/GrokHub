@@ -1014,7 +1014,7 @@ jobs:
 ```markdown
 # GrokHub for Windows
 
-Native Rust cabin (egui). Not Electron. Not Tauri.
+Loadout is built with Tauri. Not Electron.
 
 **v2.6.42** — per-user installer. Grok Build (`grok.exe`) is the agent and computer-use.
 

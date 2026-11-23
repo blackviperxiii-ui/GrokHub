@@ -3,13 +3,13 @@
 //! never reaches the model: it runs here and comes back as an effect the
 //! chat applies (a new chat, a mode, a view, or a short notice).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// Greyed rows from the cabin's list carry this reason.
-pub const IN_THE_CABIN: &str = "In the cabin";
+/// Greyed rows from the full command list carry this reason: the app has
+/// no handler for them.
+pub const NOT_IN_APP: &str = "Not in this app";
 /// A row the paired browser can't run.
 pub const ON_YOUR_COMPUTER: &str = "On your computer";
-pub const NOT_YET: &str = "Not in this app yet";
 
 /// One command the shell runs.
 pub struct ShellCmd {
@@ -21,8 +21,6 @@ pub struct ShellCmd {
     pub run_on_pick: bool,
     /// Only the window on this computer can run it.
     pub desktop_only: bool,
-    /// Listed but not runnable yet.
-    pub ready: bool,
 }
 
 const fn row(cmd: &'static str, hint: &'static str, insert: &'static str) -> ShellCmd {
@@ -32,7 +30,6 @@ const fn row(cmd: &'static str, hint: &'static str, insert: &'static str) -> She
         insert,
         run_on_pick: insert.len() == cmd.len(),
         desktop_only: false,
-        ready: true,
     }
 }
 
@@ -72,7 +69,7 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row(
             "/record",
-            "Record my screen as stills, 2 minutes at most (say what's wrong)",
+            "Record my screen for up to 2 minutes, then get a report (say what's wrong)",
             "/record ",
         )
     },
@@ -330,33 +327,40 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     row("/resume", "Open History", "/resume"),
     row("/palette", "Command palette", "/palette"),
     ShellCmd {
-        ready: false,
-        ..row("/sh", "Run a shell line…", "/sh ")
+        desktop_only: true,
+        ..row("/sh", "Run a shell line in the project folder…", "/sh ")
+    },
+    row(
+        "/scratch",
+        "New scratch chat (no memory read or written)",
+        "/scratch",
+    ),
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/sync",
+            "Share chats and memory with paired computers",
+            "/sync",
+        )
     },
     ShellCmd {
-        ready: false,
-        ..row("/scratch", "New scratch chat (no memory)", "/scratch")
-    },
-    ShellCmd {
-        ready: false,
-        ..row("/sync", "Sync with paired computers", "/sync")
-    },
-    ShellCmd {
-        ready: false,
+        desktop_only: true,
         ..row(
             "/inhabit",
-            "Hand this chat to another computer…",
+            "Hand your soul, skills and goal to a paired computer…",
             "/inhabit ",
         )
     },
     ShellCmd {
-        ready: false,
-        ..row("/room", "Speak the room…", "/room ")
+        desktop_only: true,
+        ..row("/room", "Bind a work folder named for a room…", "/room ")
     },
-    ShellCmd {
-        ready: false,
-        ..row("/history", "Past chats", "/history")
-    },
+    row("/history", "Open History", "/history"),
+    row(
+        "/deep-research",
+        "Research a question with cited sources…",
+        "/deep-research ",
+    ),
 ];
 
 /// One row of the composer's command list.
@@ -377,6 +381,8 @@ pub struct Hit {
 pub enum Effect {
     /// `/new` and `/clear`: start a fresh chat.
     NewChat,
+    /// `/scratch`: start a chat that reads and writes no memory.
+    NewScratch,
     /// `/chat`, `/plan`, `/btw`. Text after the command is sent in that mode.
     Mode {
         mode: &'static str,
@@ -420,6 +426,27 @@ pub enum Effect {
     Imagine { media: &'static str, prompt: String },
     /// `/plugins`: Settings → Labs, where the plugin list lives.
     OpenSection { section: &'static str },
+    /// `/sh <line>` or `$ <line>`: the Command page's checks on the line. A
+    /// queued line goes to the agent; a confirm asks with its own Yes.
+    Shell { check: crate::command_box::Verdict },
+    /// `/sync` or `/inhabit` with no standing grant: a card whose Send asks
+    /// the hub on its own call, so typing a line can't stand in for it.
+    HubAsk {
+        send: HubSend,
+        prompt: String,
+        note: String,
+    },
+}
+
+/// What `/sync` and `/inhabit` hand to the computers paired with this hub.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "camelCase")]
+pub enum HubSend {
+    /// Chats, memory, skills, automations and the board, to every one.
+    Sync,
+    /// SOUL.md, skill names and the goal pin, for one to claim. `peer` is
+    /// its device id, or the name or id typed after `/inhabit`.
+    Inhabit { peer: String },
 }
 
 /// What `run` needs done outside this module.
@@ -429,6 +456,10 @@ pub enum Action {
     Remember(String),
     /// A command that acts on the saved chat or the project list.
     Op(Op),
+    /// `/sh <line>` or `$ <line>`: one shell line for the agent to run.
+    Shell(String),
+    /// `/sync` or `/inhabit <computer>`: this computer's hub.
+    Hub(HubSend),
 }
 
 /// What `slash_ops` runs.
@@ -483,9 +514,21 @@ pub enum Op {
     Consult(String),
 }
 
+/// The shell line after a leading `$ `. `$5 is cheap` and `$  ls` are
+/// messages, not shell lines (the cabin took `$  ls` too; one space is
+/// asked for here so fewer messages read as commands).
+fn dollar_line(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("$ ")?;
+    rest.starts_with(|c: char| !c.is_whitespace())
+        .then_some(rest)
+}
+
 /// The command word, when `line` is a slash command at all. `/usr/bin` and
-/// `/ hi` are messages, not commands.
+/// `/ hi` are messages, not commands. A `$ ` line is `/sh`.
 pub fn command_word(line: &str) -> Option<String> {
+    if dollar_line(line).is_some() {
+        return Some("/sh".into());
+    }
     let t = line.trim_start();
     let word = t.split_whitespace().next()?;
     let name = word.strip_prefix('/')?;
@@ -509,13 +552,7 @@ fn find(cmd: &str) -> Option<&'static ShellCmd> {
 }
 
 fn shell_hit(c: &ShellCmd, remote: bool) -> Hit {
-    let disabled = if !c.ready {
-        Some(NOT_YET.to_string())
-    } else if remote && c.desktop_only {
-        Some(ON_YOUR_COMPUTER.to_string())
-    } else {
-        None
-    };
+    let disabled = (remote && c.desktop_only).then(|| ON_YOUR_COMPUTER.to_string());
     Hit {
         cmd: c.cmd.into(),
         hint: c.hint.into(),
@@ -548,7 +585,7 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
             hint: cabin.hint,
             insert: cabin.insert,
             run_on_pick: false,
-            disabled: Some(IN_THE_CABIN.to_string()),
+            disabled: Some(NOT_IN_APP.to_string()),
         });
     }
     out.truncate(12);
@@ -559,15 +596,21 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
 pub fn help() -> String {
     let mut lines: Vec<String> = SHELL_SLASH
         .iter()
-        .filter(|c| c.ready && !c.cmd.contains(' '))
+        .filter(|c| !c.cmd.contains(' '))
         .map(|c| format!("{} — {}", c.insert.trim_end(), c.hint.trim_end_matches('…')))
         .collect();
-    lines.push("Other commands run in the cabin.".into());
+    lines.push("Greyed commands in the / menu say why they don't run here.".into());
     lines.join("\n")
 }
 
 /// Reads a slash line. `remote` is a paired browser.
 pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
+    let dollar = dollar_line(line).map(|rest| format!("/sh {rest}"));
+    // A browser sends a `$ ` line as a message; it never gets here as one.
+    if remote && dollar.is_some() {
+        return Err("That isn't a command.".into());
+    }
+    let line = dollar.as_deref().unwrap_or(line);
     let Some(word) = command_word(line) else {
         return Err("That isn't a command.".into());
     };
@@ -576,7 +619,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/title" => "/rename".to_string(),
         "/close" => "/delete".to_string(),
         "/background" => "/bg".to_string(),
-        "/resume" | "/dashboard" | "/agents-dashboard" => "/sessions".to_string(),
+        "/resume" | "/history" | "/dashboard" | "/agents-dashboard" => "/sessions".to_string(),
         "/status" | "/info" | "/session-info" | "/doctor" => "/inspect".to_string(),
         "/marketplace" | "/mcps" => "/connectors".to_string(),
         "/show-plan" | "/plan-view" => "/view-plan".to_string(),
@@ -594,13 +637,10 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         if grokhub_core::parse_slash(line).is_some()
             || !grokhub_core::filter_slash_hits(&word, &[]).is_empty()
         {
-            return Err(format!("{word} runs in the cabin, not here."));
+            return Err(format!("{word} is not in this app."));
         }
         return Err(format!("Unknown command {word}. Type /help for the list."));
     };
-    if !cmd.ready {
-        return Err(format!("{word} isn't in this app yet."));
-    }
     if remote && cmd.desktop_only {
         return Err(format!("{word} works on your computer."));
     }
@@ -611,6 +651,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
     let effect = match word.as_str() {
         "/help" => Effect::Notice { text: help() },
         "/new" | "/clear" => Effect::NewChat,
+        "/scratch" => Effect::NewScratch,
         "/chat" => Effect::Mode { mode: "chat", text },
         "/plan" => Effect::Mode { mode: "plan", text },
         "/btw" => Effect::Mode { mode: "btw", text },
@@ -633,7 +674,7 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         "/stop" => Effect::Stop,
         "/compact" => Effect::Compact,
         "/rename" | "/pin" | "/delete" | "/sessions" | "/context" | "/usage" | "/rewind"
-        | "/project" => return op(line, &word).map(Action::Op),
+        | "/project" | "/room" => return op(line, &word).map(Action::Op),
         "/remember" => {
             return match text {
                 Some(note) => Ok(Action::Remember(note)),
@@ -643,6 +684,15 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         _ => return Err(format!("Unknown command {word}. Type /help for the list.")),
     };
     Ok(Action::Effect(effect))
+}
+
+/// Whether `action` writes the person's memory, which a scratch chat refuses.
+pub fn writes_memory(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Remember(_)
+            | Action::Op(Op::Learn | Op::Dream | Op::Forget { .. } | Op::MemoryPrune { .. })
+    )
 }
 
 /// A line ending in `yes` for a destructive command, without the yes.
@@ -745,6 +795,24 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
     let fx = |e: Effect| Some(Ok(Action::Effect(e)));
     let open = |view: &'static str| fx(Effect::Open { view });
     match word {
+        "/sh" if rest.is_empty() => Some(Err("Type the command after /sh.".into())),
+        "/sh" => Some(Ok(Action::Shell(rest.to_string()))),
+        "/sync" if !rest.is_empty() => Some(Err("Type /sync on its own.".into())),
+        "/sync" => Some(Ok(Action::Hub(HubSend::Sync))),
+        "/inhabit" if rest.is_empty() => Some(Err(
+            "Type the name of a paired computer after /inhabit.".into(),
+        )),
+        "/inhabit" => Some(Ok(Action::Hub(HubSend::Inhabit {
+            peer: rest.to_string(),
+        }))),
+        "/deep-research" if rest.is_empty() => {
+            Some(Err("Type what to research after /deep-research.".into()))
+        }
+        // A normal turn: the engine reads the line and works to its research
+        // recipe, and the chat shows the line as typed.
+        "/deep-research" => fx(Effect::Queue {
+            text: format!("{word} {rest}"),
+        }),
         "/send" if rest.is_empty() => Some(Err("Type the task after /send.".into())),
         "/send" => mine(Op::Send(rest.to_string())),
         "/bg" => mine(Op::Bg(rest.to_string())),
@@ -822,7 +890,11 @@ fn op(line: &str, word: &str) -> Result<Op, String> {
         Some(Slash::ProjectMove(folder)) => Op::Project(P::Move(folder)),
         Some(Slash::ProjectFolder(name)) => Op::Project(P::Folder(name)),
         Some(Slash::ProjectDelete) => Op::Project(P::Delete { yes }),
+        Some(Slash::Room(name)) => Op::Project(P::Room(name)),
+        // `/history` reads as the cabin's own History command, which is this.
+        _ if word == "/sessions" => Op::Sessions,
         _ if word == "/rename" => return Err("Type the new name after /rename.".into()),
+        _ if word == "/room" => return Err("Type the room's name after /room.".into()),
         _ => return Err(PROJECT_USAGE.into()),
     })
 }
@@ -836,6 +908,8 @@ pub fn apply(action: Action, workspace: &std::path::Path) -> Result<Effect, Stri
             text: crate::memory::add(workspace, &note, false)?,
         }),
         Action::Op(_) => Err("That command needs a saved chat.".into()),
+        Action::Shell(_) => Err("A shell line needs this computer's project folder.".into()),
+        Action::Hub(_) => Err("That needs this computer's hub.".into()),
     }
 }
 
@@ -986,15 +1060,93 @@ mod tests {
     }
 
     #[test]
-    fn history_waits_and_help_lists_what_runs() {
-        assert_eq!(
-            parse("/history", false),
-            Err("/history isn't in this app yet.".into())
-        );
+    fn history_opens_history_and_help_lists_what_runs() {
+        assert_eq!(parse("/history", false), Ok(Action::Op(Op::Sessions)));
+        assert_eq!(parse("/History", true), Ok(Action::Op(Op::Sessions)));
+        let hit = hits("/hist", false);
+        assert_eq!(cmds(&hit), vec!["/history"]);
+        assert_eq!(hit[0].disabled, None);
         let help = help();
         assert!(help.contains("/plan — Plan the next message first"));
         assert!(help.contains("/remember — Save a memory note"));
-        assert!(!help.contains("/history"));
+        assert!(help.contains("/history — Open History"));
+        assert!(help.contains("/deep-research — Research a question with cited sources"));
+    }
+
+    #[test]
+    fn scratch_starts_a_chat_with_no_memory_and_refuses_memory_writes() {
+        assert_eq!(
+            parse("/scratch", false),
+            Ok(Action::Effect(Effect::NewScratch))
+        );
+        assert_eq!(
+            parse("/scratch", true),
+            Ok(Action::Effect(Effect::NewScratch))
+        );
+        let hit = hits("/scr", false);
+        assert_eq!(cmds(&hit), vec!["/scratch"]);
+        assert_eq!(hit[0].disabled, None);
+        assert!(hit[0].run_on_pick);
+        for line in [
+            "/remember a",
+            "/memory note a",
+            "/learn",
+            "/dream",
+            "/forget a",
+            "/memory prune",
+        ] {
+            let action = parse(line, false).expect(line);
+            assert!(writes_memory(&action), "{line}");
+        }
+        for line in ["/recall a", "/memory dream", "/learned", "/new", "/help"] {
+            let action = parse(line, false).expect(line);
+            assert!(!writes_memory(&action), "{line}");
+        }
+    }
+
+    #[test]
+    fn room_binds_a_named_folder_on_this_computer_only() {
+        use crate::projects::Op as P;
+        assert_eq!(
+            parse("/room Harbor Lab", false),
+            Ok(Action::Op(Op::Project(P::Room("Harbor Lab".into()))))
+        );
+        assert_eq!(
+            parse("/room", false),
+            Err("Type the room's name after /room.".into())
+        );
+        assert_eq!(
+            parse("/room harbor", true),
+            Err("/room works on your computer.".into())
+        );
+        let hit = hits("/roo", false);
+        assert_eq!(cmds(&hit), vec!["/room"]);
+        assert_eq!(hit[0].disabled, None);
+        assert!(!hit[0].run_on_pick);
+    }
+
+    #[test]
+    fn deep_research_sends_the_line_as_typed() {
+        assert_eq!(
+            parse("/deep-research  why is the sky blue ", false),
+            Ok(Action::Effect(Effect::Queue {
+                text: "/deep-research why is the sky blue".into()
+            }))
+        );
+        assert_eq!(
+            parse("/Deep-Research cats", true),
+            Ok(Action::Effect(Effect::Queue {
+                text: "/deep-research cats".into()
+            }))
+        );
+        assert_eq!(
+            parse("/deep-research", false),
+            Err("Type what to research after /deep-research.".into())
+        );
+        let hit = hits("/deep", false);
+        assert_eq!(cmds(&hit), vec!["/deep-research"]);
+        assert_eq!(hit[0].insert, "/deep-research ");
+        assert_eq!(hit[0].disabled, None);
     }
 
     fn workspace(name: &str) -> (std::path::PathBuf, grokhub_agent::perm::ConfigGuard) {
@@ -1174,7 +1326,15 @@ mod tests {
     }
 
     #[test]
-    fn none_of_these_say_in_the_cabin() {
+    fn help_ends_by_saying_where_the_other_commands_went() {
+        assert_eq!(
+            help().lines().last(),
+            Some("Greyed commands in the / menu say why they don't run here.")
+        );
+    }
+
+    #[test]
+    fn none_of_these_say_not_in_this_app() {
         for word in [
             "/rename",
             "/pin",
@@ -1197,9 +1357,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{word} is listed"));
             assert_eq!(row.disabled, None, "{word}");
             assert!(
-                rows.iter().all(
-                    |h| h.disabled.as_deref() != Some(IN_THE_CABIN) || !h.cmd.starts_with(word)
-                ),
+                rows.iter()
+                    .all(|h| h.disabled.as_deref() != Some(NOT_IN_APP) || !h.cmd.starts_with(word)),
                 "{word}"
             );
         }
@@ -1535,19 +1694,108 @@ mod tests {
     }
 
     #[test]
-    fn what_waits_on_another_card_is_greyed_not_in_the_cabin() {
-        for cmd in ["/sh", "/scratch", "/sync", "/inhabit", "/room"] {
-            let hit = hits(cmd, false)
-                .into_iter()
-                .find(|h| h.cmd == cmd)
-                .expect(cmd);
-            assert_eq!(hit.disabled.as_deref(), Some(NOT_YET), "{cmd}");
+    fn a_dollar_or_sh_line_is_one_shell_line_on_this_computer() {
+        assert_eq!(command_word("$ git status").as_deref(), Some("/sh"));
+        assert_eq!(command_word("  $ ls").as_deref(), Some("/sh"));
+        for message in ["$5 is cheap", "$ ", "$  ls", "$", "costs $ 5"] {
+            assert_eq!(command_word(message), None, "{message:?}");
+        }
+        for line in ["$ git status", "/sh git status", "/SH   git status  "] {
             assert_eq!(
-                parse(cmd, false),
-                Err(format!("{cmd} isn't in this app yet.")),
+                parse(line, false),
+                Ok(Action::Shell("git status".into())),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            parse("/sh", false),
+            Err("Type the command after /sh.".into())
+        );
+        assert_eq!(
+            parse("/sh   ", false),
+            Err("Type the command after /sh.".into())
+        );
+        assert_eq!(
+            parse("/sh ls", true),
+            Err("/sh works on your computer.".into())
+        );
+        assert_eq!(parse("$ ls", true), Err("That isn't a command.".into()));
+        // No yes word: the line is checked as typed, every word of it.
+        assert_eq!(
+            parse("/sh --yes rm -rf build", false),
+            Ok(Action::Shell("--yes rm -rf build".into()))
+        );
+        assert_eq!(
+            parse("/sh rm x yes", false),
+            Ok(Action::Shell("rm x yes".into()))
+        );
+        let hit = |remote| {
+            hits("/sh", remote)
+                .into_iter()
+                .find(|h| h.cmd == "/sh")
+                .expect("/sh")
+        };
+        assert_eq!(hit(true).disabled.as_deref(), Some(ON_YOUR_COMPUTER));
+        assert_eq!(hit(false).disabled, None);
+        assert!(help().contains("/sh — Run a shell line in the project folder"));
+        // A shell line on its own never reaches memory or the workspace.
+        assert_eq!(
+            apply(Action::Shell("ls".into()), std::path::Path::new(".")),
+            Err("A shell line needs this computer's project folder.".into())
+        );
+    }
+
+    #[test]
+    fn sync_and_inhabit_ask_this_computers_hub() {
+        assert_eq!(parse("/sync", false), Ok(Action::Hub(HubSend::Sync)));
+        assert_eq!(
+            parse("/sync now", false),
+            Err("Type /sync on its own.".into())
+        );
+        assert_eq!(
+            parse("/inhabit  Desk PC ", false),
+            Ok(Action::Hub(HubSend::Inhabit {
+                peer: "Desk PC".into()
+            }))
+        );
+        assert_eq!(
+            parse("/inhabit", false),
+            Err("Type the name of a paired computer after /inhabit.".into())
+        );
+        for cmd in ["/sync", "/inhabit"] {
+            let hit = |remote| {
+                hits(cmd, remote)
+                    .into_iter()
+                    .find(|h| h.cmd == cmd)
+                    .expect(cmd)
+            };
+            assert_eq!(hit(false).disabled, None, "{cmd}");
+            assert_eq!(
+                hit(true).disabled.as_deref(),
+                Some(ON_YOUR_COMPUTER),
+                "{cmd}"
+            );
+            assert_eq!(
+                parse(&format!("{cmd} desk"), true),
+                Err(format!("{cmd} works on your computer.")),
                 "{cmd}"
             );
         }
+        assert!(help().contains("/sync — Share chats and memory with paired computers"));
+        assert!(help().contains("/inhabit — Hand your soul, skills and goal to a paired computer"));
+        assert_eq!(
+            apply(Action::Hub(HubSend::Sync), std::path::Path::new(".")),
+            Err("That needs this computer's hub.".into())
+        );
+        // The card's Send names what goes, in the shape the chat sends back.
+        assert_eq!(
+            serde_json::to_value(HubSend::Inhabit { peer: "d-1".into() }).unwrap(),
+            serde_json::json!({ "what": "inhabit", "peer": "d-1" })
+        );
+        assert_eq!(
+            serde_json::from_value::<HubSend>(serde_json::json!({ "what": "sync" })).unwrap(),
+            HubSend::Sync
+        );
     }
 
     #[test]

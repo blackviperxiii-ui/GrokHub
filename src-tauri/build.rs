@@ -35,8 +35,7 @@ fn newest_stable_tag(tags: &str) -> Option<&str> {
     best.map(|(_, t)| t)
 }
 
-/// The shell's channel and beta number, the way the cabin labels its own
-/// builds: `GROKHUB_CHANNEL` wins, else a `beta` checkout builds as beta, and
+/// The shell's channel and beta number: `GROKHUB_CHANNEL` wins, else a `beta` checkout builds as beta, and
 /// N counts commits since the newest stable tag (0 without tags). The shell
 /// updater (src/shell_update.rs) compares releases against this version.
 fn build_info(manifest: &Path) {

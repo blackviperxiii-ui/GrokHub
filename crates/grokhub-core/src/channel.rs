@@ -1,10 +1,14 @@
 //! Install channels. `stable` builds `main`; `beta` builds the `beta` branch.
 //! `scripts/install.sh --channel beta|stable` writes the choice to the
-//! `channel` receipt in the config folder, and the in-app Update reads it so a
-//! beta install never pulls `main`.
+//! `channel` receipt in the config folder, and the app's Updates page reads it
+//! to pick which releases to offer.
 
 /// The receipt file name inside the config folder (next to `source`).
 pub const CHANNEL_RECEIPT: &str = "channel";
+
+/// The old cabin's Beta auto-off baseline, next to the `channel` receipt.
+/// A channel switch deletes it so a stale baseline never lingers.
+pub const CHANNEL_BETA_SINCE: &str = "channel.beta-since";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Channel {
@@ -41,107 +45,6 @@ impl Channel {
             Channel::Beta => "beta",
         }
     }
-
-    /// The branch this channel builds and Update pulls.
-    pub fn branch(self) -> &'static str {
-        match self {
-            Channel::Stable => "main",
-            Channel::Beta => "beta",
-        }
-    }
-}
-
-/// What `grokhub --version` reports.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BuildVersion {
-    /// `2.10.91-beta.3` on beta, `2.10.91` on stable (legacy bare `-beta` still parses).
-    pub version: String,
-    pub channel: Channel,
-    /// Branch (or release tag) the binary was built from; empty when unknown.
-    pub branch: String,
-    /// Short commit SHA; empty when unknown.
-    pub sha: String,
-}
-
-/// `Loadout 2.10.91-beta.3 (beta @ abc1234)` / `Loadout 2.10.91 (main @ abc1234)`,
-/// led by the product name from `brand.json`. Without git info it is
-/// `Loadout 2.10.91`. `beta_n` is the prerelease number
-/// on Beta (`-beta.N`); ignored on Stable.
-pub fn version_line(base: &str, channel: Channel, branch: &str, sha: &str, beta_n: u64) -> String {
-    let version = match channel {
-        Channel::Beta => format!("{base}-beta.{beta_n}"),
-        Channel::Stable => base.to_string(),
-    };
-    let name = crate::brand::product_name();
-    match (branch.trim(), sha.trim()) {
-        ("", "") => format!("{name} {version}"),
-        ("", sha) => format!("{name} {version} ({sha})"),
-        (branch, "") => format!("{name} {version} ({branch})"),
-        (branch, sha) => format!("{name} {version} ({branch} @ {sha})"),
-    }
-}
-
-/// A `--version` line without its leading product name. Takes the current
-/// name and the old `GrokHub ` one, which installs before the rename print.
-pub fn strip_product_prefix(line: &str) -> &str {
-    let line = line.trim_start();
-    [crate::brand::product_name(), crate::brand::INTERNAL_ID]
-        .iter()
-        .find_map(|name| line.strip_prefix(name).and_then(|r| r.strip_prefix(' ')))
-        .unwrap_or(line)
-}
-
-/// Core `X.Y.Z` and channel from a version token (`2.13.0-beta.2`, bare
-/// `2.13.0-beta`, or `2.13.0`).
-fn version_core_channel(version: &str) -> Option<(&str, Channel)> {
-    if let Some((core, n)) = version.rsplit_once("-beta.") {
-        if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
-            return Some((core, Channel::Beta));
-        }
-        return None;
-    }
-    if let Some(core) = version.strip_suffix("-beta") {
-        return Some((core, Channel::Beta));
-    }
-    Some((version, Channel::Stable))
-}
-
-/// Reads a `--version` line back. Also takes the old `GrokHub ` prefix, the
-/// old bare `2.10.90` output and legacy `2.10.91-beta` (no `.N`).
-pub fn parse_version_line(line: &str) -> Option<BuildVersion> {
-    let line = line.trim();
-    let rest = strip_product_prefix(line).trim();
-    let (version, paren) = match rest.split_once(' ') {
-        Some((v, p)) => (v.trim(), p.trim()),
-        None => (rest, ""),
-    };
-    let (core, channel) = version_core_channel(version)?;
-    let parts: Vec<&str> = core.split('.').collect();
-    if parts.len() != 3
-        || parts
-            .iter()
-            .any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()))
-    {
-        return None;
-    }
-    let (branch, sha) = if paren.is_empty() {
-        (String::new(), String::new())
-    } else {
-        let inner = paren.strip_prefix('(')?.strip_suffix(')')?.trim();
-        match inner.split_once(" @ ") {
-            Some((b, s)) => (b.trim().to_string(), s.trim().to_string()),
-            None if inner.bytes().all(|b| b.is_ascii_hexdigit()) => {
-                (String::new(), inner.to_string())
-            }
-            None => (inner.to_string(), String::new()),
-        }
-    };
-    Some(BuildVersion {
-        version: version.to_string(),
-        channel,
-        branch,
-        sha,
-    })
 }
 
 #[cfg(test)]
@@ -166,90 +69,7 @@ mod tests {
         assert_eq!(Channel::from_receipt("\n  BETA \n"), Channel::Beta);
         assert_eq!(Channel::parse("main"), Some(Channel::Stable));
         assert_eq!(Channel::parse("alpha"), None);
-        assert_eq!(Channel::Beta.branch(), "beta");
-        assert_eq!(Channel::Stable.branch(), "main");
         assert_eq!(CHANNEL_RECEIPT, "channel");
-    }
-
-    #[test]
-    fn version_lines_name_the_channel_branch_and_sha() {
-        assert_eq!(
-            version_line("2.10.91", Channel::Beta, "beta", "abc1234", 3),
-            "Loadout 2.10.91-beta.3 (beta @ abc1234)"
-        );
-        assert_eq!(
-            version_line("2.10.91", Channel::Stable, "main", "abc1234", 0),
-            "Loadout 2.10.91 (main @ abc1234)"
-        );
-        assert_eq!(
-            version_line("2.10.91", Channel::Stable, "v2.10.91", "bb7890b", 0),
-            "Loadout 2.10.91 (v2.10.91 @ bb7890b)"
-        );
-        assert_eq!(
-            version_line("2.10.91", Channel::Stable, "", "", 0),
-            "Loadout 2.10.91"
-        );
-        assert_eq!(
-            version_line("2.10.91", Channel::Beta, "", "abc1234", 0),
-            "Loadout 2.10.91-beta.0 (abc1234)"
-        );
-    }
-
-    #[test]
-    fn version_lines_parse_back() {
-        assert_eq!(
-            parse_version_line("Loadout 2.10.91-beta.3 (beta @ abc1234)\n"),
-            Some(BuildVersion {
-                version: "2.10.91-beta.3".into(),
-                channel: Channel::Beta,
-                branch: "beta".into(),
-                sha: "abc1234".into(),
-            })
-        );
-        assert_eq!(
-            parse_version_line("GrokHub 2.10.91-beta (beta @ abc1234)\n"),
-            Some(BuildVersion {
-                version: "2.10.91-beta".into(),
-                channel: Channel::Beta,
-                branch: "beta".into(),
-                sha: "abc1234".into(),
-            })
-        );
-        assert_eq!(
-            parse_version_line("Loadout 2.10.91 (main @ 0f1e2d3)"),
-            Some(BuildVersion {
-                version: "2.10.91".into(),
-                channel: Channel::Stable,
-                branch: "main".into(),
-                sha: "0f1e2d3".into(),
-            })
-        );
-        assert_eq!(
-            parse_version_line("2.10.90"),
-            Some(BuildVersion {
-                version: "2.10.90".into(),
-                channel: Channel::Stable,
-                branch: String::new(),
-                sha: String::new(),
-            })
-        );
-        assert_eq!(
-            parse_version_line("GrokHub 2.13.0-beta.10 (abc1234)").map(|v| (v.channel, v.version)),
-            Some((Channel::Beta, "2.13.0-beta.10".to_string()))
-        );
-        assert_eq!(
-            parse_version_line("GrokHub 2.10.91-beta (abc1234)").map(|v| (v.channel, v.sha)),
-            Some((Channel::Beta, "abc1234".to_string()))
-        );
-        assert_eq!(parse_version_line("Loadout two (main @ x)"), None);
-        assert_eq!(
-            strip_product_prefix("Loadout 3.5.0 (beta @ a)"),
-            "3.5.0 (beta @ a)"
-        );
-        assert_eq!(strip_product_prefix("GrokHub 3.5.0"), "3.5.0");
-        assert_eq!(strip_product_prefix("3.5.0"), "3.5.0");
-        assert_eq!(parse_version_line("GrokHub 2.10.91 (main @ abc1234"), None);
-        assert_eq!(parse_version_line(""), None);
     }
 
     /// Runs the real `scripts/install.sh --dry-run`: it parses the flags and
@@ -278,7 +98,7 @@ mod tests {
         let receipt = cfg.join("channel").display().to_string();
         let plan = |c: &str, b: &str, sw: u8| {
             format!(
-                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=shell"
+                "channel={c} branch={b} switch={sw} prefix=/tmp/gh-chan receipt={receipt} app=shell mode=prebuilt"
             )
         };
         assert_eq!(run(&["--user", "--dry-run"]).1, plan("stable", "main", 0));
@@ -312,8 +132,110 @@ mod tests {
                 "error: --channel takes beta or stable".into()
             )
         );
+        assert_eq!(
+            run(&["--user", "--from-source", "--channel", "beta", "--dry-run"]).1,
+            plan("beta", "beta", 1).replace("mode=prebuilt", "mode=source")
+        );
+        assert_eq!(
+            run(&["--from-source", "--version", "v3.5.0", "--dry-run"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --version and --from-dir pick a prebuilt release; leave them out with --from-source".into()
+            )
+        );
+        assert_eq!(
+            run(&["--version", "latest", "--dry-run"]),
+            (
+                Some(2),
+                String::new(),
+                "error: --version takes a release tag like v3.5.0, not 'latest'".into()
+            )
+        );
         assert_eq!(run(&["--bogus"]).0, Some(2));
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    /// The prebuilt install trusts only the release key.
+    #[test]
+    fn install_scripts_carry_the_release_key() {
+        let key = include_str!("../../../packaging/minisign.pub")
+            .lines()
+            .nth(1)
+            .expect("key line")
+            .trim();
+        assert_eq!(
+            key,
+            "RWR4FhfLw4OqMXxiX+l3k/KmAVfsRzTpUD28zoz3HacmWPiwbTnyXgeD"
+        );
+        let sh = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
+        assert!(sh.contains(&format!("\nRELEASE_PUBKEY=\"{key}\"\n")));
+        let ps = include_str!("../../../scripts/install.ps1").replace("\r\n", "\n");
+        assert!(ps.contains(&format!("\n$ReleasePubkey = '{key}'\n")));
+    }
+
+    /// Runs the real prebuilt path on v3.5.0's signed SHA256SUMS with
+    /// `--from-dir` (no network): a good signature gets as far as the hash
+    /// check, which a stand-in AppImage fails, and an edited SHA256SUMS stops
+    /// at the signature. Nothing is installed either way.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn the_prebuilt_install_checks_the_signature_then_the_hash() {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        let signed = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/testdata/release-v3.5.0"
+        );
+        let tmp = std::env::temp_dir().join(format!("grokhub-prebuilt-sh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let rel = tmp.join("rel");
+        std::fs::create_dir_all(&rel).unwrap();
+        for f in ["SHA256SUMS", "SHA256SUMS.minisig"] {
+            std::fs::copy(format!("{signed}/{f}"), rel.join(f)).unwrap();
+        }
+        std::fs::write(
+            rel.join("grokhub-shell-v3.5.0-linux-amd64.AppImage"),
+            "not the app",
+        )
+        .unwrap();
+        let prefix = tmp.join("prefix");
+        let run = || {
+            let out = std::process::Command::new("bash")
+                .arg(script)
+                .arg("--from-dir")
+                .arg(&rel)
+                .arg(format!("--prefix={}", prefix.display()))
+                .env("GROKHUB_CONFIG", tmp.join("cfg"))
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            )
+        };
+        assert_eq!(
+            run(),
+            (
+                Some(1),
+                "error: grokhub-shell-v3.5.0-linux-amd64.AppImage doesn't match SHA256SUMS; nothing was installed".into()
+            )
+        );
+        let sums = std::fs::read_to_string(rel.join("SHA256SUMS")).unwrap();
+        std::fs::write(
+            rel.join("SHA256SUMS"),
+            sums.replace("3.5.0.exe", "3.5.1.exe"),
+        )
+        .unwrap();
+        assert_eq!(
+            run(),
+            (
+                Some(1),
+                "error: SHA256SUMS isn't signed by the release key; nothing was installed".into()
+            )
+        );
+        assert!(!prefix.exists());
+        assert!(!tmp.join("cfg/channel").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `--app` picks which desktop app the clone install builds. No `--app`
@@ -343,7 +265,7 @@ mod tests {
         let receipt = cfg.join("channel").display().to_string();
         let plan = |app: &str| {
             format!(
-                "channel=stable branch=main switch=0 prefix=/tmp/gh-app receipt={receipt} app={app}"
+                "channel=stable branch=main switch=0 prefix=/tmp/gh-app receipt={receipt} app={app} mode=prebuilt"
             )
         };
         assert_eq!(
@@ -406,7 +328,7 @@ mod tests {
         std::fs::write(cfg.join("channel"), Channel::Beta.receipt()).unwrap();
         let out = std::process::Command::new("bash")
             .arg(repo.join("scripts/install.sh"))
-            .arg("--user")
+            .args(["--user", "--from-source"])
             .env("GROKHUB_CONFIG", &cfg)
             .env("PREFIX", base.join("prefix"))
             .output()
@@ -491,7 +413,7 @@ mod tests {
         );
         std::process::Command::new("bash")
             .arg(repo.join("scripts/install.sh"))
-            .args(["--user", "--channel", "beta"])
+            .args(["--user", "--from-source", "--channel", "beta"])
             .env("GROKHUB_CONFIG", base.join("cfg"))
             .env("PREFIX", base.join("prefix"))
             .env("PATH", path)
@@ -562,7 +484,7 @@ mod tests {
     }
 
     /// A real code edit next to Cargo.lock still refuses, lists both files
-    /// (into update.log via the host output), and touches neither.
+    /// on stderr, and touches neither.
     #[cfg(unix)]
     #[test]
     fn install_sh_refuses_a_real_edit_plus_cargo_lock_and_lists_both() {
@@ -643,493 +565,127 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
     }
-}
-
-/// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.
-pub fn channel_status_line(channel: Channel, branch: &str, sha: &str) -> String {
-    let ch = channel.as_str();
-    match (branch.trim(), sha.trim()) {
-        ("", "") => ch.to_string(),
-        ("", sha) => format!("{ch} · {sha}"),
-        (branch, "") => format!("{ch} · {branch}"),
-        (branch, sha) => format!("{ch} · {branch} @ {sha}"),
-    }
-}
-
-/// Tips of `origin/beta` and `origin/main` after a fetch: commit SHAs plus
-/// their tree hashes (`origin/<branch>^{tree}`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ChannelTips {
-    pub beta_sha: String,
-    pub main_sha: String,
-    pub beta_tree: String,
-    pub main_tree: String,
-}
-
-/// True when beta has caught up to main: the trees are identical, or the tips
-/// are the same commit. Main moves by squash and the main → beta sync always
-/// adds a merge commit, so after a promote the SHAs differ but the trees match.
-/// Empty, short (< 7) or non-hex values never count as caught up.
-pub fn beta_caught_up_to_main(tips: &ChannelTips) -> bool {
-    same_tip_sha(&tips.beta_sha, &tips.main_sha) || same_tree(&tips.beta_tree, &tips.main_tree)
-}
-
-/// Same commit: exact match, or one is a prefix of the other (short vs full SHA).
-fn same_tip_sha(beta_sha: &str, main_sha: &str) -> bool {
-    let (b, m) = (normalize_git_sha(beta_sha), normalize_git_sha(main_sha));
-    valid_git_hash(&b) && valid_git_hash(&m) && (b == m || b.starts_with(&m) || m.starts_with(&b))
-}
-
-/// Same tree: the full tree hashes from `git rev-parse` are equal.
-fn same_tree(beta_tree: &str, main_tree: &str) -> bool {
-    let (b, m) = (normalize_git_sha(beta_tree), normalize_git_sha(main_tree));
-    valid_git_hash(&b) && b == m
-}
-
-/// A real hash (git's default short length is 7), hex only.
-fn valid_git_hash(s: &str) -> bool {
-    s.len() >= 7 && s.bytes().all(|c| c.is_ascii_hexdigit())
-}
-
-fn normalize_git_sha(s: &str) -> String {
-    s.trim().to_ascii_lowercase()
-}
-
-/// Next to the `channel` receipt: main's tree on the first auto-off check after
-/// opting in to Beta. Auto-off waits until main's tree moves past it (a real
-/// promote), so a beta that equals main right after a main → beta sync stays on.
-/// Turning Beta on clears it; switching to stable deletes it.
-pub const CHANNEL_BETA_SINCE: &str = "channel.beta-since";
-
-/// What one auto-off check should do. See [`auto_off_step`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AutoOffStep {
-    /// Stay on the current channel; nothing to write.
-    Stay,
-    /// First check since opting in: store this main tree as the baseline, stay on beta.
-    RecordBaseline(String),
-    /// Main moved past the baseline and beta caught up to it: switch to stable.
-    SwitchToStable,
-}
-
-/// Auto-off policy for one check. Only Beta ever moves. With no valid
-/// `beta_since` baseline, record main's tree and stay. With one, switch to
-/// stable only when beta caught up to main (same tree or tip) and main's tree
-/// is no longer the baseline. Pure — no I/O.
-pub fn auto_off_step(
-    current: Channel,
-    tips: &ChannelTips,
-    beta_since: Option<&str>,
-) -> AutoOffStep {
-    if current != Channel::Beta {
-        return AutoOffStep::Stay;
-    }
-    let main_tree = normalize_git_sha(&tips.main_tree);
-    if !valid_git_hash(&main_tree) {
-        return AutoOffStep::Stay;
-    }
-    let baseline = beta_since
-        .map(normalize_git_sha)
-        .filter(|b| valid_git_hash(b));
-    match baseline {
-        None => AutoOffStep::RecordBaseline(main_tree),
-        Some(b) if b != main_tree && beta_caught_up_to_main(tips) => AutoOffStep::SwitchToStable,
-        Some(_) => AutoOffStep::Stay,
-    }
-}
-
-/// Windows Labs copy: Beta comes from signed pre-releases there, never a source build.
-pub const CHANNEL_WINDOWS_NOTE: &str =
-    "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS; building the beta channel from a source clone is Linux-only. Beta doesn't turn off by itself on Windows yet, so turn it off here to go back to stable.";
-
-/// Labs / docs copy: auto-off when beta catches up to main (Linux now; Windows with channels).
-pub const CHANNEL_AUTO_OFF_NOTE: &str =
-    "When beta catches up to main (same code), Labs Beta turns off and stays on stable — re-enable anytime.";
-
-/// Clear Labs failure copy for a channel switch.
-pub fn channel_switch_fail_hint(stderr_or_status: &str) -> &'static str {
-    let s = stderr_or_status.to_ascii_lowercase();
-    if let Some(hint) = specific_fail_hint(&s) {
-        hint
-    } else if s.contains("channel switching is not available on windows")
-        || s.contains("windows") && s.contains("channel")
-    {
-        CHANNEL_WINDOWS_NOTE
-    } else {
-        "Channel switch failed — previous install kept."
-    }
-}
-
-/// Clear Settings → Update failure copy from the host output of an Update.
-/// Falls back to "Update failed" when nothing specific matches.
-pub fn update_fail_hint(output: &str) -> &'static str {
-    specific_fail_hint(&output.to_ascii_lowercase()).unwrap_or("Update failed")
-}
-
-/// The causes an Update or channel switch can name (input is lowercased):
-/// dirty clone, Rust too old, no clone, clone on the other branch, build failed.
-fn specific_fail_hint(s: &str) -> Option<&'static str> {
-    Some(if s.contains("untracked working tree files would be") {
-        crate::brand::filled("Your {product} source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again.")
-    } else if s.contains("uncommitted changes")
-        || s.contains("would be overwritten by")
-        || s.contains("you have unstaged changes")
-        || s.contains("commit your changes or stash them")
-    {
-        crate::brand::filled("Your {product} source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
-    } else if s.contains("requires rustc")
-        || s.contains("rustc") && s.contains("is not supported")
-        || s.contains("rust-version")
-    {
-        crate::brand::filled(
-            "{product} needs a newer Rust to build. Run rustup update, then try again.",
-        )
-    } else if s.contains("not a grokhub source")
-        || s.contains("can't find its source folder")
-        || s.contains("no clone")
-        || s.contains("set settings → source")
-        || s.contains("grokhub_src")
-    {
-        crate::brand::filled(
-            "{product} can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).",
-        )
-    } else if s.contains("is on main but the beta channel") || s.contains("source clone is on main")
-    {
-        crate::brand::filled("Your {product} source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta).")
-    } else if s.contains("is on beta but the stable channel")
-        || s.contains("source clone is on beta")
-    {
-        crate::brand::filled("Your {product} source folder is on beta, but {product} is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main).")
-    } else if s.contains("build failed")
-        || s.contains("cargo")
-        || s.contains("could not compile")
-        || s.contains("error: could not compile")
-    {
-        "Build failed — previous install kept."
-    } else {
-        return None;
-    })
-}
-
-/// Shell plan that backups binaries, runs `install.sh --user --channel …`, and
-/// restores the previous binaries if the install exits non-zero.
-pub fn channel_switch_shell(source: &str, target: Channel, home: &str) -> String {
-    let src = source.trim().trim_end_matches('/');
-    let home = home.trim().trim_end_matches('/');
-    let channel = target.as_str();
-    let bak = format!("{home}/.local/share/grokhub/channel-bak");
-    let bin = format!("{home}/.local/bin");
-    // Single host command so a failed install always restores before we return.
-    format!(
-        "set -euo pipefail; \
-bak='{bak}'; bin='{bin}'; \
-mkdir -p \"$bak\" \"$bin\"; \
-cp -f \"$bin/grokhub\" \"$bak/grokhub\" 2>/dev/null || true; \
-cp -f \"$bin/grokhub-hub\" \"$bak/grokhub-hub\" 2>/dev/null || true; \
-if ! '{src}/scripts/install.sh' --user --channel {channel}; then \
-  cp -f \"$bak/grokhub\" \"$bin/grokhub\" 2>/dev/null || true; \
-  cp -f \"$bak/grokhub-hub\" \"$bin/grokhub-hub\" 2>/dev/null || true; \
-  echo 'channel switch failed — previous install kept' >&2; \
-  exit 1; \
-fi"
-    )
-}
-
-/// Preflight errors before spawning the switch. `windows` is passed in so
-/// Linux unit tests can assert the Windows note.
-pub fn channel_switch_preflight(
-    windows: bool,
-    source: Option<&std::path::Path>,
-) -> Result<(), String> {
-    if windows {
-        return Err(CHANNEL_WINDOWS_NOTE.to_string());
-    }
-    match source {
-        Some(p) if is_source_tree(p) => Ok(()),
-        Some(_) | None => Err(crate::brand::filled(
-            "{product} can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).",
-        )
-        .into()),
-    }
-}
-
-fn is_source_tree(dir: &std::path::Path) -> bool {
-    dir.join("Cargo.toml").is_file()
-        && dir.join("scripts/install.sh").is_file()
-        && dir.join("crates/grokhub-core").is_dir()
-}
-
-#[cfg(test)]
-mod channel_switch_tests {
-    use super::*;
-    use std::path::Path;
 
     #[test]
-    fn status_line_names_channel_branch_and_sha() {
-        assert_eq!(
-            channel_status_line(Channel::Beta, "beta", "abc1234"),
-            "beta · beta @ abc1234"
-        );
-        assert_eq!(
-            channel_status_line(Channel::Stable, "main", "0f1e2d3"),
-            "stable · main @ 0f1e2d3"
-        );
-        assert_eq!(channel_status_line(Channel::Stable, "", ""), "stable");
-        assert_eq!(
-            channel_status_line(Channel::Beta, "", "deadbeef"),
-            "beta · deadbeef"
-        );
-    }
-
-    #[test]
-    fn fail_hints_are_literal_and_specific() {
-        assert_eq!(
-            channel_switch_fail_hint("error: /x has uncommitted changes; commit or stash"),
-            "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."
-        );
-        assert_eq!(
-            channel_switch_fail_hint("not a GrokHub source tree — set Settings → source"),
-            "Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
-        );
-        assert_eq!(
-            channel_switch_fail_hint("error: could not compile `grokhub-app`"),
-            "Build failed — previous install kept."
-        );
-        assert_eq!(
-            channel_switch_fail_hint("something else blew up"),
-            "Channel switch failed — previous install kept."
-        );
-        assert_eq!(
-            channel_switch_fail_hint(CHANNEL_WINDOWS_NOTE),
-            CHANNEL_WINDOWS_NOTE
-        );
-    }
-
-    #[test]
-    fn update_and_switch_hints_name_the_real_cause() {
-        let dirty =
-            "error: /src has uncommitted changes; commit or stash them before --channel stable";
-        let pull_dirty = "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md";
-        let rustc = "error: package `eframe v0.36.2` cannot be built because it requires rustc 1.88 or newer, while the currently active rustc version is 1.80.0";
-        let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
-        let on_beta = "source clone is on beta — checkout main, then Update";
-        let untracked = "error: The following untracked working tree files would be overwritten by merge:\n\tdocs/notes.md\nPlease move or remove them before you merge.";
-        for (out, hint) in [
-            (untracked, "Your Loadout source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again."),
-            (dirty, "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
-            (pull_dirty, "Your Loadout source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
-            (rustc, "Loadout needs a newer Rust to build. Run rustup update, then try again."),
-            ("Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).", "Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."),
-            (on_main, "Your Loadout source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."),
-            (on_beta, "Your Loadout source folder is on beta, but Loadout is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."),
-            ("error: could not compile `grokhub-app`", "Build failed — previous install kept."),
-        ] {
-            assert_eq!(update_fail_hint(out), hint, "{out}");
-            assert_eq!(channel_switch_fail_hint(out), hint, "{out}");
-        }
-        assert_eq!(
-            update_fail_hint("$ git pull\nexit 1 · 20ms\nfatal: unable to access"),
-            "Update failed"
-        );
-        assert_eq!(
-            channel_switch_fail_hint("fatal: unable to access"),
-            "Channel switch failed — previous install kept."
-        );
-    }
-
-    #[test]
-    fn switch_shell_backs_up_runs_install_and_restores_on_fail() {
-        let sh = channel_switch_shell("/repo/GrokHub", Channel::Beta, "/home/box");
-        assert!(sh.contains("--channel beta"), "{sh}");
-        assert!(sh.contains("/repo/GrokHub/scripts/install.sh"), "{sh}");
+    fn install_sh_never_pgreps_grokhub() {
+        let install = include_str!("../../../scripts/install.sh");
         assert!(
-            sh.contains("/home/box/.local/share/grokhub/channel-bak"),
-            "{sh}"
+            !install.contains("pgrep grokhub"),
+            "install.sh must never pgrep grokhub: {install}"
         );
-        assert!(
-            sh.contains("cp -f \"$bak/grokhub\" \"$bin/grokhub\""),
-            "{sh}"
-        );
-        assert!(sh.contains("previous install kept"), "{sh}");
-        let stable = channel_switch_shell("/repo", Channel::Stable, "/home/u");
-        assert!(stable.contains("--channel stable"), "{stable}");
-        assert!(!stable.contains("--channel beta"), "{stable}");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn preflight_blocks_windows_and_missing_clone() {
-        assert_eq!(
-            channel_switch_preflight(true, Some(Path::new("/tmp"))),
-            Err(CHANNEL_WINDOWS_NOTE.to_string())
-        );
-        assert_eq!(
-            channel_switch_preflight(false, None),
-            Err(
-                "Loadout can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
-                    .into()
-            )
-        );
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        assert!(channel_switch_preflight(false, Some(&root)).is_ok());
-    }
-
-    #[test]
-    fn windows_note_is_the_labs_copy() {
-        assert!(CHANNEL_WINDOWS_NOTE.starts_with(
-            "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS;"
+    fn install_sh_skips_sudo_when_packages_present_or_no_tty() {
+        let base = std::env::temp_dir().join(format!(
+            "grokhub-pkg-skip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
-        assert!(CHANNEL_WINDOWS_NOTE
-            .contains("building the beta channel from a source clone is Linux-only"));
-    }
-
-    fn tips(beta_sha: &str, main_sha: &str, beta_tree: &str, main_tree: &str) -> ChannelTips {
-        ChannelTips {
-            beta_sha: beta_sha.into(),
-            main_sha: main_sha.into(),
-            beta_tree: beta_tree.into(),
-            main_tree: main_tree.into(),
+        let _ = std::fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        let cfg = base.join("cfg");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
+        // Shim pacman: -Q succeeds (packages present); -S would write a marker.
+        std::fs::write(
+            bin.join("pacman"),
+            "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 0; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            bin.join("sudo"),
+            "#!/bin/sh\necho SUDO \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexec \"$@\"\n",
+        )
+        .unwrap();
+        // Shim id -u: as root the block installs without asking, but this
+        // case is a normal user, also when the tests run as root.
+        std::fs::write(
+            bin.join("id"),
+            "#!/bin/sh\nif [ \"$1\" = -u ]; then echo 1000; else exec /usr/bin/id \"$@\"; fi\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["pacman", "sudo", "id"] {
+                let mut perms = std::fs::metadata(bin.join(name)).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(bin.join(name), perms).unwrap();
+            }
         }
-    }
-
-    #[test]
-    fn beta_caught_up_to_main_same_sha_true_false_and_prefix() {
-        let sha = |b: &str, m: &str| beta_caught_up_to_main(&tips(b, m, "", ""));
-        assert!(sha("abc1234deadbeef", "abc1234deadbeef"));
-        assert!(sha("abc1234", "abc1234deadbeef"));
-        assert!(sha("ABC1234DEADBEEF", "abc1234deadbeef"));
-        assert!(!sha("abc1234", "def5678"));
-        assert!(!sha("", "abc1234"));
-        assert!(!sha("abc1234", ""));
-        assert!(!sha("  ", "abc"));
-        assert!(!sha("ab", "abc1234")); // under 7 chars
-        assert!(!sha("abc12xx", "abc1234")); // non-hex
-    }
-
-    #[test]
-    fn beta_caught_up_to_main_same_tree_different_sha() {
-        // Squash promote + merge-commit sync (#507 / #508): SHAs differ, tree 47fd2b27 matches.
-        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        assert!(beta_caught_up_to_main(&tips(
-            "e79aa50f", "7266ae6a", tree, tree
-        )));
-        assert!(beta_caught_up_to_main(&tips(
-            "e79aa50f",
-            "7266ae6a",
-            &tree.to_ascii_uppercase(),
-            &format!(" {tree}\n")
-        )));
-        // Different trees and different SHAs: not caught up.
-        assert!(!beta_caught_up_to_main(&tips(
-            "e79aa50f",
-            "7266ae6a",
-            tree,
-            "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        )));
-        // Trees compare in full — a prefix is not the same tree.
-        assert!(!beta_caught_up_to_main(&tips(
-            "e79aa50f", "7266ae6a", tree, "47fd2b27"
-        )));
-        // Missing or junk trees never match.
-        assert!(!beta_caught_up_to_main(&tips(
-            "e79aa50f", "7266ae6a", "", ""
-        )));
-        assert!(!beta_caught_up_to_main(&tips(
-            "e79aa50f", "7266ae6a", "zzzzzzzz", "zzzzzzzz"
-        )));
-        assert!(!beta_caught_up_to_main(&ChannelTips::default()));
-    }
-
-    #[test]
-    fn auto_off_waits_for_main_to_move_past_the_opt_in_baseline() {
-        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let older = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let caught_up = tips("e79aa50f", "7266ae6a", tree, tree);
-        // First check after opting in: record main's tree, stay on beta.
-        assert_eq!(
-            auto_off_step(Channel::Beta, &caught_up, None),
-            AutoOffStep::RecordBaseline(tree.into())
-        );
-        assert_eq!(
-            auto_off_step(Channel::Beta, &caught_up, Some("  \n")),
-            AutoOffStep::RecordBaseline(tree.into())
-        );
-        // Same tree as the baseline (a sync, no promote): stays on.
-        assert_eq!(
-            auto_off_step(Channel::Beta, &caught_up, Some(&format!("{tree}\n"))),
-            AutoOffStep::Stay
-        );
-        // An opt-in from before a promote: main moved past the baseline and
-        // beta caught up, so Beta turns off.
-        assert_eq!(
-            auto_off_step(Channel::Beta, &caught_up, Some(older)),
-            AutoOffStep::SwitchToStable
-        );
-        // Main moved but beta is not caught up: stays on.
-        let ahead = tips("e79aa50f", "7266ae6a", older, tree);
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &ahead,
-                Some("2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        // Extract and run only the package block via a tiny harness: dry-run
+        // never reaches try_pkgs, so the test runs that section on its own.
+        let harness = base.join("pkg-harness.sh");
+        let install_text = include_str!("../../../scripts/install.sh");
+        let start = install_text
+            .find("PKG_SKIP_FILE=")
+            .expect("PKG_SKIP_FILE in install.sh");
+        let end = install_text[start..]
+            .find("\nif command -v systemctl")
+            .map(|i| start + i)
+            .expect("end of package block");
+        let block = &install_text[start..end];
+        std::fs::write(
+            &harness,
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nGROKHUB_CONFIG=\"{cfg}\"\nexport GROKHUB_CONFIG\n{block}\n",
+                cfg = cfg.display()
             ),
-            AutoOffStep::Stay
+        )
+        .unwrap();
+        let log = base.join("pkg.log");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
         );
-        // Stable never moves; a missing main tree records nothing.
-        assert_eq!(
-            auto_off_step(Channel::Stable, &caught_up, Some(older)),
-            AutoOffStep::Stay
+        // Packages present → pacman -Q succeeds → no sudo.
+        let out = std::process::Command::new("bash")
+            .arg(&harness)
+            .env("PATH", &path)
+            .env("GROKHUB_PKG_LOG", &log)
+            .env("HOME", &base)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr={}",
+            String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(
-            auto_off_step(Channel::Beta, &ChannelTips::default(), None),
-            AutoOffStep::Stay
+        assert!(
+            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
+            "no sudo when packages present"
         );
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &tips("abc1234", "abc1234", "", ""),
-                Some(older)
-            ),
-            AutoOffStep::Stay
+        // Missing packages + no TTY → note, no sudo.
+        std::fs::write(
+            bin.join("pacman"),
+            "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 1; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&log);
+        let out = std::process::Command::new("bash")
+            .arg(&harness)
+            .env("PATH", &path)
+            .env("GROKHUB_PKG_LOG", &log)
+            .env("HOME", &base)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "stderr={stderr}");
+        assert!(
+            stdout.contains("pkgs: skipped (no TTY)") || stderr.contains("pkgs: skipped (no TTY)"),
+            "stdout={stdout} stderr={stderr}"
         );
-        assert_eq!(CHANNEL_BETA_SINCE, "channel.beta-since");
-    }
-
-    #[test]
-    fn beta_turned_on_while_beta_equals_main_sticks_across_checks() {
-        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let synced = tips("e79aa50f", "7266ae6a", tree, tree);
-        let AutoOffStep::RecordBaseline(baseline) = auto_off_step(Channel::Beta, &synced, None)
-        else {
-            panic!("first check records the baseline");
-        };
-        assert_eq!(baseline, tree);
-        // Every later check and every main -> beta sync with the same tree stays on.
-        for _ in 0..3 {
-            assert_eq!(
-                auto_off_step(Channel::Beta, &synced, Some(&baseline)),
-                AutoOffStep::Stay
-            );
-        }
-        let same_sha = tips("7266ae6a", "7266ae6a", tree, tree);
-        assert_eq!(
-            auto_off_step(Channel::Beta, &same_sha, Some(&baseline)),
-            AutoOffStep::Stay
+        assert!(
+            !log.exists() || !std::fs::read_to_string(&log).unwrap().contains("SUDO"),
+            "no sudo without TTY"
         );
-        // The next promote changes main's tree; once beta catches up, Beta turns off.
-        let promoted = "3333333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &tips("aa11bb22", "cc33dd44", promoted, promoted),
-                Some(&baseline)
-            ),
-            AutoOffStep::SwitchToStable
-        );
-    }
-
-    #[test]
-    fn auto_off_note_documents_linux_and_future_windows() {
-        assert!(CHANNEL_AUTO_OFF_NOTE.contains("beta catches up to main"));
-        assert!(CHANNEL_WINDOWS_NOTE.contains("Beta doesn't turn off by itself on Windows yet"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

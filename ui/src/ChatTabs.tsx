@@ -1,6 +1,8 @@
 // Hangout tab strip under the title bar: Switch, Pin, Archive, Rename, Delete
 // (soft), Clear (asks first), and restore menus for Archived / Recently deleted.
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+// Main sits first and only offers Clear: it can't be archived, deleted,
+// renamed or unpinned.
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import {
   chatTabArchive,
   chatTabPin,
@@ -14,11 +16,13 @@ import {
   listDeletedChats,
   type ChatTab,
 } from "./api";
+import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ClearChatDialog } from "./ClearChat";
 import { useDismiss } from "./ui";
 
 export const CHAT_TABS_LABEL = "Chat tabs";
 export const NEW_CHAT_TAB = "New chat";
+export const MAIN_TAB_HINT = "Main: always here. Clear empties it.";
 
 function shortTitle(title: string): string {
   const words = title.trim().split(/\s+/).filter(Boolean).slice(0, 4);
@@ -33,6 +37,8 @@ type Menu =
 
 export function ChatTabs({
   activeId,
+  active = true,
+  busy = false,
   draftEmpty,
   onSwitch,
   onNew,
@@ -40,19 +46,24 @@ export function ChatTabs({
   onError,
 }: {
   activeId: string;
+  /** The Chat tab is on screen, so Ctrl+Shift+A archives or unarchives this chat. */
+  active?: boolean;
+  /** A reply is running, so the open chat can't close yet and the key waits. */
+  busy?: boolean;
   /** Open empty draft shows as "New chat" until the first message names it. */
   draftEmpty: boolean;
   onSwitch: (id: string) => void;
   onNew: () => void;
-  /** Clear the open chat — parent runs the confirmed wipe. */
-  onClear: () => void;
+  /** Clear chat `id` — parent runs the confirmed wipe. `main` when it is
+   * Main, which is emptied in place rather than closed. */
+  onClear: (id: string) => Promise<void>;
   onError: (note: string) => void;
 }) {
   const [tabs, setTabs] = useState<ChatTab[]>([]);
   const [archived, setArchived] = useState<ChatTab[]>([]);
   const [deleted, setDeleted] = useState<ChatTab[]>([]);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [askClear, setAskClear] = useState(false);
+  const [askClear, setAskClear] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const tick = useRef(0);
 
@@ -154,28 +165,80 @@ export function ChatTabs({
 
   const shown = tabs.length > 0 ? tabs : [];
   const activeInList = shown.some((t) => t.id === activeId);
+  const isMain = (id: string) => shown.some((t) => t.id === id && t.main);
+
+  /** Ctrl+Shift+A: archive the open chat, or unarchive it when it is archived
+   * (opened from History). Main and a chat with nothing saved yet stay. The
+   * lists load only when the open chat changes, so a chat they don't know yet
+   * (saved since, or the lists not in) is looked up first. */
+  const keyRunning = useRef(false);
+  async function archiveByKey(id: string) {
+    let live = tabs;
+    let arch = archived;
+    if (!live.some((t) => t.id === id) && !arch.some((t) => t.id === id)) {
+      try {
+        [live, arch] = await Promise.all([listChatTabs(), listArchivedChats()]);
+      } catch {
+        return;
+      }
+    }
+    if (arch.some((t) => t.id === id)) await restoreArchived(id);
+    else if (live.some((t) => t.id === id && !t.main)) await archive(id);
+  }
+  const archiveKey = useEffectEvent((event: KeyboardEvent) => {
+    if (!isChatShortcut(event, "a", true)) return;
+    event.preventDefault();
+    if (event.repeat || dialogOpen() || busy || draftEmpty || keyRunning.current) return;
+    keyRunning.current = true;
+    void archiveByKey(activeId).finally(() => {
+      keyRunning.current = false;
+    });
+  });
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => archiveKey(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
+
+  async function clear(id: string) {
+    try {
+      await onClear(id);
+    } catch (err) {
+      onError(String(err));
+    }
+    refresh();
+  }
 
   return (
     <div className="chat-tabs" role="tablist" aria-label={CHAT_TABS_LABEL}>
       <div className="chat-tabs-row">
         {shown.map((tab) => {
+          // Main keeps its name even while empty.
           const label =
-            tab.id === activeId && draftEmpty ? NEW_CHAT_TAB : shortTitle(tab.title);
+            tab.id === activeId && draftEmpty && !tab.main ? NEW_CHAT_TAB : shortTitle(tab.title);
+          const kind = tab.main ? "chat-tab main" : tab.pinned ? "chat-tab pinned" : "chat-tab";
           return (
             <button
               key={tab.id}
               type="button"
               role="tab"
-              className={tab.pinned ? "chat-tab pinned" : "chat-tab"}
+              className={kind}
               aria-selected={tab.id === activeId}
-              title={tab.title}
+              title={tab.main ? MAIN_TAB_HINT : tab.title}
               onClick={() => void switchTo(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ kind: "tab", id: tab.id, at: { x: e.clientX, y: e.clientY } });
               }}
             >
-              {tab.pinned ? <span className="chat-tab-pin" aria-hidden="true">*</span> : null}
+              {tab.main ? (
+                <svg className="chat-tab-main-mark" viewBox="0 0 12 12" aria-hidden="true">
+                  <path d="M1.5 6 6 2l4.5 4M3 5v5h6V5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                </svg>
+              ) : tab.pinned ? (
+                <span className="chat-tab-pin" aria-hidden="true">*</span>
+              ) : null}
               {label}
             </button>
           );
@@ -220,10 +283,14 @@ export function ChatTabs({
           onDelete={() => void softDelete(menu.id)}
           onClear={() => {
             setMenu(null);
-            setAskClear(true);
+            setAskClear(menu.id);
           }}
-          clearOnly={menu.id === activeId && shown.length <= 1 && draftEmpty}
-        />
+          clearOnly={
+            isMain(menu.id) ||
+            (menu.id === activeId && shown.length <= 1 && draftEmpty)
+          }
+        >
+        </TabContextMenu>
       )}
 
       {menu?.kind === "tools" && (
@@ -267,10 +334,11 @@ export function ChatTabs({
       {askClear && (
         <ClearChatDialog
           onConfirm={() => {
-            setAskClear(false);
-            onClear();
+            const id = askClear;
+            setAskClear(null);
+            void clear(id);
           }}
-          onClose={() => setAskClear(false)}
+          onClose={() => setAskClear(null)}
         />
       )}
     </div>
@@ -286,7 +354,9 @@ function TabContextMenu({
   onDelete,
   onClear,
   clearOnly,
+  children,
 }: {
+  children?: ReactNode;
   at: { x: number; y: number };
   onClose: () => void;
   onPin: () => void;
@@ -365,6 +435,7 @@ function TabContextMenu({
           </button>
         </>
       )}
+      {children}
     </div>
   );
 }

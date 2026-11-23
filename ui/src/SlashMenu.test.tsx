@@ -29,7 +29,7 @@ vi.mock("./api", async () => {
   answerPermission: vi.fn(),
   cancelChat: vi.fn(),
   // No chat saved from an earlier launch.
-  getLastChat: () => Promise.resolve(null),
+  getStartChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
   onChatEvent: () => Promise.resolve(() => {}),
   helperQuestions: () => Promise.resolve([]),
@@ -45,7 +45,7 @@ vi.mock("./api", async () => {
 
 import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
 import { subscribeImagine } from "./imagineAsk";
-import { isSlashCommand } from "./SlashMenu";
+import { isShellLine, isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
   closeToTray: true,
@@ -58,6 +58,8 @@ const SETTINGS: Settings = {
   version: "3.1.0",
   summonHotkey: false,
   notifications: true,
+  dockPanels: false,
+  dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
 };
 
 const ROWS: SlashHit[] = [
@@ -65,7 +67,7 @@ const ROWS: SlashHit[] = [
   { cmd: "/remember", hint: "Save a memory note…", insert: "/remember ", runOnPick: false, disabled: null },
   { cmd: "/delete", hint: "Delete this chat (asks first)", insert: "/delete", runOnPick: true, disabled: null },
   { cmd: "/rename", hint: "Rename this chat…", insert: "/rename ", runOnPick: false, disabled: null },
-  { cmd: "/diagnose", hint: "Read-only checks", insert: "/diagnose", runOnPick: false, disabled: "In the cabin" },
+  { cmd: "/diagnose", hint: "Read-only checks", insert: "/diagnose", runOnPick: false, disabled: "Not in this app" },
 ];
 
 function rowsFor(draft: string): SlashHit[] {
@@ -88,6 +90,22 @@ describe("composer slash commands", () => {
     expect(isSlashCommand("/usr/bin is slow")).toBe(false);
     expect(isSlashCommand("/ hi")).toBe(false);
     expect(isSlashCommand("hello /plan")).toBe(false);
+    expect(isSlashCommand("$ git status")).toBe(true);
+    expect(isSlashCommand("  $ ls")).toBe(true);
+    expect(isSlashCommand("$5 is cheap")).toBe(false);
+    expect(isSlashCommand("$ ")).toBe(false);
+    expect(isSlashCommand("$  ls")).toBe(false);
+    expect(isSlashCommand("costs $ 5")).toBe(false);
+    // A browser sends `$ ` lines as messages.
+    expect(isSlashCommand("$ git status", true)).toBe(false);
+    expect(isSlashCommand("/plan", true)).toBe(true);
+    // Whitespace reads as Rust's `char::is_whitespace` does.
+    expect(isShellLine("\u0085$ ls")).toBe(true);
+    expect(isShellLine("\ufeff$ ls")).toBe(false);
+    expect(isShellLine("$ \u0085ls")).toBe(false);
+    expect(isShellLine("$ \ufeffls")).toBe(true);
+    expect(isShellLine("$\tls")).toBe(false);
+    expect(isShellLine("$ \u00a0ls")).toBe(false);
   });
 
   it("opens on / with the cabin's commands greyed, and Escape closes it", async () => {
@@ -97,7 +115,7 @@ describe("composer slash commands", () => {
     const list = await screen.findByRole("listbox", { name: "Commands" });
     expect(list).toHaveTextContent("/plan");
     expect(screen.getByRole("option", { name: /diagnose/ })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("In the cabin")).toBeInTheDocument();
+    expect(screen.getByText("Not in this app")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
   });
@@ -169,7 +187,7 @@ describe("composer slash commands", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/");
     expect(await screen.findByRole("option", { name: /\/delete/ })).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("option", { name: /\/rename/ })).not.toHaveAttribute("aria-disabled");
-    expect(screen.getAllByText("In the cabin")).toHaveLength(1);
+    expect(screen.getAllByText("Not in this app")).toHaveLength(1);
   });
 
   it("/delete asks first with the chat's name, and only Yes runs it", async () => {

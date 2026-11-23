@@ -43,12 +43,18 @@ grokhub-code = { path = "../crates/grokhub-code" }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The OS clock's UTC offset for `--automations`, which has no window to
+# report it. Already in the lock through tauri.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 keyring = { version = "4", default-features = false, features = ["v1"] }
 # Settings → Web access serves the UI and the remote API (Phase 5b).
 tiny_http = "0.12"
 # HTTPS for Settings → Web access (remote_tls.rs); ring only, as reqwest uses.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# Voice mode's streaming speech-to-text socket (stt_stream.rs), with the
+# same build and TLS config as the agent's sockets.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync", "macros"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 base64 = "0.23"
@@ -88,6 +94,14 @@ tauri-plugin-updater = "=2.14.1"
 # Push to talk: WebKitGTK asks the app before a page may use the mic.
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0.2"
+
+# Android seals credentials in the OS Keystore (SharedPreferences encrypted
+# with a Keystore key). keyring's `v1` feature has no Android store; the
+# agent installs this via keyring_blob::ensure_android_store. Named here so
+# feature unification keeps the store on phone builds.
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1"
+keyring-core = "1"
 
 [profile.release]
 lto = "thin"

@@ -128,19 +128,6 @@ mod app_nav_palette_settings_tests {
             "revert still has no finished key, so tick kicks a real walk: {files_q:?} {files:?}"
         );
     }
-
-    #[test]
-    fn overlay_update_skips_chat() {
-        let v = grokhub_core::overlay_update_begin(2);
-        assert!(v.stay_on_update);
-        assert!(!v.posts_chat);
-        let done = grokhub_core::overlay_update_finish(true, 50);
-        assert!(!done.posts_chat);
-        assert!(done.stay_on_update);
-        assert!(done.can_restart);
-        assert!(grokhub_core::overlay_update_can_restart(true, false));
-        assert!(!grokhub_core::overlay_update_can_restart(true, true));
-    }
 }
 
 /// From `crates/grokhub-app/src/app/tests.rs`.
@@ -188,56 +175,5 @@ mod app_tests {
             grokhub_core::ThemeChoice::System,
             false
         ));
-    }
-}
-
-/// From `crates/grokhub-app/src/update.rs`.
-mod update {
-    use grokhub_core::auto_off_step;
-    use grokhub_core::AutoOffStep;
-    use grokhub_core::Channel;
-
-    #[test]
-    fn auto_off_step_from_core_drives_receipt_policy() {
-        let tips = |b: &str, m: &str, bt: &str, mt: &str| grokhub_core::ChannelTips {
-            beta_sha: b.into(),
-            main_sha: m.into(),
-            beta_tree: bt.into(),
-            main_tree: mt.into(),
-        };
-        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let older = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &tips("e79aa50f", "7266ae6a", tree, tree),
-                Some(older)
-            ),
-            AutoOffStep::SwitchToStable
-        );
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &tips("e79aa50f", "7266ae6a", tree, tree),
-                Some(tree)
-            ),
-            AutoOffStep::Stay
-        );
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &tips("e79aa50f", "7266ae6a", tree, tree),
-                None
-            ),
-            AutoOffStep::RecordBaseline(tree.into())
-        );
-        assert_eq!(
-            auto_off_step(
-                Channel::Beta,
-                &tips("aaaaaaa", "bbbbbbb", older, tree),
-                Some(older)
-            ),
-            AutoOffStep::Stay
-        );
     }
 }

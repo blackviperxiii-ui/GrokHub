@@ -1,16 +1,23 @@
-//! Settings → Local AI: Auto (the default) or Manual, the model picker
-//! (`local_picker::score`), the files already on this PC, what hardware
-//! detection could not see, and the tray's state chip.
+//! Settings → Local AI: what Auto picks for this PC (`local_picker::score`),
+//! the model files the user added, the Advanced engine tuning, what hardware
+//! detection could not see, and the tray's state chip. There is no model
+//! picker: Auto picks the model, and a model file the user adds loads when no
+//! downloaded catalog model is there.
 //!
-//! Choices live in `local_ai.json` in the GrokHub config folder, the pick
-//! under `localModel.selected`. The cabin's `app.json` keeps its own
-//! `localModel` on/off switch, so the shell never writes there. The game,
-//! idle and battery switches and the app lists go to `local/governor.json`,
-//! which the cabin's governor reads.
+//! Choices live in `local_ai.json` in the GrokHub config folder, the added
+//! files under `ownFiles`. A file from before (with the old Auto / Manual
+//! `mode` and a `localModel.selected` pick) is read by [`load`]: a picked
+//! model file becomes an added file, a catalog pick goes back to Auto, and
+//! tuning saved under Auto is dropped. The `app.json` `localModel` on/off
+//! switch is separate: `local_use` owns it, and the typo tidy (`prompt_tidy`)
+//! only reads it. The game, idle and battery switches and the app lists go to
+//! `local/governor.json`, which the cabin's governor reads.
 
 use std::path::{Path, PathBuf};
 
-use grokhub_agent::route::{local_autoconfig, local_gov, local_live, local_sidecar, local_task};
+use grokhub_agent::route::{
+    local_autoconfig, local_gov, local_live, local_perf, local_sidecar, local_task,
+};
 use grokhub_core::local_discover::{self, FoundModel, Source};
 use grokhub_core::local_governor::{Level, Rules};
 use grokhub_core::local_picker::{self, BenchCache, Bucket, CpuSimd, Memory, Pick, Profile};
@@ -22,49 +29,18 @@ use crate::local_engine::{self, DraftOffer, DraftProgress, EngineInfo};
 
 pub const FILE: &str = "local_ai.json";
 
-/// Per-state memory caps may not go past this share.
-pub const CAP_MAX_PCT: u8 = 90;
-const CAP_MIN_PCT: u8 = 10;
 const CTX_MIN: u32 = 2_048;
 const CTX_MAX: u32 = 131_072;
 const NGL_MAX: u32 = 999;
 const IDLE_MAX_MIN: u32 = 240;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    Manual,
-    /// GrokHub picks the model and its settings for this machine. A value
-    /// this build doesn't know reads as Auto (serde wants it last).
-    #[default]
-    #[serde(other)]
-    Auto,
-}
-
-/// Memory share each governor state may plan for, in percent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Caps {
-    pub ramp_up: u8,
-    pub normal: u8,
-    pub throttle: u8,
-}
-
-impl Default for Caps {
-    fn default() -> Self {
-        Caps {
-            ramp_up: 90,
-            normal: 80,
-            throttle: 50,
-        }
-    }
-}
-
+/// Settings → Local AI → Advanced: engine tuning that applies whenever it's
+/// set (blank is Auto), idle unload, and the game app lists. Saved under
+/// `manual`. Device and memory-cap rows were removed: the launcher picks the
+/// backend, and governor budgets stay fixed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manual {
-    /// `auto`, or one of `cuda`, `rocm`, `vulkan`, `metal`, `sycl`, `cpu`.
-    pub backend: String,
     pub ngl: Option<u32>,
     pub ctx: Option<u32>,
     pub threads: Option<u32>,
@@ -72,7 +48,7 @@ pub struct Manual {
     pub kv: String,
     /// Minutes without a request before the model unloads.
     pub idle_minutes: u32,
-    pub caps: Caps,
+    /// Idle unload never fires (`local_perf` gets `u64::MAX`).
     pub never_unload: bool,
     /// Apps that never count as a game, even fullscreen.
     pub allow_apps: Vec<String>,
@@ -83,13 +59,11 @@ pub struct Manual {
 impl Default for Manual {
     fn default() -> Self {
         Manual {
-            backend: "auto".into(),
             ngl: None,
             ctx: None,
             threads: None,
             kv: "auto".into(),
             idle_minutes: 10,
-            caps: Caps::default(),
             never_unload: false,
             allow_apps: Vec::new(),
             deny_apps: Vec::new(),
@@ -97,23 +71,17 @@ impl Default for Manual {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Selected {
-    /// A catalog id, or the path of a model file. Empty: the tier default.
-    pub selected: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct LocalAiConfig {
-    pub mode: Mode,
     pub pause_for_games: bool,
     pub use_idle_time: bool,
     /// Local AI slows down on battery.
     pub throttle_on_battery: bool,
     pub manual: Manual,
-    pub local_model: Selected,
+    /// Model files the user added (`.gguf` paths). Auto scores them on merit
+    /// (size, speed) alongside downloaded catalog models.
+    pub own_files: Vec<String>,
     /// Third-party model files whose notice the user has read.
     pub notice_seen: Vec<String>,
 }
@@ -121,12 +89,11 @@ pub struct LocalAiConfig {
 impl Default for LocalAiConfig {
     fn default() -> Self {
         LocalAiConfig {
-            mode: Mode::Auto,
             pause_for_games: true,
             use_idle_time: true,
             throttle_on_battery: true,
             manual: Manual::default(),
-            local_model: Selected::default(),
+            own_files: Vec::new(),
             notice_seen: Vec::new(),
         }
     }
@@ -141,6 +108,17 @@ fn one_of(value: &str, allowed: &[&str]) -> String {
     }
 }
 
+/// Trimmed paths, each once, in order.
+fn paths(list: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in list.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        if !out.iter().any(|o| o == p) {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
 fn app_list(apps: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for app in apps.iter().map(|a| a.trim()).filter(|a| !a.is_empty()) {
@@ -152,31 +130,29 @@ fn app_list(apps: &[String]) -> Vec<String> {
 }
 
 impl LocalAiConfig {
-    /// Every number back in range: caps at most 90% of memory, `threads` at
-    /// most the machine's `max_threads`.
+    /// Every number back in range: `threads` at most the machine's
+    /// `max_threads`.
     pub fn clamped(mut self, max_threads: u32) -> Self {
         let m = &mut self.manual;
-        m.backend = one_of(
-            &m.backend,
-            &["auto", "cuda", "rocm", "vulkan", "metal", "sycl", "cpu"],
-        );
         m.kv = one_of(&m.kv, &["auto", "q8", "q4"]);
         m.ngl = m.ngl.map(|n| n.min(NGL_MAX));
         m.ctx = m.ctx.map(|c| c.clamp(CTX_MIN, CTX_MAX));
         m.threads = m.threads.map(|t| t.clamp(1, max_threads.max(1)));
         m.idle_minutes = m.idle_minutes.clamp(1, IDLE_MAX_MIN);
-        for cap in [
-            &mut m.caps.ramp_up,
-            &mut m.caps.normal,
-            &mut m.caps.throttle,
-        ] {
-            *cap = (*cap).clamp(CAP_MIN_PCT, CAP_MAX_PCT);
-        }
         m.allow_apps = app_list(&m.allow_apps);
         m.deny_apps = app_list(&m.deny_apps);
-        self.local_model.selected = self.local_model.selected.trim().to_string();
+        self.own_files = paths(&self.own_files);
         self.notice_seen = app_list(&self.notice_seen);
         self
+    }
+
+    /// Seconds of idle before unload: `u64::MAX` when Never unload is on.
+    pub fn idle_unload_secs(&self) -> u64 {
+        if self.manual.never_unload {
+            u64::MAX
+        } else {
+            u64::from(self.manual.idle_minutes).saturating_mul(60)
+        }
     }
 
     /// What `local/governor.json` holds for these choices.
@@ -191,11 +167,8 @@ impl LocalAiConfig {
         }
     }
 
-    /// The launch overrides Manual sets; Auto sets none.
+    /// The launch overrides Advanced sets; a blank one stays on Auto.
     pub fn overrides(&self) -> local_autoconfig::Overrides {
-        if self.mode == Mode::Auto {
-            return local_autoconfig::Overrides::default();
-        }
         let m = &self.manual;
         local_autoconfig::Overrides {
             ngl: m.ngl,
@@ -214,12 +187,41 @@ pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
 }
 
-/// A missing or broken file gives the defaults.
+/// A missing or broken file gives the defaults. A file from before the
+/// model picker went away is read as [`from_old`] says.
 pub fn load(config_dir: &Path) -> LocalAiConfig {
-    std::fs::read_to_string(path(config_dir))
+    let Some(raw) = std::fs::read_to_string(path(config_dir))
         .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    else {
+        return LocalAiConfig::default();
+    };
+    let config = serde_json::from_value(raw.clone()).unwrap_or_default();
+    from_old(&raw, config)
+}
+
+/// The old page had an Auto / Manual `mode` and a model pick
+/// (`localModel.selected`). A picked model file becomes an added file; a
+/// catalog pick goes back to Auto. Tuning only counted under Manual, so
+/// tuning saved under Auto is dropped rather than switched on now.
+fn from_old(raw: &serde_json::Value, mut config: LocalAiConfig) -> LocalAiConfig {
+    let pick = raw
+        .get("localModel")
+        .and_then(|m| m.get("selected"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let is_file = Path::new(pick)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
+    if is_file && !config.own_files.iter().any(|f| f == pick) {
+        config.own_files.push(pick.to_string());
+    }
+    if raw.get("mode").and_then(serde_json::Value::as_str) == Some("auto") {
+        let m = &mut config.manual;
+        (m.ngl, m.ctx, m.threads, m.kv) = (None, None, None, "auto".into());
+    }
+    config
 }
 
 fn write(path: &Path, text: &str) -> Result<(), String> {
@@ -228,6 +230,15 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// Hands Advanced choices to the live engine: launch overrides and the idle
+/// unload timeout (`local_perf` for the next start, the running sidecar at once).
+pub fn apply(config: &LocalAiConfig) {
+    local_autoconfig::set_overrides(config.overrides());
+    let secs = config.idle_unload_secs();
+    local_perf::set_idle_unload_secs(Some(secs));
+    local_sidecar::set_idle_unload_secs(secs);
 }
 
 /// Saves the choices and the governor's rules, and applies the overrides.
@@ -242,7 +253,7 @@ pub fn save(config_dir: &Path, config: &LocalAiConfig) -> Result<(), String> {
     }
     let rules = serde_json::to_string_pretty(&rules).map_err(|e| e.to_string())?;
     write(&gov, &rules)?;
-    local_autoconfig::set_overrides(config.overrides());
+    apply(config);
     Ok(())
 }
 
@@ -390,7 +401,7 @@ pub struct Picker {
     /// Recommended first, then May be slow, then Hidden (shown under Show all).
     pub models: Vec<ModelRow>,
     pub on_this_pc: Vec<FileRow>,
-    /// The pick: the saved one, else the tier default.
+    /// What Auto picks for this PC: the tier default.
     pub selected: String,
 }
 
@@ -473,14 +484,11 @@ pub fn picker(
         .iter()
         .map(|f| file_row(&f.path, f.bytes, source_name(f.source), &config.notice_seen))
         .collect();
-    let selected = match config.local_model.selected.as_str() {
-        "" => models
-            .iter()
-            .find(|m| m.preselected)
-            .map(|m| m.id.clone())
-            .unwrap_or_default(),
-        s => s.to_string(),
-    };
+    let selected = models
+        .iter()
+        .find(|m| m.preselected)
+        .map(|m| m.id.clone())
+        .unwrap_or_default();
     Picker {
         models,
         on_this_pc,
@@ -508,11 +516,13 @@ pub fn state_word(level: Level) -> &'static str {
     }
 }
 
-/// The Auto status line's parts. `set_up` is false until an engine and a model are on disk.
+/// The Auto status line's parts. `on` is the Use Local AI switch; `set_up`
+/// is false until an engine and a model are on disk.
 pub fn status(
     p: &Profile,
     picker: &Picker,
     bench: &BenchCache,
+    on: bool,
     set_up: bool,
     level: Level,
     reason: &str,
@@ -526,7 +536,12 @@ pub fn status(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "None (cloud only)".into()),
     };
-    let (state, reason) = if set_up {
+    let (state, reason) = if !on {
+        (
+            "Off".to_string(),
+            "Use Local AI on this computer is off.".to_string(),
+        )
+    } else if set_up {
         (state_word(level).to_string(), reason.to_string())
     } else {
         (
@@ -562,6 +577,10 @@ pub struct LocalAiView {
     pub draft_progress: Option<DraftProgress>,
     /// What runs now: model, where, speed, draft model, unload.
     pub running: Running,
+    /// Use Local AI on this computer.
+    pub local_use: crate::local_use::LocalUseView,
+    /// Tidy typos on this computer.
+    pub tidy: crate::prompt_tidy::TidyView,
 }
 
 /// The running-model rows and their two controls.
@@ -576,10 +595,22 @@ pub struct Running {
     pub dynamic_hint: String,
 }
 
-pub fn running(config_dir: &Path) -> Running {
+/// The Running now line while Use Local AI on this computer is off and no
+/// model is loaded: nothing loads with the next reply.
+pub const RUNNING_OFF: &str = "Running now: nothing. Local AI is off, so no model loads.";
+
+/// `on` is Use Local AI on this computer. While it is off nothing loads, so
+/// the "loads with the next reply" line would be wrong; a model still
+/// finishing an answer shows as usual until it stops.
+pub fn running(config_dir: &Path, on: bool) -> Running {
     let live = local_live::snapshot(config_dir);
+    let lines = if !on && live.model.is_none() {
+        vec![RUNNING_OFF.to_string()]
+    } else {
+        local_live::lines(&live)
+    };
     Running {
-        lines: local_live::lines(&live),
+        lines,
         loaded: live.model.is_some(),
         kept_loaded: live.kept_loaded,
         dynamic: local_task::dynamic(config_dir),
@@ -747,13 +778,9 @@ fn found_models(config_dir: &Path) -> Vec<FoundModel> {
         .collect();
     local_discover::discover(&home, ollama.as_deref(), &dirs)
         .into_iter()
-        .filter(|f| {
-            let name = f.path.file_name().map(|n| n.to_string_lossy().into_owned());
-            // Drafters pair with a model; they aren't one to chat with.
-            !ls::local_models()
-                .iter()
-                .any(|m| m.is_drafter && Some(m.file.to_string()) == name)
-        })
+        // Drafters and vision projectors pair with a model; they aren't one
+        // to chat with, and loading one as the model stops the engine.
+        .filter(|f| !local_sidecar::helper_gguf(&f.path))
         .collect()
 }
 
@@ -766,6 +793,8 @@ pub fn max_threads() -> u32 {
 /// Everything the page shows. Runs the hardware readers.
 pub fn view(config_dir: &Path) -> LocalAiView {
     let config = load(config_dir).clamped(max_threads());
+    // A restart must still honor Advanced: apply before the page is painted.
+    apply(&config);
     let machine = read_machine(config_dir);
     let p = machine.profile();
     let bench = BenchCache::new();
@@ -775,15 +804,12 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         &p,
         &picker,
         &bench,
+        crate::local_use::is_on(config_dir),
         set_up,
         local_gov::level(),
         local_gov::reason(),
     );
-    let selected = if config.local_model.selected.is_empty() {
-        picker.selected.as_str()
-    } else {
-        config.local_model.selected.as_str()
-    };
+    let selected = picker.selected.as_str();
     let env = |k: &str| std::env::var(k).ok();
     LocalAiView {
         limits: limits(&machine, std::env::consts::OS, &env),
@@ -791,7 +817,9 @@ pub fn view(config_dir: &Path) -> LocalAiView {
         draft_offer: local_engine::draft_offer(config_dir, selected),
         draft_offers: local_engine::draft_offers(config_dir),
         draft_progress: local_engine::draft_progress(),
-        running: running(config_dir),
+        running: running(config_dir, crate::local_use::is_on(config_dir)),
+        local_use: crate::local_use::view(config_dir),
+        tidy: crate::prompt_tidy::view(config_dir),
         config,
         status,
         picker,
@@ -799,7 +827,7 @@ pub fn view(config_dir: &Path) -> LocalAiView {
     }
 }
 
-/// "Use a model file": the path must be a `.gguf` that exists.
+/// "Add a model file": the path must be a `.gguf` that exists.
 pub fn model_file(path: &str, seen: &[String]) -> Result<FileRow, String> {
     let path = PathBuf::from(path.trim());
     let gguf = path
@@ -817,37 +845,45 @@ pub fn model_file(path: &str, seen: &[String]) -> Result<FileRow, String> {
 
 /// The speed test: the model with and without its draft model.
 pub fn speed_test(config_dir: &Path) -> Result<String, String> {
+    // The bench switches the router's local route on; while the switch is
+    // off it would load the model the user turned off.
+    if !crate::local_use::is_on(config_dir) {
+        return Err(SPEED_TEST_LOCAL_OFF.into());
+    }
     if local_sidecar::resolve_paths(config_dir).is_none() {
         return Err("Set up a local engine and model first, then run the speed test.".into());
     }
     grokhub_agent::route::local_bench::run_for_ui()
 }
 
+/// Why the speed test won't run while Use Local AI on this computer is off.
+pub const SPEED_TEST_LOCAL_OFF: &str =
+    "Turn on Use Local AI on this computer first, then run the speed test.";
+
 /// Saves the page's choices, clamped, and reads the page again.
 pub fn save_view(config_dir: &Path, config: LocalAiConfig) -> Result<LocalAiView, String> {
-    let before = local_sidecar::picked_model(config_dir);
+    let before = local_sidecar::find_model(config_dir);
     save(config_dir, &config.clamped(max_threads()))?;
-    // A new pick loads on the next request, not after a restart.
-    if local_sidecar::picked_model(config_dir) != before {
+    // A newly added (or removed) model file loads on the next request, not
+    // after a restart.
+    if local_sidecar::find_model(config_dir) != before {
         local_sidecar::stop_global();
     }
     Ok(refreshed(config_dir))
 }
 
-/// Reset to Auto: Manual's values and the pick go back to the defaults; the
-/// switches and the notices already read stay.
+/// Reset Advanced: the tuning and app lists go back to the defaults; the
+/// switches, the added files and the notices already read stay.
 pub fn reset(config_dir: &Path) -> Result<LocalAiView, String> {
     let old = load(config_dir);
     let config = LocalAiConfig {
-        mode: Mode::Auto,
         manual: Manual::default(),
-        local_model: Selected::default(),
         ..old
     };
     save_view(config_dir, config)
 }
 
-/// "Use a model file", against the notices already read.
+/// "Add a model file", against the notices already read.
 pub fn check_file(config_dir: &Path, path: &str) -> Result<FileRow, String> {
     model_file(path, &load(config_dir).notice_seen)
 }

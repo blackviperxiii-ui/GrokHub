@@ -27,26 +27,30 @@ pub fn runtime_download_host_ok(host: &str) -> bool {
 
 /// Refuse non-HTTPS runtime downloads and hosts outside [`RUNTIME_DOWNLOAD_HOSTS`].
 pub fn runtime_download_url_ok(url: &str) -> Result<(), String> {
+    github_download_url_ok(url, "engine download")
+}
+
+/// [`runtime_download_url_ok`] for another GitHub release download, with
+/// `what` ("model catalog download") leading each refusal.
+pub fn github_download_url_ok(url: &str, what: &str) -> Result<(), String> {
     crate::offline::refuse()?;
     let url = url.trim();
     if !url.starts_with("https://") {
-        return Err("engine download must use HTTPS".into());
+        return Err(format!("{what} must use HTTPS"));
     }
     let rest = url
         .strip_prefix("https://")
-        .ok_or_else(|| "engine download URL is invalid".to_string())?;
+        .ok_or_else(|| format!("{what} URL is invalid"))?;
     let host = rest
         .split(['/', '?', '#'])
         .next()
         .filter(|h| !h.is_empty())
-        .ok_or_else(|| "engine download URL is missing a host".to_string())?;
+        .ok_or_else(|| format!("{what} URL is missing a host"))?;
     if host_name_blocked(host) {
-        return Err(format!("engine download host {host} is not allowed"));
+        return Err(format!("{what} host {host} is not allowed"));
     }
     if !runtime_download_host_ok(host) {
-        return Err(format!(
-            "engine download host {host} is not on the allowlist"
-        ));
+        return Err(format!("{what} host {host} is not on the allowlist"));
     }
     Ok(())
 }
@@ -83,6 +87,57 @@ fn ipv4_blocked(ip: Ipv4Addr) -> bool {
         || (a == 198 && (b == 18 || b == 19))
         // 240.0.0.0/4 reserved
         || a >= 240
+}
+
+/// True when a server the user saved by hand (a SearXNG URL) must not be
+/// dialed at `ip`. Their own network is fine: private, carrier-grade NAT
+/// (Tailscale) and unique-local addresses, and public ones. Never: unspecified,
+/// `0/8`, broadcast, multicast, link-local (where cloud metadata answers),
+/// `192.0.0/24`, `198.18/15`, `240/4`, or IPv6 link- and site-local. Loopback
+/// only when `host` itself names this computer.
+pub fn saved_host_ip_refused(host: &str, ip: IpAddr) -> bool {
+    let v4 = match ip {
+        IpAddr::V4(v4) => Some(v4),
+        IpAddr::V6(v6) => embedded_v4(v6),
+    };
+    if ip.to_canonical().is_loopback() || v4.is_some_and(|v4| v4.is_loopback()) {
+        return !names_this_computer(host);
+    }
+    match (v4, ip) {
+        (Some(v4), _) => saved_host_v4_refused(v4),
+        (None, IpAddr::V6(v6)) => {
+            v6.is_unspecified()
+                || v6.is_multicast()
+                || v6.is_unicast_link_local()
+                || (v6.segments()[0] & 0xffc0) == 0xfec0
+        }
+        (None, IpAddr::V4(v4)) => saved_host_v4_refused(v4),
+    }
+}
+
+fn saved_host_v4_refused(v4: Ipv4Addr) -> bool {
+    let [a, b, c, _] = v4.octets();
+    v4.is_unspecified()
+        || v4.is_broadcast()
+        || v4.is_multicast()
+        || v4.is_link_local()
+        || a == 0
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 198 && (b == 18 || b == 19))
+        || a >= 240
+}
+
+/// `localhost` and its kin, or a loopback IP.
+fn names_this_computer(host: &str) -> bool {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.');
+    host_name_blocked(host)
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 /// Resolver shared by MCP registry refresh, Pulse, `web_fetch`, and media.
@@ -146,37 +201,29 @@ pub fn guard_mcp_registry_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ipv6_blocked(v6: Ipv6Addr) -> bool {
+/// The IPv4 address an IPv6 one carries, which must pass the IPv4 checks:
+/// mapped (`::ffff:a.b.c.d`), compatible (`::a.b.c.d`), NAT64 (`64:ff9b::/96`)
+/// or 6to4 (`2002::/16`).
+fn embedded_v4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
     if let Some(v4) = v6.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    let seg = v6.segments();
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
+    if seg[..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback() && !v6.is_unspecified() {
+        return Some(v4(seg[6], seg[7]));
+    }
+    if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0] {
+        return Some(v4(seg[6], seg[7]));
+    }
+    (seg[0] == 0x2002).then(|| v4(seg[1], seg[2]))
+}
+
+fn ipv6_blocked(v6: Ipv6Addr) -> bool {
+    if let Some(v4) = embedded_v4(v6) {
         return ipv4_blocked(v4);
     }
     let seg = v6.segments();
-    // IPv4-compatible (::a.b.c.d), NAT64 (64:ff9b::/96) and 6to4 (2002::/16)
-    // carry an IPv4 address that must pass the same check.
-    if seg[..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback() && !v6.is_unspecified() {
-        return ipv4_blocked(Ipv4Addr::new(
-            (seg[6] >> 8) as u8,
-            seg[6] as u8,
-            (seg[7] >> 8) as u8,
-            seg[7] as u8,
-        ));
-    }
-    if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0] {
-        return ipv4_blocked(Ipv4Addr::new(
-            (seg[6] >> 8) as u8,
-            seg[6] as u8,
-            (seg[7] >> 8) as u8,
-            seg[7] as u8,
-        ));
-    }
-    if seg[0] == 0x2002 {
-        return ipv4_blocked(Ipv4Addr::new(
-            (seg[1] >> 8) as u8,
-            seg[1] as u8,
-            (seg[2] >> 8) as u8,
-            seg[2] as u8,
-        ));
-    }
     v6.is_loopback()
         || v6.is_unspecified()
         || v6.is_multicast()
@@ -190,6 +237,50 @@ fn ipv6_blocked(v6: Ipv6Addr) -> bool {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn a_saved_server_may_be_on_your_network_but_not_a_reserved_address() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        for (host, addr) in [
+            ("searx.lan", "192.168.1.5"),
+            ("searx.lan", "10.0.0.2"),
+            ("box.tailnet.ts.net", "100.101.102.103"),
+            ("searx.lan", "fd00::5"),
+            ("searx.example", "93.184.216.34"),
+            ("localhost", "127.0.0.1"),
+            ("localhost.", "::1"),
+            ("searx.localhost", "127.0.0.1"),
+            ("127.0.0.1", "127.0.0.1"),
+            ("[::1]", "::1"),
+            ("::ffff:127.0.0.1", "::ffff:127.0.0.1"),
+        ] {
+            assert!(!saved_host_ip_refused(host, ip(addr)), "{host} → {addr}");
+        }
+        for (host, addr) in [
+            ("searx.example", "127.0.0.1"),
+            ("searx.lan", "127.0.0.2"),
+            ("searx.lan", "::1"),
+            ("searx.lan", "::ffff:127.0.0.1"),
+            ("searx.lan", "2002:7f00:1::"),
+            ("::7f00:1", "::7f00:1"),
+            ("searx.lan", "169.254.169.254"),
+            ("searx.lan", "::ffff:169.254.169.254"),
+            ("searx.lan", "64:ff9b::a9fe:a9fe"),
+            ("searx.lan", "fe80::1"),
+            ("searx.lan", "fec0::1"),
+            ("searx.lan", "0.0.0.0"),
+            ("searx.lan", "0.1.2.3"),
+            ("searx.lan", "::"),
+            ("searx.lan", "224.0.0.1"),
+            ("searx.lan", "ff02::1"),
+            ("searx.lan", "255.255.255.255"),
+            ("searx.lan", "240.0.0.1"),
+            ("searx.lan", "198.18.0.1"),
+            ("searx.lan", "192.0.0.1"),
+        ] {
+            assert!(saved_host_ip_refused(host, ip(addr)), "{host} → {addr}");
+        }
+    }
 
     #[test]
     fn blocked_ranges_cover_private_cgnat_and_mapped() {

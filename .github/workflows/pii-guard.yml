@@ -4,6 +4,9 @@ on:
   push:
     branches: [main, beta]
   merge_group:
+  # vstack-sync.yml starts it on the PRs it opens with the workflow token,
+  # which start no pull_request runs by themselves.
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:

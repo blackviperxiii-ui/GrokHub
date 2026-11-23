@@ -12,6 +12,11 @@
 use serde::Deserialize;
 
 use crate::local_setup::LocalModel;
+pub use crate::skill::{
+    load_skill_lock, save_skill_lock, scan_skill_md, skill_lock_path, skill_quarantine_reason,
+    verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillScan, SkillThreat,
+    SKILL_LOCK_FILE,
+};
 
 /// A model's scores, 0 to 100. A 0 means "not set": [`resolved`] fills it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

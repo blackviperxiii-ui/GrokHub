@@ -343,3 +343,57 @@ fn a_missing_keychain_is_named_in_plain_words() {
         "The system keychain is not available."
     );
 }
+
+/// Same get/set/delete shape as [`Keychain`], routed through
+/// [`grokhub_agent::keyring_blob`] so a long secret is proven without the OS.
+#[derive(Default)]
+struct BlobBackend(std::sync::Mutex<HashMap<String, String>>);
+
+impl grokhub_agent::keyring_blob::Backend for BlobBackend {
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        Ok(self.0.lock().unwrap().get(account).cloned())
+    }
+    fn set(&self, account: &str, value: &str) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(account.to_string(), value.to_string());
+        Ok(())
+    }
+    fn delete(&self, account: &str) -> Result<(), String> {
+        self.0.lock().unwrap().remove(account);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct BlobVault(BlobBackend);
+
+impl Vault for BlobVault {
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        grokhub_agent::keyring_blob::get(&self.0, account)
+    }
+    fn set(&self, account: &str, value: &str) -> Result<(), String> {
+        grokhub_agent::keyring_blob::set(&self.0, account, value)
+    }
+    fn delete(&self, account: &str) -> Result<(), String> {
+        grokhub_agent::keyring_blob::delete(&self.0, account)
+    }
+}
+
+#[test]
+fn a_secret_over_the_windows_limit_round_trips_through_the_code_store() {
+    let d = dir("chunk");
+    let vault = BlobVault::default();
+    let limit = grokhub_agent::keyring_blob::PLATFORM_UTF16_LIMIT;
+    let secret: String = (0..limit + 90)
+        .map(|i| char::from(b'a' + (i % 26) as u8))
+        .collect();
+    assert!(grokhub_agent::keyring_blob::utf16_units(&secret) > limit);
+    set(&d, &vault, KEY, "DEPLOY_TOKEN", &secret).unwrap();
+    let loaded = load_values(&d, &vault, KEY).unwrap();
+    assert_eq!(loaded.held(), vec![secret.clone()]);
+    delete(&d, &vault, KEY, "DEPLOY_TOKEN", true).unwrap();
+    assert!(list(&d, KEY).names.is_empty());
+    let _ = std::fs::remove_dir_all(&d);
+}

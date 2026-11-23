@@ -22,6 +22,12 @@ pub struct Automation {
     pub heartbeat_every_min: u32,
     #[serde(default)]
     pub check_command: String,
+    /// How the check command's output is used ([`crate::automation_check`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::automation_check::CheckGate::is_plain"
+    )]
+    pub gate: crate::automation_check::CheckGate,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -142,6 +148,10 @@ pub fn automation_health_line(a: &Automation) -> Option<String> {
 /// A failing automation by name: what its Pulse card is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutomationAlert {
+    /// The job's id, empty on rows saved before ids existed.
+    pub id: String,
+    /// Whether the job still runs. Only a running job can be paused.
+    pub enabled: bool,
     pub name: String,
     pub fail_streak: u32,
     pub error: String,
@@ -158,6 +168,8 @@ pub fn automation_alert(a: &Automation) -> Option<AutomationAlert> {
         a.health.error.clone()
     };
     Some(AutomationAlert {
+        id: a.id.clone(),
+        enabled: a.enabled,
         name: a.name.trim().to_string(),
         fail_streak: a.health.fail_streak.max(1),
         error,
@@ -405,6 +417,7 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
             instructions: t.to_string(),
             heartbeat_every_min: mins,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
@@ -446,6 +459,7 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
         instructions: t.to_string(),
         heartbeat_every_min: 0,
         check_command: String::new(),
+        gate: Default::default(),
         enabled: true,
         last_run: None,
         next_run: None,
@@ -834,6 +848,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_failing_alert_carries_the_jobs_id_and_whether_it_runs() {
+        let a: Automation = serde_json::from_str(
+            r#"{"id":"auto-0123456789abcdef","name":"Sync notes","schedule":"daily","time":"09:00","instructions":"sync","enabled":true,"health":{"outcome":"failed","error":"disk full","failStreak":5}}"#,
+        )
+        .expect("row loads");
+        let alert = automation_alert(&a).expect("failing");
+        assert_eq!(alert.id, "auto-0123456789abcdef");
+        assert!(alert.enabled);
+        assert_eq!(alert.fail_streak, 5);
+        assert_eq!(alert.error, "disk full");
+        let off = automation_alert(&Automation {
+            enabled: false,
+            ..a
+        })
+        .expect("failing");
+        assert!(!off.enabled);
+    }
+
+    #[test]
     fn parse_nl_automation_does_not_lowercase_an_8mb_complete() {
         let src = include_str!("automation.rs");
         let parse = src
@@ -1194,6 +1227,7 @@ mod tests {
                 instructions: "check".into(),
                 heartbeat_every_min: 0,
                 check_command: String::new(),
+                gate: Default::default(),
                 enabled: true,
                 last_run: None,
                 next_run: Some(500),
@@ -1256,6 +1290,7 @@ mod tests {
             instructions: "rm -rf /tmp/x".into(),
             heartbeat_every_min: 15,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
@@ -1276,6 +1311,7 @@ mod tests {
             instructions: "hello".into(),
             heartbeat_every_min: 0,
             check_command: "test -f /missing".into(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
@@ -1300,6 +1336,7 @@ mod tests {
             instructions: "summarize".into(),
             heartbeat_every_min: 0,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
@@ -1396,6 +1433,7 @@ mod tests {
             instructions: "summarize the board".into(),
             heartbeat_every_min: 0,
             check_command: String::new(),
+            gate: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,

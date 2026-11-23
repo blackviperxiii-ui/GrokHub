@@ -8,9 +8,8 @@ name: Release
 # push cancels a build still running; the nightly skips when that tag already
 # exists. Merges made with github.token start no push runs, so auto-merge needs
 # AUTO_MERGE_TOKEN (see auto-merge.yml) for its merges to publish.
-# Each release carries Linux and Windows builds, the Tauri shell's bundles
-# (Linux and Windows; macOS on tags, the nightly and manual runs, not on beta
-# pushes), `SHA256SUMS`, and
+# Each release carries the Tauri shell's bundles (Linux and Windows; macOS
+# on tags, the nightly and manual runs, not on beta pushes), `SHA256SUMS`, and
 # `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
 # `packaging/minisign.pub`; the updater refuses unverified assets.
 
@@ -204,8 +203,9 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
       # The shell's self-updater (LU-06) installs only what this signs: the
-      # AppImage and the NSIS installer, listed in latest.json with their
-      # minisign signatures. No key, no manifest, so shells don't offer it.
+      # AppImage, the .deb, the NSIS installer and (when macOS was built) the
+      # .app archive, listed in latest.json with their minisign signatures.
+      # No key, no manifest, so shells don't offer it.
       - name: Sign the shell updates
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
@@ -222,7 +222,10 @@ jobs:
           umask 077
           key="$RUNNER_TEMP/minisign.key"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
-          for f in "dist-release/grokhub-shell-v$ver-linux-amd64.AppImage" "dist-release/GrokHub-Shell-Setup-$ver.exe"; do
+          files=("dist-release/grokhub-shell-v$ver-linux-amd64.AppImage" "dist-release/grokhub-shell-v$ver-linux-amd64.deb" "dist-release/GrokHub-Shell-Setup-$ver.exe")
+          mac="dist-release/grokhub-shell-v$ver-macos-arm64.app.tar.gz"
+          if [ -e "$mac" ]; then files+=("$mac"); fi
+          for f in "${files[@]}"; do
             minisign -S -s "$key" -m "$f" -t "loadout shell $TAG"
             minisign -V -p packaging/minisign.pub -m "$f"
           done
@@ -271,9 +274,12 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
+            Loadout is built with Tauri.
+
             ## Install
             **Linux:** `grokhub-shell-v*-linux-amd64.AppImage` or `.deb`, or
-            `./scripts/install.sh --user` from a clone.
+            `curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash`,
+            which checks the signature first (`--from-source` builds a clone instead).
 
             **Windows:** run `GrokHub-Shell-Setup-*.exe`.
 
@@ -285,7 +291,4 @@ jobs:
             `SHA256SUMS` lists every file's SHA-256 and `SHA256SUMS.minisig` signs it.
             `minisign -V -p minisign.pub -m SHA256SUMS`, then `sha256sum -c SHA256SUMS --ignore-missing`.
             The public key is `packaging/minisign.pub` in the repo. GrokHub's updater checks both before it installs.
-
-            ## Code signing policy
-            Windows release binaries may be Authenticode-signed through SignPath Foundation when configured.
-            [docs/CODE_SIGNING.md](https://github.com/blackviperxiii-ui/GrokHub/blob/${{ steps.name.outputs.tag }}/docs/CODE_SIGNING.md)
+            The Windows installer isn't Authenticode-signed yet, so SmartScreen may ask before it runs.

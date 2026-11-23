@@ -7,9 +7,11 @@ import {
   saveSettings,
   setApiKey,
   setAutostart,
+  setDockPanels,
   setNotifications,
   setSummonHotkey,
   type Capabilities,
+  type Profile,
   type Settings as Shape,
 } from "./api";
 import { inShell } from "./transport";
@@ -17,6 +19,8 @@ import { Appearance } from "./Appearance";
 import { AutoSetupPage } from "./AutoSetup";
 import { Background } from "./Background";
 import { Behavior } from "./Behavior";
+import { BotDesktop } from "./BotDesktop";
+import { BrowserAttach } from "./BrowserAttach";
 import { CodeSettings } from "./CodeSettings";
 import { Defaults } from "./Defaults";
 import { GrokSignIn } from "./GrokSignIn";
@@ -24,14 +28,20 @@ import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { KnowMe } from "./KnowMe";
+import { PcHealth } from "./PcHealth";
+import { ProfileSettings } from "./Profile";
+import { PulseAuto } from "./PulseAuto";
 import { PulseSources } from "./PulseSources";
 import { AiModels } from "./AiModels";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
+import { GameCompanionSetting } from "./GameCompanionSetting";
 import { GameWatch } from "./GameWatch";
+import { LivingWall } from "./LivingWall";
 import { PcHelpers } from "./PcHelpers";
 import { ScreenshotExplain } from "./ScreenshotExplain";
 import { SteamPulseSources } from "./SteamPulseSources";
+import { LocalModelsSource } from "./LocalModelsSource";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { Learned } from "./Learned";
@@ -75,13 +85,19 @@ export function Settings({
   goTo,
   onClose,
   backTo,
+  onProfile,
+  onOpenConnectors,
 }: {
   caps: Capabilities;
-  goTo?: { section: Section; n: number };
+  goTo?: { section: Section; n: number; model?: string };
   /** Leaves Settings for the screen that was open before it. */
   onClose?: () => void;
   /** The name of that screen, for the Back button ("Back to Chat"). */
   backTo?: string;
+  /** The profile after a change in Account, so the rail shows it at once. */
+  onProfile?: (p: Profile) => void;
+  /** Opens the Connectors page, from the Labs note about MCP servers. */
+  onOpenConnectors?: () => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [desktopControl, setDesktopControl] = useState(false);
@@ -101,9 +117,13 @@ export function Settings({
   // A new palette pick opens its section. Settings stays mounted between visits,
   // so showing it again keeps the section that was open.
   const [goToN, setGoToN] = useState(goTo?.n);
+  // A Pulse card's model, shown once: picking a section here drops it, so
+  // coming back to Local AI later doesn't jump to it again.
+  const [modelFocus, setModelFocus] = useState(goTo?.model);
   if (goTo && goTo.n !== goToN) {
     setGoToN(goTo.n);
     setSection(goTo.section);
+    setModelFocus(goTo.model);
     clear();
   }
 
@@ -222,6 +242,7 @@ export function Settings({
 
   function open(next: Section) {
     setSection(next);
+    setModelFocus(undefined);
     clear();
   }
 
@@ -268,10 +289,21 @@ export function Settings({
               <Behavior
                 tray={caps.tray}
                 onCloseToTray={(closeToTray) => setSettings({ ...loaded, closeToTray })}
+                dock={
+                  inShell()
+                    ? { on: loaded.dockPanels, onToggle: (on) => void flip(() => setDockPanels(on)) }
+                    : null
+                }
               />
             )}
             {section === "behavior" && <ScreenshotExplain />}
+            {section === "behavior" && caps.pulse && (
+              <GameCompanionSetting
+                notifications={Boolean(loaded.notifications && caps.notifications)}
+              />
+            )}
             {section === "behavior" && <GameWatch />}
+            {section === "behavior" && <LivingWall />}
             {section === "behavior" && <MemoryRetention />}
             {section === "behavior" && <ChatArchive />}
             {section === "behavior" && <WorkboardTidy />}
@@ -293,12 +325,17 @@ export function Settings({
             {section === "code" && caps.code && <CodeSettings />}
             {section === "pulse" && caps.pulse && <Interests />}
             {section === "pulse" && caps.pulse && <SteamPulseSources />}
+            {section === "pulse" && caps.pulse && caps.localAi && <LocalModelsSource />}
             {section === "pulse" && caps.pulse && <KnowMe />}
             {section === "pulse" && caps.pulse && <PulseSources />}
-            {section === "localAi" && caps.localAi && <LocalAi />}
+            {section === "pulse" && caps.pulse && <PulseAuto />}
+            {section === "pulse" && caps.pulse && <PcHealth />}
+            {section === "localAi" && caps.localAi && (
+              <LocalAi focus={modelFocus && goToN !== undefined ? { id: modelFocus, n: goToN } : undefined} />
+            )}
             {section === "aiModels" && caps.localAi && <AiModels />}
             {section === "webAccess" && caps.webAccess && <WebAccess />}
-            {section === "labs" && caps.plugins && <Labs />}
+            {section === "labs" && caps.plugins && <Labs onOpenConnectors={onOpenConnectors} />}
             {section === "about" && <About version={loaded.version} />}
           </section>
         </div>
@@ -336,8 +373,13 @@ export function Settings({
           </Toggle>
           {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
           {globalHalt !== null && <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>}
-          <button type="submit">Save settings</button>
+          {/* Amber only while there is a change to save. */}
+          <button type="submit" className={settings && desktopControl !== settings.desktopControl ? "cta" : undefined}>
+            Save settings
+          </button>
         </form>
+        <BotDesktop />
+        <BrowserAttach />
         {onThisComputer}
       </>
     );
@@ -381,6 +423,12 @@ export function Settings({
   function account() {
     return (
       <>
+        <ProfileSettings
+          onProfile={onProfile}
+          signedIn={loaded.signedIn ? `${loaded.signedIn.name ?? ""}|${loaded.signedIn.email ?? ""}` : ""}
+          // Every desktop has a tray; phones have no file picker.
+          canPick={caps.tray}
+        />
         {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={show} />}
         <div className="key">
           <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
@@ -407,8 +455,8 @@ export function Settings({
   }
 }
 
-export const ABOUT_NOTE =
-  `This is the cross-platform app. The ${PRODUCT_NAME} cabin keeps working next to it until this app has everything the cabin has.`;
+/** Settings → About: stack line under the tagline. */
+export const ABOUT_STACK = `${PRODUCT_NAME} is built with Tauri.`;
 
 function About({ version }: { version: string }) {
   return (
@@ -418,8 +466,8 @@ function About({ version }: { version: string }) {
         {PRODUCT_NAME}
       </h2>
       <p className="note">{TAGLINE}</p>
+      <p className="note">{ABOUT_STACK}</p>
       <p>Version {version}</p>
-      <p className="note">{ABOUT_NOTE}</p>
       {inShell() && <Updates />}
     </div>
   );

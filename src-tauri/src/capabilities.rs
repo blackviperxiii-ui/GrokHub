@@ -41,6 +41,10 @@ pub struct Capabilities {
     /// The Mods page: this computer's moddable games, browse, search and
     /// For you. Desktops only.
     pub mods: bool,
+    /// The top bar's minimize, maximize and close buttons. On Linux and
+    /// Windows the main window has no system title bar, so the app draws
+    /// them; macOS keeps its own window buttons.
+    pub window_controls: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -71,6 +75,7 @@ pub fn for_env(os: &str, wayland: bool) -> Capabilities {
         code: desktop,
         auto_setup: desktop,
         mods: desktop,
+        window_controls: matches!(os, "linux" | "windows"),
     }
 }
 
@@ -123,10 +128,18 @@ mod tests {
             auto_setup: true,
             code: true,
             mods: true,
+            window_controls: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
-        assert_eq!(for_os("macos"), all);
+        // macOS keeps its own title bar and window buttons.
+        assert_eq!(
+            for_os("macos"),
+            Capabilities {
+                window_controls: false,
+                ..all
+            }
+        );
     }
 
     #[test]
@@ -147,6 +160,7 @@ mod tests {
             auto_setup: false,
             code: false,
             mods: false,
+            window_controls: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(
@@ -218,6 +232,7 @@ mod tests {
                 "autoSetup": false,
                 "code": false,
                 "mods": false,
+                "windowControls": false,
             })
         );
     }

@@ -93,7 +93,7 @@ fn gemma_e2b() -> GgufMeta {
 }
 
 fn args(p: &LocalProfile, meta: &GgufMeta, backend: Backend, state: GovState) -> LaunchArgs {
-    autoconfig(p, meta, backend, state, &Overrides::default())
+    autoconfig(p, meta, backend, state, &Overrides::default(), None)
 }
 
 #[test]
@@ -187,6 +187,45 @@ fn a_drafter_fits_only_beside_a_whole_model_or_on_the_cpu() {
     assert_eq!(fits(&low, &meta, &lo, GovState::Normal, &e2b), None);
 }
 
+/// A mixture of experts that keeps some layers' experts in RAM still drafts
+/// on the GPU when the launch left the drafter its room.
+#[test]
+fn a_drafter_fits_beside_a_moe_with_experts_in_ram() {
+    let moe = GgufMeta {
+        block_count: 30,
+        context_length: 262_144,
+        expert_count: 128,
+        file_mb: 16_018,
+        ..gemma_12b(None)
+    };
+    let e2b = gemma_e2b();
+    let card = machine(vec![nvidia(16_384, 15_800)], 65_536, 48_000);
+    let pair = autoconfig(
+        &card,
+        &moe,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        Some(&e2b),
+    );
+    assert_eq!(
+        (pair.ngl, pair.all_layers, pair.n_cpu_moe, pair.ctx),
+        (31, 31, Some(24), 16_384)
+    );
+    assert_eq!(fits(&card, &moe, &pair, GovState::Normal, &e2b), Some(true));
+    // The experts held in RAM must fit there too.
+    let tight = machine(vec![nvidia(16_384, 15_800)], 16_384, 6_000);
+    let t = autoconfig(
+        &tight,
+        &moe,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        Some(&e2b),
+    );
+    assert_eq!(fits(&tight, &moe, &t, GovState::Normal, &e2b), None);
+}
+
 /// A GGUF header with a vocabulary, written to `path`.
 fn write_gguf(path: &Path, arch: &str, tokens: &[&str], nextn: u32) {
     fn s(out: &mut Vec<u8>, v: &str) {
@@ -269,7 +308,6 @@ impl Rig {
             args: &self.a,
             tune_dir: &self.dir,
             device: "NVIDIA GeForce RTX",
-            gaming: false,
         })
     }
 }
@@ -284,12 +322,19 @@ const G12B_FILE: &str = "Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-
 const G12B_MTP: &str = "Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
 
 #[test]
-fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
+fn a_matching_catalog_drafter_loads_with_the_model_before_and_after_the_speed_test() {
     let rig = Rig::new("pair", G12B_FILE, Some((G12B_MTP, VOCAB)));
     let key = "NVIDIA GeForce RTX|Huihui-gemma-4-12B-it-qat-q4_0-unquantized-abliterated-Q4_K.gguf|Huihui-gemma-4-12B-it-abliterated-MTP-BF16.gguf";
+    let heads = DraftArgs {
+        kind: DraftKind::Mtp,
+        model: Some(rig.dir.join("drafters").join(G12B_MTP)),
+        on_gpu: true,
+        flags: rig.flags.clone(),
+    };
+    // Untested, the pair still loads together; the speed test runs later.
     let first = rig.plan(GovState::Normal);
     assert_eq!(first.decision, Decision::NeedsTest);
-    assert_eq!(first.draft, None);
+    assert_eq!(first.draft, Some(heads.clone()));
     assert_eq!(first.key.as_deref(), Some(key));
     assert_eq!(first.name.as_deref(), Some("Gemma 4 12B draft model"));
     let keep = Verdict {
@@ -301,15 +346,7 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     ld::save_verdict(&rig.dir, key, keep).unwrap();
     let on = rig.plan(GovState::Normal);
     assert_eq!(on.decision, Decision::On);
-    assert_eq!(
-        on.draft,
-        Some(DraftArgs {
-            kind: DraftKind::Mtp,
-            model: Some(rig.dir.join("drafters").join(G12B_MTP)),
-            on_gpu: true,
-            flags: rig.flags.clone(),
-        })
-    );
+    assert_eq!(on.draft, Some(heads));
     // The heads file loads as the draft model and drafts four ahead.
     let args = on.draft.unwrap().to_args();
     assert!(args.windows(2).any(|w| w[1] == "draft-mtp"), "{args:?}");
@@ -319,19 +356,17 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
     );
     assert!(args.windows(2).any(|w| w[1] == "4"), "{args:?}");
     assert_eq!(rig.plan(GovState::RampUp).decision, Decision::On);
+    // Throttle's halved budget leaves no room for the pair: the model is
+    // refused, never run alone, so a smaller model takes its place.
+    let throttled = rig.plan(GovState::Throttle);
     assert_eq!(
-        rig.plan(GovState::Throttle).decision,
-        Decision::Off("the machine is busy, so the draft model is off")
+        (throttled.decision, throttled.draft),
+        (Decision::NoRoom, None)
     );
-    // The speed test skips the level check; Throttle's halved budget still
-    // leaves no room next to the 12B.
     set_force(Some(true));
     let forced = rig.plan(GovState::Throttle).decision;
     set_force(None);
-    assert_eq!(
-        forced,
-        Decision::Off("there isn't room for the model and its draft model together")
-    );
+    assert_eq!(forced, Decision::NoRoom);
     ld::save_verdict(
         &rig.dir,
         key,
@@ -515,6 +550,7 @@ fn every_launch_flag_is_live_in_the_pinned_engine() {
         draft: Some(Box::new(d)),
         cpu_only: false,
         run: Default::default(),
+        projector: None,
     };
     let launches = [
         full(simple),
@@ -651,6 +687,43 @@ fn live_replies_that_keep_few_guesses_turn_the_drafter_off_until_a_retest() {
 }
 
 #[test]
+fn a_refused_pick_times_the_model_that_started_in_its_place_even_once_it_unloaded() {
+    use super::super::local_swap::{Hold, Refusals};
+    let pick = PathBuf::from("/home/user/models/my-app-12b.gguf");
+    let stand_in = PathBuf::from("/home/user/models/my-app-4b.gguf");
+    let paths = super::super::local_sidecar::SidecarPaths {
+        binary: PathBuf::from("/home/user/bin/llama-server"),
+        model: pick.clone(),
+    };
+    let note = super::super::local_sidecar::note_pick_refused;
+    note(&pick, &pick, &Refusals::default());
+    assert_eq!(timed_model(&paths), pick);
+    // The walk refused the pick and the 4B started; nothing is loaded now
+    // (it idle-unloaded), and the 4B is still the one timed.
+    let refused = Refusals {
+        models: vec![(pick.clone(), Hold::UntilUnload)],
+        since_ms: 0,
+    };
+    note(&pick, &stand_in, &refused);
+    assert_eq!(timed_model(&paths), stand_in);
+    // The pick loading clears it.
+    note(&pick, &pick, &Refusals::default());
+    assert_eq!(timed_model(&paths), pick);
+    // A pair that doesn't fit reads in plain words, never the internal reason.
+    assert_eq!(
+        start_line("refusal check", autoconfig::PAIR_NO_ROOM),
+        "The refusal check runs once the model and its draft model fit together."
+    );
+    assert_eq!(
+        start_line(
+            "refusal check",
+            "local model file missing: /home/user/m.gguf"
+        ),
+        "The refusal check couldn't start the model: local model file missing: /home/user/m.gguf"
+    );
+}
+
+#[test]
 fn the_refusal_check_reads_the_reply_not_the_reasoning() {
     let j = r#"{"choices":[{"message":{"role":"assistant","content":"  Use kill -9.  ","reasoning_content":"I can't..."}}]}"#;
     assert_eq!(reply_text(j).as_deref(), Some("Use kill -9."));
@@ -660,10 +733,10 @@ fn the_refusal_check_reads_the_reply_not_the_reasoning() {
 }
 
 #[test]
-fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
+fn a_game_runs_the_pair_on_the_cpu_and_keeps_its_own_speed_test() {
     let rig = Rig::new("gaming", G12B_FILE, Some((G12B_MTP, VOCAB)));
     let cpu = crate::route::local_autoconfig::gaming_launch(&rig.a);
-    let at = |device: &str, gaming: bool| {
+    let at = |device: &str| {
         plan(&Launch {
             flags: &rig.flags,
             model: &rig.model,
@@ -673,17 +746,19 @@ fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
             args: &cpu,
             tune_dir: &rig.dir,
             device,
-            gaming,
         })
     };
-    assert_eq!(
-        at("cpu", false).decision,
-        Decision::Off("the machine is busy, so the draft model is off"),
-        "a throttled machine outside a game still turns it off"
-    );
-    let first = at(GAMING_DEVICE, true);
+    // Throttle no longer turns the drafter off: the pair runs in RAM.
+    let throttled = at("cpu");
+    assert_eq!(throttled.decision, Decision::NeedsTest);
+    assert_eq!(throttled.draft.map(|d| d.on_gpu), Some(false));
+    let first = at(GAMING_DEVICE);
     assert_eq!(first.decision, Decision::NeedsTest, "no gaming verdict yet");
-    assert_eq!(first.draft, None, "the model runs alone until it's tested");
+    assert_eq!(
+        first.draft.as_ref().map(|d| d.on_gpu),
+        Some(false),
+        "the untested pair runs together, off the GPU"
+    );
     let key = first.key.expect("verdict key");
     assert!(key.starts_with("cpu-gaming|"), "{key}");
     let keep = Verdict {
@@ -693,7 +768,7 @@ fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
         retest_at: None,
     };
     ld::save_verdict(&rig.dir, &key, keep).unwrap();
-    let on = at(GAMING_DEVICE, true);
+    let on = at(GAMING_DEVICE);
     assert_eq!(on.decision, Decision::On);
     assert_eq!(
         on.draft.map(|d| d.on_gpu),
@@ -709,9 +784,13 @@ fn a_game_keeps_the_drafter_on_the_cpu_only_on_its_own_speed_test() {
         },
     )
     .unwrap();
+    let lost = at(GAMING_DEVICE);
     assert_eq!(
-        at(GAMING_DEVICE, true).draft,
-        None,
-        "a lost test turns it off"
+        (lost.decision, lost.draft),
+        (
+            Decision::Off("the speed test found the draft model didn't help"),
+            None
+        ),
+        "a lost test turns it off and the model runs alone"
     );
 }

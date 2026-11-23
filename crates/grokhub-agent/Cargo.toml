@@ -73,3 +73,9 @@ windows-sys = { version = "0.61", features = [
 # Naming it here adds that feature on iOS only (feature unification).
 [target.'cfg(target_os = "ios")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["protected"] }
+
+# keyring's `v1` facade has no Android store. Wire the OS Keystore through
+# keyring-core + android-native-keyring-store (see keyring_blob::ensure_android_store).
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1"
+keyring-core = "1"

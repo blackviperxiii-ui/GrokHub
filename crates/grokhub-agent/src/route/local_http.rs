@@ -29,6 +29,8 @@ pub struct HttpLocalRuntime {
     unified: bool,
     /// Requests on the server this runtime talks to.
     in_flight: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    /// The server loaded its vision projector, so it reads pictures.
+    sees_pictures: bool,
 }
 
 impl std::fmt::Debug for HttpLocalRuntime {
@@ -54,7 +56,15 @@ impl HttpLocalRuntime {
             slots: 1,
             unified: false,
             in_flight: None,
+            sees_pictures: false,
         }
+    }
+
+    /// The server loaded its vision projector (see
+    /// [`LocalRuntime::sees_pictures`]).
+    pub fn with_sight(mut self, sees_pictures: bool) -> Self {
+        self.sees_pictures = sees_pictures;
+        self
     }
 
     /// The server's slots and request count, for [`Self::share_of`] and
@@ -195,6 +205,79 @@ impl HttpLocalRuntime {
         let text = self.chat_once(&messages, self.background_slot(), Some(lean))?;
         parse_json_object(&text).ok_or_else(|| format!("local model did not return JSON: {text}"))
     }
+
+    /// Call the OpenAI-compatible `{base_url}/v1/embeddings` endpoint on the
+    /// loopback `llama-server` (router-mode managed embeddings slot).
+    pub fn embed(&self, inputs: &[String], model: Option<&str>) -> Result<Vec<Vec<f32>>, String> {
+        if !self.loopback_ok() {
+            return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
+        }
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let _busy = self.call_busy();
+        super::local_sidecar::touch_global();
+        let body = json!({
+            "model": model.unwrap_or(&self.model),
+            "input": inputs,
+        });
+        let resp = Self::agent()
+            .post(&format!("{}/v1/embeddings", self.base_url))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Content-Type", "application/json")
+            .send_json(body)
+            .map_err(request_failed)?;
+        if resp.status() >= 400 {
+            let status = resp.status();
+            let err_body = resp.into_string().unwrap_or_default();
+            return Err(format!("local embeddings HTTP {status}: {err_body}"));
+        }
+        let v: Value = resp
+            .into_json()
+            .map_err(|e| format!("local embeddings JSON: {e}"))?;
+        parse_embeddings(&v)
+    }
+}
+
+/// Request embeddings from the running sidecar's managed local embeddings slot
+/// (router mode), if an embedding GGUF is resident.
+pub fn embed_local(inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    let Some((base_url, token, model_id)) = super::local_sidecar::sidecar_embedding_endpoint()
+    else {
+        return Err("no resident local embedding model".into());
+    };
+    HttpLocalRuntime::new(base_url, token)
+        .with_model(model_id.clone())
+        .embed(inputs, Some(&model_id))
+}
+
+fn parse_embeddings(v: &Value) -> Result<Vec<Vec<f32>>, String> {
+    let data = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .ok_or_else(|| "local embeddings response missing data array".to_string())?;
+    let mut indexed: Vec<(usize, Vec<f32>)> = Vec::with_capacity(data.len());
+    for (fallback_idx, item) in data.iter().enumerate() {
+        let idx = item
+            .get("index")
+            .and_then(|i| i.as_u64())
+            .map(|i| i as usize)
+            .unwrap_or(fallback_idx);
+        let arr = item
+            .get("embedding")
+            .and_then(|e| e.as_array())
+            .ok_or_else(|| format!("local embeddings item {idx} missing embedding vector"))?;
+        let mut vec = Vec::with_capacity(arr.len());
+        for num in arr {
+            let f = num
+                .as_f64()
+                .ok_or_else(|| format!("local embeddings item {idx} has non-numeric entry"))?;
+            vec.push(f as f32);
+        }
+        indexed.push((idx, vec));
+    }
+    indexed.sort_by_key(|(idx, _)| *idx);
+    Ok(indexed.into_iter().map(|(_, v)| v).collect())
 }
 
 /// What a background call asks the server for: no thinking, a short reply,
@@ -310,6 +393,10 @@ impl HttpLocalRuntime {
 }
 
 impl LocalRuntime for HttpLocalRuntime {
+    fn sees_pictures(&self) -> bool {
+        self.sees_pictures
+    }
+
     fn classify(&self, text: &str, labels: &[&str]) -> Result<Value, String> {
         let labels_csv = labels.join(", ");
         let system = format!(
@@ -405,6 +492,10 @@ impl LocalRuntime for HttpLocalRuntime {
         // tokens: dropping the stream closes the socket and the server stops
         // generating. The deltas are put back together into one reply.
         let mut body = openai_body(&self.model, None, req);
+        // A picture step must call the picture tool, its only one.
+        if super::local_image::forced() {
+            body["tool_choice"] = json!("required");
+        }
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);
@@ -692,7 +783,8 @@ pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn L
     };
     let mut rt = HttpLocalRuntime::new(end.base_url, end.token)
         .with_thinking(end.thinking)
-        .with_slots(end.slots, end.unified, end.in_flight);
+        .with_slots(end.slots, end.unified, end.in_flight)
+        .with_sight(end.sees_pictures);
     rt.busy = Some(Arc::new(busy));
     Some(Arc::new(rt))
 }
@@ -859,6 +951,32 @@ mod tests {
             bodies
         });
         (base, h)
+    }
+
+    #[test]
+    fn a_picture_step_must_call_a_tool_and_other_steps_choose() {
+        let (base, server) = capture_server(2);
+        let rt = HttpLocalRuntime::new(&base, "t");
+        let req = ResponsesRequest {
+            model: "local".into(),
+            effort: None,
+            input: Vec::new(),
+            conversation_id: "c".into(),
+            tools: vec![
+                json!({"name": "image_generate", "description": "Generate images.", "parameters": {"type": "object"}}),
+            ],
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        {
+            let _force = super::super::local_image::ForceGuard::set();
+            let _ = rt.chat_tools(&req, &CancelToken::new());
+        }
+        let _ = rt.chat_tools(&req, &CancelToken::new());
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies[0]["tool_choice"], json!("required"));
+        assert_eq!(bodies[1].get("tool_choice"), None);
     }
 
     #[test]
@@ -1033,5 +1151,40 @@ mod tests {
         );
         assert!(dbg.contains("[redacted]"), "{dbg}");
         assert!(!dbg.contains("super-secret-token"), "{dbg}");
+    }
+
+    #[test]
+    fn embeddings_endpoint_parses_vectors_in_index_order() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]);
+            assert!(req.starts_with("POST /v1/embeddings HTTP/1.1"), "{req}");
+            assert!(
+                req.to_ascii_lowercase()
+                    .contains("authorization: bearer tok-embed"),
+                "{req}"
+            );
+            let body = r#"{"data":[{"index":1,"embedding":[0.25,0.75]},{"index":0,"embedding":[0.5,0.5]}]}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(resp.as_bytes()).unwrap();
+        });
+
+        let rt = HttpLocalRuntime::new(format!("http://{addr}"), "tok-embed").with_model("embed");
+        let vecs = rt
+            .embed(&["first".into(), "second".into()], Some("embed"))
+            .unwrap();
+        handle.join().unwrap();
+        assert_eq!(vecs, vec![vec![0.5, 0.5], vec![0.25, 0.75]]);
     }
 }

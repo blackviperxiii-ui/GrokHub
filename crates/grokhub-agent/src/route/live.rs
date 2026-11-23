@@ -7,9 +7,14 @@
 //! R2a: one model per episode. The model is picked at an episode boundary (a
 //! new user message), on a second VerifyGate reject at the ceiling (E2), or
 //! when the episode's model goes unhealthy; otherwise every step of the
-//! episode keeps it, so the prompt cache stays warm. Nothing you set pins,
-//! forces or steers the model or the effort: the router alone picks them. With
-//! no healthy, included model the call pauses instead of sending.
+//! episode keeps it, so the prompt cache stays warm. No setting pins,
+//! forces or steers the cloud model or the effort. Only the chat's own words
+//! do ([`super::task_steer`]: "use Opus for the refactor"), and even then the
+//! router picks among the models that carry the name. On device, a chat's
+//! tier (its words this turn, else its standing ask, see
+//! [`super::local_pin`]) steers which model on disk loads, and the swap
+//! planner still decides it. With no healthy, included model the call pauses
+//! instead of sending.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,7 +32,6 @@ use super::cabin::{MODEL_TOOL, MODEL_TRACE};
 use grokhub_core::model_registry::EFFORT_LADDER;
 use grokhub_core::outcome::is_correction;
 
-use super::budget::{self, Budget, BudgetNotes};
 use super::difficulty::{estimate, DifficultyInput};
 use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
 use super::ladder::{self, rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick};
@@ -35,7 +39,7 @@ use super::learn;
 use super::local::LocalGate;
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
 use super::policy::ClassRow;
-use super::policy::{class_row, expected_cost_usd, MODEL_LIVE, POLICY_LIVE};
+use super::policy::{class_row, MODEL_LIVE, POLICY_LIVE};
 use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
 use super::spend::{self, Latency, Spend};
 use super::table::{load_table, table_path, RoutingTable};
@@ -246,17 +250,15 @@ pub fn take_no_route() -> Option<(String, String, String)> {
 
 /// R2b: a premium route a call wanted, not yet asked about (its route key).
 static PREMIUM_ASK: Mutex<Option<String>> = Mutex::new(None);
-/// R2b: user-facing work paused at 100% of the week's budget.
-static BUDGET_ASK: Mutex<bool> = Mutex::new(false);
 
 /// Take the newest premium route a call wanted, for the cabin's hard money card.
 pub fn take_premium_ask() -> Option<String> {
     PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
-/// True once after a user-facing call paused at 100%: the cabin shows the ask.
+/// App-side weekly budgets never block chat turns.
 pub fn take_budget_ask() -> bool {
-    std::mem::take(&mut *BUDGET_ASK.lock().unwrap_or_else(|e| e.into_inner()))
+    false
 }
 
 /// Count this call in its episode's turn; returns the steps so far.
@@ -271,18 +273,6 @@ fn note_step(key: &str, turn: u64) -> u32 {
     }
     slot.1 += 1;
     slot.1
-}
-
-/// This week's budget, or none in a unit test that didn't pin a config dir.
-fn week_budget(config_dir: &Path, reg: &Registry, cap_usd: f64, now_ms: u64) -> Budget {
-    if cfg!(test) && !crate::perm::config_pinned() {
-        return Budget::default();
-    }
-    Budget::of(
-        &budget::load_week(config_dir, reg, now_ms),
-        reg.entitlement.credential,
-        cap_usd,
-    )
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -313,39 +303,25 @@ pub fn snapshot(config_dir: &Path) -> (Arc<Registry>, Arc<BTreeMap<String, Model
     (reg, profiles)
 }
 
-/// Requests sent per model this second, per config dir ([`health::Pacer`]).
-static PACE: Mutex<BTreeMap<PathBuf, health::Pacer>> = Mutex::new(BTreeMap::new());
-
-/// The registry the router picks from: a live model already at its request
-/// limit this second reads as busy (degraded), so failover takes the next one.
+/// The registry the router picks from: a model cooling after a server failure
+/// reads as busy (degraded), so failover takes the next one. Internal request
+/// counters never mark a model busy.
 pub(super) fn paced(config_dir: &Path, reg: Arc<Registry>, now_ms: u64) -> Arc<Registry> {
-    let pace = PACE.lock().unwrap_or_else(|e| e.into_inner());
-    let p = pace.get(config_dir);
-    // (model, cooling after an outage rather than at its pace limit)
-    let busy: Vec<(String, bool)> = reg
+    let busy: Vec<String> = reg
         .models
         .iter()
         .filter(|(_, r)| r.state == grokhub_core::model_registry::ModelState::Live)
-        .filter_map(|(id, _)| {
-            if p.is_some_and(|p| p.at_limit(id, now_ms)) {
-                Some((id.clone(), false))
-            } else if cooling(config_dir, id, now_ms) {
-                Some((id.clone(), true))
-            } else {
-                None
-            }
-        })
+        .filter(|&(id, _)| cooling(config_dir, id, now_ms))
+        .map(|(id, _)| id.clone())
         .collect();
     if busy.is_empty() {
         return reg;
     }
     let mut view = (*reg).clone();
-    for (id, cooled) in busy {
+    for id in busy {
         if let Some(r) = view.models.get_mut(&id) {
             health::mark_busy(r);
-            if cooled {
-                r.reason = "It was too busy to answer a moment ago.".into();
-            }
+            r.reason = "It was too busy to answer a moment ago.".into();
         }
     }
     Arc::new(view)
@@ -359,6 +335,60 @@ static COOLING: Mutex<BTreeMap<PathBuf, BTreeMap<String, u64>>> = Mutex::new(BTr
 /// How long a model that failed with an outage is routed around.
 pub(crate) const OUTAGE_COOL_MS: u64 = 60_000;
 
+/// Maximum `Retry-After` (seconds) on HTTP 429 that we wait out in-place once
+/// before cooling the chosen model down and failing over to another model.
+pub const SHORT_RETRY_AFTER_SECS: u64 = 5;
+
+/// Returns the wait duration when a 429 rate-limit error carries a short
+/// `Retry-After` (`1..=SHORT_RETRY_AFTER_SECS`), so callers can retry the
+/// chosen model once instead of cooling it down for 5 minutes and failing over.
+pub fn short_retry_after_wait(err: &ClientError) -> Option<Duration> {
+    match err {
+        ClientError::RateLimited {
+            retry_after_secs: Some(secs),
+            ..
+        } if (1..=SHORT_RETRY_AFTER_SECS).contains(secs) => Some(Duration::from_secs(*secs)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SHORT_RETRY_WAITS: std::cell::RefCell<Option<Vec<Duration>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Sleep `wait` in 20ms slices while watching `cancel`. Returns `true` if the
+/// full wait elapsed without cancellation. In tests with [`ShortRetryWaitGuard`],
+/// records the wait duration immediately without wall-clock sleeping.
+pub(crate) fn wait_short_retry(wait: Duration, cancel: &CancelToken) -> bool {
+    if cancel.is_cancelled() {
+        return false;
+    }
+    #[cfg(test)]
+    {
+        let recorded = SHORT_RETRY_WAITS.with(|slot| {
+            if let Some(log) = slot.borrow_mut().as_mut() {
+                log.push(wait);
+                true
+            } else {
+                false
+            }
+        });
+        if recorded {
+            return !cancel.is_cancelled();
+        }
+    }
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        let rem = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::sleep(rem.min(Duration::from_millis(20)));
+    }
+    !cancel.is_cancelled()
+}
+
 /// How long a provider model that hit its rate limit (429) is routed around,
 /// unless the provider asked for longer. A minute was too short: a long step
 /// outlasted it and the next step hit the same wall.
@@ -369,6 +399,7 @@ pub(crate) const LIMIT_COOL_MS: u64 = 5 * 60_000;
 pub(crate) const OUT_FOR_SESSION_MS: u64 = 12 * 60 * 60_000;
 
 /// `model` just failed with an outage at `now_ms`.
+#[cfg(test)]
 pub(crate) fn cool_down(config_dir: &Path, model: &str, now_ms: u64) {
     cool_until(config_dir, model, now_ms.saturating_add(OUTAGE_COOL_MS));
 }
@@ -425,14 +456,8 @@ pub(crate) fn cooling(config_dir: &Path, model: &str, now_ms: u64) -> bool {
         || (!model.ends_with(":free") && account_key(model).is_some_and(|account| hot(&account)))
 }
 
-/// One request to `model` goes out now.
-pub(super) fn note_send(config_dir: &Path, model: &str, now_ms: u64) {
-    PACE.lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(config_dir.to_path_buf())
-        .or_default()
-        .note(model, now_ms);
-}
+/// App-side send rate counters are disabled; server responses govern limits.
+pub(super) fn note_send(_config_dir: &Path, _model: &str, _now_ms: u64) {}
 
 /// The saved routing table, re-read only when its file changes.
 pub fn table_snapshot(config_dir: &Path) -> Arc<RoutingTable> {
@@ -610,6 +635,12 @@ impl Decision {
         {
             return super::local::offline_pause_text(&super::local::unavailable_reason());
         }
+        if self.budget_pause.is_none() && rule("bench:all_benched") {
+            return "All available models for this step are benched. Tell chat to use a model again or unbench one in Settings → AI models.".to_string();
+        }
+        if self.budget_pause.is_none() && rule("voice:no_local") {
+            return "Voice routing is set to Local only, and no on-device model is ready. Download one in Settings → Local AI or switch Voice routing to Auto.".to_string();
+        }
         self.pause_msg().to_string()
     }
 
@@ -660,21 +691,28 @@ fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool)
 }
 
 /// Pick the provider, model and effort for one call and advance its episode's ladder.
+/// The on-device difficulty estimator. It runs only offline: online it
+/// would load the local model for every call, and the cloud is the route
+/// anyway. It rides on a model already loaded and never starts or swaps
+/// one: the turn's own load, which knows whether its newest message carries
+/// a picture, decides what runs.
+pub(super) fn offline_estimator() -> Option<Arc<dyn super::local::LocalRuntime>> {
+    super::connectivity::state()
+        .prefer_local()
+        .then(super::local::warm_runtime)
+        .flatten()
+}
+
 pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision {
     let mut laps = Breakdown::start();
     let (reg, profiles) = snapshot(config_dir);
     let reg = paced(config_dir, reg, now_ms);
     laps.mark("route:snapshot");
     let settings = spend::spend_settings();
-    let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
+    let user_bench = super::user_bench::load(config_dir);
     laps.mark("route:week_budget");
-    // The on-device estimator runs only offline: online it would load the local
-    // model for every call, and the cloud is the route anyway.
     super::connectivity::sync_from_core();
-    let rt = super::connectivity::state()
-        .prefer_local()
-        .then(super::local::runtime)
-        .flatten();
+    let rt = offline_estimator();
     let key = episode_key(call);
     let base_row = class_row(call.class);
     let turn = turn_hash(call.text);
@@ -692,9 +730,24 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             prior: super::ask::prior(key),
         };
         let read = super::ask::read(call.text, &cx);
-        super::knn::blend_turn(config_dir, key, call.text, turn, &cx, read, now_ms)
+        // A scratch chat's turns blend with the bank but never join it.
+        let bank_key = if crate::scratch::is_scratch(call.session) {
+            ""
+        } else {
+            key
+        };
+        super::knn::blend_turn(config_dir, bank_key, call.text, turn, &cx, read, now_ms)
     });
     let lane = ask.as_ref().map(|a| a.lane());
+    // What the chat's words asked for this kind of task ("use Opus for the
+    // refactor"); a helper reads its chat's asks.
+    let (named_model, named_effort) = ask
+        .as_ref()
+        .map(|a| {
+            let asks = super::task_steer::asks(config_dir, key);
+            super::task_steer::for_kind(&asks, a.kind)
+        })
+        .unwrap_or_default();
     let d = match &ask {
         Some(a) if rt.is_none() => a.d,
         _ => estimate(
@@ -735,10 +788,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // Brain 2: the goal the turn's Brief named; user-facing steps only, never the holdout.
     // Brain 4: a goal the cabin pinned on a background run (cost while you're active) is
     // logged with it; only user-facing steps move by a goal.
+    let voice_auto_fast = facing && super::voice_route::auto_fast_turn(config_dir);
     let goal = if holdout {
         None
     } else if facing {
         super::goal::goal_for(&[call.session, call.episode])
+            .or_else(|| super::voice_route::voice_turn_goal(config_dir))
     } else {
         super::goal::pinned_for(&[call.session, call.episode])
     };
@@ -800,9 +855,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 verify_ok,
                 // "That's wrong" or "try again": the next answer starts one rung up.
                 correction: is_correction(call.text) || super::ask::asks_redo(call.text),
-                // No self-check score yet, so E4 stays quiet. DE3 reads the week's budget.
+                // No self-check score yet, so E4 stays quiet. App-side budget caps never throttle effort.
                 low_check: None,
-                budget_pct: b.pct,
+                budget_pct: None,
                 routine,
                 stage,
                 keep_start: super::capabilities::BaselineLane::of(r.class)
@@ -865,6 +920,14 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             Some(model)
         })
     };
+    let voice_reply = super::voice_route::active_reply_pref(config_dir);
+    let sticky = sticky
+        .filter(|m| !user_bench.matches_model(m))
+        .filter(|m| !cooling(config_dir, m, now_ms))
+        .filter(|m| match &voice_reply {
+            None => true,
+            Some(super::voice_route::ReplyPref::LocalOnly) => super::local::is_local(m),
+        });
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
     if rejects.unwrap_or(0) > 0 && !verify_ok {
         let was_local = sticky.as_deref().is_some_and(super::local::is_local)
@@ -901,11 +964,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         Vec::new()
     };
     laps.mark("route:providers");
+    let mut latency = Latency::of(origin, facing, steps, call.deadline_ms, now_ms);
+    if voice_auto_fast {
+        latency.waiting_live = true;
+    }
     let spend = Spend {
         settings,
-        latency: Latency::of(origin, facing, steps, call.deadline_ms, now_ms),
+        latency,
         background: !facing || spend::background_origin(origin),
-        budget_tight: b.tight(),
+        budget_tight: false,
         grants,
         providers,
     };
@@ -964,6 +1031,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prior_escalated,
         care_first,
         lane,
+        named_model: named_model.as_deref(),
+        named_effort: named_effort.as_deref(),
         size: Some(size_est),
         // Failover PR 5: whether a local model is already loaded, for the
         // warm-local default. Never starts the sidecar to find out.
@@ -984,6 +1053,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             && !key.is_empty()
             && tune::in_canary(key, super::trial::CANARY))
         .then_some(key),
+        voice_reply,
+        user_bench,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     if let (Some(a), Some(p), Some((band, own))) = (&ask, &input.pick, chat_band)
@@ -1062,24 +1133,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     }
     laps.mark("route:shadow");
     let live = POLICY_LIVE && row.is_some();
-    let budget_pause = if !live || route.no_route || call.provider == PROVIDER_GROK_BUILD {
-        None
-    } else if spend.background {
-        let est = reg
-            .get(&route.model)
-            .and_then(|r| expected_cost_usd(&r.meta.prices, call.class, call.ctx_tokens))
-            .unwrap_or(0.0);
-        (!b.admits_background(est)).then_some(if b.used_up() {
-            *budget::BUDGET_PAUSE_MSG
-        } else {
-            budget::BACKGROUND_PAUSE_MSG
-        })
-    } else if b.used_up() && BudgetNotes::load(config_dir).must_ask(&b) {
-        *BUDGET_ASK.lock().unwrap_or_else(|e| e.into_inner()) = true;
-        Some(*budget::BUDGET_PAUSE_MSG)
-    } else {
-        None
-    };
+    let budget_pause = None;
     // Item 34: between boundaries the segment's first effort is sent again.
     if live
         && !route.no_route
@@ -1129,7 +1183,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         && !route
             .rule_ids
             .iter()
-            .any(|r| r == "local:paused" || r == "offline:switch")
+            .any(|r| r == "local:paused" || r == "offline:switch" || r == "voice:no_local")
     {
         let failed = reg
             .get(call.model)
@@ -1152,7 +1206,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         holdout,
         recover,
         live,
-        budget_pct: b.pct,
+        budget_pct: None,
         budget_pause,
         tune: tune_mark,
         timing,
@@ -1414,11 +1468,34 @@ fn xai_outage(err: &ClientError) -> bool {
     err.is_retryable() || matches!(err, ClientError::IdleTimeout)
 }
 
-/// xAI can't take this turn: down, or the account is out of credit. Either
-/// way a provider you set up (or this computer's model) answers instead of
-/// the turn failing, so one empty wallet never stops the work.
-fn xai_cant_answer(err: &ClientError) -> bool {
-    xai_outage(err) || matches!(err, ClientError::PaymentRequired { .. })
+/// xAI can't take this turn: down, out of credit, or the sign-in / key was
+/// refused. A provider you set up (or this computer's model) answers instead
+/// of the turn failing, so a dead Grok credential never blocks chat when
+/// something else can answer.
+pub(crate) fn xai_cant_answer(err: &ClientError) -> bool {
+    xai_outage(err)
+        || matches!(
+            err,
+            ClientError::PaymentRequired { .. }
+                | ClientError::Auth { .. }
+                | ClientError::KeyOffer { .. }
+        )
+}
+
+/// xAI failed in a way this computer's model can take over when no provider
+/// stood in: outage, out of credit (402), refused sign-in / key, or offline refusal.
+pub(crate) fn xai_falls_to_local(err: &ClientError) -> bool {
+    xai_outage(err)
+        || matches!(
+            err,
+            ClientError::PaymentRequired { .. }
+                | ClientError::Auth { .. }
+                | ClientError::KeyOffer { .. }
+        )
+        || matches!(
+            err,
+            ClientError::Transport(m) if grokhub_core::offline::is_refusal(m)
+        )
 }
 
 /// A provider you added failed in a way another route can get past: a limit
@@ -1465,6 +1542,7 @@ pub(crate) fn outage_stand_in(
         return None;
     }
     let (reg, profiles) = snapshot(config_dir);
+    let user_bench = super::user_bench::load(config_dir);
     let spend = Spend {
         settings: spend::spend_settings(),
         providers,
@@ -1486,7 +1564,9 @@ pub(crate) fn outage_stand_in(
         .models
         .iter()
         .filter(|(id, r)| {
-            super::policy::is_new_provider(&reg, id)
+            !user_bench.matches_model(id)
+                && !cooling(config_dir, id, now_ms)
+                && super::policy::is_new_provider(&reg, id)
                 && super::policy::fits(&reg, &profiles, id, fit, &spend, now_ms)
                 && super::providers::auto_pickable(id, &r.meta, &need)
         })
@@ -1496,13 +1576,8 @@ pub(crate) fn outage_stand_in(
     let mut ranked =
         super::policy::rank(call.class, &pool, &table, &reg, call.model, call.ctx_tokens);
     let lagging = health::lagging_providers(&health::provider_healths(&reg, now_ms));
-    // Stable: the rank decides within each group.
-    ranked.sort_by_key(|m| {
-        (
-            split_provider_model(m).is_some_and(|(p, _)| lagging.contains(p)),
-            !m.to_ascii_lowercase().contains("grok"),
-        )
-    });
+    // Rule 918.6: no primary provider bias among healthy candidates.
+    ranked.sort_by_key(|m| split_provider_model(m).is_some_and(|(p, _)| lagging.contains(p)));
     ranked.into_iter().next()
 }
 
@@ -1649,6 +1724,34 @@ pub fn current_class() -> &'static str {
 }
 
 thread_local! {
+    static STEP_ON_DEVICE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The newest model step on this thread ran on this computer's model, so
+/// the tools it called (a picture, say) run here too.
+pub fn step_on_device() -> bool {
+    STEP_ON_DEVICE.with(std::cell::Cell::get)
+}
+
+/// Pins [`step_on_device`] on this thread until dropped.
+#[cfg(test)]
+pub(crate) struct StepOnDeviceForTests(bool);
+
+#[cfg(test)]
+impl StepOnDeviceForTests {
+    pub(crate) fn set(on: bool) -> Self {
+        Self(STEP_ON_DEVICE.with(|s| s.replace(on)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for StepOnDeviceForTests {
+    fn drop(&mut self) {
+        STEP_ON_DEVICE.with(|s| s.set(self.0));
+    }
+}
+
+thread_local! {
     static HELPER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -1675,6 +1778,60 @@ impl Drop for HelperScope {
 /// This thread is running a helper's calls.
 pub fn in_helper() -> bool {
     HELPER.with(std::cell::Cell::get)
+}
+
+/// The model, effort and reason a step was sent with, for a helper's row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RouteSeen {
+    pub model: String,
+    /// Empty when the step sent no effort.
+    pub effort: String,
+    /// The route's reason sentence ("balanced · High: a multi-file change.").
+    pub why: String,
+}
+
+type RouteSink = Box<dyn Fn(&RouteSeen)>;
+
+thread_local! {
+    static ROUTE_WATCH: std::cell::RefCell<Option<RouteSink>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Hears each step this thread sends until dropped, so a helper's row can
+/// say which model and effort the router gave it, and why.
+pub struct RouteWatch {
+    prev: Option<RouteSink>,
+}
+
+impl RouteWatch {
+    pub fn enter(sink: RouteSink) -> Self {
+        Self {
+            prev: ROUTE_WATCH.with(|w| w.replace(Some(sink))),
+        }
+    }
+}
+
+impl Drop for RouteWatch {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        ROUTE_WATCH.with(|w| *w.borrow_mut() = prev);
+    }
+}
+
+/// Tells this thread's [`RouteWatch`], if any, what a step was sent with.
+pub fn tell_route(seen: &RouteSeen) {
+    ROUTE_WATCH.with(|w| {
+        if let Some(sink) = w.borrow().as_ref() {
+            sink(seen);
+        }
+    });
+}
+
+/// Note where `conversation_id`'s step runs, for the voice: the app's own
+/// background calls and a helper's steps leave the chat's record alone.
+fn note_here(class: &str, conversation_id: &str, here: bool, must_stay: bool) {
+    if !class.trim().starts_with("background:") && !in_helper() {
+        super::local_live::note_step_here(conversation_id, here, must_stay);
+    }
 }
 
 /// The newest user text in a request (difficulty only; never stored), without
@@ -1765,6 +1922,9 @@ pub fn stream_routed(
         ..RouteCall::default()
     };
     let now = grokhub_core::now_ms();
+    let user_bench = super::user_bench::load(&dir);
+    // "It tries again on your next message": a person's turn is the retry.
+    super::local::retry_for_turn(class);
     let decision = decide(&dir, &call, now);
     if decision.paused() {
         route_log(&dir, &call, &decision, &RouteDone::unseen());
@@ -1779,20 +1939,33 @@ pub fn stream_routed(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
+    // An 18+ voice keeps every turn of the chat here, so its voice stays here too.
+    let must_stay = super::adult::voice_on(&sent.input);
     // 18+ chat runs on this computer's model only, never online. With none
     // ready and an 18+ voice on, every turn gets the notice (with the
     // self-check's reason) and nothing is sent: a clean ask in that voice is
     // an 18+ turn too. With the voice off, it's decided per message: a clean
     // ask still goes online with the chat's older 18+ parts left out; an 18+
     // ask gets the notice. The app's own background work never goes online with it.
+    let mut forced_adult_local = false;
     if super::adult::to_local(&sent.input, dest) {
         match super::adult::no_local_notice() {
-            None => on_device = true,
+            None => {
+                if user_bench.blocks_local() {
+                    return Err(ClientError::Protocol(
+                        "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
+                            .into(),
+                    ));
+                }
+                on_device = true;
+                forced_adult_local = true;
+            }
             Some(notice) => {
                 let online = !class.trim().starts_with("background:")
-                    && !super::adult::voice_on(&sent.input)
+                    && !must_stay
                     && super::adult::leave_adult_out(&mut sent.input);
                 if !online {
+                    note_here(class, &req.conversation_id, false, must_stay);
                     let out = super::adult::notice_answer(class, &notice)?;
                     sink(StreamEvent::TextDelta(out.text.clone()));
                     return Ok(out);
@@ -1800,22 +1973,28 @@ pub fn stream_routed(
             }
         }
     }
-    let mut on_provider = decision.on_provider() && !on_device;
-    let model = if on_device && !decision.on_device() {
+    // Before the model call, so the reply's first spoken piece already uses
+    // the right voice.
+    note_here(class, &req.conversation_id, on_device, must_stay);
+    let mut active_decision = decision;
+    let mut active_on_device = on_device;
+    let mut active_on_provider = active_decision.on_provider() && !active_on_device;
+    let mut active_model = if active_on_device && !active_decision.on_device() {
         super::local::live_tier().to_string()
     } else {
-        decision.send_model(&req.model)
+        active_decision.send_model(&req.model)
     };
+    let mut active_effort = effort;
     // A local tier has no effort menu, so the router picks none for it; the
     // sidecar maps the turn's own effort onto what the model's template renders.
-    sent.effort = if on_device {
-        effort.clone().or_else(|| req.effort.clone())
+    sent.effort = if active_on_device {
+        active_effort.clone().or_else(|| req.effort.clone())
     } else {
-        effort.clone()
+        active_effort.clone()
     };
-    sent.model = model.clone();
+    sent.model = active_model.clone();
     // On this computer's model with 18+ on, only the hard limits stay.
-    if on_device {
+    if active_on_device {
         super::adult::unlock_local(&mut sent.input);
     }
     // Model and effort show nowhere; only a turn that asks gets told, truthfully.
@@ -1846,7 +2025,7 @@ pub fn stream_routed(
         && super::local_doctor::question(&text))
     .then(|| super::local_doctor::note(&super::local_doctor::diagnose(&dir)));
     let notes: Vec<String> = asks_route
-        .then(|| route_note(&model, sent.effort.as_deref(), on_device))
+        .then(|| route_note(&active_model, sent.effort.as_deref(), active_on_device))
         .into_iter()
         .chain(connections)
         .chain(local_check)
@@ -1884,219 +2063,207 @@ pub fn stream_routed(
     };
     // Reply text passes the hard-limit check before the chat shows it.
     let mut reply = grokhub_core::adult_guard::ReplyGuard::default();
-    // xAI's error and how long it took, when another model answered instead.
-    let mut xai_failed: Option<(ClientError, Duration)> = None;
-    // The provider model that answered when xAI was down.
-    let mut stood_in: Option<String> = None;
-    // A provider's error, the model that made it, and how long it took, when
-    // another route took the turn instead: it goes on the provider's own
-    // health line, never on the answering model's.
-    let mut provider_failed: Option<(String, ClientError, Duration)> = None;
-    // Grok took a turn a provider failed: the turn is logged as Grok's.
-    let mut grok_took_turn = false;
-    let out = if on_device {
-        // A model that isn't loaded yet (unloaded for a game, or idle) loads
-        // again by itself; the chat shows why the answer takes a moment.
-        if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
-            sink(StreamEvent::ReasoningDelta(
-                super::local::LOCAL_LOADING_NOTE.into(),
-            ));
-        }
-        // Pass the full request so cabin web_search / web_fetch tool calls round-trip
-        // through the agent loop (OpenAI-compatible tools on the local sidecar).
-        let out = super::local::serve_request(class, &sent, cancel);
-        // The chat shows streamed text only, so the device's answer goes out
-        // as one delta, like a provider's; without this the reply is saved to
-        // the session but never reaches the screen.
-        if let Ok(turn) = &out {
-            if !turn.text.is_empty() {
-                super::adult::guard(
-                    &mut reply,
-                    &mut *sink,
-                    StreamEvent::TextDelta(turn.text.clone()),
-                );
-            }
-        }
-        out
-    } else if on_provider {
-        // An Anthropic or OpenRouter answer streams; the rest arrive as one delta.
-        // Either way the text reaches the chat through the reply guard.
-        let span_id = format!("{}:{now}", req.conversation_id);
-        let out = super::providers::stream_model(
-            &dir,
-            class,
-            &model,
-            effort.as_deref(),
-            &sent,
-            super::providers::call_data(call.sensitive),
-            &span_id,
-            cancel,
-            &mut |ev: StreamEvent| super::adult::guard(&mut reply, &mut *sink, ev),
-        );
-        match out {
-            Err(err) if provider_fallible(&err) => {
-                // The provider hit a limit, ran out of credit or fell over:
-                // cool it (credit and a refused key for the session) so the
-                // next pick, the resumed step included, skips it, and Grok
-                // takes this turn. The provider showed nothing,
-                // so no work repeats.
-                cool_down_for(&dir, &model, &err, now);
-                super::handoff::note_switch(&req.conversation_id, &model, &req.model, &err);
-                switch_line(&mut *sink, &err);
-                provider_failed = Some((model.clone(), err, started.elapsed()));
-                grok_took_turn = true;
-                on_provider = false;
-                if asks_route {
-                    let n = route_note(&req.model, effort.as_deref(), false);
-                    super::ask::add_route_note(&mut sent.input, &n);
-                }
-                sent.model = req.model.clone();
-                let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
-                    super::adult::guard(&mut reply, &mut *sink, ev)
-                });
-                if let Err(err) = &out {
-                    if xai_outage(err) {
-                        cool_down(&dir, &req.model, now);
-                    }
-                }
-                out
-            }
-            out => out,
-        }
-    } else {
-        // `streamed`: reply text reached the chat. Thinking alone isn't an
-        // answer, so a stand-in can still take a turn xAI only thought about.
-        let mut streamed = false;
-        let out = client.stream(&sent, cancel, &mut |ev: StreamEvent| {
-            if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
-                streamed = true;
-            }
-            super::adult::guard(&mut reply, &mut *sink, ev)
-        });
-        if let Err(err) = &out {
-            if xai_outage(err) {
-                cool_down(&dir, &model, now);
-            }
-        }
-        // xAI down for an ordinary turn: a provider you set up answers, and
-        // failing that this computer's model (below). Only when xAI showed
-        // nothing yet.
-        let stand_in = match &out {
-            Err(err) if !streamed && xai_cant_answer(err) => outage_stand_in(&dir, &call, now),
-            _ => None,
-        };
-        match out {
-            Err(err) if stand_in.is_some() => {
-                let m = stand_in.unwrap_or_default();
-                super::handoff::note_switch(&req.conversation_id, &model, &m, &err);
-                switch_line(&mut *sink, &err);
-                xai_failed = Some((err, started.elapsed()));
-                on_provider = true;
-                if asks_route {
-                    let n = route_note(&m, effort.as_deref(), false);
-                    super::ask::add_route_note(&mut sent.input, &n);
-                }
-                let span_id = format!("{}:{now}", req.conversation_id);
-                let out = super::providers::stream_model(
-                    &dir,
-                    class,
-                    &m,
-                    effort.as_deref(),
-                    &sent,
-                    super::providers::call_data(call.sensitive),
-                    &span_id,
-                    cancel,
-                    &mut |ev: StreamEvent| super::adult::guard(&mut reply, &mut *sink, ev),
-                );
-                match out {
-                    Err(e2) if provider_fallible(&e2) && super::local::available() => {
-                        // The stand-in hit the same kind of wall: cool it so
-                        // it isn't picked again, note it on its own health
-                        // line, and this computer's model answers instead.
-                        // The provider showed nothing, so no work repeats.
-                        cool_down_for(&dir, &m, &e2, now);
-                        super::handoff::note_switch(
-                            &req.conversation_id,
-                            &m,
-                            super::local::live_tier(),
-                            &e2,
-                        );
-                        switch_line(&mut *sink, &e2);
-                        provider_failed = Some((m, e2, started.elapsed()));
-                        on_provider = false;
-                        on_device = true;
-                        if asks_route {
-                            let n =
-                                route_note(super::local::live_tier(), sent.effort.as_deref(), true);
-                            super::ask::add_route_note(&mut sent.input, &n);
-                        }
-                        let out = super::local::serve_request(class, &sent, cancel);
-                        if let Ok(turn) = &out {
-                            if !turn.text.is_empty() {
-                                super::adult::guard(
-                                    &mut reply,
-                                    &mut *sink,
-                                    StreamEvent::TextDelta(turn.text.clone()),
-                                );
-                            }
-                        }
-                        out
-                    }
-                    Err(e2) if provider_fallible(&e2) => {
-                        // No local model to land on: the error stands, but
-                        // the stand-in still cools so a resumed step doesn't
-                        // re-pick the model that just failed.
-                        cool_down_for(&dir, &m, &e2, now);
-                        stood_in = Some(m);
-                        Err(e2)
-                    }
-                    out => {
-                        stood_in = Some(m);
-                        out
-                    }
-                }
-            }
-            // An ordinary turn falls back to this computer's model when xAI is
-            // down and no provider could take it. Only when xAI showed nothing
-            // yet: a half-streamed xAI answer is never finished by another model.
-            Err(err)
-                if !streamed
-                    && !matches!(err, ClientError::Cancelled)
-                    && super::local::available()
-                    && (xai_outage(&err)
-                        || matches!(&err, ClientError::Transport(m)
-                            if grokhub_core::offline::is_refusal(m))) =>
+    let allow_cross_provider_failover = super::voice_route::active_reply_pref(&dir).is_none();
+    let mut failed_hops: Vec<(String, ClientError, Duration)> = Vec::new();
+    let mut tried: Vec<String> = Vec::new();
+    let mut last_fail_rule: Option<&'static str> = None;
+    let mut emitted_fallback_msg = false;
+    let mut short_retried = false;
+    let mut out = Err(ClientError::Protocol("no route".into()));
+    for attempt in 0..5 {
+        if active_on_device {
+            let reason = if forced_adult_local {
+                "keeping explicit content on this computer"
+            } else {
+                super::local_live::routing_reason(&active_decision.route.rule_ids, last_fail_rule)
+            };
+            super::local_live::note_route_reason(&req.conversation_id, reason);
+            if !emitted_fallback_msg
+                && !class.trim().starts_with("background:")
+                && super::local::fallback_active()
             {
-                super::handoff::note_switch(
-                    &req.conversation_id,
-                    &model,
-                    super::local::live_tier(),
-                    &err,
-                );
-                switch_line(&mut *sink, &err);
-                xai_failed = Some((err, started.elapsed()));
-                on_device = true;
-                if asks_route {
-                    let n = route_note(super::local::live_tier(), sent.effort.as_deref(), true);
-                    super::ask::add_route_note(&mut sent.input, &n);
+                sink(StreamEvent::ReasoningDelta(
+                    super::local::LOCAL_FALLBACK_MSG.into(),
+                ));
+            }
+            if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
+                sink(StreamEvent::ReasoningDelta(
+                    super::local_live::loading_note(Some(reason)),
+                ));
+            }
+            let step_out = super::local::serve_request(class, &sent, cancel);
+            if let Ok(turn) = &step_out {
+                if !turn.text.is_empty() {
+                    super::adult::guard(
+                        &mut reply,
+                        &mut *sink,
+                        StreamEvent::TextDelta(turn.text.clone()),
+                    );
                 }
-                let out = super::local::serve_request(class, &sent, cancel);
-                if let Ok(turn) = &out {
-                    // The chat shows streamed text, so the local answer goes out
-                    // as one delta, like a provider's.
-                    if !turn.text.is_empty() {
-                        super::adult::guard(
-                            &mut reply,
-                            &mut *sink,
-                            StreamEvent::TextDelta(turn.text.clone()),
-                        );
+            }
+            out = step_out;
+            break;
+        }
+        tried.push(active_model.clone());
+        let mut streamed = false;
+        let step_out = if active_on_provider {
+            let span_id = format!("{}:{now}:{attempt}", req.conversation_id);
+            super::providers::stream_model(
+                &dir,
+                class,
+                &active_model,
+                active_effort.as_deref(),
+                &sent,
+                super::providers::call_data(call.sensitive),
+                &span_id,
+                cancel,
+                &mut |ev: StreamEvent| {
+                    if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
+                        streamed = true;
+                    }
+                    super::adult::guard(&mut reply, &mut *sink, ev)
+                },
+            )
+        } else {
+            client.stream(&sent, cancel, &mut |ev: StreamEvent| {
+                if matches!(&ev, StreamEvent::TextDelta(t) if !t.is_empty()) {
+                    streamed = true;
+                }
+                super::adult::guard(&mut reply, &mut *sink, ev)
+            })
+        };
+        match step_out {
+            Ok(turn) => {
+                out = Ok(turn);
+                break;
+            }
+            Err(err) => {
+                if !streamed && !short_retried {
+                    if let Some(wait) = short_retry_after_wait(&err) {
+                        if wait_short_retry(wait, cancel) {
+                            short_retried = true;
+                            tried.pop();
+                            continue;
+                        }
+                        out = Err(ClientError::Cancelled);
+                        break;
                     }
                 }
-                out
+                let retryable = attempt < 4
+                    && allow_cross_provider_failover
+                    && !streamed
+                    && !matches!(err, ClientError::Cancelled)
+                    && if active_on_provider {
+                        provider_fallible(&err)
+                    } else {
+                        xai_cant_answer(&err)
+                    };
+                let retry_now = grokhub_core::now_ms();
+                if (active_on_provider && provider_fallible(&err))
+                    || (!active_on_provider && xai_cant_answer(&err))
+                {
+                    cool_down_for(&dir, &active_model, &err, retry_now);
+                }
+                if !retryable {
+                    out = Err(err);
+                    break;
+                }
+                let next_dec = decide(&dir, &call, retry_now);
+                let cand_model = next_dec.send_model(&req.model);
+                let cand_local = next_dec.on_device();
+                let cand_provider = next_dec.on_provider() && !cand_local;
+                let cand_dest = if cand_local {
+                    grokhub_core::adult_guard::Dest::Local
+                } else if cand_provider {
+                    super::providers::dest(&dir, &cand_model)
+                } else {
+                    grokhub_core::adult_guard::Dest::Xai
+                };
+                let dec_ok = !next_dec.paused()
+                    && !user_bench.matches_model(&cand_model)
+                    && cand_model != active_model
+                    && (cand_local || !tried.contains(&cand_model))
+                    && (cand_local || !super::adult::to_local(&sent.input, cand_dest));
+                let next = if dec_ok {
+                    let cand_effort = next_dec.send_effort(req.effort.as_deref());
+                    Some((
+                        cand_model,
+                        cand_effort,
+                        cand_local,
+                        cand_provider,
+                        Some(next_dec),
+                    ))
+                } else if let Some(stand_in) = outage_stand_in(&dir, &call, retry_now).filter(|m| {
+                    !tried.contains(m)
+                        && !user_bench.matches_model(m)
+                        && !super::adult::to_local(&sent.input, super::providers::dest(&dir, m))
+                }) {
+                    Some((stand_in, active_effort.clone(), false, true, None))
+                } else if !user_bench.blocks_local()
+                    && super::local::available()
+                    && (active_on_provider || xai_falls_to_local(&err))
+                {
+                    Some((
+                        super::local::live_tier().to_string(),
+                        sent.effort.clone(),
+                        true,
+                        false,
+                        None,
+                    ))
+                } else {
+                    None
+                };
+                let Some((next_model, next_effort, next_on_device, next_on_provider, next_dec)) =
+                    next
+                else {
+                    out = Err(err);
+                    break;
+                };
+                super::handoff::note_switch(&req.conversation_id, &active_model, &next_model, &err);
+                last_fail_rule = Some(super::handoff::stop_rule(&err));
+                let auth_miss = !active_on_provider
+                    && next_on_device
+                    && matches!(
+                        &err,
+                        ClientError::Auth { .. } | ClientError::KeyOffer { .. }
+                    );
+                if auth_miss {
+                    if !emitted_fallback_msg && !class.trim().starts_with("background:") {
+                        emitted_fallback_msg = true;
+                        sink(StreamEvent::ReasoningDelta(
+                            super::local::LOCAL_FALLBACK_MSG.into(),
+                        ));
+                    }
+                    super::local::note_fallback(true);
+                } else {
+                    switch_line(&mut *sink, &err);
+                }
+                failed_hops.push((active_model.clone(), err, started.elapsed()));
+                active_model = next_model;
+                active_effort = next_effort;
+                active_on_device = next_on_device;
+                active_on_provider = next_on_provider;
+                short_retried = false;
+                if let Some(d) = next_dec {
+                    active_decision = d;
+                }
+                sent.model = active_model.clone();
+                sent.effort = if active_on_device {
+                    active_effort.clone().or_else(|| req.effort.clone())
+                } else {
+                    active_effort.clone()
+                };
+                if active_on_device {
+                    super::adult::unlock_local(&mut sent.input);
+                }
+                note_here(class, &req.conversation_id, active_on_device, must_stay);
+                if asks_route {
+                    let n = route_note(&active_model, sent.effort.as_deref(), active_on_device);
+                    super::ask::add_route_note(&mut sent.input, &n);
+                }
             }
-            out => out,
         }
-    };
+    }
     // The held rest of the reply, or the line that replaced it; what the chat
     // showed is what the history keeps.
     let rest = reply.finish();
@@ -2112,29 +2279,32 @@ pub fn stream_routed(
         turn
     });
     timing::record("send:model_call", started.elapsed());
-    call.effort = effort.as_deref();
-    call.model = &model;
-    if let Some((err, elapsed)) = &xai_failed {
-        // xAI's health line says it failed; the answer is logged as the model's that gave it.
-        note_failure(&dir, &call, err, *elapsed);
-        call.model = stood_in.as_deref().unwrap_or(super::local::live_tier());
-    }
-    if let Some((failed_model, err, elapsed)) = &provider_failed {
-        // The provider's health line says it failed; the answer is logged as
-        // the route's that gave it.
+    for (failed_model, err, elapsed) in &failed_hops {
         let mut failed_call = call;
+        failed_call.effort = active_effort.as_deref();
         failed_call.model = failed_model;
         note_failure(&dir, &failed_call, err, *elapsed);
     }
-    if grok_took_turn {
-        call.model = &sent.model;
+    call.effort = active_effort.as_deref();
+    call.model = &active_model;
+    // The app's own calls (the permission judge, a summary) don't run the
+    // step's tools, so they leave the chat step's mark alone.
+    note_here(class, &req.conversation_id, active_on_device, must_stay);
+    if !class.trim().starts_with("background:") {
+        STEP_ON_DEVICE.with(|s| s.set(active_on_device));
+        // A step answered elsewhere: the line under the reply names only the
+        // on-device model that answered the turn's last step.
+        if !active_on_device {
+            super::local_live::forget_line(&req.conversation_id);
+        }
     }
-    if on_device {
+    if active_on_device {
         call.provider = super::local::PROVIDER_LOCAL;
-    } else if let Some(m) = &stood_in {
-        call.provider = split_provider_model(m).map_or(&decision.route.provider, |(p, _)| p);
-    } else if on_provider {
-        call.provider = &decision.route.provider;
+    } else if active_on_provider {
+        call.provider =
+            split_provider_model(&active_model).map_or(&active_decision.route.provider, |(p, _)| p);
+    } else {
+        call.provider = super::PROVIDER_XAI;
     }
     // Failover PR 7: the step's hand-off chain learns how this call ended —
     // who served it, or who failed it last — for the resume packet.
@@ -2147,8 +2317,15 @@ pub fn stream_routed(
     }
     let mut done = RouteDone::of(&out, started.elapsed());
     // Only the xAI client queues; a local or provider answer was timed live.
-    done.batched = client.batches() && !on_device && !on_provider;
-    route_log(&dir, &call, &decision, &done);
+    done.batched = client.batches() && !active_on_device && !active_on_provider;
+    route_log(&dir, &call, &active_decision, &done);
+    if out.is_ok() {
+        tell_route(&RouteSeen {
+            model: call.model.to_string(),
+            effort: call.effort.unwrap_or_default().to_string(),
+            why: active_decision.route.reason.clone(),
+        });
+    }
     out
 }
 
@@ -2251,4 +2428,173 @@ pub fn route_gb_turn(
     call.model = &spawn_model;
     route_log(config_dir, &call, &decision, &RouteDone::unseen());
     (spawn_model, effort)
+}
+
+#[cfg(test)]
+mod card_964_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct ShortRetryWaitGuard;
+
+    impl ShortRetryWaitGuard {
+        fn capture() -> Self {
+            SHORT_RETRY_WAITS.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+            Self
+        }
+
+        fn recorded(&self) -> Vec<Duration> {
+            SHORT_RETRY_WAITS.with(|slot| slot.borrow().clone().unwrap_or_default())
+        }
+    }
+
+    impl Drop for ShortRetryWaitGuard {
+        fn drop(&mut self) {
+            SHORT_RETRY_WAITS.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    struct SeqClient {
+        calls: AtomicUsize,
+        models: Mutex<Vec<String>>,
+        first_err: Mutex<Option<ClientError>>,
+    }
+
+    impl ModelClient for SeqClient {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.models
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(req.model.clone());
+            if let Some(err) = self
+                .first_err
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
+                return Err(err);
+            }
+            sink(StreamEvent::TextDelta("ok".into()));
+            Ok(TurnOutput {
+                text: "ok".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    #[test]
+    fn short_retry_after_wait_checks_bounds_and_error_kind() {
+        let mk = |secs| ClientError::RateLimited {
+            retry_after_secs: secs,
+            message: "429".into(),
+        };
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(1))),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(2))),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(SHORT_RETRY_AFTER_SECS))),
+            Some(Duration::from_secs(SHORT_RETRY_AFTER_SECS))
+        );
+        assert_eq!(short_retry_after_wait(&mk(Some(0))), None);
+        assert_eq!(
+            short_retry_after_wait(&mk(Some(SHORT_RETRY_AFTER_SECS + 1))),
+            None
+        );
+        assert_eq!(short_retry_after_wait(&mk(None)), None);
+        assert_eq!(
+            short_retry_after_wait(&ClientError::Server {
+                status: 503,
+                message: "down".into(),
+                retry_after_secs: Some(2),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn stream_routed_waits_once_on_short_retry_after_without_cooling_down() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-short-retry-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let waits = ShortRetryWaitGuard::capture();
+
+        let client = SeqClient {
+            calls: AtomicUsize::new(0),
+            models: Mutex::new(Vec::new()),
+            first_err: Mutex::new(Some(ClientError::RateLimited {
+                retry_after_secs: Some(2),
+                message: "burst limit".into(),
+            })),
+        };
+        let req = ResponsesRequest {
+            model: "grok-4.3".into(),
+            effort: None,
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("hello".into())],
+            }],
+            conversation_id: "conv-short-retry".into(),
+            tools: Vec::new(),
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        let cancel = CancelToken::new();
+        let out = stream_routed(&client, &req, &cancel, &mut |_| {}, "unlisted:test")
+            .expect("should succeed after waiting 2s");
+        assert_eq!(out.text, "ok");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        let models = client.models.lock().unwrap().clone();
+        assert_eq!(models, vec!["grok-4.3", "grok-4.3"]);
+        assert_eq!(waits.recorded(), vec![Duration::from_secs(2)]);
+        assert!(
+            !cooling(&dir, "grok-4.3", grokhub_core::now_ms()),
+            "model must not be cooled down for 5m after a successful short Retry-After wait"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_auto_voice_session_injects_speed_goal_in_decide() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-voice-decide-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _voice = super::super::voice_route::SessionActiveGuard::set(true);
+
+        let call = RouteCall {
+            provider: super::super::PROVIDER_XAI,
+            class: DEFAULT_CLASS,
+            model: "grok-4.3",
+            session: "voice-sess-auto",
+            text: "what time is the game tonight?",
+            ..RouteCall::default()
+        };
+        let dec = decide(&dir, &call, grokhub_core::now_ms());
+        let goal = dec
+            .goal
+            .expect("speed goal injected for active auto voice turn");
+        assert_eq!(goal.goal, super::super::goal::Goal::Speed);
+        assert_eq!(goal.reason, super::super::voice_route::VOICE_SPEED_REASON);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

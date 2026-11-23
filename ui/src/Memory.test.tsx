@@ -37,6 +37,7 @@ const api = vi.hoisted(() => ({
   pauseMemoryRow: vi.fn<(id: string, paused: boolean) => Promise<MemoryNotes>>(),
   addPersonalFact: vi.fn<(text: string, group: string) => Promise<MemoryNotes>>(),
   exportPersonal: vi.fn<() => Promise<string>>(),
+  exportMemoryWiki: vi.fn<() => Promise<string>>(),
   wipePersonal:
     vi.fn<() => Promise<{ removed: number; locked: number; notes: MemoryNotes }>>(),
 }));
@@ -412,6 +413,17 @@ describe("Memory", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Export to Downloads" }));
       expect(
         await screen.findByText("Saved to /home/me/Downloads/what it knows.md."),
+      ).toBeInTheDocument();
+
+      api.exportMemoryWiki.mockResolvedValue(
+        "The wiki in /home/user/.config/GrokHub/amr/wiki has 3 pages (3 changed, 0 removed). 1 private line stays out of it.",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Update wiki" }));
+      expect(api.exportMemoryWiki).toHaveBeenCalledTimes(1);
+      expect(
+        await screen.findByText(
+          "The wiki in /home/user/.config/GrokHub/amr/wiki has 3 pages (3 changed, 0 removed). 1 private line stays out of it.",
+        ),
       ).toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("button", { name: "Wipe everything" }));

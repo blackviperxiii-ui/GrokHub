@@ -25,13 +25,14 @@ pub fn path(config_dir: &Path) -> PathBuf {
 
 /// The file's top-level object. A missing file is an empty object; anything
 /// else that doesn't parse as an object is an error, so nothing writes over it.
+/// A leading byte-order mark is skipped, as the router's reader does.
 pub fn read(config_dir: &Path) -> Result<Map<String, Value>, String> {
     let text = match std::fs::read_to_string(path(config_dir)) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
         Err(e) => return Err(format!("Couldn't read {FILE_NAME}: {e}")),
     };
-    match serde_json::from_str::<Value>(&text) {
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
         Ok(Value::Object(map)) => Ok(map),
         _ => Err(format!(
             "{FILE_NAME} isn't readable, so nothing was changed."
@@ -85,12 +86,20 @@ fn lock_file(config_dir: &Path) -> Result<FileLock, String> {
 
 /// Set each key, keeping every other key as it is.
 pub fn patch(config_dir: &Path, changes: &[(&str, Value)]) -> Result<(), String> {
+    edit(config_dir, |map| {
+        for (key, value) in changes {
+            map.insert((*key).to_string(), value.clone());
+        }
+    })
+}
+
+/// Change the top-level object under the lock (set or remove keys); every
+/// key `change` leaves alone stays as it is.
+pub fn edit(config_dir: &Path, change: impl FnOnce(&mut Map<String, Value>)) -> Result<(), String> {
     let _in_process = IN_PROCESS.lock().unwrap_or_else(|e| e.into_inner());
     let _file = lock_file(config_dir)?;
     let mut map = read(config_dir)?;
-    for (key, value) in changes {
-        map.insert((*key).to_string(), value.clone());
-    }
+    change(&mut map);
     let text = serde_json::to_string_pretty(&Value::Object(map)).map_err(|e| e.to_string())?;
     crate::pulse_writer::write_atomic(&path(config_dir), &text)
 }
@@ -135,6 +144,39 @@ mod tests {
         patch(&d, &[("focusHelp", json!(true))]).unwrap();
         assert_eq!(read(&d).unwrap().len(), 1);
         assert!(bool_or(&d, "focusHelp", false));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_still_patches() {
+        let d = dir("bom");
+        std::fs::write(path(&d), "\u{feff}{\"promptCleanup\":true}").unwrap();
+        assert!(!bool_or(&d, "missing", false));
+        assert!(bool_or(&d, "promptCleanup", false));
+        patch(&d, &[("promptCleanup", json!(false))]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path(&d)).unwrap(),
+            "{\n  \"promptCleanup\": false\n}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_edit_removes_a_key_and_keeps_the_rest() {
+        let d = dir("edit");
+        patch(
+            &d,
+            &[("displayName", json!("Sam")), ("focusHelp", json!(true))],
+        )
+        .unwrap();
+        edit(&d, |map| {
+            map.remove("displayName");
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path(&d)).unwrap(),
+            "{\n  \"focusHelp\": true\n}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

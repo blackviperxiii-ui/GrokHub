@@ -21,6 +21,9 @@ export interface Settings {
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
+  /** Settings → Defaults → Always collapse: thoughts start folded in every
+   * chat. Missing from a desktop older than the setting. */
+  alwaysCollapseThoughts?: boolean;
   /** Settings → Let the app control the desktop. */
   desktopControl: boolean;
   /** Settings → Appearance. */
@@ -31,9 +34,36 @@ export interface Settings {
   summonHotkey: boolean;
   /** Settings → General → notifications while the window is in the background. */
   notifications: boolean;
+  /** Settings → Appearance → Objectives beside chat. Missing from an older
+   * desktop, which reads as off. */
+  chatObjectives?: boolean;
   /** Settings → Account under a live Grok sign-in: the SuperGrok pool's room,
    * or that xAI's plan gate refused the sign-in. */
   planNote?: string | null;
+  /** Settings → Behavior → Dockable panels: the main pages as tabs in panes. */
+  dockPanels: boolean;
+  /** The dock's pane layout, kept in shell.json. */
+  dockLayout: DockLayout;
+}
+
+/** One pane of the dock (src-tauri/src/settings.rs `DockPane`). */
+export interface DockPane {
+  /** The pane's stable name: it survives tab moves, so the page mounted in
+   * the pane is not remounted when its tabs change. */
+  id: string;
+  /** The pane's page tabs, by page name. */
+  tabs: string[];
+  /** The showing tab: an index into `tabs`. */
+  active: number;
+  /** This pane's share of the row, per-mille. 0 reads as an equal share. */
+  share: number;
+}
+
+/** The dock's layout: panes side by side, one of them focused. */
+export interface DockLayout {
+  panes: DockPane[];
+  /** The pane nav and focus follow: an index into `panes`. */
+  focused: number;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */
@@ -66,6 +96,9 @@ export interface Capabilities {
   code?: boolean;
   /** The Mods page: this computer's moddable games (desktops). */
   mods?: boolean;
+  /** No system title bar (Linux, Windows): the top bar drags the window and
+   * draws minimize, maximize and close. */
+  windowControls?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */
@@ -112,19 +145,38 @@ export interface Decision {
 
 export type ChatEvent =
   | { kind: "text"; text: string }
-  | { kind: "tool"; id: string; title: string; status: string; detail: string }
+  /** The model's thinking as it streams; never part of the reply. */
+  | { kind: "thought"; text: string }
+  | {
+      kind: "tool";
+      id: string;
+      title: string;
+      status: string;
+      detail: string;
+      /** The picture file a finished image_generate made; read it with `chatPicture`. */
+      picture?: string;
+    }
   | {
       kind: "permission";
       id: string;
       title: string;
       action: string;
       reason: string;
+      /** It asks on every such step whatever Settings says (a chat on the
+       * Claude plan), so the card has no Stop asking me. */
+      asksEveryTime?: boolean;
     }
   /** A permission card answered away from the page, such as Deny on its notification. */
   | { kind: "answered"; id: string; answer: Answer }
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
+  /** A report written into the chat after its reply ended, such as a screen
+   * recording's. It comes as a helper event and is saved with the chat. */
+  | { kind: "report"; text: string }
+  /** A question with Yes from this computer, such as a skill draft from a
+   * recording: Yes sends `yes` as a slash line. */
+  | { kind: "confirm"; command: string; prompt: string; yes: string }
   /** One-tap follow-ups for the reply that just ended; most replies get none. */
   | { kind: "suggestions"; items: QuickChip[] }
   /** A game goal the reply noticed, to Track or leave with Not now. */
@@ -145,6 +197,9 @@ export type ChatEvent =
       /** Predicted replies for this card, ranked by past picks. */
       chips?: ReplyChipData[];
     }
+  /** A panel the agent drew with show_panel (generative UI), keyed by the
+   * call that made it. The shell sends only specs the core rules allow. */
+  | { kind: "panel"; id: string; spec: PanelSpec }
   /** A report_findings card: one pill per fix; a pill fills the composer. */
   | {
       kind: "findings";
@@ -161,6 +216,9 @@ export type ChatEvent =
       undo: string[];
       steps: { title: string; failed: boolean }[];
     }
+  /** The line under an on-device reply: which model answered, with its
+   * draft or not, and why. It comes before Done and is never saved. */
+  | { kind: "modelLine"; text: string }
   /** The evidence receipt for the turn that just ended. */
   | {
       kind: "evidence";
@@ -176,14 +234,16 @@ export type ChatEvent =
       toolRanNotVerified: boolean;
     };
 
-/** A quick chip: the cabin's engine picked it for this moment (`chips.rs`).
+/** A quick chip: the chip engine picked it for this moment (`chips.rs`).
  * Ask puts `value` in the box, or sends it when the box is empty; Go opens
- * `view`. Only these two cross from the shell. */
+ * `view`; Note opens the note dialog for the game `noteFor` names. */
 export interface QuickChip {
   id: string;
   label: string;
   value: string;
-  action: "ask" | "go";
+  action: "ask" | "go" | "note";
+  /** For a Note chip: the Steam app id of the game. */
+  noteFor?: number;
   /** Why it is here, for the chip's tip. */
   hint: string;
   primary: boolean;
@@ -254,6 +314,39 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
+/** Settings → Account → Profile (src-tauri/src/profile.rs). */
+export interface Profile {
+  /** The saved name; empty when none is set. */
+  name: string;
+  /** What the rail shows: the saved name, else the Grok name, else "You". */
+  shownName: string;
+  /** The first letter of `shownName`, for the rail without a picture. */
+  initial: string;
+  /** `data:image/png;base64,…`, or null. */
+  picture: string | null;
+}
+
+/** The name and picture (src-tauri/src/profile.rs). */
+export function getProfile(): Promise<Profile> {
+  return invoke<Profile>("get_profile");
+}
+
+/** Save the name; blank goes back to the Grok name (src-tauri/src/profile.rs). */
+export function setProfileName(name: string): Promise<Profile> {
+  return invoke<Profile>("set_profile_name", { name });
+}
+
+/** The system picker, then the picture is cropped square; null when closed
+ * without a pick (src-tauri/src/profile.rs). */
+export function pickProfilePicture(): Promise<Profile | null> {
+  return invoke<Profile | null>("pick_profile_picture");
+}
+
+/** Remove the picture (src-tauri/src/profile.rs). */
+export function clearProfilePicture(): Promise<Profile> {
+  return invoke<Profile>("clear_profile_picture");
+}
+
 export type Theme =
   "system" | "dark" | "ops-dark" | "oled-black" | "soft-charcoal" | "light";
 
@@ -291,6 +384,14 @@ export function setSummonHotkey(on: boolean): Promise<Settings> {
 
 export function setNotifications(on: boolean): Promise<Settings> {
   return invoke<Settings>("set_notifications", { on });
+}
+
+export function setDockPanels(on: boolean): Promise<Settings> {
+  return invoke<Settings>("set_dock_panels", { on });
+}
+
+export function saveDockLayout(layout: DockLayout): Promise<Settings> {
+  return invoke<Settings>("save_dock_layout", { layout });
 }
 
 export function setApiKey(key: string): Promise<Settings> {
@@ -437,9 +538,18 @@ export async function onFileDrop(
   });
 }
 
-/** Push to talk: one WAV (base64) to text for the draft. Never sends. */
-export function transcribe(wav: string): Promise<string> {
-  return invoke<string>("transcribe", { wav });
+/** What a recording said, and which engine heard it and why: `line` is
+ * set only when it was heard on this computer, or by xAI in a chat that runs
+ * here; a chat that plainly runs online gets none. */
+export interface HeardWords {
+  words: string;
+  line: string | null;
+}
+
+/** Push to talk: one WAV (base64) to text for the draft, heard with the
+ * engine `conversationId` needs. Never sends. */
+export function transcribe(wav: string, conversationId?: string | null): Promise<HeardWords> {
+  return invoke<HeardWords>("transcribe", { wav, conversationId: conversationId ?? null });
 }
 
 /** What the open mic heard, as voice mode's backend reports it. */
@@ -448,17 +558,26 @@ export type LiveEvent =
   | { kind: "turn"; ms: number }
   | { kind: "nothing" }
   | { kind: "check_in" }
-  | { kind: "pause" };
+  | { kind: "pause" }
+  /** Everything heard so far in this turn, while they talk. */
+  | { kind: "caption"; text: string };
 
 /** One spoken piece: base64 audio and its type. */
 export interface Spoken {
   mime: string;
   audio: string;
+  /** Which voice spoke and why; none for a chat that plainly runs online. */
+  line?: string | null;
 }
 
-/** Voice mode on: one open mic, listening for the first turn. */
-export function voiceLiveStart(): Promise<void> {
-  return invoke<void>("voice_live_start");
+/** Voice mode on in `conversationId`: one open mic, listening for the first turn. */
+export function voiceLiveStart(conversationId?: string | null): Promise<void> {
+  return invoke<void>("voice_live_start", { conversationId: conversationId ?? null });
+}
+
+/** Voice mode moved to `conversationId`: the mic follows that chat's need. */
+export function voiceLiveChat(conversationId?: string | null): Promise<void> {
+  return invoke<void>("voice_live_chat", { conversationId: conversationId ?? null });
 }
 
 /** Voice mode off; drops any turn or reply under way. */
@@ -486,9 +605,10 @@ export function voiceLiveFinish(): Promise<void> {
   return invoke<void>("voice_live_finish");
 }
 
-/** The finished turn as text; empty when nothing was said. */
-export function voiceLiveHear(): Promise<string> {
-  return invoke<string>("voice_live_hear");
+/** The finished turn as text (empty when nothing was said), heard with the
+ * engine `conversationId` needs. */
+export function voiceLiveHear(conversationId?: string | null): Promise<HeardWords> {
+  return invoke<HeardWords>("voice_live_hear", { conversationId: conversationId ?? null });
 }
 
 /** More of the reply; the pieces ready to speak. */
@@ -506,9 +626,26 @@ export function voiceReplyHush(): Promise<void> {
   return invoke<void>("voice_reply_hush");
 }
 
-/** One piece of the reply as speech, in the chat's voice. */
-export function voiceSpeak(text: string): Promise<Spoken> {
-  return invoke<Spoken>("voice_speak", { text });
+/** One piece of the reply as speech, in the chat's voice, with the engine
+ * `conversationId` needs. */
+export function voiceSpeak(text: string, conversationId?: string | null): Promise<Spoken> {
+  return invoke<Spoken>("voice_speak", { text, conversationId: conversationId ?? null });
+}
+
+/** Auto picks every voice source; Local only keeps them all on this computer. */
+export type VoiceRouteMode = "auto" | "local_only";
+
+export interface VoiceRouteConfig {
+  mode: VoiceRouteMode;
+}
+
+/** Shared voice routing preference across STT, reply model and TTS. */
+export function getVoiceRoute(): Promise<VoiceRouteConfig> {
+  return invoke<VoiceRouteConfig>("get_voice_route");
+}
+
+export function setVoiceRoute(config: VoiceRouteConfig): Promise<VoiceRouteConfig> {
+  return invoke<VoiceRouteConfig>("set_voice_route", { config });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
@@ -592,6 +729,8 @@ export interface ChatRow {
   pinned?: boolean;
   /** The id of the project whose folder the chat works in. */
   project?: string | null;
+  /** The permanent Main chat: no pin, rename or delete. */
+  main?: boolean;
 }
 
 /** A project or folder from the sidebar list the cabin shares (projects.json). */
@@ -625,8 +764,9 @@ export interface DeleteAllResult {
   count: number;
 }
 
-/** "tools": a run of tool steps, named on one muted line (not replayed as cards). */
-export type LineRole = "user" | "assistant" | "tools";
+/** "tools": a run of tool steps, named on one muted line (not replayed as cards).
+ * "thought": the model's thinking, saved where it was shown. */
+export type LineRole = "user" | "assistant" | "tools" | "thought";
 
 export interface TranscriptLine {
   role: LineRole;
@@ -655,9 +795,9 @@ export function loadChat(id: string, limit?: number): Promise<Transcript> {
   return invoke<Transcript>("load_chat", { id, limit: limit ?? null });
 }
 
-/** The chat open when the app last closed, if it is still saved. */
-export function getLastChat(): Promise<Transcript | null> {
-  return invoke<Transcript | null>("get_last_chat");
+/** The chat the Chat tab opens at launch: Main, made first if there is none. */
+export function getStartChat(): Promise<Transcript> {
+  return invoke<Transcript>("get_start_chat");
 }
 
 export function renameChat(id: string, title: string): Promise<void> {
@@ -708,6 +848,8 @@ export interface ChatTab {
   title: string;
   pinned: boolean;
   updated: number;
+  /** The permanent Main chat: first, and never archived, deleted, renamed or unpinned. */
+  main: boolean;
   archivedAt?: number;
   deletedAt?: number;
 }
@@ -753,6 +895,12 @@ export function chatTabSoftDelete(id: string): Promise<ChatTab> {
 
 export function chatTabRestoreDeleted(id: string): Promise<ChatTab> {
   return invoke<ChatTab>("chat_tab_restore_deleted", { id });
+}
+
+/** Clear on Main: the old Main goes and an empty Main takes its place. */
+/** Clear chat: deletes the chat, or on Main swaps in an empty Main and returns it. */
+export function clearChat(id: string): Promise<Transcript | null> {
+  return invoke<Transcript | null>("clear_chat", { id });
 }
 
 export function getHangoutMode(): Promise<HangoutMode> {
@@ -858,6 +1006,12 @@ export function onEventGap(handler: () => void): Promise<UnlistenFn> {
   return subscribe<null>(GAP_EVENT, () => handler());
 }
 
+/** `gate.onChange` / `gate.noAgent` from automations.json. */
+export interface AutomationGate {
+  onChange: boolean;
+  noAgent: boolean;
+}
+
 export interface AutomationRow {
   id: string;
   name: string;
@@ -867,6 +1021,9 @@ export interface AutomationRow {
   health: string | null;
   /** The words for the Edit box; null when words can't say the schedule. */
   describe: string | null;
+  /** The job's check command; empty when it has none. */
+  checkCommand: string;
+  gate: AutomationGate;
 }
 
 export interface RunResult {
@@ -895,6 +1052,66 @@ export function addAutomation(text: string): Promise<AutomationRow[]> {
   });
 }
 
+/** A Suggested tile on the Automations page; Add saves `seed`. */
+export interface SuggestedTile {
+  title: string;
+  body: string;
+  seed: string;
+}
+
+/** One fillable field on a Blueprint starter. */
+export interface BlueprintSlot {
+  key: string;
+  label: string;
+  placeholder: string;
+}
+
+/** A slot-filled starter on the Automations Blueprints gallery. */
+export interface Blueprint {
+  id: string;
+  title: string;
+  body: string;
+  seed: string;
+  slots: BlueprintSlot[];
+}
+
+export function listSuggestedAutomations(): Promise<SuggestedTile[]> {
+  return invoke<SuggestedTile[]>("list_suggested_automations");
+}
+
+export function listAutomationBlueprints(): Promise<Blueprint[]> {
+  return invoke<Blueprint[]>("list_automation_blueprints");
+}
+
+/** Replace `{key}` slots in a Blueprint seed. */
+export function fillBlueprintSeed(
+  seed: string,
+  values: Record<string, string>,
+): string {
+  let out = seed;
+  for (const [key, raw] of Object.entries(values)) {
+    const value = raw.trim();
+    if (!value) throw new Error(`Fill in ${key} first.`);
+    if (value.includes("`") || value.includes("\n")) {
+      throw new Error(`The value for ${key} cannot include backticks or new lines.`);
+    }
+    const needle = `{${key}}`;
+    if (!out.includes(needle)) throw new Error(`This Blueprint has no {${key}} field.`);
+    out = out.split(needle).join(value);
+  }
+  if (out.includes("{") && out.includes("}")) {
+    throw new Error("Fill in every field first.");
+  }
+  return out;
+}
+
+export function addSuggestedAutomation(seed: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("add_suggested_automation", {
+    seed,
+    clock: wallClock(),
+  });
+}
+
 export function setAutomationEnabled(
   id: string,
   enabled: boolean,
@@ -915,6 +1132,16 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
+}
+
+/** Whether the login service keeps automations running with the app closed. */
+export function getAutomationsService(): Promise<boolean> {
+  return invoke<boolean>("get_automations_service");
+}
+
+/** Install or remove the login service for closed-app automations. */
+export function setAutomationsService(on: boolean): Promise<boolean> {
+  return invoke<boolean>("set_automations_service", { on });
 }
 
 export function editAutomation(
@@ -1037,6 +1264,7 @@ export interface SlashHit {
 /** What a slash line asked the chat to do. Slash lines never reach the model. */
 export type SlashEffect =
   | { kind: "newChat" }
+  | { kind: "newScratch" }
   | { kind: "mode"; mode: SessionMode; text: string | null }
   | {
       kind: "open";
@@ -1076,7 +1304,15 @@ export type SlashEffect =
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
   /** `/plugins`: Settings → Labs. */
-  | { kind: "openSection"; section: "labs" };
+  | { kind: "openSection"; section: "labs" }
+  /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
+  | { kind: "shell"; check: CommandBoxVerdict }
+  /** `/sync` or `/inhabit <computer>`: a send to a paired computer asks
+   * first. Its Send is `hubSendApprove`, which checks again. */
+  | { kind: "hubAsk"; send: HubSend; prompt: string; note: string };
+
+/** What `/sync` or `/inhabit` sends. `peer` is the paired computer's id. */
+export type HubSend = { what: "sync" } | { what: "inhabit"; peer: string };
 
 export function slashHits(draft: string): Promise<SlashHit[]> {
   return invoke<SlashHit[]>("slash_hits", { draft });
@@ -1151,6 +1387,11 @@ export function addPersonalFact(
 /** Saves one readable copy in Downloads; returns where. Desktop only. */
 export function exportPersonal(): Promise<string> {
   return invoke<string>("export_personal");
+}
+
+/** Updates the Obsidian-friendly wiki of the plain memory; returns the page's line. Desktop only. */
+export function exportMemoryWiki(): Promise<string> {
+  return invoke<string>("export_memory_wiki");
 }
 
 export interface PersonalWiped {
@@ -1383,6 +1624,9 @@ export interface PulsePost {
   ago: string;
   /** The first source link, empty when there is none. */
   link: string;
+  /** A catalog upgrade card's model id, for Open in Settings. Empty on
+   * other posts. */
+  model: string;
   loved: boolean;
   /** What the card's numbers mean, when it has a read of them. */
   verdict: PulseVerdict | null;
@@ -1406,6 +1650,8 @@ export interface PulsePost {
   review?: string;
   /** A code-idea card also offers Copy as GitHub issue. */
   issue?: boolean;
+  /** A Done for you card: Undo and Stop doing this show until it is answered. */
+  done?: { answered: boolean } | null;
 }
 
 /** A card kept with Save, on the Saved page. Stored apart from the feed
@@ -1439,8 +1685,41 @@ export interface PulseItem {
 /** One chip under a card. `index` is the fix's place on the card. */
 export interface PulseChip {
   label: string;
-  act: "offer" | "discuss" | "ignore" | "remind";
+  /** `pause` is Pause it on a failing automation's card: it pauses that job. */
+  act: "offer" | "discuss" | "ignore" | "remind" | "pause";
   index: number;
+  /** How an offer runs: chat, live checklist, or quiet background. Empty on
+   * non-offer chips. */
+  mode?: "chat" | "live" | "background" | "";
+}
+
+/** Where one step of a live fix stands. */
+export type LiveStepMark =
+  | "pending"
+  | "running"
+  | "needsOk"
+  | "done"
+  | "failed"
+  | "skipped";
+
+/** One line of a live fix checklist. */
+export interface LiveStep {
+  plain: string;
+  mark: LiveStepMark;
+}
+
+/** The live fix dialog's state. */
+export interface LiveView {
+  cardId: string;
+  label: string;
+  title: string;
+  summary: string;
+  steps: LiveStep[];
+  phase: "ready" | "running" | "awaiting" | "done" | "stopped";
+  result: string | null;
+  canUndo: boolean;
+  primary: string | null;
+  stop: string | null;
 }
 
 /** What a card puts in the chat: its own conversation and the words for the
@@ -1485,6 +1764,8 @@ export interface PulseIdea {
   chips: PulseChip[];
   /** Like was tapped and is still on: the row shows a filled heart. */
   loved: boolean;
+  /** A skill the nightly review suggested: the main button is Add skill. */
+  skill: boolean;
 }
 
 export type FixKind =
@@ -1543,6 +1824,7 @@ export type PulseAct =
   | "snooze"
   | "opened"
   | "accept"
+  | "addSkill"
   | "moreLike"
   | "notInterested"
   | "ignore"
@@ -1579,6 +1861,21 @@ export function pulseReviewApply(id: string): Promise<PulseReviewDone> {
   return invoke<PulseReviewDone>("pulse_review_apply", { id, day: localDay() });
 }
 
+/** Pause it on a failing automation's card: pauses that job once. */
+export function pulsePauseAutomation(id: string): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_pause_automation", { id, day: localDay() });
+}
+
+/** A Done for you card's Undo: turns the paused job back on. */
+export function pulseDoneUndo(id: string): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_done_undo", { id, day: localDay() });
+}
+
+/** A Done for you card's Stop doing this: the switch in Settings → Pulse goes off. */
+export function pulseDoneStop(): Promise<PulseReviewDone> {
+  return invoke<PulseReviewDone>("pulse_done_stop", { day: localDay() });
+}
+
 /** A code-idea card's Copy as GitHub issue: the redacted text and the note. */
 export function pulseReviewIssue(id: string): Promise<{ text: string; copied: string }> {
   return invoke<{ text: string; copied: string }>("pulse_review_issue", { id });
@@ -1589,9 +1886,40 @@ export function pulseDiscuss(id: string): Promise<PulseSeed> {
   return invoke<PulseSeed>("pulse_discuss", { id });
 }
 
-/** A card's fix chip: its words in the card's own chat. Nothing runs until sent. */
+/** A card's fix chip: its words in the card's own chat. Nothing runs until sent.
+ * Live offers open `pulseLiveOpen` instead. */
 export function pulseOffer(id: string, index: number): Promise<PulseSeed> {
   return invoke<PulseSeed>("pulse_offer", { id, index });
+}
+
+/** Open a Live offer's checklist dialog. */
+export function pulseLiveOpen(id: string, index: number): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_open", { id, index });
+}
+
+export function pulseLiveCurrent(): Promise<LiveView | null> {
+  return invoke<LiveView | null>("pulse_live_current");
+}
+
+/** Start the checklist, or Allow the step waiting for an OK. */
+export function pulseLiveAllow(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_allow");
+}
+
+export function pulseLiveDeny(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_deny");
+}
+
+export function pulseLiveStop(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_stop");
+}
+
+export function pulseLiveUndo(): Promise<LiveView> {
+  return invoke<LiveView>("pulse_live_undo");
+}
+
+export function pulseLiveClose(): Promise<void> {
+  return invoke<void>("pulse_live_close");
 }
 
 /** Remind me later: hidden until a time that fits the day. */
@@ -1687,6 +2015,11 @@ export function imagineCancel(): Promise<boolean> {
 /** A gallery file as a data URL, by its bare name. */
 export function imagineImage(name: string): Promise<string> {
   return invoke<string>("imagine_image", { name });
+}
+
+/** A picture a chat's tool made, as a data URL. Only the app's media folders are read. */
+export function chatPicture(path: string): Promise<string> {
+  return invoke<string>("chat_picture", { path });
 }
 
 /** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */
@@ -1812,6 +2145,8 @@ export interface BoardCard {
   userSteps: boolean;
   /** The steps as the editor shows them, one a line with its mark. */
   stepsText: string;
+  /** When this card is due, as unix ms. Missing when it has no due time. */
+  dueAt?: number | null;
 }
 
 export interface BoardColumn {
@@ -1862,7 +2197,8 @@ export type BoardAct =
   | { kind: "block"; reason: string }
   | { kind: "unblock" }
   | { kind: "steps"; text: string }
-  | { kind: "place"; to: BoardLane; before: string | null };
+  | { kind: "place"; to: BoardLane; before: string | null }
+  | { kind: "due"; dueAt: number | null };
 
 /** Make it recurring: the schedules offered, in the order the shell's
  * `work_triage::RECUR_CHOICES` keeps them. */
@@ -2063,7 +2399,7 @@ export type HomeTile =
   | {
       kind: "pulse";
       post: { id: string; title: string; summary: string; ago: string } | null;
-      idea: { id: string; title: string; action: string } | null;
+      idea: { id: string; title: string; action: string; skill: boolean } | null;
     }
   | { kind: "personality"; name: string; picture: string | null }
   | { kind: "upNext"; games: { appId: number; name: string }[] }
@@ -2092,19 +2428,24 @@ export type TileAction =
   | { kind: "steamSettings" }
   | { kind: "setup"; module: string; undo: boolean }
   | { kind: "copySetup"; module: string }
+  /** Open the module's details sheet on this computer. */
+  | { kind: "details"; module: string }
   | { kind: "reroll" }
   | { kind: "retry" };
+
+/** One label and value line on a tile or a details sheet. */
+export interface TileRow {
+  label: string;
+  value: string;
+  tone: TileTone;
+  tap: TileAction | null;
+}
 
 export interface TileView {
   state: TileState;
   tag: string | null;
   text: { big: string; caption: string; detail: string | null; tone: TileTone };
-  rows: {
-    label: string;
-    value: string;
-    tone: TileTone;
-    tap: TileAction | null;
-  }[];
+  rows: TileRow[];
   progress: number | null;
   buttons: { label: string; action: TileAction; primary: boolean }[];
   tap: TileAction | null;
@@ -2141,6 +2482,11 @@ export interface HomePage {
 
 export function getHome(conversationId?: string): Promise<HomePage> {
   return invoke<HomePage>("get_home", { clock: wallClock(), conversationId });
+}
+
+/** Home's PC Loadout tile on its own, for Chat's side column. Not on the web. */
+export function getPcSnapshot(): Promise<TileView> {
+  return invoke<TileView>("get_pc_snapshot");
 }
 
 /** Which module sits in each slot. "" or null hides a Medium or Small slot. */
@@ -2263,37 +2609,26 @@ export function goalAct(acts: GoalAct[]): Promise<GoalsSaved> {
 }
 
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
-export type LocalMode = "auto" | "manual";
-
-export interface LocalCaps {
-  rampUp: number;
-  normal: number;
-  throttle: number;
-}
-
 export interface LocalManual {
-  /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
-  backend: string;
   ngl: number | null;
   ctx: number | null;
   threads: number | null;
   /** "auto", "q8" or "q4". */
   kv: string;
   idleMinutes: number;
-  caps: LocalCaps;
   neverUnload: boolean;
   allowApps: string[];
   denyApps: string[];
 }
 
 export interface LocalAiConfig {
-  mode: LocalMode;
   pauseForGames: boolean;
   useIdleTime: boolean;
   throttleOnBattery: boolean;
   manual: LocalManual;
-  /** A catalog id or a model file's path; empty for the tier default. */
-  localModel: { selected: string };
+  /** Model files the user added (.gguf paths); Auto loads the first one on
+   * disk when no downloaded model is there. */
+  ownFiles: string[];
   /** Model files whose notice was read. */
   noticeSeen: string[];
 }
@@ -2396,6 +2731,23 @@ export interface LocalAiView {
   draftOffers: LocalDraftOffer[];
   draftProgress: LocalDraftProgress | null;
   running: LocalRunning;
+  /** Use Local AI on this computer: the router's on/off switch. */
+  localUse: LocalUse;
+  /** Tidy typos on this computer. */
+  tidy: LocalTidy;
+}
+
+/** Use Local AI on this computer: on or off, and its line. */
+export interface LocalUse {
+  on: boolean;
+  hint: string;
+}
+
+/** Tidy typos on this computer: the saved choice, whether it can run, and its line. */
+export interface LocalTidy {
+  on: boolean;
+  available: boolean;
+  hint: string;
 }
 
 /** What runs now, with its two controls: keep loaded and unload now. */
@@ -2445,6 +2797,16 @@ export function setLocalKeepLoaded(on: boolean): Promise<LocalAiView> {
 
 export function setLocalDynamic(on: boolean): Promise<LocalAiView> {
   return invoke<LocalAiView>("set_local_dynamic", { on });
+}
+
+/** Use Local AI on this computer, on or off; it applies at once. */
+export function setLocalUse(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_local_use", { on });
+}
+
+/** Tidy typos on this computer, on or off; it applies at once. */
+export function setPromptTidy(on: boolean): Promise<LocalAiView> {
+  return invoke<LocalAiView>("set_prompt_tidy", { on });
 }
 
 export function unloadLocalModel(): Promise<LocalAiView> {
@@ -2528,6 +2890,36 @@ export function onModelLibraryEvent(
   handler: (status: LibraryStatus) => void,
 ): Promise<UnlistenFn> {
   return subscribe<LibraryStatus>("model-library", handler);
+}
+
+/** Live Hugging Face GGUF search (Download models → browse). */
+export interface HfGgufHit {
+  repo: string;
+  downloads: number;
+  likes: number;
+  updated: string;
+  gated: boolean;
+}
+
+export interface HfGgufFile {
+  label: string;
+  paths: string[];
+  size: string;
+  fit: string;
+  fitKind: "yes" | "tight" | "no";
+}
+
+export function searchHfGguf(query: string, limit = 20): Promise<HfGgufHit[]> {
+  return invoke<HfGgufHit[]>("search_hf_gguf", { query, limit });
+}
+
+export function listHfGgufFiles(repo: string): Promise<HfGgufFile[]> {
+  return invoke<HfGgufFile[]>("list_hf_gguf_files", { repo });
+}
+
+/** Downloads into the models folder and registers the file in Auto only. */
+export function downloadHfGguf(repo: string, path: string): Promise<string> {
+  return invoke<string>("download_hf_gguf", { repo, path });
 }
 
 export function runLocalSpeedTest(): Promise<string> {
@@ -2657,12 +3049,144 @@ export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
 }
 
+/** A computer on the Fleet page (src-tauri/src/fleet.rs); desktop only. */
+export interface FleetMachine {
+  id: string;
+  name: string;
+  /** CPU use since the last reading, 0-100; null before a second reading or off Linux. */
+  cpuPct: number | null;
+  ramMb: number | null;
+  freeRamMb: number | null;
+  appVersion: string;
+  /** Unix ms when the card was made. */
+  atMs: number;
+  /** The card is under three minutes old. */
+  online: boolean;
+  thisComputer: boolean;
+}
+
+export interface UsageTokens {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+}
+
+/** Claude Code's usage from its local transcripts. */
+export interface ClaudeUsage {
+  window: UsageTokens;
+  windowResetsAtMs: number | null;
+  /** No 5-hour pause in view: `window` is the last 5 hours. */
+  windowRolling: boolean;
+  week: UsageTokens;
+  lastAtMs: number | null;
+}
+
+/** The SuperGrok pool as the last signed-in reply's headers said. */
+export interface GrokRoom {
+  requestsLeft: number | null;
+  requestsLimit: number | null;
+  tokensLeft: number | null;
+  tokensLimit: number | null;
+  resetsAtMs: number | null;
+  seenMs: number;
+}
+
+export interface FleetUsage {
+  claude: ClaudeUsage | null;
+  grok: GrokRoom | null;
+}
+
+/** A subscription row the user fills in from its own dashboard. */
+export interface FleetRow {
+  id: "cursor" | "antigravity";
+  windowPct: number | null;
+  windowResetsAtMs: number | null;
+  periodPct: number | null;
+  periodResetsAtMs: number | null;
+  /** Unix ms of the last change; 0 until filled in. */
+  updatedAt: number;
+}
+
+export function fleetMachines(): Promise<FleetMachine[]> {
+  return invoke<FleetMachine[]>("fleet_machines");
+}
+
+export function fleetUsage(): Promise<FleetUsage> {
+  return invoke<FleetUsage>("fleet_usage");
+}
+
+export function getFleetRows(): Promise<FleetRow[]> {
+  return invoke<FleetRow[]>("get_fleet_rows");
+}
+
+export function setFleetRow(row: FleetRow): Promise<FleetRow[]> {
+  return invoke<FleetRow[]>("set_fleet_row", { row });
+}
+
+/** The hub this computer joined (src-tauri/src/hub_join.rs); desktop only. */
+export interface JoinedHub {
+  /** `host:port` on this network. */
+  address: string;
+  hubId: string;
+  hubName: string;
+  joinedAt: number;
+}
+
+/** Devices → Join another computer. The pairing token stays in the keychain. */
+export interface HubJoin {
+  joined: JoinedHub | null;
+  /** Unix ms when this computer's card last reached the hub, this run. */
+  lastSentAt: number | null;
+  /** Why the last send failed; null after one that worked. */
+  lastError: string | null;
+}
+
+export function getHubJoin(): Promise<HubJoin> {
+  return invoke<HubJoin>("get_hub_join");
+}
+
+/** Pair with another computer's Start share address and code, then send this computer's card. */
+export function joinHub(address: string, code: string): Promise<HubJoin> {
+  return invoke<HubJoin>("join_hub", { address, code });
+}
+
+export function leaveHub(): Promise<HubJoin> {
+  return invoke<HubJoin>("leave_hub");
+}
+
+/** The chat's device glance (src-tauri/src/hub_share.rs); desktop only. */
+export interface DeviceGlance {
+  /** This computer's hub is on (Devices → Start share). */
+  sharing: boolean;
+  /** The newest screenshot as a checked `data:image/...;base64,` URL. */
+  frame: string | null;
+}
+
+/** Null when there is nothing to show: not sharing and no screenshot held. */
+export function getDeviceGlance(): Promise<DeviceGlance | null> {
+  return invoke<DeviceGlance | null>("get_device_glance");
+}
+
 /** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
+/** One labelled line of a bundle's summary (src-tauri/src/plugins.rs `Part`). */
+export interface PluginPart {
+  /** Empty when the line has no known label. */
+  label: string;
+  text: string;
+  /** A refused part, or a reason the bundle can't be trusted. */
+  warn: boolean;
+}
+
 export interface PluginRow {
   name: string;
   version: string;
   /** What the bundle brings: skills, hooks, MCP servers, agents. */
   summary: string;
+  /** The manifest's description, shown once under the title. */
+  description: string;
+  /** The summary split into labelled lines, without the title and description. */
+  parts: PluginPart[];
   trusted: boolean;
   enabled: boolean;
   /** Installed through GrokHub, so it can be removed here. */
@@ -2686,6 +3210,8 @@ export interface PluginEntry {
 export interface PluginMarket {
   entries: PluginEntry[];
   page: PluginPage;
+  /** The index was really read, so no entries means it is empty. */
+  read: boolean;
 }
 
 export interface DiagnosticsPage {
@@ -3064,6 +3590,8 @@ export interface PermissionPage {
   imported: PermissionRule[];
   /** Commands remembered with Allow always for this project. */
   grants: string[];
+  /** The imported allow rules apply only in a trusted folder. */
+  folderTrusted: boolean;
 }
 
 export function getPermissions(): Promise<PermissionPage> {
@@ -3092,6 +3620,97 @@ export function forgetGrant(command: string): Promise<PermissionPage> {
   return invoke<PermissionPage>("forget_grant", { command });
 }
 
+/** Settings → Permissions → Paired computers (src-tauri/src/hub_send.rs). */
+export interface HubSendGrant {
+  everyTime: boolean;
+  status: string;
+}
+
+export function getHubSendGrant(): Promise<HubSendGrant> {
+  return invoke<HubSendGrant>("get_hub_send_grant");
+}
+
+export function allowHubSendEveryTime(): Promise<HubSendGrant> {
+  return invoke<HubSendGrant>("allow_hub_send_every_time");
+}
+
+export function askHubSendEachTime(): Promise<HubSendGrant> {
+  return invoke<HubSendGrant>("ask_hub_send_each_time");
+}
+
+/** Connectors → GitHub (src-tauri/src/github.rs). Never holds the token. */
+export interface GithubView {
+  tokenSet: boolean;
+  status: string;
+}
+
+export type GithubTool = "user" | "listRepos";
+
+export interface GithubRepo {
+  /** `owner/name`. */
+  name: string;
+  private: boolean;
+  description: string;
+}
+
+export interface GithubRan {
+  summary: string;
+  repos: GithubRepo[];
+}
+
+export function getGithub(): Promise<GithubView> {
+  return invoke<GithubView>("get_github");
+}
+
+/** An empty token removes the saved one. */
+export function saveGithubToken(token: string): Promise<GithubView> {
+  return invoke<GithubView>("save_github_token", { token });
+}
+
+/** One read-only call to api.github.com. */
+export function runGithub(tool: GithubTool): Promise<GithubRan> {
+  return invoke<GithubRan>("run_github", { tool });
+}
+
+/** Connectors → Hooks (src-tauri/src/project_hooks.rs). */
+export type HookOrigin = "user" | "project" | "plugin";
+
+export interface HookRow {
+  /** When it runs, like PreToolUse. */
+  event: string;
+  /** The tool it runs for; empty means any. */
+  matcher: string;
+  /** The command line, or an http hook's URL. URLs show only their host,
+   * and passwords and keys are hidden. */
+  command: string;
+  /** "command" or "http". */
+  kind: string;
+  origin: HookOrigin;
+  /** The file it was read from. */
+  path: string;
+  /** Whether a turn runs it now. */
+  runs: boolean;
+  /** Why it doesn't run; empty when it does. */
+  note: string;
+}
+
+export interface HooksPage {
+  folder: string;
+  trusted: boolean;
+  /** How many of the rows come from this project. */
+  projectHooks: number;
+  rows: HookRow[];
+  status: string;
+}
+
+export function getHooks(): Promise<HooksPage> {
+  return invoke<HooksPage>("get_hooks");
+}
+
+export function setHooksTrust(trusted: boolean): Promise<HooksPage> {
+  return invoke<HooksPage>("set_hooks_trust", { trusted });
+}
+
 /** Settings → About → Updates (src-tauri/src/shell_update.rs). */
 export type UpdateChannel = "stable" | "beta";
 
@@ -3104,6 +3723,8 @@ export interface UpdateView {
   note: string | null;
   /** The version a check found, ready to install. */
   available: string | null;
+  /** Set when the last update was rolled back because it didn't stay up. */
+  rolledBack: string | null;
 }
 
 /** Emitted when the background check (every 2 hours) finds an update. */
@@ -3206,6 +3827,12 @@ export interface QueueProgress {
   lastStep: string;
   tokens: number;
   seconds: number;
+  /** The model this helper ran on; absent when unknown. */
+  model?: string;
+  /** The effort its last step went out with; absent when none or unknown. */
+  effort?: string;
+  /** Why the router sent it there ("quality · High: debugging."). */
+  why?: string;
 }
 
 /** A background command, subagent or monitor of the open chat. */
@@ -3215,6 +3842,8 @@ export interface QueueTask {
   status: TaskStatus;
   /** Still going, so Stop has something to stop. */
   live: boolean;
+  /** The model a helper ran on; absent for commands and monitors. */
+  model?: string;
   /** Only on a helper of a session whose Tasks panel is live. */
   progress?: QueueProgress;
 }
@@ -3493,6 +4122,8 @@ export function getTaskDetail(conversationId: string, taskId: string): Promise<T
 /** Settings → Behavior, saved in shell.json. Everything starts off. */
 export interface Behavior {
   autocomplete: boolean;
+  /** Soft light around the composer while a reply comes in. */
+  composerGlow: boolean;
   /** A few next steps to tap, under the box, on Home and after replies. */
   suggestions: boolean;
   /** Quiet hours for automations as HH:MM; both empty is none. */
@@ -3501,7 +4132,12 @@ export interface Behavior {
   /** Tokens a day, one of `budgets`; 0 is off. */
   dailyTokenBudget: number;
   pauseOverBudget: boolean;
+  /** Which way the composer's near-tied suggestions lean. */
+  lane: Lane;
 }
+
+/** Coding or Life, for Settings → Behavior. */
+export type Lane = "coding" | "life";
 
 export interface BehaviorPage {
   closeToTray: boolean;
@@ -3562,8 +4198,9 @@ export function forgetPcRhythm(): Promise<PcHelpers> {
 export function saveDefaults(
   workspace: string,
   approvals: Approvals,
+  alwaysCollapseThoughts: boolean,
 ): Promise<Settings> {
-  return invoke<Settings>("save_defaults", { workspace, approvals });
+  return invoke<Settings>("save_defaults", { workspace, approvals, alwaysCollapseThoughts });
 }
 
 /** Settings → Privacy & data (src-tauri/src/privacy.rs). */
@@ -3573,6 +4210,9 @@ export interface PrivacyPage {
   localReady: boolean;
   /** "3 calls sent off-device this week". */
   sent: string;
+  /** The same count as a number; null while the log is sealed and the keyring
+   * locked. Missing from an older desktop the web app talks to. */
+  sentCalls?: number | null;
   hosts: { host: string; calls: number }[];
   encrypted: boolean;
   encryptedNote: string;
@@ -3580,6 +4220,11 @@ export interface PrivacyPage {
   /** Where exports and the cabin's other files go (Documents/Loadout). */
   filesFolder: string;
   canOpenFolder: boolean;
+}
+
+/** "Quiet until 07:00" while Settings → Behavior's quiet hours hold now, else null. */
+export function quietChip(): Promise<string | null> {
+  return invoke<string | null>("quiet_chip", { clock: wallClock() });
 }
 
 export function getPrivacy(): Promise<PrivacyPage> {
@@ -3716,6 +4361,37 @@ export function companionFrame(
 
 export function companionSetNote(appId: number, text: string): Promise<string> {
   return invoke<string>("companion_set_note", { appId, text });
+}
+
+/** The note dialog's game name and saved note (src-tauri/src/game_companion.rs `NoteFor`). */
+export interface CompanionNote {
+  game: string;
+  note: string;
+}
+
+export function companionNote(appId: number): Promise<CompanionNote> {
+  return invoke<CompanionNote>("companion_note", { appId });
+}
+
+/** Settings → Behavior → Game launch companion. */
+export interface GameCompanion {
+  on: boolean;
+  /** A quiet desktop notification comes with the launch card. */
+  ping: boolean;
+  /** What the last change did; empty on a read. */
+  note: string;
+}
+
+export function getGameCompanion(): Promise<GameCompanion> {
+  return invoke<GameCompanion>("get_game_companion");
+}
+
+export function setGameCompanion(on: boolean): Promise<GameCompanion> {
+  return invoke<GameCompanion>("set_game_companion", { on });
+}
+
+export function setGameCompanionPing(on: boolean): Promise<GameCompanion> {
+  return invoke<GameCompanion>("set_game_companion_ping", { on });
 }
 
 /** Per-game companion screens (src-tauri/src/games.rs). */
@@ -3964,6 +4640,80 @@ export function setGameWatch(on: boolean): Promise<GameWatch> {
   return invoke<GameWatch>("set_game_watch", { on });
 }
 
+/** Settings → Behavior → Living wall (`app.json` imagineWall). Desktops only. */
+export interface LivingWall {
+  on: boolean;
+}
+
+export function getLivingWall(): Promise<LivingWall> {
+  return invoke<LivingWall>("get_living_wall");
+}
+
+export function setLivingWall(on: boolean): Promise<LivingWall> {
+  return invoke<LivingWall>("set_living_wall", { on });
+}
+
+/** The living wall's cover as it starts, lands in the Imagine gallery, or
+ * fails (`living_wall::News`). */
+export type WallNews = { state: "painting"; title: string } | { state: "painted"; title: string } | { state: "failed" };
+
+export const IMAGINE_WALL_EVENT = "imagine://wall";
+
+export function onWallNews(handler: (news: WallNews) => void): Promise<UnlistenFn> {
+  return subscribe<WallNews>(IMAGINE_WALL_EVENT, handler);
+}
+
+/** Settings → Pulse: one kind of fix that may run without its tap (`app.json` autoFixes). */
+export interface PulseAutoFix {
+  id: string;
+  label: string;
+  note: string;
+  on: boolean;
+}
+
+/** Settings → Pulse: fixes that run on their own, and reminder notifications. */
+/** Done for you's switch: pause an automation that keeps failing. `held`
+ * says what holds it back while it is on, or is null. */
+export interface PulseAutoPause {
+  on: boolean;
+  label: string;
+  note: string;
+  held: string | null;
+}
+
+export interface PulseAuto {
+  fixes: PulseAutoFix[];
+  reminders: boolean;
+  pause: PulseAutoPause;
+}
+
+/** Settings → Pulse: PC health while gaming (the cabin's `pcHealth` key). */
+export type PcHealth = { on: boolean };
+
+export function getPcHealth(): Promise<PcHealth> {
+  return invoke<PcHealth>("get_pc_health");
+}
+
+export function setPcHealth(on: boolean): Promise<PcHealth> {
+  return invoke<PcHealth>("set_pc_health", { on });
+}
+
+export function getPulseAuto(): Promise<PulseAuto> {
+  return invoke<PulseAuto>("get_pulse_auto");
+}
+
+export function setPulseAutoFix(id: string, on: boolean): Promise<PulseAuto> {
+  return invoke<PulseAuto>("set_pulse_auto_fix", { id, on });
+}
+
+export function setProactiveReminders(on: boolean): Promise<PulseAuto> {
+  return invoke<PulseAuto>("set_proactive_reminders", { on });
+}
+
+export function setPulseAutoPause(on: boolean): Promise<PulseAuto> {
+  return invoke<PulseAuto>("set_pulse_auto_pause", { on });
+}
+
 /** Settings → Pulse: Steam achievement nudges and wishlist sale alerts. */
 export interface SteamPulseThreshold {
   key: string;
@@ -3982,6 +4732,25 @@ export interface SteamPulse {
   wishNote: string;
   achPrivate: boolean;
   wishPrivate: boolean;
+}
+
+/** Settings → Pulse: weekly suggestions of local models that fit this PC. */
+export interface LocalModelNews {
+  on: boolean;
+  /** What the last check said; empty while off or before one ran. */
+  note: string;
+}
+
+export function getLocalModelNews(): Promise<LocalModelNews> {
+  return invoke<LocalModelNews>("get_local_model_news");
+}
+
+export function setLocalModelNews(on: boolean): Promise<LocalModelNews> {
+  return invoke<LocalModelNews>("set_local_model_news", { on });
+}
+
+export function localModelNewsCheckNow(): Promise<LocalModelNews> {
+  return invoke<LocalModelNews>("local_model_news_check_now");
 }
 
 export function getSteamPulse(): Promise<SteamPulse> {
@@ -4047,6 +4816,12 @@ export function homeRunPlaybook(id: string): Promise<BoardWork> {
 /** Plays the clip at this place in Home's Clips tile with the PC's player. */
 export function homeOpenClip(index: number): Promise<void> {
   return invoke<void>("home_open_clip", { index });
+}
+
+/** PC Loadout → Details: this PC's hardware read as rows, or null until the
+ * launch read lands. Desktop only. */
+export function homePcDetails(): Promise<TileRow[] | null> {
+  return invoke<TileRow[] | null>("home_pc_details");
 }
 
 /** Home's Updates & Drivers page (src-tauri/src/home_updates.rs, core home::updates). */
@@ -4122,6 +4897,19 @@ export interface CodeDiff {
   cut: boolean;
 }
 
+/** Sync ahead/behind for the open project's git repo. */
+export interface CodeProjectSync {
+  ahead: number;
+  behind: number;
+  upstream?: string | null;
+}
+
+/** One discovered rule file on the project bar. */
+export interface CodeProjectRule {
+  path: string;
+  kind: string;
+}
+
 /** Code tab: one project on the project bar. */
 export interface CodeProject {
   id: string;
@@ -4131,12 +4919,38 @@ export interface CodeProject {
   current: boolean;
   /** The folder is no longer on disk. */
   missing: boolean;
+  /** Linked remote URL when set (never includes credentials). */
+  remoteUrl?: string | null;
+  /** Working / PR-base branch for this project. */
+  preferredBranch?: string | null;
+  /** Checked-out branch when this is a git repo. */
+  activeBranch?: string | null;
+  sync?: CodeProjectSync | null;
+  /** Rule files in force for the open project. */
+  rules?: CodeProjectRule[];
 }
 
 /** Code tab: every project in the list, and the open folder ("" when none is). */
 export interface CodeProjects {
   bound: string;
   projects: CodeProject[];
+}
+
+/** Discovered repo rules for orchestrator helpers (Order 918.5 / 918.95). */
+export interface RepoRulesBundle {
+  projectId: string;
+  workspace: string;
+  remoteUrl?: string | null;
+  preferredBranch: string;
+  activeBranch?: string | null;
+  sync?: CodeProjectSync | null;
+  files: Array<{
+    path: string;
+    kind: string;
+    excerpt?: string | null;
+    bytes: number;
+  }>;
+  promptBlock: string;
 }
 
 export function codeProjects(): Promise<CodeProjects> {
@@ -4156,6 +4970,33 @@ export function codeProjectPick(): Promise<CodeProjects | null> {
 /** Make a project in the work folder and open it. */
 export function codeProjectNew(name: string): Promise<CodeProjects> {
   return invoke<CodeProjects>("code_project_new", { name });
+}
+
+/** Clone (or reuse) a remote git URL under the work root and open it. */
+export function codeProjectLinkRemote(
+  url: string,
+  preferredBranch?: string | null,
+): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_project_link_remote", {
+    url,
+    preferredBranch: preferredBranch ?? null,
+  });
+}
+
+/** Set or clear the per-project preferred working branch. */
+export function codeProjectSetBranch(
+  projectId: string,
+  branch?: string | null,
+): Promise<CodeProjects> {
+  return invoke<CodeProjects>("code_project_set_branch", {
+    projectId,
+    branch: branch ?? null,
+  });
+}
+
+/** Discovered repo rules for the open project — same shape helpers receive. */
+export function codeProjectRules(): Promise<RepoRulesBundle> {
+  return invoke<RepoRulesBundle>("code_project_rules");
 }
 
 /** The agent window shows this session: it takes the open project's folder
@@ -4277,10 +5118,10 @@ export interface CommandBoxView {
 }
 
 /** What the Command page does with a line: queue it to the agent now, ask
- * first (a first run, or a destructive line every time), or refuse it. */
+ * first (a first run, or a destructive or keyed line every time), or refuse it. */
 export type CommandBoxVerdict =
   | { verdict: "queue"; command: string; prompt: string }
-  | { verdict: "confirm"; command: string; destructive: boolean }
+  | { verdict: "confirm"; command: string; destructive: boolean; secret: boolean }
   | { verdict: "blocked"; command: string; message: string };
 
 export function commandBoxView(): Promise<CommandBoxView> {
@@ -4291,9 +5132,17 @@ export function commandBoxCheck(line: string): Promise<CommandBoxVerdict> {
   return invoke<CommandBoxVerdict>("command_box_check", { line });
 }
 
-/** The yes on a first run: the checks run again, and the agent's message comes back. */
-export function commandBoxApprove(line: string): Promise<string> {
-  return invoke<string>("command_box_approve", { line });
+/** The yes on a first run: the checks run again, and the agent's message
+ * comes back. A chat's `/sh` line names its chat, so it is checked in that
+ * chat's folder. */
+export function commandBoxApprove(line: string, conversationId?: string): Promise<string> {
+  return invoke<string>("command_box_approve", { line, conversationId });
+}
+
+/** Send on a `/sync` or `/inhabit` card: the checks run again before
+ * anything leaves this computer, and the line to show comes back. */
+export function hubSendApprove(send: HubSend): Promise<string> {
+  return invoke<string>("hub_send_approve", { send });
 }
 
 export function commandBoxForget(): Promise<CommandBoxView> {
@@ -4561,6 +5410,27 @@ export function codeDeployRun(
   return invoke<CodeTestResult>("code_deploy_run", { command, confirmed });
 }
 
+/** Settings → Code → Coding skills (vstack): active version/commit and sync state. */
+export interface VstackStatus {
+  repo: string;
+  source: "synced" | "bundled" | string;
+  version: string;
+  tag: string | null;
+  commit: string;
+  lastSyncMs: number | null;
+  lastCheckMs: number | null;
+  lastError: string | null;
+  skillCount: number;
+}
+
+export function vstackSyncStatus(): Promise<VstackStatus> {
+  return invoke<VstackStatus>("vstack_sync_status");
+}
+
+export function vstackSyncNow(): Promise<VstackStatus> {
+  return invoke<VstackStatus>("vstack_sync_now");
+}
+
 export function onCodeDeployRun(
   handler: (chunk: CodeRunChunk) => void,
 ): Promise<UnlistenFn> {
@@ -4605,13 +5475,31 @@ export interface AiClassView {
   rows: AiTableRow[];
 }
 
+/** Settings → AI models → Web search. A Brave key's value never comes back. */
+export interface AiWebSearch {
+  backend: "duckduckgo" | "searxng" | "brave";
+  backends: { id: string; label: string }[];
+  searxngUrl: string;
+  /** Why searches can't use the saved SearXNG URL; empty when they can. */
+  searxngProblem: string;
+  braveKeySet: boolean;
+}
+
+export interface AiBenchedRow {
+  id: string;
+  label: string;
+  benchedAtMs: number;
+}
+
 export interface AiModelsView {
   providers: AiProviderRow[];
   spend: AiSpend;
   premium: AiPremiumRow[];
+  benched: AiBenchedRow[];
   table: AiClassView[];
   tableBuiltAt: number;
   locked: string;
+  webSearch: AiWebSearch;
   status: string;
 }
 
@@ -4627,12 +5515,84 @@ export function getAiModels(): Promise<AiModelsView> {
   return invoke<AiModelsView>("get_ai_models");
 }
 
+/** Claude Code on this computer (src/claude_plan.rs in grokhub-agent); desktop only.
+ * Only the sign-in kind is read, never a credential. */
+export type ClaudePlan =
+  | { state: "missing" }
+  | { state: "noAnswer" }
+  | { state: "signedOut"; version: string }
+  | { state: "plan"; version: string }
+  | { state: "otherBilling"; version: string; method: string };
+
+export function claudePlanStatus(): Promise<ClaudePlan> {
+  return invoke<ClaudePlan>("claude_plan_status");
+}
+
+/** Settings' Allow for chats on the Claude plan, and the chats moved to it by words. */
+export interface ClaudeChats {
+  allowed: boolean;
+  chats: string[];
+  /** The plan's newest limit reading from a chat turn. */
+  headroom?: PlanHeadroom | null;
+}
+
+/** How much of one limit window the plan has used (Unix seconds). */
+export interface PlanHeadroom {
+  window: string;
+  usedPct: number | null;
+  resetsAt: number | null;
+  limited: boolean;
+  seenAt: number;
+}
+
+export function claudePlanChats(): Promise<ClaudeChats> {
+  return invoke<ClaudeChats>("claude_plan_chats");
+}
+
+/** Allow or revoke; revoking moves every chat back to the app's own models. */
+export function setClaudePlanAllowed(on: boolean): Promise<ClaudeChats> {
+  return invoke<ClaudeChats>("set_claude_plan_allowed", { on });
+}
+
+
 /** Posts the key's approval card; nothing is saved until `answerAiModelsCard`. */
 export function addAiProvider(
   baseUrl: string,
   key: string,
 ): Promise<AiModelsCard> {
   return invoke<AiModelsCard>("add_ai_provider", { baseUrl, key });
+}
+
+/** OpenRouter's sign-in page reached the browser; `opened` false means open `url` by hand. */
+export interface OpenRouterSignIn {
+  url: string;
+  opened: boolean;
+  why: string;
+}
+
+/** Opens OpenRouter's sign-in page, or hands back the one that waits. Nothing is saved; the key comes back on a card. */
+export function startOpenRouterSignIn(): Promise<OpenRouterSignIn> {
+  return invoke<OpenRouterSignIn>("start_openrouter_sign_in");
+}
+
+/** Waits for the browser sign-in to end: the key card, or why there is none. */
+export function waitOpenRouterSignIn(): Promise<AiModelsCard> {
+  return invoke<AiModelsCard>("wait_openrouter_sign_in");
+}
+
+/** What a page that just loaded picks up: a sign-in that waits, or its unanswered card. */
+export interface OpenRouterSignInStatus {
+  waiting: OpenRouterSignIn | null;
+  card: AiModelsCard | null;
+}
+
+export function openRouterSignInStatus(): Promise<OpenRouterSignInStatus> {
+  return invoke<OpenRouterSignInStatus>("openrouter_sign_in_status");
+}
+
+/** Stops a browser sign-in that waits; its wait ends with `OPENROUTER_STOPPED`. */
+export function stopOpenRouterSignIn(): Promise<void> {
+  return invoke<void>("stop_openrouter_sign_in");
 }
 
 export function allowAiProvider(id: string): Promise<AiModelsCard> {
@@ -4657,8 +5617,25 @@ export function saveAiSpend(
   return invoke<AiModelsView>("save_ai_spend", { cap, ceiling });
 }
 
+export function benchAiModel(target: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("bench_ai_model", { target });
+}
+
+export function unbenchAiModel(id: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("unbench_ai_model", { id });
+}
+
 export function revokeAiPremium(id: string): Promise<AiModelsView> {
   return invoke<AiModelsView>("revoke_ai_premium", { id });
+}
+
+export function saveWebSearch(backend: string, searxngUrl: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("save_web_search", { backend, searxngUrl });
+}
+
+/** An empty key removes the saved one. */
+export function saveBraveKey(key: string): Promise<AiModelsView> {
+  return invoke<AiModelsView>("save_brave_key", { key });
 }
 
 /** One line of the top bar while a recording or an audio check runs. */
@@ -4672,11 +5649,15 @@ export interface RecordEvent {
   kind: "record" | "audio";
   ok: boolean;
   text: string;
+  /** The chat a recording's report went into; empty when none did. */
+  chat: string;
 }
 
 export interface RecordStatus {
   recording: RecordLine | null;
   listening: RecordLine | null;
+  /** After Stop, while Grok looks at the recording's stills. */
+  diagnosing: RecordLine | null;
   events: RecordEvent[];
 }
 
@@ -4802,3 +5783,20 @@ export function modsNotForMe(source: string, id: string): Promise<void> {
 export function modsHideGame(game: string, hidden: boolean): Promise<void> {
   return invoke<void>("mods_hide_game", { game, hidden });
 }
+
+/** grokhub_core::panel_spec: what show_panel draws. Plain text only; a
+ * button names an action id, never a link or a command. */
+export interface PanelSpec {
+  title?: string;
+  elements: PanelElement[];
+}
+
+export type PanelElement =
+  | { type: "heading"; level: number; text: string }
+  | { type: "text"; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "key_value"; pairs: { key: string; value: string }[] }
+  | { type: "button"; label: string; action: string }
+  | { type: "input"; id: string; label: string; placeholder?: string; value?: string }
+  | { type: "progress"; label: string; value: number };

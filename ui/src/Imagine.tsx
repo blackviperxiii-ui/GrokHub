@@ -7,6 +7,7 @@ import {
   imagineSignInPoll,
   imagineSignInStart,
   imagineSignOut,
+  onWallNews,
   type ImagineKind,
   type ImaginePage,
   type ImagineTile,
@@ -21,7 +22,7 @@ export const SIGNIN_HINT = "Sign in with Grok here, or add an xAI API key in Set
 export const IMAGINE_SIGN_IN = "Imagine sign-in";
 export const IMAGINE_SIGN_IN_NOTE =
   "Use your Grok subscription for images and videos. Your sign-in is kept in this device's keychain.";
-export const GALLERY_EMPTY = "Nothing yet. What you make shows up here and on the cabin's wall.";
+export const GALLERY_EMPTY = "Nothing yet. What you make, and the living wall's covers, show up here.";
 
 /** Square first: the default. Values are what the shell accepts. */
 export const ASPECTS: { value: string; label: string }[] = [
@@ -37,6 +38,20 @@ export function makingLine(kind: ImagineKind, count: number): string {
   if (kind === "video") return "Making a video… this can take a few minutes.";
   return count === 1 ? "Making 1 image…" : `Making ${count} images…`;
 }
+
+/** The status line when a living wall cover lands. */
+export function wallLine(title: string): string {
+  return `New cover on the wall: ${title}`;
+}
+
+export function paintingLine(title: string): string {
+  return `Painting a wall cover: ${title}`;
+}
+
+export const WALL_RETRY = "The wall cover didn't come. It tries again in 15 minutes.";
+
+/** The shell's refusal while another run holds Imagine (imagine.rs BUSY). */
+export const IMAGINE_BUSY = "Imagine is already making something. Stop it or wait for it.";
 
 function madeLine(made: number, note: string): string {
   const line = made === 1 ? "Made 1." : `Made ${made}.`;
@@ -115,6 +130,15 @@ export function Imagine() {
   const [count, setCount] = useState(1);
   const [kind, setKind] = useState<ImagineKind>("image");
   const [busy, setBusy] = useState(false);
+  /** The living wall cover being painted now, by its title. */
+  const [wall, setWall] = useState<string | null>(null);
+  // The wall's news must not write over a Make's own status line.
+  const making = useRef(false);
+  useEffect(() => {
+    making.current = busy;
+  }, [busy]);
+  /** A Make or a wall cover holds Imagine's one run: Stop shows. */
+  const working = busy || wall !== null;
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<ImagineTile | null>(null);
@@ -153,6 +177,41 @@ export function Imagine() {
     getImagine().then(setPage, (err) => setError(String(err)));
   }, []);
 
+  // The living wall painting while the page is open: its line, Stop (the
+  // run is Imagine's one run), then the gallery again when it lands.
+  useEffect(() => {
+    let live = true;
+    const say = (line: string) => {
+      if (!making.current) setStatus(line);
+    };
+    const off = onWallNews((news) => {
+      if (news.state === "painting") {
+        setWall(news.title);
+        say(paintingLine(news.title));
+        return;
+      }
+      setWall(null);
+      // A Make refused while the cover held Imagine can go now.
+      setError((now) => (now === IMAGINE_BUSY ? null : now));
+      if (news.state === "failed") {
+        say(WALL_RETRY);
+        return;
+      }
+      getImagine().then(
+        (next) => {
+          if (!live) return;
+          setPage(next);
+          say(wallLine(news.title));
+        },
+        () => {},
+      );
+    });
+    return () => {
+      live = false;
+      void off.then((unlisten) => unlisten());
+    };
+  }, []);
+
   /** Imagine's own sign-in, shown on this page as the cabin did. */
   const flow: SignInFlow = {
     title: IMAGINE_SIGN_IN,
@@ -169,7 +228,7 @@ export function Imagine() {
 
   async function make(event: FormEvent) {
     event.preventDefault();
-    if (busy || !prompt.trim()) return;
+    if (working || !prompt.trim()) return;
     const n = kind === "video" ? 1 : count;
     setBusy(true);
     setError(null);
@@ -232,7 +291,7 @@ export function Imagine() {
                 type="button"
                 className="chip"
                 aria-pressed={kind === k}
-                disabled={busy}
+                disabled={working}
                 onClick={() => setKind(k)}
               >
                 {k === "image" ? "Image" : "Video"}
@@ -247,7 +306,7 @@ export function Imagine() {
                 className="chip"
                 aria-pressed={aspect === a.value}
                 title={a.value}
-                disabled={busy}
+                disabled={working}
                 onClick={() => setAspect(a.value)}
               >
                 {a.label}
@@ -262,7 +321,7 @@ export function Imagine() {
                   type="button"
                   className="chip"
                   aria-pressed={count === n}
-                  disabled={busy}
+                  disabled={working}
                   onClick={() => setCount(n)}
                 >
                   {n}
@@ -272,7 +331,7 @@ export function Imagine() {
           )}
         </div>
         <div className="card-buttons">
-          {busy ? (
+          {working ? (
             <button type="button" onClick={stop}>
               Stop
             </button>
@@ -283,7 +342,7 @@ export function Imagine() {
           )}
         </div>
         {status && (
-          <p className="status" role="status" aria-busy={busy}>
+          <p className="status" role="status" aria-busy={working}>
             {status}
           </p>
         )}

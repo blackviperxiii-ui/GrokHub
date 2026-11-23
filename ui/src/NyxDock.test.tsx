@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopNyxState } from "./desktopNyxApi";
@@ -9,7 +9,10 @@ const api = vi.hoisted(() => ({
   desktopNyxUndock: vi.fn<() => Promise<DesktopNyxState>>(),
   desktopNyxDock: vi.fn<() => Promise<DesktopNyxState>>(),
   desktopNyxSetOutfit: vi.fn<(id: string | null) => Promise<DesktopNyxState>>(),
+  onDesktopNyx: vi.fn<(fn: (s: DesktopNyxState) => void) => Promise<() => void>>(),
 }));
+
+let heard: ((s: DesktopNyxState) => void) | null = null;
 
 vi.mock("./desktopNyxApi", () => api);
 vi.mock("./transport", () => ({ inShell: () => true }));
@@ -32,6 +35,9 @@ function state(over: Partial<DesktopNyxState> = {}): DesktopNyxState {
     pos: null,
     effects: { transparent: true, onTop: true },
     companion: "Nyx",
+    hiddenForGame: false,
+    still: false,
+    look: "idle",
     ...over,
   };
 }
@@ -39,6 +45,11 @@ function state(over: Partial<DesktopNyxState> = {}): DesktopNyxState {
 describe("NyxDock desktop controls", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    heard = null;
+    api.onDesktopNyx.mockImplementation((fn) => {
+      heard = fn;
+      return Promise.resolve(() => {});
+    });
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: (query: string) => ({
@@ -65,6 +76,15 @@ describe("NyxDock desktop controls", () => {
     expect(await screen.findByRole("button", { name: "Bring her back" })).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Bring her back" }));
     await waitFor(() => expect(api.desktopNyxDock).toHaveBeenCalled());
+  });
+
+  it("follows the tray: she goes out without the dock's button", async () => {
+    api.desktopNyxGet.mockResolvedValue(state());
+    render(<NyxDock url="/nyx.jpg" mood="hanging-out" />);
+    await screen.findByRole("button", { name: "Put her on the desktop" });
+    act(() => heard?.(state({ undocked: true })));
+    expect(screen.getByRole("button", { name: "Bring her back" })).toBeVisible();
+    expect(api.desktopNyxUndock).toHaveBeenCalledTimes(0);
   });
 
   it("saves a wardrobe pick from the dock", async () => {

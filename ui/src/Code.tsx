@@ -1,4 +1,14 @@
-import { Activity, lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  Activity,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   codeBuiltins,
   codeDiff,
@@ -26,6 +36,63 @@ import { CodeShip } from "./CodeShip";
 import { CodeRevert } from "./CodeRevert";
 import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
+
+/** Right-column panes (former under-stack panels). */
+export type CodeSideTab = "projects" | "editor" | "tests" | "skills" | "helpers";
+
+export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
+  { id: "projects", label: "Projects" },
+  { id: "editor", label: "Editor" },
+  { id: "tests", label: "Tests" },
+  { id: "skills", label: "Skills" },
+  { id: "helpers", label: "Helpers" },
+];
+
+export const CODE_HELPERS = "Helpers";
+
+/** Remembered Code window side tab. Default Projects (first launch / clear). */
+export const CODE_SIDE_TAB_KEY = "code.sideTab";
+export const CODE_SIDE_TAB_DEFAULT: CodeSideTab = "projects";
+
+export function isCodeSideTab(value: string | null | undefined): value is CodeSideTab {
+  return CODE_SIDE_TABS.some((tab) => tab.id === value);
+}
+
+/** Last side tab, or Projects when none is stored. Mid-session picks survive restart. */
+export function readSideTab(): CodeSideTab {
+  try {
+    const raw = localStorage.getItem(CODE_SIDE_TAB_KEY);
+    if (isCodeSideTab(raw)) return raw;
+  } catch {
+    /* private mode */
+  }
+  return CODE_SIDE_TAB_DEFAULT;
+}
+
+export function writeSideTab(tab: CodeSideTab): void {
+  try {
+    localStorage.setItem(CODE_SIDE_TAB_KEY, tab);
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Remembered agent column width (% of the Code tab). Default ~62%. */
+export const CODE_AGENT_WIDTH_KEY = "code.agentWidthPct";
+export const CODE_AGENT_WIDTH_DEFAULT = 62;
+export const CODE_AGENT_WIDTH_MIN = 48;
+export const CODE_AGENT_WIDTH_MAX = 72;
+
+export function readAgentWidthPct(): number {
+  try {
+    const raw = localStorage.getItem(CODE_AGENT_WIDTH_KEY);
+    const n = raw == null ? NaN : Number(raw);
+    if (!Number.isFinite(n)) return CODE_AGENT_WIDTH_DEFAULT;
+    return Math.min(CODE_AGENT_WIDTH_MAX, Math.max(CODE_AGENT_WIDTH_MIN, n));
+  } catch {
+    return CODE_AGENT_WIDTH_DEFAULT;
+  }
+}
 
 // CodeMirror and xterm load only when the tab first shows them.
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -56,7 +123,9 @@ export const CODE_STOPPED = "Tests stopped.";
 
 /** The label on a built-in row that a same-name skill currently shadows. */
 export function overrideLabel(over: CodeOverriddenBy): string {
-  return `overridden by ${over.scope} skill ${over.name}`;
+  // The app's own skills folder keeps its old source id.
+  const scope = over.scope === "cabin" ? "app" : over.scope;
+  return `overridden by ${scope} skill ${over.name}`;
 }
 
 interface Props {
@@ -67,14 +136,12 @@ interface Props {
   onOpenView?: (view: View) => boolean | void;
   onOpenPalette?: () => void;
   grokSignIn?: boolean;
-  /** The conversation the Chat tab has open. A session row for it goes
-   * there: one conversation is never open in both places. */
-  chatSession?: string;
-  onShowChat?: () => void;
   /** The session in the agent window, each time it changes. */
   onSession?: (id: string) => void;
   /** Chats History deleted: the agent window leaves one it is showing. */
   deleted?: { id: string; ids?: string[]; n: number };
+  /** Open this saved session in the agent window (from History / palette). */
+  open?: { id: string; n: number };
 }
 
 /** The Code tab: the project bar, the open project's sessions and its
@@ -86,10 +153,9 @@ export function Code({
   onOpenView,
   onOpenPalette,
   grokSignIn,
-  chatSession,
-  onShowChat,
   onSession,
   deleted,
+  open: openAsk,
 }: Props) {
   // Counts project switches: a new value starts the workspace below afresh in
   // the new folder, with nothing kept from the old one.
@@ -112,6 +178,15 @@ export function Code({
   const sessionNow = useRef<string>(undefined);
   const busyNow = useRef(false);
   const appFolder = useRef<string>(undefined);
+  const [sideTab, setSideTab] = useState<CodeSideTab>(readSideTab);
+  const [agentPct, setAgentPct] = useState(readAgentWidthPct);
+  const tabRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ startX: number; startPct: number } | null>(null);
+
+  const selectSideTab = useCallback((tab: CodeSideTab) => {
+    setSideTab(tab);
+    writeSideTab(tab);
+  }, []);
 
   /** A new session, with `text` waiting in its box. It has its folder
    * before the agent window shows it. */
@@ -127,16 +202,19 @@ export function Code({
     if (id) setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, send: true, conversationId: id }));
   }, []);
 
-  /** A saved session. The Chat tab keeps the one it has open; any other
-   * takes its folder first, so opening it is not the Chat tab's last chat. */
+  /** A saved project session: always opens in the agent window. Hangout Chat
+   * no longer lists these; App vacates Chat when the agent takes the same id. */
   function openSession(id: string) {
-    if (id === chatSession) {
-      onShowChat?.();
-      return;
-    }
     const show = () => setOpen((now) => ({ id, n: (now?.n ?? 0) + 1 }));
     codeSessionBind(id).then(show, show);
   }
+
+  // History / palette asked to open a project session here.
+  const takeOpen = useEffectEvent((id: string) => openSession(id));
+  useEffect(() => {
+    if (!openAsk) return;
+    takeOpen(openAsk.id);
+  }, [openAsk]);
 
   const onConversation = useCallback(
     (id: string) => {
@@ -204,31 +282,67 @@ export function Code({
   // The app works in another folder than when this tab last looked (a switch
   // here, or a project bound in chat): the agent window starts a session
   // there. A reply still running keeps its session and its folder.
+  // With no open project, the window stays on Projects (restart default),
+  // not a mid-session Editor/Helpers/Tests/Skills pick from last time.
   const onFolder = useCallback(
     (next: string) => {
       const before = appFolder.current;
       appFolder.current = next;
+      if (!next.trim()) {
+        setSideTab((tab) => {
+          if (tab === "projects") return tab;
+          writeSideTab("projects");
+          return "projects";
+        });
+      }
       if (before !== undefined && before !== next && !busyNow.current) startSession("");
     },
     [startSession],
   );
 
+  function onSplitDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    drag.current = { startX: event.clientX, startPct: agentPct };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function onSplitMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = drag.current;
+    const root = tabRef.current;
+    if (!start || !root) return;
+    const width = root.getBoundingClientRect().width;
+    if (width < 1) return;
+    const deltaPct = ((event.clientX - start.startX) / width) * 100;
+    const next = Math.min(CODE_AGENT_WIDTH_MAX, Math.max(CODE_AGENT_WIDTH_MIN, start.startPct + deltaPct));
+    setAgentPct(next);
+  }
+
+  function onSplitUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!drag.current) return;
+    drag.current = null;
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      /* already released */
+    }
+    setAgentPct((pct) => {
+      try {
+        localStorage.setItem(CODE_AGENT_WIDTH_KEY, String(Math.round(pct * 10) / 10));
+      } catch {
+        /* private mode */
+      }
+      return pct;
+    });
+  }
+
   return (
-    <div className="code-tab" hidden={!shown}>
-      <Activity mode={shown ? "visible" : "hidden"}>
-        <section className="code" aria-label="Code">
-          <CodeProjects
-            onSwitched={() => setSwitches((n) => n + 1)}
-            onNewSession={() => startSession("")}
-            onOpenSession={openSession}
-            onFolder={onFolder}
-            agentBusy={busy}
-            openSession={session}
-            refresh={ended}
-          />
-          <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} />
-        </section>
-      </Activity>
+    <div
+      ref={tabRef}
+      className="code-tab"
+      hidden={!shown}
+      style={{ ["--code-agent-pct" as string]: `${agentPct}%` }}
+    >
       {/* Outside <Activity>, like Chat: hidden there, its listeners would
           stop and a reply landing on another tab would be lost. */}
       <aside className="code-agent" aria-label="Agent window">
@@ -266,14 +380,89 @@ export function Code({
           onOpenPalette={onOpenPalette}
           grokSignIn={grokSignIn}
         />
-        <Agents
-          conversationId={session}
-          active={shown}
-          live={lead}
-          onAsk={lead ? askLead : undefined}
-          onShipped={() => setShipped((n) => n + 1)}
-        />
       </aside>
+      <div
+        className="code-split-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize agent and editor"
+        aria-valuenow={Math.round(agentPct)}
+        aria-valuemin={CODE_AGENT_WIDTH_MIN}
+        aria-valuemax={CODE_AGENT_WIDTH_MAX}
+        tabIndex={0}
+        onPointerDown={onSplitDown}
+        onPointerMove={onSplitMove}
+        onPointerUp={onSplitUp}
+        onPointerCancel={onSplitUp}
+        onKeyDown={(e) => {
+          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+          e.preventDefault();
+          const step = e.key === "ArrowLeft" ? -2 : 2;
+          setAgentPct((pct) => {
+            const next = Math.min(CODE_AGENT_WIDTH_MAX, Math.max(CODE_AGENT_WIDTH_MIN, pct + step));
+            try {
+              localStorage.setItem(CODE_AGENT_WIDTH_KEY, String(next));
+            } catch {
+              /* private mode */
+            }
+            return next;
+          });
+        }}
+      />
+      <Activity mode={shown ? "visible" : "hidden"}>
+        <section className="code code-side" aria-label="Code">
+          <div className="code-side-tabs" role="tablist" aria-label="Code panels">
+            {CODE_SIDE_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={`code-side-tab-${tab.id}`}
+                aria-selected={sideTab === tab.id}
+                aria-controls={`code-side-panel-${tab.id}`}
+                tabIndex={sideTab === tab.id ? 0 : -1}
+                onClick={() => selectSideTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div
+            className="code-side-panel"
+            role="tabpanel"
+            id={`code-side-panel-${sideTab}`}
+            aria-labelledby={`code-side-tab-${sideTab}`}
+          >
+            {/* Keep Projects mounted so folder/session refresh still lands
+                while another side tab is open. */}
+            <div className="code-projects-host" hidden={sideTab !== "projects"}>
+              <CodeProjects
+                onSwitched={() => setSwitches((n) => n + 1)}
+                onNewSession={() => startSession("")}
+                onOpenSession={openSession}
+                onFolder={onFolder}
+                agentBusy={busy}
+                openSession={session}
+                refresh={ended}
+              />
+            </div>
+            {/* Keep Helpers mounted while the Code tab shows so live task
+                updates still land when another side tab is open. */}
+            <div className="code-helpers-host" hidden={sideTab !== "helpers"}>
+              <Agents
+                conversationId={session}
+                active={shown}
+                live={lead}
+                onAsk={lead ? askLead : undefined}
+                onShipped={() => setShipped((n) => n + 1)}
+              />
+            </div>
+            {sideTab !== "helpers" && sideTab !== "projects" && (
+              <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
+            )}
+          </div>
+        </section>
+      </Activity>
     </div>
   );
 }
@@ -284,10 +473,12 @@ function CodeWorkspace({
   agentBusy,
   onAsk,
   shipped = 0,
+  tab,
 }: {
   agentBusy: boolean;
   onAsk: (prompt: string) => void;
   shipped?: number;
+  tab: CodeSideTab;
 }) {
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
@@ -486,6 +677,107 @@ function CodeWorkspace({
   }
 
   const sync = repo && (repo.ahead || repo.behind) ? ` · ${repo.ahead} ahead, ${repo.behind} behind` : "";
+  if (tab === "tests") {
+    return (
+      <div className="code-tests">
+        <h3>{CODE_TESTS}</h3>
+        <div className="code-test-row">
+          <label>
+            Test command
+            <input
+              value={command}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="cargo test"
+              disabled={running}
+              onChange={(e) => {
+                setCommand(e.target.value);
+                setConfirming(false);
+                setNeedsConfirm(true);
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className={command.trim() ? "code-run cta" : "code-run"}
+            onClick={() => void requestRun()}
+            disabled={running || !command.trim()}
+          >
+            {running ? "Running…" : "Run tests"}
+          </button>
+          {running && (
+            <button type="button" className="quiet" onClick={() => void stopRun()} disabled={stopping}>
+              {stopping ? "Stopping…" : "Stop"}
+            </button>
+          )}
+        </div>
+        {!command.trim() && <p className="note">{CODE_NO_COMMAND}</p>}
+        {confirming && (
+          <div className="card confirm-window" role="group" aria-label={CODE_CONFIRM}>
+            <p>{CODE_CONFIRM}</p>
+            <pre className="code-command" aria-label="Command to run">
+              {command.trim()}
+            </pre>
+            <div className="card-buttons">
+              <button type="button" className="cta" onClick={() => void confirmRun()} disabled={running}>
+                Run tests
+              </button>
+              <button ref={cancel} type="button" className="quiet" onClick={() => setConfirming(false)} disabled={running}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {runNote && (
+          <p className="note" role="status">
+            {runNote}
+          </p>
+        )}
+        {(log || running) && (
+          <pre className="code-log" tabIndex={0} role="log" aria-label="Test output">
+            {log || "Running…"}
+          </pre>
+        )}
+        {needsConfirm && !confirming && command.trim() && !running && (
+          <p className="note">The first run of this command will ask before it starts.</p>
+        )}
+      </div>
+    );
+  }
+
+  if (tab === "skills") {
+    if (!builtins) return <p className="empty">Loading skills…</p>;
+    if (builtins.length === 0) return <p className="empty">No built-in skills in this project.</p>;
+    return (
+      <div className="code-skills">
+        <h3>{CODE_BUILTINS}</h3>
+        <div className={openSkill ? "code-split" : undefined}>
+          <ul className="rows" aria-label={CODE_BUILTINS}>
+            {builtins.map((skill) => (
+              <li key={skill.name}>
+                <button
+                  type="button"
+                  className="code-skill quiet"
+                  aria-pressed={openSkill?.name === skill.name}
+                  onClick={() => setOpenSkill(skill)}
+                >
+                  <span className="card-title">{skill.name}</span>
+                  {skill.description && <span className="note">{skill.description}</span>}
+                  {skill.overriddenBy && <span className="note">{overrideLabel(skill.overriddenBy)}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {openSkill && (
+            <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
+              {openSkill.body}
+            </pre>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <header className="code-head">
@@ -516,9 +808,7 @@ function CodeWorkspace({
       )}
       {repo === null && !note && <p className="empty">Loading the workspace…</p>}
       {repo && !repo.isRepo && <p className="empty">{CODE_NOT_REPO}</p>}
-      {repo?.isRepo && repo.files.length === 0 && (
-        <p className={builtins && builtins.length > 0 ? "note" : "empty"}>{CODE_CLEAN}</p>
-      )}
+      {repo?.isRepo && repo.files.length === 0 && <p className="empty">{CODE_CLEAN}</p>}
       {repo?.isRepo && repo.files.length > 0 && (
         <div className="code-split">
           <ul className="rows code-changed" aria-label="Changed files">
@@ -554,64 +844,6 @@ function CodeWorkspace({
         ) : (
           <p className="note">{CODE_DESKTOP_ONLY}</p>
         ))}
-      <div className="code-tests">
-        <h3>{CODE_TESTS}</h3>
-        <div className="code-test-row">
-          <label>
-            Test command
-            <input
-              value={command}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="cargo test"
-              disabled={running}
-              onChange={(e) => {
-                setCommand(e.target.value);
-                setConfirming(false);
-                setNeedsConfirm(true);
-              }}
-            />
-          </label>
-          <button type="button" onClick={() => void requestRun()} disabled={running || !command.trim()}>
-            {running ? "Running…" : "Run tests"}
-          </button>
-          {running && (
-            <button type="button" className="quiet" onClick={() => void stopRun()} disabled={stopping}>
-              {stopping ? "Stopping…" : "Stop"}
-            </button>
-          )}
-        </div>
-        {!command.trim() && <p className="note">{CODE_NO_COMMAND}</p>}
-        {confirming && (
-          <div className="card confirm-window" role="group" aria-label={CODE_CONFIRM}>
-            <p>{CODE_CONFIRM}</p>
-            <pre className="code-command" aria-label="Command to run">
-              {command.trim()}
-            </pre>
-            <div className="card-buttons">
-              <button type="button" onClick={() => void confirmRun()} disabled={running}>
-                Run tests
-              </button>
-              <button ref={cancel} type="button" className="quiet" onClick={() => setConfirming(false)} disabled={running}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-        {runNote && (
-          <p className="note" role="status">
-            {runNote}
-          </p>
-        )}
-        {(log || running) && (
-          <pre className="code-log" tabIndex={0} role="log" aria-label="Test output">
-            {log || "Running…"}
-          </pre>
-        )}
-        {needsConfirm && !confirming && command.trim() && !running && (
-          <p className="note">The first run of this command will ask before it starts.</p>
-        )}
-      </div>
       {repo?.isRepo && <CodeShip refreshKey={activityKey} onShipped={() => void load()} />}
       {repo?.isRepo && (
         <CodeRevert
@@ -623,36 +855,6 @@ function CodeWorkspace({
         />
       )}
       {repo?.isRepo && <CodeDeploy onDeployed={() => setActivityKey((n) => n + 1)} />}
-      {builtins && builtins.length > 0 && (
-        <div className="code-skills">
-          <h3>{CODE_BUILTINS}</h3>
-          <div className={openSkill ? "code-split" : undefined}>
-            <ul className="rows" aria-label={CODE_BUILTINS}>
-              {builtins.map((skill) => (
-                <li key={skill.name}>
-                  <button
-                    type="button"
-                    className="code-skill quiet"
-                    aria-pressed={openSkill?.name === skill.name}
-                    onClick={() => setOpenSkill(skill)}
-                  >
-                    <span className="card-title">{skill.name}</span>
-                    {skill.description && <span className="note">{skill.description}</span>}
-                    {skill.overriddenBy && (
-                      <span className="note">{overrideLabel(skill.overriddenBy)}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {openSkill && (
-              <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
-                {openSkill.body}
-              </pre>
-            )}
-          </div>
-        </div>
-      )}
     </>
   );
 }

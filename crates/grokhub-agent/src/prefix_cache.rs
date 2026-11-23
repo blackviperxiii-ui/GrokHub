@@ -78,6 +78,7 @@ impl TurnVolatile {
         playbook: Option<&str>,
         already: &[String],
         intentions: Option<String>,
+        recall: bool,
     ) -> Self {
         let style = style
             .map(|s| s.prompt_block(soft_caps))
@@ -86,7 +87,10 @@ impl TurnVolatile {
             .map(|block| block.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        let memory = if first_turn {
+        // A scratch chat reads no memory.
+        let memory = if !recall {
+            None
+        } else if first_turn {
             crate::memory::first_turn_injection(workspace, user_text)
         } else {
             crate::memory::followup_injection(workspace, user_text, already)
@@ -160,11 +164,19 @@ pub fn steering_changed(items: &[InputItem], volatile: &TurnVolatile) -> bool {
     }) else {
         return false;
     };
+    // The research recipe steers only its own turn: a turn without it says
+    // the earlier notes are old.
+    let research_ended = notes.contains(crate::research::RECIPE)
+        && !volatile
+            .intentions
+            .as_deref()
+            .is_some_and(|block| block.contains(crate::research::RECIPE));
     !notes.is_empty()
-        && [&volatile.style, &volatile.playbook]
-            .into_iter()
-            .flatten()
-            .any(|block| !notes.contains(block.as_str()))
+        && (research_ended
+            || [&volatile.style, &volatile.playbook]
+                .into_iter()
+                .flatten()
+                .any(|block| !notes.contains(block.as_str())))
 }
 
 pub fn push_stable_system(history: &mut Vec<InputItem>, stable_system: &str) {

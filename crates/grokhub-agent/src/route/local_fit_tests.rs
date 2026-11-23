@@ -260,6 +260,11 @@ struct SmallWindow {
     sent: std::sync::Mutex<Vec<ResponsesRequest>>,
 }
 
+thread_local! {
+    /// Whether each call [`SmallWindow`] took had to call a tool.
+    static FORCED_CALLS: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl crate::route::local::LocalRuntime for SmallWindow {
     fn classify(&self, _: &str, _: &[&str]) -> Result<serde_json::Value, String> {
         Err("unused".into())
@@ -279,6 +284,7 @@ impl crate::route::local::LocalRuntime for SmallWindow {
         _: &crate::client::CancelToken,
     ) -> Result<crate::client::TurnOutput, String> {
         self.sent.lock().unwrap().push(req.clone());
+        FORCED_CALLS.with(|f| f.borrow_mut().push(crate::route::local_image::forced()));
         Ok(crate::client::TurnOutput {
             text: "ok".into(),
             ..Default::default()
@@ -497,10 +503,22 @@ fn sent_on_4k(ask: &str, can_draw: bool) -> ResponsesRequest {
 fn a_small_window_keeps_the_picture_tool_when_this_computer_can_draw() {
     use crate::route::local_image as li;
     for ask in ["hey", "draw me a fox in the snow"] {
+        FORCED_CALLS.with(|f| f.borrow_mut().clear());
         let sent = sent_on_4k(ask, true);
         let names = tool_names(&sent);
-        assert!(names.contains(&"image_generate"), "{ask}: {names:?}");
-        assert!(names.contains(&"load_tool_schema"), "{ask}: {names:?}");
+        let picture = ask != "hey";
+        // A picture ask is a step that must call the picture tool, its only one.
+        assert_eq!(
+            FORCED_CALLS.with(|f| f.borrow().clone()),
+            vec![picture],
+            "{ask}"
+        );
+        if picture {
+            assert_eq!(names, vec!["image_generate"], "{ask}");
+        } else {
+            assert!(names.contains(&"image_generate"), "{ask}: {names:?}");
+            assert!(names.contains(&"load_tool_schema"), "{ask}: {names:?}");
+        }
         let image = sent
             .tools
             .iter()
@@ -524,7 +542,13 @@ fn with_nothing_to_draw_with_only_a_picture_ask_says_what_to_download() {
     let plain = sent_on_4k("hey", false);
     assert!(!tool_names(&plain).contains(&"image_generate"));
     assert!(!first_text(&plain.input[0]).contains("[Pictures]"));
+    FORCED_CALLS.with(|f| f.borrow_mut().clear());
     let ask = sent_on_4k("make a picture of a castle at night", false);
+    assert_eq!(
+        FORCED_CALLS.with(|f| f.borrow().clone()),
+        vec![false],
+        "nothing here can draw"
+    );
     // Kept, so an 18+ prompt gets the tool's own notice and a clean one can
     // still reach Grok Imagine when signed in.
     assert!(tool_names(&ask).contains(&"image_generate"));
@@ -533,4 +557,162 @@ fn with_nothing_to_draw_with_only_a_picture_ask_says_what_to_download() {
     assert!(!system.contains(li::CAN_DRAW));
     assert!(li::NO_KIT.contains("Settings → Download models → Image"));
     assert!(li::NO_KIT.contains("picture guard"));
+}
+
+/// Local router step 7: one on-device turn whose history is `history`;
+/// what the device was sent and the line kept under the reply.
+fn blind_turn(history: Vec<InputItem>) -> (ResponsesRequest, Option<String>) {
+    let rt = std::sync::Arc::new(SmallWindow {
+        n_ctx: Some(32_768),
+        sent: Default::default(),
+    });
+    let _on = crate::route::local::ForceOn::with(Some(rt.clone()));
+    let req = real_request(history);
+    crate::route::local::serve_request("chat:default", &req, &crate::client::CancelToken::new())
+        .unwrap();
+    let sent = rt.sent.lock().unwrap()[0].clone();
+    (
+        sent,
+        crate::route::local_live::take_line(&req.conversation_id),
+    )
+}
+
+/// A user message with a picture: the 8-byte PNG signature, which reads as
+/// a PNG, so it reaches a device that sees pictures as it is.
+fn with_picture(body: &str) -> InputItem {
+    InputItem::Message {
+        role: "user".into(),
+        content: vec![
+            ContentPart::InputText(body.into()),
+            ContentPart::InputImage("data:image/png;base64,iVBORw0KGgo=".into()),
+        ],
+    }
+}
+
+#[test]
+fn a_device_with_no_picture_reader_answers_without_the_picture_and_says_so() {
+    use crate::route::local_vision::BLIND_NOTE;
+    let (sent, line) = blind_turn(vec![
+        with_picture("what is this?"),
+        text("assistant", "A fox."),
+        with_picture("and this one?"),
+    ]);
+    let body = crate::route::providers::openai_body("local", None, &sent).to_string();
+    assert!(!body.contains("image_url"), "{body}");
+    assert_eq!(body.matches(BLIND_NOTE).count(), 2, "{body}");
+    assert_eq!(line.as_deref(), Some(crate::route::local_live::BLIND_LINE));
+}
+
+#[test]
+fn an_older_picture_alone_adds_no_line_under_the_reply() {
+    use crate::route::local_vision::BLIND_NOTE;
+    let (sent, line) = blind_turn(vec![
+        with_picture("what is this?"),
+        text("assistant", "A fox."),
+        text("user", "thanks"),
+    ]);
+    let body = crate::route::providers::openai_body("local", None, &sent).to_string();
+    assert!(!body.contains("image_url"), "{body}");
+    assert_eq!(body.matches(BLIND_NOTE).count(), 1, "{body}");
+    assert_eq!(line, None);
+}
+
+/// A device whose launch carries its vision projector; it keeps what it was
+/// sent and whether the request asked the swap for a picture reader.
+#[derive(Default)]
+struct Seeing {
+    sent: std::sync::Mutex<Vec<(ResponsesRequest, bool)>>,
+}
+
+impl crate::route::local::LocalRuntime for Seeing {
+    fn classify(&self, _: &str, _: &[&str]) -> Result<serde_json::Value, String> {
+        Err("unused".into())
+    }
+    fn summarize(&self, _: &str, _: u32) -> Result<serde_json::Value, String> {
+        Err("unused".into())
+    }
+    fn difficulty(&self, _: &str) -> Result<serde_json::Value, String> {
+        Err("unused".into())
+    }
+    fn context_tokens(&self) -> Option<u64> {
+        Some(32_768)
+    }
+    fn sees_pictures(&self) -> bool {
+        true
+    }
+    fn chat_tools(
+        &self,
+        req: &ResponsesRequest,
+        _: &crate::client::CancelToken,
+    ) -> Result<crate::client::TurnOutput, String> {
+        let asked = crate::route::local_vision::wants_picture();
+        self.sent.lock().unwrap().push((req.clone(), asked));
+        Ok(crate::client::TurnOutput {
+            text: "ok".into(),
+            ..Default::default()
+        })
+    }
+}
+
+#[test]
+fn a_device_that_reads_pictures_gets_them_as_they_are() {
+    use crate::route::local_vision::{wants_picture, BLIND_NOTE};
+    let rt = std::sync::Arc::new(Seeing::default());
+    let _on = crate::route::local::ForceOn::with(Some(rt.clone()));
+    let turn = |history: Vec<InputItem>| {
+        let req = real_request(history);
+        crate::route::local::serve_request(
+            "chat:default",
+            &req,
+            &crate::client::CancelToken::new(),
+        )
+        .unwrap();
+        let line = crate::route::local_live::take_line(&req.conversation_id);
+        (rt.sent.lock().unwrap().pop().unwrap(), line)
+    };
+    let ((sent, asked), line) = turn(vec![
+        with_picture("what is this?"),
+        text("assistant", "A fox."),
+        with_picture("and this one?"),
+    ]);
+    let body = crate::route::providers::openai_body("local", None, &sent).to_string();
+    assert_eq!(
+        body.matches("data:image/png;base64,iVBORw0KGgo=").count(),
+        2,
+        "{body}"
+    );
+    assert!(!body.contains(BLIND_NOTE), "{body}");
+    assert!(asked, "the newest message's picture reached the swap");
+    assert!(
+        !line.is_some_and(|l| l.contains(crate::route::local_live::BLIND_LINE)),
+        "the picture was read"
+    );
+    // An older picture rides along but loads nothing for itself.
+    let ((sent, asked), _) = turn(vec![
+        with_picture("what is this?"),
+        text("assistant", "A fox."),
+        text("user", "thanks"),
+    ]);
+    let body = crate::route::providers::openai_body("local", None, &sent).to_string();
+    assert_eq!(
+        body.matches("data:image/png;base64,iVBORw0KGgo=").count(),
+        1,
+        "{body}"
+    );
+    assert!(!asked);
+    assert!(!wants_picture(), "the guard is gone after the turn");
+}
+
+#[test]
+fn a_picture_the_device_reads_counts_at_gemma_4s_most_tokens() {
+    let req = real_request(vec![with_picture("hi")]);
+    let base = request_tokens(&real_request(vec![text("user", "hi")]));
+    assert_eq!(request_tokens(&req), base + 1_120);
+    assert_eq!(LOCAL_IMAGE_TOKENS, 1_120);
+    // Two pictures, twice.
+    let two = real_request(vec![with_picture("hi"), with_picture("hi")]);
+    assert_eq!(
+        request_tokens(&two),
+        request_tokens(&real_request(vec![text("user", "hi"), text("user", "hi")])) + 2 * 1_120
+    );
 }

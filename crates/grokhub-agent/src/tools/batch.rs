@@ -9,7 +9,6 @@ use std::sync::Mutex;
 
 use crate::FunctionCall;
 
-use super::show_panel::SHOW_PANEL;
 use super::{bind_deferred_session, is_readonly, ToolOutput};
 
 const CONFIG_NAME: &str = "batched_tools.toml";
@@ -57,7 +56,7 @@ fn session_native(name: &str) -> bool {
 
 /// Whether this call may share a parallel read-only batch (gate readonly, not MCP).
 pub fn can_batch_call(name: &str, arguments: &str) -> bool {
-    if !is_readonly(name) && name != SHOW_PANEL {
+    if !is_readonly(name) {
         return false;
     }
     if session_native(name) || crate::mcp::is_mcp_call(name, arguments) {

@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use grokhub_core::local_setup::{self, LocalModel};
 use grokhub_core::local_skills::{self, TaskKind};
 
-use super::local_scale::{self, Need, Room, Scale};
+use super::local_autoconfig::{FreeNow, GovState, PairRefusal, Pool};
+use super::local_scale::{self, ChatTier, Need, Room, Scale, Source, SpeedQuality};
 use super::local_task::Marks;
 
 /// Why a model other than the Settings pick runs.
@@ -38,39 +39,71 @@ pub enum StandIn {
     /// Dynamic is on and another model on disk is clearly better at this
     /// kind of task.
     BestFor(TaskKind),
+    /// A chat asked for a tier in words, or is set to one: the fastest
+    /// model that fits for Speed, the biggest for Performance.
+    Asked(SpeedQuality, Source),
+    /// A chat's newest message carries a picture, and the pick can't load
+    /// its vision projector here: a model that can runs ([`vision_plan`]).
+    Vision,
+}
+
+/// The word a tier goes by in the chat and in Settings.
+pub fn tier_word(tier: SpeedQuality) -> &'static str {
+    match tier {
+        SpeedQuality::Speed => "Speed",
+        SpeedQuality::Balanced => "Balance",
+        SpeedQuality::Quality => "Performance",
+    }
 }
 
 impl StandIn {
+    /// Why this model runs, as a clause both the running-model row in
+    /// Settings and the line under a reply use (`Running {reason}.` and
+    /// `Answered by …, {reason}.`), so the two never drift apart.
+    pub fn reason(self) -> String {
+        let why = match self {
+            StandIn::LowBattery => "a smaller model while the battery is low",
+            StandIn::OutOfMemory => "a smaller model because your pick ran out of memory",
+            StandIn::Gaming => "the lightest model while a game runs",
+            StandIn::Lighter => "a smaller model for light tasks while the computer saves power",
+            StandIn::Tight => "a smaller model because less memory is free than your pick needs",
+            StandIn::Performance => {
+                "a bigger model than your pick for hard tasks while the computer is free"
+            }
+            StandIn::BestFor(kind) => {
+                return format!("a model that's stronger at {} than your pick", kind.words());
+            }
+            StandIn::Asked(tier, source) => {
+                let how = if tier == SpeedQuality::Quality {
+                    "a bigger model than your pick"
+                } else {
+                    "a faster model than your pick"
+                };
+                let why = match source {
+                    Source::Words => "a chat asked for",
+                    Source::Pin => "a chat is set to",
+                };
+                return format!("{how} because {why} {}", tier_word(tier));
+            }
+            StandIn::Vision => "a model that can see the picture your pick can't",
+        };
+        why.to_string()
+    }
+
     /// The running-model row that says why.
     pub fn line(self) -> String {
-        if let StandIn::BestFor(kind) = self {
-            return format!(
-                "Running a model that's stronger at {} than your pick. Turn off Dynamic to always use your pick.",
-                kind.words()
-            );
-        }
-        let line = match self {
-            StandIn::LowBattery => {
-                "Running a smaller model while the battery is low. Your pick comes back once it charges."
-            }
-            StandIn::OutOfMemory => {
-                "Running a smaller model because your pick ran out of memory. It tries your pick again after the next unload."
-            }
-            StandIn::Gaming => {
-                "Running the lightest model while a game runs. Your pick comes back after the game."
-            }
-            StandIn::Lighter => {
-                "Running a smaller model for light tasks while the computer saves power. Hard tasks get your pick."
-            }
-            StandIn::Tight => {
-                "Running a smaller model because less memory is free than your pick needs. Your pick comes back when there's room."
-            }
-            StandIn::Performance => {
-                "Running a bigger model than your pick for hard tasks while the computer is free. It steps back down when the computer gets busy."
-            }
-            StandIn::BestFor(_) => unreachable!("handled above"),
+        let then = match self {
+            StandIn::LowBattery => "Your pick comes back once it charges.",
+            StandIn::OutOfMemory => "It tries your pick again after the next unload.",
+            StandIn::Gaming => "Your pick comes back after the game.",
+            StandIn::Lighter => "Hard tasks get your pick.",
+            StandIn::Tight => "Your pick comes back when there's room.",
+            StandIn::Performance => "It steps back down when the computer gets busy.",
+            StandIn::BestFor(_) => "Turn off Dynamic to always use your pick.",
+            StandIn::Asked(..) => "Other chats get your pick again.",
+            StandIn::Vision => "Your pick comes back once the chat is quiet.",
         };
-        line.to_string()
+        format!("Running {}. {then}", self.reason())
     }
 }
 
@@ -110,12 +143,24 @@ pub struct Now<'a> {
     pub loaded: Option<(&'a Path, Option<StandIn>)>,
     /// The chat models on disk, with their files.
     pub on_disk: &'a [(&'static LocalModel, PathBuf)],
+    /// The ids of the models on disk that launch with a drafter file (see
+    /// `local_autoconfig::pair_view`): they need room for both.
+    pub paired: &'a [&'static str],
+    /// What runs loaded a drafter file beside it.
+    pub loaded_paired: bool,
+    /// Models a start refused since the last unload, still holding (see
+    /// [`Refusals::holding`]): they aren't tried again yet, so a request
+    /// never reloads into the same refusal.
+    pub refused: &'a [PathBuf],
     pub low_battery: bool,
     /// "Keep the model loaded" is on: the pick stays, whatever happens.
     pub kept_loaded: bool,
     /// A model file was forced (`GROKHUB_LOCAL_MODEL`): nothing swaps.
     pub forced: bool,
     pub in_flight: usize,
+    /// Of [`Now::in_flight`], the app's own background requests (a
+    /// classify, a summary): a chat's ask doesn't wait out their turn.
+    pub background_in_flight: usize,
     pub secs_since_swap: u64,
     /// What this request's task needs.
     pub need: Need,
@@ -128,6 +173,93 @@ pub struct Now<'a> {
     pub dynamic: bool,
     /// What the router learned about each model's misses per task.
     pub marks: &'a Marks,
+    /// The tier this chat asked for this turn, in words or by its setting.
+    /// It loads now, past the cooldown and the wait for a quiet chat; only a
+    /// reply in flight, Keep loaded, a forced file, a low battery and a game
+    /// still win.
+    pub chat: Option<ChatTier>,
+}
+
+/// Why a refused model isn't tried again yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hold {
+    /// Its start ran out of memory: held until the next unload.
+    UntilUnload,
+    /// The launch refused its pair: held until the next unload, a change in
+    /// the governor state, or more room in the pool the pair needed.
+    Pair(PairRefusal),
+}
+
+/// Models a start refused before what runs loaded. They live on the running
+/// server, so the next unload drops them all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Refusals {
+    pub models: Vec<(PathBuf, Hold)>,
+    /// When the server holding them was up (ms), so an older room reading
+    /// never judges them.
+    pub since_ms: u64,
+}
+
+/// What a [`Hold`] is checked against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HoldNow {
+    pub state: GovState,
+    /// Free memory now, with the running model's own use added back: what a
+    /// fresh start would see. `None` without a reading since the server was up.
+    pub free: Option<FreeNow>,
+}
+
+/// The hold still keeps the model out. A pair is released when the governor
+/// state changed, or when the pool it was sized from has
+/// [`local_scale::HEADROOM_MB`] more free than at the refusal. Only that
+/// pool counts: more RAM never releases a pair that needed VRAM.
+pub fn held(hold: &Hold, now: &HoldNow) -> bool {
+    let Hold::Pair(r) = hold else {
+        return true;
+    };
+    if r.state != now.state {
+        return false;
+    }
+    let free = now.free.unwrap_or_default();
+    let now_mb = match r.pool {
+        Pool::Vram => free.vram_free_mb,
+        Pool::Ram => free.ram_free_mb,
+    };
+    !matches!((r.free_mb, now_mb), (Some(at), Some(n)) if n >= at + local_scale::HEADROOM_MB)
+}
+
+impl Refusals {
+    /// The refused models still held (see [`held`]).
+    pub fn holding(&self, now: &HoldNow) -> Vec<PathBuf> {
+        self.models
+            .iter()
+            .filter(|(_, h)| held(h, now))
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
+}
+
+/// MB `m` needs: with its drafter when it launches with one. The planner
+/// only filters: the launch decides whether a pair fits, so this errs on the
+/// side of trying.
+fn need(n: &Now<'_>, m: &LocalModel) -> u64 {
+    grokhub_core::local_draft::pair_mb(m, n.paired.contains(&m.id))
+}
+
+/// `m` fits once `resident` MB are freed, with `headroom` to spare.
+fn fits(n: &Now<'_>, m: &LocalModel, room: &Room, resident: u64, headroom: u64) -> bool {
+    local_scale::fits(need(n, m), room, resident, headroom)
+}
+
+/// `m`'s rough speed once `resident` MB are freed.
+fn speed(n: &Now<'_>, m: &LocalModel, room: &Room, resident: u64) -> u32 {
+    local_scale::est_tok_s(m, need(n, m), room, resident)
+}
+
+/// What runs still fits, sized by what it really loaded.
+fn still_fits(n: &Now<'_>, running: &LocalModel, room: &Room) -> bool {
+    let mb = grokhub_core::local_draft::pair_mb(running, n.loaded_paired);
+    local_scale::fits(mb, room, mb, 0)
 }
 
 /// The model the next load should run.
@@ -145,11 +277,29 @@ pub fn plan(n: Now<'_>) -> Plan {
     };
     let settled = running == target
         // The stand-in for a pick that ran out of memory stays until the next
-        // unload, so a request doesn't retry a start that just failed.
+        // unload, so a request doesn't retry a start that just failed. So
+        // does what runs for a model a start refused, even where this
+        // planner thought it fits.
         || (why == Some(StandIn::OutOfMemory) && stand_in.is_none())
+        || n.refused.contains(&target)
         || stays_big(&n, running, why, stand_in);
-    if settled || n.in_flight > 0 || n.secs_since_swap < SWAP_COOLDOWN_SECS {
+    // A chat's ask is the person's own word: it skips the cooldown, the wait
+    // for a quiet chat and the app's own background requests, but never
+    // swaps a model mid-reply.
+    let asked = n.chat.is_some();
+    let busy = if asked {
+        replies_in_flight(&n)
+    } else {
+        n.in_flight
+    };
+    if settled || busy > 0 || (!asked && n.secs_since_swap < SWAP_COOLDOWN_SECS) {
         return Plan::Keep;
+    }
+    if asked {
+        return Plan::Load {
+            model: target,
+            stand_in,
+        };
     }
     let bigger = match (catalog_for(&target), catalog_for(running)) {
         (Some(t), Some(r)) => t.run_mb > r.run_mb,
@@ -170,6 +320,11 @@ pub fn plan(n: Now<'_>) -> Plan {
     }
 }
 
+/// The requests in flight that are replies someone reads.
+fn replies_in_flight(n: &Now<'_>) -> usize {
+    n.in_flight.saturating_sub(n.background_in_flight)
+}
+
 /// A bigger model loaded for hard work stays for lighter asks in between
 /// while the computer is still free and it still fits: swapping down and
 /// back up would cost two loads.
@@ -179,7 +334,7 @@ fn stays_big(
     why: Option<StandIn>,
     target_why: Option<StandIn>,
 ) -> bool {
-    if target_why.is_some() || n.scale.gaming {
+    if n.chat.is_some() || target_why.is_some() || n.scale.gaming {
         return false;
     }
     if let Some(StandIn::BestFor(_)) = why {
@@ -193,9 +348,9 @@ fn stays_big(
                 Some(room) if m.run_mb > home.run_mb => {
                     !n.scale.saving
                         && local_scale::performance_ready(&room)
-                        && local_scale::fits(m, &room, m.run_mb, 0)
+                        && still_fits(n, m, &room)
                 }
-                Some(room) => local_scale::fits(m, &room, m.run_mb, 0),
+                Some(room) => still_fits(n, m, &room),
                 None => m.run_mb <= home.run_mb,
             };
     }
@@ -208,7 +363,7 @@ fn stays_big(
     !n.scale.gaming
         && !n.scale.saving
         && local_scale::performance_ready(&room)
-        && local_scale::fits(m, &room, m.run_mb, 0)
+        && still_fits(n, m, &room)
 }
 
 /// The smallest chat model on disk lighter than `home`: what a game, a low
@@ -259,11 +414,19 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         return gaming_below(home, n.on_disk)
             .map_or((home_path, None), |p| (p, Some(StandIn::Gaming)));
     }
-    let resident = n
-        .loaded
-        .and_then(|(p, _)| catalog_for(p))
-        .map_or(0, |m| m.run_mb);
-    if n.dynamic {
+    // Stopping what runs frees its drafter too, when it loaded one.
+    let resident = n.loaded.and_then(|(p, _)| catalog_for(p)).map_or(0, |m| {
+        grokhub_core::local_draft::pair_mb(m, n.loaded_paired)
+    });
+    // A chat's tier replaces the automatic pick (the task's best model, a
+    // step up for hard work, a lighter one while saving power); only the
+    // walk down for a pick that doesn't fit is left after it.
+    let auto = n.chat.is_none();
+    if let Some((tier, source)) = n.chat {
+        if let Some(p) = chat_target(n, home, tier, source, resident) {
+            return p;
+        }
+    } else if n.dynamic {
         if let Some(kind) = n.task {
             if let Some(p) = best_for(n, home, kind, resident) {
                 return p;
@@ -271,7 +434,8 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         }
     }
     if let Some(room) = n.scale.room {
-        if n.dynamic
+        if auto
+            && n.dynamic
             && n.need == Need::Hard
             && !n.scale.saving
             && local_scale::performance_ready(&room)
@@ -280,29 +444,30 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
                 .on_disk
                 .iter()
                 .filter(|(m, _)| m.run_mb > home.run_mb)
-                .filter(|(m, _)| local_scale::fits(m, &room, resident, local_scale::HEADROOM_MB))
+                .filter(|(m, _)| fits(n, m, &room, resident, local_scale::HEADROOM_MB))
                 .filter(|(m, _)| {
-                    local_scale::est_tok_s(m, &room, resident)
-                        >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                    speed(n, m, &room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
                 })
                 .max_by_key(|(m, _)| m.run_mb);
             if let Some((_, p)) = bigger {
                 return (p.clone(), Some(StandIn::Performance));
             }
         }
-        if !local_scale::fits(home, &room, resident, 0) {
+        // A pick that doesn't fit with its drafter gives way to the largest
+        // smaller model that fits with its own (or alone, without one).
+        if !fits(n, home, &room, resident, 0) {
             let fitting = n
                 .on_disk
                 .iter()
                 .filter(|(m, _)| m.run_mb < home.run_mb)
-                .filter(|(m, _)| local_scale::fits(m, &room, resident, 0))
+                .filter(|(m, _)| fits(n, m, &room, resident, 0))
                 .max_by_key(|(m, _)| m.run_mb);
             if let Some((_, p)) = fitting {
                 return (p.clone(), Some(StandIn::Tight));
             }
         }
     }
-    if n.scale.saving && n.dynamic {
+    if auto && n.scale.saving && n.dynamic {
         let lighter = match n.need {
             Need::Hard => None,
             Need::Light | Need::Background => smallest(),
@@ -318,6 +483,185 @@ fn target(n: &Now<'_>) -> (PathBuf, Option<StandIn>) {
         }
     }
     (home_path, None)
+}
+
+/// The model a chat's tier runs on, when it isn't the walk's to decide:
+/// - Speed: the fastest model at or below the pick that fits with its
+///   drafter (on a tie, the lighter one). The pick itself means no stand-in.
+/// - Performance: the biggest model above the pick that fits with its
+///   drafter and headroom and still runs at
+///   [`local_scale::PERFORMANCE_FLOOR_TOK_S`], on battery or a busy CPU too.
+///   It needs a room reading.
+/// - Balance: none, so the pick runs (or the walk steps down).
+fn chat_target(
+    n: &Now<'_>,
+    home: &LocalModel,
+    tier: SpeedQuality,
+    source: Source,
+    resident: u64,
+) -> Option<(PathBuf, Option<StandIn>)> {
+    let room = n.scale.room;
+    let (m, p) = match tier {
+        SpeedQuality::Balanced => return None,
+        SpeedQuality::Speed => {
+            let rate = |m: &LocalModel| match &room {
+                Some(r) => speed(n, m, r, resident),
+                None => m.tok_s.cpu,
+            };
+            n.on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb <= home.run_mb)
+                .filter(|(m, _)| room.is_none_or(|r| fits(n, m, &r, resident, 0)))
+                .max_by(|(a, _), (b, _)| rate(a).cmp(&rate(b)).then(b.run_mb.cmp(&a.run_mb)))?
+        }
+        // A low battery still wins over a Performance ask: nothing bigger
+        // loads, even with no smaller model to stand in.
+        SpeedQuality::Quality if n.low_battery => return None,
+        SpeedQuality::Quality => {
+            let room = room?;
+            n.on_disk
+                .iter()
+                .filter(|(m, _)| m.run_mb > home.run_mb)
+                .filter(|(m, _)| fits(n, m, &room, resident, local_scale::HEADROOM_MB))
+                .filter(|(m, _)| {
+                    speed(n, m, &room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                })
+                .max_by_key(|(m, _)| m.run_mb)?
+        }
+    };
+    let why = (m.id != home.id).then_some(StandIn::Asked(tier, source));
+    Some((p.clone(), why))
+}
+
+/// MB `m` needs with its vision projector beside it and its drafter (when
+/// it launches with one), from the catalog.
+fn vision_mb(n: &Now<'_>, m: &LocalModel) -> u64 {
+    let projector = m
+        .projector
+        .and_then(local_setup::model_by_id)
+        .map_or(0, |v| v.run_mb);
+    need(n, m) + projector
+}
+
+/// What a picture loads: the chat's newest message carries a picture the
+/// running launch can't see, so the model [`plan`] aims at loads with its
+/// vision projector when it can (`seeing` holds the ids of the models on
+/// disk whose projector this engine loads), else the biggest smaller one
+/// that can and fits with its drafter and projector. `None` loads nothing
+/// for the picture: it is read as a note, and [`plan`] decides as usual.
+///
+/// A reply in flight keeps its model. Keep loaded and a forced file keep
+/// the pick, which may load its own projector. A low battery or a game
+/// chose the model: only that one may load one. Models a start refused
+/// aren't tried. A picture loads now, past the cooldown and the wait for a
+/// quiet chat, like an ask; the pick comes back once the chat is quiet.
+pub fn vision_plan(n: &Now<'_>, seeing: &[&'static str]) -> Option<Plan> {
+    if n.in_flight > 0 && n.loaded.is_some() {
+        return None;
+    }
+    let sees = |p: &Path| catalog_for(p).is_some_and(|m| seeing.contains(&m.id));
+    let load = |model: PathBuf, stand_in: Option<StandIn>| Some(Plan::Load { model, stand_in });
+    if n.kept_loaded || n.forced {
+        return if sees(n.home) {
+            load(n.home.to_path_buf(), None)
+        } else {
+            None
+        };
+    }
+    let (target, why) = target(n);
+    let free_to_load = |p: &Path| !n.refused.iter().any(|r| r == p);
+    if n.low_battery || n.scale.gaming {
+        return if sees(&target) && free_to_load(&target) {
+            load(target, why)
+        } else {
+            None
+        };
+    }
+    let t = catalog_for(&target)?;
+    // Stopping what runs frees its drafter too, when it loaded one.
+    let resident = n.loaded.and_then(|(p, _)| catalog_for(p)).map_or(0, |m| {
+        grokhub_core::local_draft::pair_mb(m, n.loaded_paired)
+    });
+    let fits = |m: &LocalModel| {
+        n.scale
+            .room
+            .is_none_or(|room| local_scale::fits(vision_mb(n, m), &room, resident, 0))
+    };
+    if sees(&target) && free_to_load(&target) && fits(t) {
+        return load(target, why);
+    }
+    let (m, p) = n
+        .on_disk
+        .iter()
+        .filter(|(m, p)| m.run_mb < t.run_mb && seeing.contains(&m.id) && free_to_load(p))
+        .filter(|(m, _)| fits(m))
+        .max_by_key(|(m, _)| m.run_mb)?;
+    let home = catalog_for(n.home).map(|h| h.id);
+    load(p.clone(), (home != Some(m.id)).then_some(StandIn::Vision))
+}
+
+/// The model [`plan`] aims this request at, whether or not it loads now:
+/// what an ask's [`AskOutcome::Got`] means runs.
+pub fn target_model(n: &Now<'_>) -> PathBuf {
+    target(n).0
+}
+
+/// Why a chat's ask didn't get its tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// No faster (Speed) or bigger (Performance) model fits right now, or the
+    /// pick doesn't (Balance).
+    NoRoom,
+    /// Another chat's reply was running on the model, so it stayed. A
+    /// chat's setting loads with its next reply; words asked only this one.
+    Busy(Source),
+    /// The battery is low: Performance loads nothing bigger.
+    LowBattery,
+    /// Keep loaded is on: the pick stays.
+    KeptLoaded,
+    /// A model file was forced (`GROKHUB_LOCAL_MODEL`): nothing swaps.
+    Forced,
+}
+
+/// What came of a chat's ask, for the line under its reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskOutcome {
+    /// The plan aims at the tier's model ([`target_model`]). The launch may
+    /// still step it down: the line checks what runs ([`super::local_live::settle`]).
+    Got(SpeedQuality, Source),
+    Refused(SpeedQuality, Refused),
+}
+
+/// What [`plan`] does with this request's ask, if it made one. `None` when
+/// it made none, or when a low battery, a game or too little memory chose
+/// the model: their own line says why.
+pub fn ask_outcome(n: &Now<'_>) -> Option<AskOutcome> {
+    let (tier, source) = n.chat?;
+    if n.forced {
+        return Some(AskOutcome::Refused(tier, Refused::Forced));
+    }
+    if n.kept_loaded {
+        return Some(AskOutcome::Refused(tier, Refused::KeptLoaded));
+    }
+    let (target, why) = target(n);
+    if let Some((running, _)) = n.loaded {
+        if running != target && replies_in_flight(n) > 0 {
+            return Some(AskOutcome::Refused(tier, Refused::Busy(source)));
+        }
+    }
+    if n.refused.contains(&target) {
+        return Some(AskOutcome::Refused(tier, Refused::NoRoom));
+    }
+    match (tier, why) {
+        (_, Some(StandIn::Asked(..))) | (SpeedQuality::Balanced, None) => {
+            Some(AskOutcome::Got(tier, source))
+        }
+        (SpeedQuality::Quality, None) if n.low_battery => {
+            Some(AskOutcome::Refused(tier, Refused::LowBattery))
+        }
+        (_, None) => Some(AskOutcome::Refused(tier, Refused::NoRoom)),
+        _ => None,
+    }
 }
 
 /// `m`'s score for `kind`, less what the router learned about its misses.
@@ -339,10 +683,10 @@ fn may_run(
         Some(room) if m.run_mb > home.run_mb => {
             !n.scale.saving
                 && local_scale::performance_ready(room)
-                && local_scale::fits(m, room, resident, local_scale::HEADROOM_MB)
-                && local_scale::est_tok_s(m, room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
+                && fits(n, m, room, resident, local_scale::HEADROOM_MB)
+                && speed(n, m, room, resident) >= local_scale::PERFORMANCE_FLOOR_TOK_S
         }
-        Some(room) => local_scale::fits(m, room, resident, 0),
+        Some(room) => fits(n, m, room, resident, 0),
         None => m.run_mb <= home.run_mb,
     }
 }
@@ -404,12 +748,18 @@ pub fn out_of_memory_stand_in(
         .map(|(_, p)| p.clone())
 }
 
-/// The running-model row's mode: Gaming while a game holds the GPU,
-/// Performance while a bigger model runs for hard work, Fixed while Dynamic
-/// is off, else Balanced.
+/// The running-model row's mode: Gaming while a game holds the GPU, the
+/// tier a chat asked for while its model runs, Performance while a bigger
+/// model runs for hard work, Fixed while Dynamic is off, else Balanced.
 pub fn mode(stand_in: Option<StandIn>, scale: &Scale, dynamic: bool) -> local_scale::Mode {
     if scale.gaming || stand_in == Some(StandIn::Gaming) {
         local_scale::Mode::Gaming
+    } else if let Some(StandIn::Asked(tier, _)) = stand_in {
+        match tier {
+            SpeedQuality::Speed => local_scale::Mode::Speed,
+            SpeedQuality::Quality => local_scale::Mode::Performance,
+            SpeedQuality::Balanced => local_scale::Mode::Balanced,
+        }
     } else if !dynamic {
         local_scale::Mode::Fixed
     } else if stand_in == Some(StandIn::Performance) {
@@ -436,6 +786,28 @@ pub fn on_disk(dirs: &[PathBuf]) -> Vec<(&'static LocalModel, PathBuf)> {
                 .map(|p| (m, p))
         })
         .collect()
+}
+
+/// Add user-added `.gguf` paths that match a catalog chat model, so Auto can
+/// score them for a task beside downloads. Paths that are already on `disk`
+/// (same catalog id or same path) are left alone.
+pub fn with_own(
+    mut disk: Vec<(&'static LocalModel, PathBuf)>,
+    own: &[PathBuf],
+) -> Vec<(&'static LocalModel, PathBuf)> {
+    for path in own {
+        let Some(m) = catalog_for(path) else {
+            continue;
+        };
+        if !m.is_chat() {
+            continue;
+        }
+        if disk.iter().any(|(c, p)| c.id == m.id || p == path) {
+            continue;
+        }
+        disk.push((m, path.clone()));
+    }
+    disk
 }
 
 /// A reload within this long of an idle unload means the timer was too short.

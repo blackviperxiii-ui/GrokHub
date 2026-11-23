@@ -5,6 +5,7 @@ import type {
   SavedFind,
   FeedPrompt,
   FixView,
+  LiveView,
   PulseAct,
   PulseIdea,
   PulsePage,
@@ -19,6 +20,12 @@ const api = vi.hoisted(() => ({
   pulseAct: vi.fn<(id: string, act: PulseAct) => Promise<PulsePage>>(),
   pulseDiscuss: vi.fn<(id: string) => Promise<PulseSeed>>(),
   pulseOffer: vi.fn<(id: string, index: number) => Promise<PulseSeed>>(),
+  pulseLiveOpen: vi.fn<(id: string, index: number) => Promise<LiveView>>(),
+  pulseLiveAllow: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveDeny: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveStop: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveUndo: vi.fn<() => Promise<LiveView>>(),
+  pulseLiveClose: vi.fn<() => Promise<void>>(),
   pulseRemind: vi.fn<(id: string) => Promise<PulseReminded>>(),
   pulseWhy: vi.fn<(id: string) => Promise<string>>(),
   pulseImage: vi.fn<(name: string) => Promise<string>>(),
@@ -30,9 +37,19 @@ const api = vi.hoisted(() => ({
   pulseUnsave: vi.fn<(url: string) => Promise<SavedFind[]>>(),
   pulseReviewApply: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
   pulseReviewIssue: vi.fn<(id: string) => Promise<{ text: string; copied: string }>>(),
+  pulsePauseAutomation: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
+  pulseDoneUndo: vi.fn<(id: string) => Promise<PulseReviewDone>>(),
+  pulseDoneStop: vi.fn<() => Promise<PulseReviewDone>>(),
 }));
 
 vi.mock("./api", () => api);
+
+const ext = vi.hoisted(() => ({ openExternal: vi.fn<(url: string) => Promise<void>>() }));
+
+vi.mock("./external", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./external")>()),
+  ...ext,
+}));
 
 import { emojiImage, Snippet } from "./FeedCard";
 import {
@@ -47,6 +64,7 @@ import {
   PAGE_SIZE,
   Pulse,
   REFRESH_MS,
+  SKILL_ADDED,
   SAVED_NOTE,
 } from "./Pulse";
 
@@ -64,6 +82,7 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     createdAt: Date.UTC(2026, 9, 26, 15, 4),
     ago: "2h ago",
     link: "https://blog.rust-lang.org/1.99.html",
+    model: "",
     loved: false,
     verdict: null,
     more: "",
@@ -91,6 +110,7 @@ const IDEA: PulseIdea = {
   more: "",
   chips: [],
   loved: false,
+  skill: false,
 };
 
 const PAGE: PulsePage = {
@@ -163,6 +183,8 @@ describe("Pulse", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.pulseImage.mockImplementation((name) => Promise.resolve(`data:image/jpeg;base64,${name}`));
+    ext.openExternal.mockReset();
+    ext.openExternal.mockResolvedValue();
   });
 
   afterEach(() => {
@@ -205,7 +227,13 @@ describe("Pulse", () => {
     expect(card).not.toHaveTextContent("https://blog.rust-lang.org/1.99.html");
   });
 
-  it("one image is a hero and two or three are a gallery that opens a lightbox", async () => {
+  it("the lead image loads near the screen, and Show more opens the rest in a gallery and a lightbox", async () => {
+    installMockIO();
+    api.pulseImage.mockImplementation((name) =>
+      Promise.resolve(
+        name.endsWith(".img") ? `data:image/png;base64,${name}` : `data:image/jpeg;base64,${name}`,
+      ),
+    );
     api.getPulse.mockResolvedValue({
       ...PAGE,
       feed: [
@@ -213,24 +241,52 @@ describe("Pulse", () => {
         post({
           id: "post-2",
           title: "Tauri 2.5 ships",
-          images: ["bbbbbbbbbbbbbbbb.jpg", "cccccccccccccccc.png", "dddddddddddddddd.webp"],
+          images: ["bbbbbbbbbbbbbbbb.jpg", "cccccccccccccccc.img", "dddddddddddddddd.webp"],
         }),
       ],
     });
     const { container } = render(<Pulse onRun={() => {}} />);
 
     const hero = await screen.findByRole("listitem", { name: TITLE });
-    await within(hero).findByRole("button", { name: "Open image 1" });
-    expect(hero.querySelector(".media")).toHaveClass("hero");
     const gallery = screen.getByRole("listitem", { name: "Tauri 2.5 ships" });
+    const heroLead = hero.querySelector(".feed-lead")!;
+    const galleryLead = gallery.querySelector(".feed-lead")!;
+    await vi.waitFor(() => {
+      expect(observers.some((o) => o.els.has(heroLead))).toBe(true);
+      expect(observers.some((o) => o.els.has(galleryLead))).toBe(true);
+    });
+    // Off screen: nothing is read yet, and the lead box holds its place empty.
+    expect(api.pulseImage).not.toHaveBeenCalled();
+    expect(heroLead.querySelector("img")).toBeNull();
+
+    trigger(heroLead, 0.1);
+    await within(hero).findByRole("button", { name: "Open image 1" });
+    expect(api.pulseImage.mock.calls).toEqual([["aaaaaaaaaaaaaaaa.jpg"]]);
+    expect(hero.querySelector(".feed-lead .media-item img")).toHaveAttribute(
+      "src",
+      "data:image/jpeg;base64,aaaaaaaaaaaaaaaa.jpg",
+    );
+
+    trigger(galleryLead, 0.1);
+    await within(gallery).findByRole("button", { name: "Open image 1" });
+    // Only the lead until the card is opened.
+    expect(api.pulseImage.mock.calls).toEqual([["aaaaaaaaaaaaaaaa.jpg"], ["bbbbbbbbbbbbbbbb.jpg"]]);
+    expect(gallery.querySelector(".media.gallery")).toBeNull();
+
+    await userEvent.click(within(gallery).getByRole("button", { name: "Show more" }));
     await within(gallery).findByRole("button", { name: "Open image 3" });
-    expect(gallery.querySelector(".media")).toHaveClass("gallery");
-    expect(gallery.querySelectorAll(".media img")).toHaveLength(3);
-    expect(api.pulseImage).toHaveBeenCalledWith("cccccccccccccccc.png");
+    expect(gallery.querySelectorAll(".media.gallery img")).toHaveLength(2);
+    expect(api.pulseImage.mock.calls).toEqual([
+      ["aaaaaaaaaaaaaaaa.jpg"],
+      ["bbbbbbbbbbbbbbbb.jpg"],
+      ["cccccccccccccccc.img"],
+      ["dddddddddddddddd.webp"],
+    ]);
 
     await userEvent.click(within(gallery).getByRole("button", { name: "Open image 2" }));
     const box = screen.getByRole("dialog", { name: "Image" });
-    expect(box.querySelector("img")).toHaveAttribute("src", "data:image/jpeg;base64,cccccccccccccccc.png");
+    expect(box.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,cccccccccccccccc.img");
+    // A .img file saves under the type its bytes are.
     expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute(
       "download",
       "cccccccccccccccc.png",
@@ -238,6 +294,11 @@ describe("Pulse", () => {
     await userEvent.click(within(box).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog", { name: "Image" })).not.toBeInTheDocument();
     expect(container.querySelector(".lightbox")).toBeNull();
+    // Closing the lightbox leaves the card open.
+    expect(within(gallery).getByRole("button", { name: "Show less" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   it("the menu holds only Why I created this", async () => {
@@ -255,7 +316,7 @@ describe("Pulse", () => {
     expect(within(card).queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("Snooze sits before Not interested; Delete is gone; Dismiss asks first", async () => {
+  it("Snooze sits before Not interested; Delete and Dismiss are gone", async () => {
     const both = { ...PAGE, feed: [post({ snooze: true, delete: true })] };
     api.getPulse.mockResolvedValue(both);
     api.pulseAct.mockResolvedValue(both);
@@ -266,19 +327,15 @@ describe("Pulse", () => {
     const labels = within(row)
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Not interested", "Dismiss"]);
+    expect(labels).toEqual(["Like", "Discuss", "Read it", "Snooze", "Not interested"]);
     expect(labels).not.toContain("Delete");
+    expect(labels).not.toContain("Dismiss");
+    expect(within(card).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     await userEvent.click(within(row).getByRole("button", { name: "Snooze" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "snooze");
-    // Dismiss asks first (Delete folded in).
-    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).not.toHaveBeenLastCalledWith("post-1", "dismiss");
-    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dismiss");
   });
 
-  it("every card has one row: Like first, its own buttons, Not interested, Dismiss last", async () => {
+  it("every card has one row: Like first, its own buttons, Not interested last with no confirm", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
@@ -290,21 +347,16 @@ describe("Pulse", () => {
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
     expect(labels[0]).toBe("Like");
-    expect(labels[labels.length - 2]).toBe("Not interested");
-    // One dislike button only.
+    // One dislike button only, last in the row; no Dismiss.
     expect(labels.filter((l) => l === "Not interested" || l === "I don't like")).toHaveLength(1);
-    expect(labels[labels.length - 1]).toBe("Dismiss");
+    expect(labels[labels.length - 1]).toBe("Not interested");
+    expect(labels).not.toContain("Dismiss");
     expect(labels).toContain("Discuss");
 
     await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dislike");
+    expect(within(card).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent("Got it. A few less like that.");
-
-    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
-    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("post-1", "dismiss");
-    expect(await screen.findByRole("status")).toHaveTextContent("Dismissed.");
   });
 
   it("an error reads as an error, not as a result", async () => {
@@ -313,9 +365,8 @@ describe("Pulse", () => {
     render(<Pulse onRun={() => {}} />);
 
     const card = await screen.findByRole("listitem", { name: TITLE });
-    await userEvent.click(within(card).getByRole("button", { name: "Dismiss" }));
-    const confirm = within(card).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(confirm).getByRole("button", { name: "Dismiss" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Not interested" }));
+    expect(within(card).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent("That card is gone.");
     expect(status).toHaveClass("status--error");
@@ -398,9 +449,15 @@ describe("Pulse", () => {
     render(<Pulse onRun={onRun} />);
 
     const card = await screen.findByRole("listitem", { name: "bluetoothd crashed 4 times today" });
-    // Always fully open: the report shows with no toggle.
-    expect(card).toHaveTextContent("It stopped with a segfault each time.");
-    expect(card).toHaveTextContent("4 crash reports since 9 AM");
+    // The report waits behind Show more.
+    expect(card).toHaveTextContent("Your Bluetooth service keeps restarting.");
+    expect(card).not.toHaveTextContent("It stopped with a segfault each time.");
+    await userEvent.click(within(card).getByRole("button", { name: "Show more" }));
+    const report = within(card).getByRole("region", {
+      name: "More about bluetoothd crashed 4 times today",
+    });
+    expect(report).toHaveTextContent("It stopped with a segfault each time.");
+    expect(report).toHaveTextContent("4 crash reports since 9 AM");
     // Every button in the row looks the same.
     const fix = within(card).getByRole("button", { name: "Restart bluetooth" });
     expect(fix).toHaveClass("quiet");
@@ -431,7 +488,6 @@ describe("Pulse", () => {
       ...PAGE,
       feed: [post({ source: "Helldivers 2 on Steam", because: "You play Helldivers 2" })],
     });
-    api.openUrl.mockResolvedValue();
     api.pulseAct.mockResolvedValue(PAGE);
     render(<Pulse onRun={() => {}} />);
 
@@ -440,9 +496,14 @@ describe("Pulse", () => {
       "Helldivers 2 on Steam · You play Helldivers 2",
     );
     await userEvent.click(within(card).getByRole("button", { name: "Read it" }));
-    expect(api.openUrl).toHaveBeenCalledWith("https://blog.rust-lang.org/1.99.html");
+    // openExternal, not openUrl: a paired browser opens the page in its own tab.
+    expect(ext.openExternal.mock.calls).toEqual([["https://blog.rust-lang.org/1.99.html"]]);
+    expect(api.openUrl).not.toHaveBeenCalled();
     // Reading counts toward card taste, quietly.
-    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "opened");
+    expect(api.pulseAct.mock.calls).toEqual([["post-1", "opened"]]);
+    expect(ext.openExternal.mock.invocationCallOrder[0]).toBeLessThan(
+      api.pulseAct.mock.invocationCallOrder[0],
+    );
   });
 
   it("a post with no source page has no Read it", async () => {
@@ -451,6 +512,38 @@ describe("Pulse", () => {
     const card = await screen.findByRole("listitem", { name: TITLE });
     expect(card.querySelector(".feed-source")).toHaveTextContent("Rust Blog");
     expect(within(card).queryByRole("button", { name: "Read it" })).not.toBeInTheDocument();
+  });
+
+  it("a model card's Open in Settings opens the model library on it, and nothing downloads", async () => {
+    const model = post({
+      source: "Local models",
+      title: "Gemma 4 31B fits this PC",
+      link: "",
+      model: "gemma-4-31b-it-abliterated-q4_k",
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [model] });
+    api.pulseAct.mockResolvedValue(PAGE);
+    const onOpenModel = vi.fn();
+    const { unmount } = render(<Pulse onRun={() => {}} onOpenModel={onOpenModel} />);
+    const card = await screen.findByRole("listitem", { name: "Gemma 4 31B fits this PC" });
+    expect(within(card).queryByRole("button", { name: "Read it" })).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Open in Settings" }));
+    expect(onOpenModel).toHaveBeenCalledWith("gemma-4-31b-it-abliterated-q4_k");
+    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "opened");
+    unmount();
+
+    // Where local models don't run, the card has no Open in Settings.
+    render(<Pulse onRun={() => {}} />);
+    const bare = await screen.findByRole("listitem", { name: "Gemma 4 31B fits this PC" });
+    expect(within(bare).queryByRole("button", { name: "Open in Settings" })).not.toBeInTheDocument();
+  });
+
+  it("a link post shows Read it and no Open in Settings", async () => {
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [post()] });
+    render(<Pulse onRun={() => {}} onOpenModel={vi.fn()} />);
+    const card = await screen.findByRole("listitem", { name: TITLE });
+    expect(within(card).getByRole("button", { name: "Read it" })).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Open in Settings" })).not.toBeInTheDocument();
   });
 
   it("today's set ends with That's all for today, then the older posts", async () => {
@@ -630,7 +723,46 @@ describe("Pulse", () => {
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
   });
 
-  it("an idea shows the same row as every card: Like, Let's do it, Not interested, Dismiss", async () => {
+  it("a skill idea's Add skill saves the skill and sends nothing to chat", async () => {
+    const skill: PulseIdea = {
+      ...IDEA,
+      id: "idea-skill",
+      title: "Tidy the board",
+      kind: "Learn",
+      summary: "Sort open cards",
+      action: "sort cards by due date",
+      skill: true,
+    };
+    const page: PulsePage = { ...PAGE, ideas: [{ label: "", ideas: [skill] }] };
+    const after: PulsePage = { ...PAGE, ideas: [] };
+    api.getPulse.mockResolvedValue(page);
+    api.pulseAct.mockResolvedValue(after);
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: "Tidy the board" });
+    expect(within(row).queryByRole("button", { name: "Let's do it" })).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: "Add skill" }));
+    expect(api.pulseAct).toHaveBeenCalledTimes(1);
+    expect(api.pulseAct).toHaveBeenCalledWith("idea-skill", "addSkill");
+    expect(await screen.findByRole("status")).toHaveTextContent(SKILL_ADDED);
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listitem", { name: "Tidy the board" })).not.toBeInTheDocument();
+  });
+
+  it("a paired browser shows no Add skill: the skill is added on the computer", async () => {
+    const skill: PulseIdea = { ...IDEA, id: "idea-skill", title: "Tidy the board", skill: true };
+    api.getPulse.mockResolvedValue({ ...PAGE, ideas: [{ label: "", ideas: [skill] }] });
+    api.pulseAct.mockResolvedValue(PAGE);
+    render(<Pulse onRun={() => {}} remote />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: "Tidy the board" });
+    expect(within(row).queryByRole("button", { name: "Add skill" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Let's do it" })).toBeInTheDocument();
+  });
+
+  it("an idea shows the same row as every card: Like, Let's do it, Not interested", async () => {
     const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
     const page: PulsePage = {
       ...PAGE,
@@ -659,7 +791,8 @@ describe("Pulse", () => {
     const buttons = within(within(row).getByRole("group", { name: "Card actions" }))
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    expect(buttons).toEqual(["Like", "Let's do it", "Not interested", "Dismiss"]);
+    expect(buttons).toEqual(["Like", "Let's do it", "Not interested"]);
+    expect(within(row).queryByRole("button", { name: "Dismiss" })).toBeNull();
     expect(within(row).queryByRole("button", { name: "More" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
     const main = within(row).getByRole("button", { name: "Let's do it" });
@@ -689,13 +822,8 @@ describe("Pulse", () => {
 
     await userEvent.click(within(row).getByRole("button", { name: "Not interested" }));
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "notInterested");
+    expect(within(row).queryByRole("group", { name: "Dismiss this post?" })).not.toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent(NOT_INTERESTED_NOTE);
-
-    await userEvent.click(within(row).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).not.toHaveBeenLastCalledWith("idea-2", "dismiss");
-    const dismissAsk = within(row).getByRole("group", { name: "Dismiss this post?" });
-    await userEvent.click(within(dismissAsk).getByRole("button", { name: "Dismiss" }));
-    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "dismiss");
 
     await userEvent.click(main);
     expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "accept");
@@ -783,6 +911,139 @@ describe("Pulse", () => {
     expect(onRun).toHaveBeenLastCalledWith("Read bluetoothd's crash history.", "pulse-crash-1");
 
     expect(within(row).getByRole("button", { name: "Not interested" })).toBeInTheDocument();
+  });
+
+  it("a Live offer chip opens the checklist dialog, not chat", async () => {
+    const liveCard = post({
+      id: "fans-1",
+      title: "GPU hit 87°C in the last session",
+      summary: "The fans can run full speed for a bit.",
+      link: "",
+      chips: [
+        { label: "Run the fans at full speed", act: "offer", index: 0, mode: "live" },
+        { label: "Discuss", act: "discuss", index: 0 },
+      ],
+    });
+    const liveView: LiveView = {
+      cardId: "fans-1",
+      label: "Run the fans at full speed",
+      title: "GPU hit 87°C in the last session",
+      summary: "Save each fan, set full speed, then check.",
+      steps: [
+        { plain: "Save each fan's setting.", mark: "pending" },
+        { plain: "Set every fan to full speed.", mark: "pending" },
+      ],
+      phase: "ready",
+      result: null,
+      canUndo: false,
+      primary: "Start fix",
+      stop: null,
+    };
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [liveCard] });
+    api.pulseLiveOpen.mockResolvedValue(liveView);
+    api.pulseLiveClose.mockResolvedValue();
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+    const card = await screen.findByRole("listitem", { name: "GPU hit 87°C in the last session" });
+    await userEvent.click(within(card).getByRole("button", { name: "Run the fans at full speed" }));
+    expect(api.pulseLiveOpen).toHaveBeenCalledWith("fans-1", 0);
+    expect(api.pulseOffer).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "Run the fans at full speed" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Start fix" })).toBeVisible();
+  });
+
+  it("Pause it on a failing automation's card pauses it here and never opens a chat", async () => {
+    const failing: PulseIdea = {
+      ...IDEA,
+      id: "auto-card",
+      title: '"Sync notes" failed 6 times in a row',
+      chips: [
+        { label: "Find out why", act: "offer", index: 0 },
+        { label: "Pause it", act: "pause", index: 0 },
+        { label: "Discuss", act: "discuss", index: 0 },
+      ],
+    };
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [], ideas: [{ label: "", ideas: [failing] }] });
+    api.pulsePauseAutomation.mockResolvedValue({
+      line: 'Paused "Sync notes". Undo is in Settings > Behavior.',
+      page: { ...PAGE, feed: [], ideas: [] },
+    });
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+    await userEvent.click(await screen.findByRole("button", { name: "For You" }));
+    const row = screen.getByRole("listitem", { name: '"Sync notes" failed 6 times in a row' });
+    await userEvent.click(within(row).getByRole("button", { name: "Pause it" }));
+    expect(api.pulsePauseAutomation).toHaveBeenCalledWith("auto-card");
+    expect(api.pulseOffer).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText('Paused "Sync notes". Undo is in Settings > Behavior.'),
+    ).toBeInTheDocument();
+  });
+
+  it("a Done for you card's Undo needs a pointer click and a confirm, and Stop turns it off", async () => {
+    const done = post({
+      id: "dfy-1",
+      title: 'Paused "Sync notes": it failed 6 times in a row',
+      summary: "Last error: disk full. Undo turns it back on.",
+      link: "",
+      done: { answered: false },
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [done] });
+    api.pulseDoneUndo.mockResolvedValue({
+      line: 'Undid GrokHub\'s change to the automation auto-sync.',
+      page: { ...PAGE, feed: [{ ...done, done: { answered: true } }] },
+    });
+    api.pulseDoneStop.mockResolvedValue({
+      line: "Turned off. GrokHub won't pause automations on its own.",
+      page: { ...PAGE, feed: [done] },
+    });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: done.title });
+    const undo = within(card).getByRole("button", { name: "Undo" });
+    // Enter on the focused button does nothing.
+    undo.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(within(card).queryByRole("group", { name: "Turn it back on?" })).toBeNull();
+    await userEvent.click(undo);
+    const ask = within(card).getByRole("group", { name: "Turn it back on?" });
+    expect(api.pulseDoneUndo).not.toHaveBeenCalled();
+    await userEvent.click(within(ask).getByRole("button", { name: "Undo" }));
+    expect(api.pulseDoneUndo).toHaveBeenCalledWith("dfy-1");
+    expect(
+      await screen.findByText("Undid GrokHub's change to the automation auto-sync."),
+    ).toBeInTheDocument();
+    // Answered: the buttons go away.
+    const after = screen.getByRole("listitem", { name: done.title });
+    expect(within(after).queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(within(after).queryByRole("button", { name: "Stop doing this" })).toBeNull();
+  });
+
+  it("Stop doing this on a Done for you card turns the switch off", async () => {
+    const done = post({
+      id: "dfy-2",
+      title: 'Paused "Mail digest": it failed 5 times in a row',
+      link: "",
+      done: { answered: false },
+    });
+    api.getPulse.mockResolvedValue({ ...PAGE, feed: [done, post()] });
+    api.pulseDoneStop.mockResolvedValue({
+      line: "Turned off. GrokHub won't pause automations on its own.",
+      page: { ...PAGE, feed: [done] },
+    });
+    render(<Pulse onRun={() => {}} />);
+    const card = await screen.findByRole("listitem", { name: done.title });
+    // An ordinary post has neither button.
+    const plain = screen.getByRole("listitem", { name: TITLE });
+    expect(within(plain).queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(within(plain).queryByRole("button", { name: "Stop doing this" })).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "Stop doing this" }));
+    expect(api.pulseDoneStop).toHaveBeenCalledTimes(1);
+    expect(api.pulseDoneUndo).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Turned off. GrokHub won't pause automations on its own."),
+    ).toBeInTheDocument();
   });
 
   it("a PC health card reads its verdict and Fix it opens its options, which only advise", async () => {
@@ -908,9 +1169,10 @@ describe("Pulse", () => {
     const rowNames = within(row)
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label") ?? b.textContent);
-    // Like far left, Save among the card's own actions, Dismiss far right.
+    // Like far left, Save among the card's own actions, Not interested far right.
     expect(rowNames[0]).toBe("Like");
-    expect(rowNames.at(-1)).toBe("Dismiss");
+    expect(rowNames.at(-1)).toBe("Not interested");
+    expect(rowNames).not.toContain("Dismiss");
     expect(rowNames.indexOf("Save")).toBeLessThan(rowNames.indexOf("Not interested"));
     await userEvent.click(within(row).getByRole("button", { name: "Save" }));
     expect(api.pulseAct).toHaveBeenCalledWith("post-1", "save");

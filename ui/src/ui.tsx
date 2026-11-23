@@ -22,10 +22,12 @@ export function useDismiss<T extends HTMLElement>(open: boolean, close: () => vo
       if (el && event.target instanceof Node && !el.contains(event.target)) closeRef.current();
     }
     document.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", onDown);
+    // Capture: the title bar's drag script stops a press on the bar before it
+    // bubbles, and a press there should still close the pop-up.
+    document.addEventListener("mousedown", onDown, true);
     return () => {
       document.removeEventListener("keydown", onKey);
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("mousedown", onDown, true);
     };
   }, [open]);
   return ref;

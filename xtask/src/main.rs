@@ -84,9 +84,10 @@ fn bump_check(root: &Path) -> Result<(), String> {
     check_contains(root, "packaging/aur/PKGBUILD", &format!("pkgver={version}"))?;
     check_contains(
         root,
-        "packaging/windows/grokhub.iss",
-        &format!("#define MyAppVersion \"{version}\""),
+        "packaging/aur/.SRCINFO",
+        &format!("pkgver = {version}"),
     )?;
+    check_contains(root, "packaging/aur/.SRCINFO", &format!("#tag=v{version}"))?;
     check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
     check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;
     check_reference(root, &version)?;
@@ -125,8 +126,7 @@ fn check_reference(root: &Path, version: &str) -> Result<(), String> {
     check_reference_text(&text, version)
 }
 
-/// Headline + both Latest cells use `**vX.Y.Z**`; `--version` examples use
-/// `GrokHub X.Y.Z-beta…` and `GrokHub X.Y.Z (main…)`.
+/// The headline and both Latest cells use `**vX.Y.Z**`.
 fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     let bold = format!("**v{version}**");
     let bold_n = text.matches(&bold).count();
@@ -134,17 +134,6 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
         return Err(format!(
             "docs/REFERENCE.md: expected >=3 {bold:?} (headline + Latest rows), found {bold_n}"
         ));
-    }
-    for (needle, label) in [
-        (format!("grokhub-linux-v{version}.tar.gz"), "Linux tarball"),
-        (format!("GrokHub-Setup-{version}.exe"), "Windows Setup"),
-        (format!("grokhub-windows-v{version}.zip"), "Windows zip"),
-        (format!("GrokHub {version}-beta."), "--version beta example"),
-        (format!("GrokHub {version} (main"), "--version main example"),
-    ] {
-        if !text.contains(&needle) {
-            return Err(format!("docs/REFERENCE.md missing {label}: {needle:?}"));
-        }
     }
     Ok(())
 }
@@ -270,11 +259,6 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
             format!("pkgver={new_version}"),
         ),
         (
-            "packaging/windows/grokhub.iss",
-            format!("#define MyAppVersion \"{old}\""),
-            format!("#define MyAppVersion \"{new_version}\""),
-        ),
-        (
             SHELL_TOML,
             shell_toml_line(&old),
             shell_toml_line(new_version),
@@ -290,6 +274,26 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
             return Err(format!("{rel} missing {from:?}"));
         }
         plan.writes.push((rel.into(), text.replacen(&from, &to, 1)));
+    }
+    // AUR .SRCINFO tracks PKGBUILD: bump pkgver and the source tag together.
+    // scripts/aur-srcinfo.py --check (ci-guards) catches non-version drift.
+    {
+        let rel = "packaging/aur/.SRCINFO";
+        let text = read_rel(root, rel)?;
+        let from_ver = format!("pkgver = {old}");
+        let to_ver = format!("pkgver = {new_version}");
+        let from_tag = format!("#tag=v{old}");
+        let to_tag = format!("#tag=v{new_version}");
+        if !text.contains(&from_ver) {
+            return Err(format!("{rel} missing {from_ver:?}"));
+        }
+        if !text.contains(&from_tag) {
+            return Err(format!("{rel} missing {from_tag:?}"));
+        }
+        let next = text
+            .replacen(&from_ver, &to_ver, 1)
+            .replacen(&from_tag, &to_tag, 1);
+        plan.writes.push((rel.into(), next));
     }
     plan.writes.push((
         "docs/REFERENCE.md".into(),
@@ -349,36 +353,7 @@ fn workspace_version_text(text: &str, old: &str, new: &str) -> Result<String, St
 fn reference_text(text: &str, old: &str, new: &str) -> Result<String, String> {
     // Refuse a partial bump: every lockstep token must already be present.
     check_reference_text(text, old)?;
-    let mut next = text.to_string();
-    // Longer / more specific tokens first so `GrokHub X.Y.Z-beta.` is not
-    // rewritten only as a prefix of a looser pattern.
-    for (from, to) in [
-        (format!("**v{old}**"), format!("**v{new}**")),
-        (
-            format!("grokhub-linux-v{old}.tar.gz"),
-            format!("grokhub-linux-v{new}.tar.gz"),
-        ),
-        (
-            format!("GrokHub-Setup-{old}.exe"),
-            format!("GrokHub-Setup-{new}.exe"),
-        ),
-        (
-            format!("grokhub-windows-v{old}.zip"),
-            format!("grokhub-windows-v{new}.zip"),
-        ),
-        (
-            format!("GrokHub {old}-beta."),
-            format!("GrokHub {new}-beta."),
-        ),
-        (
-            format!("GrokHub {old} (main"),
-            format!("GrokHub {new} (main"),
-        ),
-        // Remaining plain `GrokHub X.Y.Z` (no-git build line, etc.).
-        (format!("GrokHub {old}"), format!("GrokHub {new}")),
-    ] {
-        next = next.replace(&from, &to);
-    }
+    let next = text.replace(&format!("**v{old}**"), &format!("**v{new}**"));
     check_reference_text(&next, new)?;
     Ok(next)
 }
@@ -438,7 +413,7 @@ fn changelog_text(
         bullets.push_str("- (no changelog fragments)\n");
     }
     let section = format!(
-        "## {new_version} — {today}\n\n{bullets}\n- Linux: `grokhub-linux-v{new_version}.tar.gz` and AUR `pkgver={new_version}`.\n- Windows: `GrokHub-Setup-{new_version}.exe` and `grokhub-windows-v{new_version}.zip`.\n{}",
+        "## {new_version} — {today}\n\n{bullets}\n{}- Arch: the AUR recipe at `pkgver={new_version}`.\n",
         shell_artifacts(new_version)
     );
     let rest = strip_unreleased(text)?;
@@ -558,15 +533,14 @@ mod tests {
     fn sample_reference(version: &str) -> String {
         format!(
             "**v{version}** — notes\n\
-             | Linux | `grokhub-linux-v{version}.tar.gz` | **v{version}** |\n\
-             | Windows | `GrokHub-Setup-{version}.exe`, `grokhub-windows-v{version}.zip` | **v{version}** |\n\
-             grokhub --version # GrokHub {version}-beta.3 (beta @ abc) or GrokHub {version} (main @ def)\n\
-             A build without git shows just `GrokHub {version}`.\n"
+             | Linux | `grokhub-shell-v*-linux-amd64.AppImage` | **v{version}** |\n\
+             | Windows | `GrokHub-Shell-Setup-*.exe` | **v{version}** |\n\
+             grokhub-shell --version # grokhub-shell X.Y.Z\n"
         )
     }
 
     #[test]
-    fn check_reference_requires_bold_count_and_version_examples() {
+    fn check_reference_requires_the_bold_count() {
         let ok = sample_reference("3.0.2");
         assert!(check_reference_text(&ok, "3.0.2").is_ok());
 
@@ -578,21 +552,9 @@ mod tests {
             "expected bold-count error, got {err}"
         );
 
-        // Stale --version beta example.
-        let stale_beta = ok.replace("GrokHub 3.0.2-beta.", "GrokHub 9.9.9-beta.");
-        let err = check_reference_text(&stale_beta, "3.0.2").unwrap_err();
-        assert!(
-            err.contains("--version beta example"),
-            "expected beta example error, got {err}"
-        );
-
-        // Stale --version main example.
-        let stale_main = ok.replace("GrokHub 3.0.2 (main", "GrokHub 9.9.9 (main");
-        let err = check_reference_text(&stale_main, "3.0.2").unwrap_err();
-        assert!(
-            err.contains("--version main example"),
-            "expected main example error, got {err}"
-        );
+        let bumped = reference_text(&ok, "3.0.2", "3.1.0").expect("bump");
+        assert_eq!(bumped, sample_reference("3.1.0"));
+        assert!(reference_text(&two_bold, "3.0.2", "3.1.0").is_err());
     }
 
     // ---- temp-dir fixtures for bump_apply / dry-run ----
@@ -608,7 +570,7 @@ mod tests {
         "src-tauri/tauri.conf.json",
         "packaging/PKGBUILD",
         "packaging/aur/PKGBUILD",
-        "packaging/windows/grokhub.iss",
+        "packaging/aur/.SRCINFO",
         "docs/REFERENCE.md",
         "CHANGELOG.md",
     ];
@@ -644,8 +606,8 @@ mod tests {
             fx.put("packaging/PKGBUILD", &format!("pkgver={OLD}\n"));
             fx.put("packaging/aur/PKGBUILD", &format!("pkgver={OLD}\n"));
             fx.put(
-                "packaging/windows/grokhub.iss",
-                &format!("#define MyAppVersion \"{OLD}\"\n"),
+                "packaging/aur/.SRCINFO",
+                &format!("pkgver = {OLD}\nsource = grokhub::git+#tag=v{OLD}\n"),
             );
             fx.put(
                 SHELL_TOML,
@@ -707,6 +669,27 @@ mod tests {
         bump_check(&fx.0).unwrap();
     }
 
+    /// Every grokhub-* package in the real lockfiles is one the bump rewrites,
+    /// so a new path dependency can't keep the old version and break --locked.
+    #[test]
+    fn lock_lists_cover_every_grokhub_package_in_the_real_locks() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for (rel, packages) in LOCKS {
+            let lock = fs::read_to_string(root.join(rel))
+                .unwrap()
+                .replace("\r\n", "\n");
+            let mut found: Vec<&str> = lock
+                .lines()
+                .filter_map(|l| l.strip_prefix("name = \""))
+                .filter_map(|l| l.strip_suffix('"'))
+                .filter(|name| name.starts_with("grokhub-"))
+                .collect();
+            found.sort_unstable();
+            found.dedup();
+            assert_eq!(found, packages.to_vec(), "{rel}");
+        }
+    }
+
     #[test]
     fn check_catches_a_stale_shell_lock() {
         let fx = Fixture::new();
@@ -759,6 +742,10 @@ mod tests {
             fx.get("src-tauri/tauri.conf.json"),
             "{\n  \"productName\": \"GrokHub Shell\",\n  \"version\": \"3.1.0\",\n}\n"
         );
+        assert_eq!(
+            fx.get("packaging/aur/.SRCINFO"),
+            "pkgver = 3.1.0\nsource = grokhub::git+#tag=v3.1.0\n"
+        );
         // Dependency version in [workspace.dependencies] is untouched.
         assert!(fx
             .get("Cargo.toml")
@@ -773,11 +760,15 @@ mod tests {
         assert!(!log.contains("# heading"));
         assert!(log.contains("## 3.0.2 — 2026-01-01"));
         assert!(log.contains(
-            "- Windows: `GrokHub-Setup-3.1.0.exe` and `grokhub-windows-v3.1.0.zip`.\n\
+            "- Plain line.\n\n\
              - Shell (Tauri): `grokhub-shell-v3.1.0-linux-amd64.deb`, \
              `grokhub-shell-v3.1.0-linux-amd64.AppImage`, `GrokHub-Shell-Setup-3.1.0.exe` \
-             and `grokhub-shell-v3.1.0-macos-arm64.dmg`.\n"
+             and `grokhub-shell-v3.1.0-macos-arm64.dmg`.\n\
+             - Arch: the AUR recipe at `pkgver=3.1.0`.\n"
         ));
+        for retired in ["grokhub-linux-v", "GrokHub-Setup-", "grokhub-windows-v"] {
+            assert!(!log.contains(retired), "{retired} still in {log}");
+        }
 
         assert!(fx.0.join("changelog.d/README.md").exists());
         assert!(!fx.0.join("changelog.d/a-first.md").exists());

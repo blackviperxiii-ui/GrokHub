@@ -76,8 +76,12 @@ pub fn govern(
     workspace: &Path,
     policy: &Policy,
 ) -> Decision {
+    // Plan and btw still run web lookups (the gate lets them), so their
+    // WebFetch / WebSearch rules apply there too.
     if !gate::is_readonly(name)
-        && (gate.readonly_session || gate::is_desktop(name) || !gate::is_known(name))
+        && ((gate.readonly_session && !gate::is_web_lookup(name))
+            || gate::is_desktop(name)
+            || !gate::is_known(name))
     {
         return base;
     }

@@ -31,9 +31,12 @@ const READONLY: &[&str] = &[
     "diagnose",
     "local_ai_status",
     "models_check",
+    "session_search",
     "mods_search",
     "mods_detail",
     "mods_installed",
+    // Checks a panel spec for the chat to draw; only on with generative UI.
+    "show_panel",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -50,6 +53,13 @@ const CONTROL: &[&str] = &[
     "spawn_subagent",
     "send_subagent_message",
     "merge_subagent_work",
+    // Runs a saved routine; each of its steps meets this gate on its own.
+    "run_routine",
+    // Saves the last turn's steps as a routine; it always asks.
+    "save_routine",
+    // Runs a Python script. It runs without asking only where the OS sandbox
+    // fully holds it (see `decide_with`); anywhere else it asks like a command.
+    "run_tool_script",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",
@@ -257,6 +267,11 @@ pub fn is_web_lookup(name: &str) -> bool {
     name == WEB_SEARCH || name == WEB_FETCH
 }
 
+/// The terminal command tool.
+pub fn is_shell(name: &str) -> bool {
+    SHELL.contains(&name)
+}
+
 pub fn is_desktop(name: &str) -> bool {
     DESKTOP.contains(&name)
 }
@@ -437,6 +452,17 @@ pub fn decide_with(
     if crate::subagent::spawn_is_explore(name, arguments) {
         return Decision::Run;
     }
+    // A tool script is Python, so it is read-only only where the OS sandbox
+    // holds it: writes fenced, the network only through the proxy, secrets
+    // hidden. Elsewhere (Windows, the sandbox off, no Landlock) it asks.
+    if name == crate::tools::ptc::NAME && crate::tools::ptc::sandbox_holds(workspace) {
+        return Decision::Run;
+    }
+    // A routine's steps each meet this gate inside the run, so starting one
+    // asks nothing. Plan mode still refuses it.
+    if name == crate::tools::run_routine::NAME && !gate.readonly_session {
+        return Decision::Run;
+    }
     let base = decide(gate, name, latched_always, desk);
     match policy {
         Some(policy) => crate::perm::govern(base, gate, name, arguments, workspace, policy),
@@ -456,6 +482,59 @@ mod tests {
             attended,
             desktop,
         }
+    }
+
+    #[test]
+    fn show_panel_runs_without_a_card_in_every_mode() {
+        // It only checks a panel spec and hands it to the chat: no file, no
+        // network, no action. The engine refused it as unknown before.
+        let ws = std::path::Path::new("/home/user/my-app");
+        let args = r#"{"title":"Linux CI","elements":[{"type":"text","text":"ok"}]}"#;
+        for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+            for readonly in [false, true] {
+                let g = gate(mode, readonly, true, false);
+                assert_eq!(decide(&g, "show_panel", false, None), Decision::Run);
+                assert_eq!(
+                    decide_with(&g, "show_panel", args, false, None, ws, None),
+                    Decision::Run
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_tool_script_asks_where_the_sandbox_does_not_hold_it() {
+        // Python can write, delete and reach the network, so with the sandbox
+        // off it asks like a command and plan mode and unattended runs refuse it.
+        let config = std::env::temp_dir().join(format!("gate-ptc-{}", std::process::id()));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join(crate::sandbox::CONFIG_NAME),
+            "enabled = false\n",
+        )
+        .unwrap();
+        let _pin = crate::perm::ConfigGuard::set(&config);
+        let ws = std::path::Path::new("/home/user/my-app");
+        let args = r#"{"script":"print(1)"}"#;
+        assert!(!crate::tools::ptc::sandbox_holds(ws));
+        let decide_ptc = |g: &Gate| decide_with(g, "run_tool_script", args, false, None, ws, None);
+        assert_eq!(
+            decide_ptc(&gate(PermMode::Ask, false, true, false)),
+            Decision::Ask
+        );
+        assert_eq!(
+            decide_ptc(&gate(PermMode::Auto, false, true, false)),
+            Decision::Ask
+        );
+        assert!(matches!(
+            decide_ptc(&gate(PermMode::Ask, true, true, false)),
+            Decision::Refuse(_)
+        ));
+        assert!(matches!(
+            decide_ptc(&gate(PermMode::Auto, false, false, false)),
+            Decision::Refuse(_)
+        ));
+        let _ = std::fs::remove_dir_all(&config);
     }
 
     #[test]

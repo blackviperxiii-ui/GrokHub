@@ -410,3 +410,95 @@ fn an_upgraded_turn_leaves_its_free_episode_model() {
         r.model
     );
 }
+
+#[test]
+fn a_picture_the_device_cant_see_goes_online_unless_the_turn_must_stay() {
+    let mut reg = fleet();
+    let mut lists = |id: &str, kinds: &[&str]| {
+        reg.models.get_mut(id).unwrap().meta.input_modalities =
+            Some(kinds.iter().map(|k| (*k).to_string()).collect());
+    };
+    // grok-4.7 reads text only; grok-4.3 reads pictures; the provider
+    // models list no input kinds, so neither is known to read one.
+    lists("grok-4.7", &["text"]);
+    lists("grok-4.3", &["text", "image"]);
+    let choose = |input: &RouteInput<'_>| {
+        Router::choose(input, &reg, &none(), &RoutingTable::default(), NOW)
+    };
+    let no_vision = |r: &super::Route| r.rule_ids.iter().any(|x| x == "local:no_vision");
+    // Control: the warm device takes the tiny text step.
+    let mut input = warm_ask(TaskSize::Tiny, Level::Normal, true);
+    assert_eq!(choose(&input).model, "local:small");
+    // A picture it can't see: the online model listed as reading pictures.
+    input.needs_image = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "grok-4.3");
+    assert!(!r.no_route);
+    assert!(no_vision(&r), "{:?}", r.rule_ids);
+    // An 18+ turn never leaves the device, picture or not.
+    input.adult = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+    input.adult = false;
+    // Sensitive data with no grant to send it: the device or nothing.
+    input.local.sensitive = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+    input.local.sensitive = false;
+    // Offline: the device answers it, without the picture.
+    input.local.offline = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!r.no_route);
+    assert!(!no_vision(&r));
+    input.local.offline = false;
+    // A voice set to Local only keeps the turn here.
+    input.voice_reply = Some(super::voice_route::ReplyPref::LocalOnly);
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+    input.voice_reply = None;
+    // The model loaded now carries its vision projector: the step rides on
+    // it and the device reads the picture itself.
+    input.local.sees_pictures = true;
+    let r = choose(&input);
+    assert_eq!(r.model, "local:small");
+    assert!(!no_vision(&r));
+}
+
+#[test]
+fn a_picture_turn_that_goes_online_anyway_never_blames_the_picture() {
+    let reg = fleet();
+    let choose = |input: &RouteInput<'_>| {
+        Router::choose(input, &reg, &none(), &RoutingTable::default(), NOW)
+    };
+    // A medium-sized step goes online even with the device warm.
+    let mut input = warm_ask(TaskSize::Medium, Level::Normal, true);
+    let text_only = choose(&input);
+    assert_eq!(text_only.model, "grok-4.3");
+    input.needs_image = true;
+    let r = choose(&input);
+    assert!(
+        !r.rule_ids.iter().any(|x| x == "local:no_vision"),
+        "{:?}",
+        r.rule_ids
+    );
+    assert_eq!(r.model, "grok-4.3");
+}
+
+#[test]
+fn a_picture_stays_on_the_device_when_no_online_model_is_listed_as_reading_it() {
+    // No online model lists its input kinds (the xAI cards' lists are
+    // cleared): none is known to read the picture.
+    let mut reg = fleet();
+    for id in ["grok-4.7", "grok-4.3"] {
+        reg.models.get_mut(id).unwrap().meta.input_modalities = None;
+    }
+    let mut input = warm_ask(TaskSize::Tiny, Level::Normal, true);
+    input.needs_image = true;
+    let r = Router::choose(&input, &reg, &none(), &RoutingTable::default(), NOW);
+    assert_eq!(r.model, "local:small", "{:?} {}", r.rule_ids, r.reason);
+    assert!(!r.rule_ids.iter().any(|x| x == "local:no_vision"));
+}

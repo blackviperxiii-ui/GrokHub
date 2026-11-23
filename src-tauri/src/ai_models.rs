@@ -89,19 +89,103 @@ pub struct ClassView {
     pub rows: Vec<TableRowView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BenchedRow {
+    pub id: String,
+    pub label: String,
+    pub benched_at_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiModelsView {
     pub providers: Vec<ProviderRow>,
     pub spend: Spend,
     pub premium: Vec<PremiumRow>,
+    pub benched: Vec<BenchedRow>,
     pub table: Vec<ClassView>,
     /// When the routing table was built (Unix ms), 0 when there is none yet.
     pub table_built_at: u64,
     /// Why grants can't be read or changed right now (a locked ledger), else empty.
     pub locked: String,
+    /// Web search for OpenRouter and Local AI chats.
+    pub web_search: WebSearchView,
     /// What the last action did, in plain words.
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendChoice {
+    pub id: String,
+    pub label: String,
+}
+
+/// The `webSearch` settings in app.json. A Brave key's value is never here,
+/// only whether one is saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchView {
+    pub backend: String,
+    pub backends: Vec<BackendChoice>,
+    pub searxng_url: String,
+    /// Why searches can't use the saved SearXNG URL while SearXNG is picked,
+    /// else empty (a URL from an older version was never checked).
+    pub searxng_problem: String,
+    pub brave_key_set: bool,
+}
+
+fn web_search_view(config_dir: &Path) -> WebSearchView {
+    let s = grokhub_agent::WebSearchSettings::load(config_dir);
+    WebSearchView {
+        backend: s.backend.as_str().to_string(),
+        backends: grokhub_agent::WEB_SEARCH_BACKENDS
+            .iter()
+            .map(|(b, label)| BackendChoice {
+                id: b.as_str().to_string(),
+                label: (*label).to_string(),
+            })
+            .collect(),
+        searxng_problem: match s.backend {
+            grokhub_agent::WebSearchBackend::Searxng if !s.searxng_url.is_empty() => {
+                grokhub_agent::searxng_url_problem(&s.searxng_url)
+                    .unwrap_or("")
+                    .to_string()
+            }
+            _ => String::new(),
+        },
+        searxng_url: s.searxng_url,
+        brave_key_set: grokhub_agent::brave_key_present(config_dir),
+    }
+}
+
+/// Pick the search backend and SearXNG URL. The next search uses them.
+pub fn save_web_search(
+    config_dir: &Path,
+    backend: &str,
+    searxng_url: &str,
+) -> Result<AiModelsView, String> {
+    let backend = grokhub_agent::WebSearchBackend::from_id(backend)
+        .ok_or("Pick one of the search backends listed.")?;
+    grokhub_agent::WebSearchSettings {
+        backend,
+        searxng_url: searxng_url.trim().to_string(),
+    }
+    .save(config_dir)?;
+    Ok(view(config_dir, "Saved."))
+}
+
+/// Save a Brave Search API key to the keyring; empty removes it. The key is
+/// never returned or logged.
+pub fn save_brave_key(config_dir: &Path, key: &str) -> Result<AiModelsView, String> {
+    grokhub_agent::seal_brave_key(config_dir, key)?;
+    let status = if grokhub_agent::brave_key_present(config_dir) {
+        "Brave search key saved."
+    } else {
+        "Brave search key cleared."
+    };
+    Ok(view(config_dir, status))
 }
 
 /// A card waiting for Save/Allow or Deny. It never holds a key.
@@ -184,12 +268,11 @@ fn offered(listed: &[u32], stored: u32) -> Vec<u32> {
 /// is not on its list (an older or hand-edited file) is shown and offered too.
 pub fn load_spend(config_dir: &Path) -> Spend {
     let app = read_app_json(config_dir);
-    let cap = shown_usd(&app, CAP_KEY).unwrap_or(0);
     let ceiling = shown_usd(&app, CEILING_KEY).unwrap_or(spend_default_ceiling());
     Spend {
-        weekly_cap_usd: cap,
+        weekly_cap_usd: 0,
         price_ceiling_usd_per_m: ceiling,
-        caps: offered(CAPS, cap),
+        caps: offered(CAPS, 0),
         ceilings: offered(CEILINGS, ceiling),
     }
 }
@@ -198,14 +281,10 @@ fn spend_default_ceiling() -> u32 {
     grokhub_core::model_registry::cost_class::DEFAULT_CEILING_USD_PER_M as u32
 }
 
-/// Save the weekly cap and price limit into `app.json`, keeping every other
-/// key as it is. A cap of 0 is stored as no key, like the cabin does. A value
-/// sent back as the page showed it stays as the file holds it.
-pub fn save_spend(config_dir: &Path, cap: u32, ceiling: u32) -> Result<Spend, String> {
+/// Save the price limit into `app.json`, keeping every other key as it is and
+/// clearing any legacy weekly spend cap key so no app-side cap throttles calls.
+pub fn save_spend(config_dir: &Path, _cap: u32, ceiling: u32) -> Result<Spend, String> {
     let shown = load_spend(config_dir);
-    if !shown.caps.contains(&cap) {
-        return Err("Pick one of the weekly caps listed.".into());
-    }
     if !shown.ceilings.contains(&ceiling) {
         return Err("Pick one of the price limits listed.".into());
     }
@@ -223,17 +302,11 @@ pub fn save_spend(config_dir: &Path, cap: u32, ceiling: u32) -> Result<Spend, St
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(e) => return Err(e.to_string()),
     };
-    // 12.5 is shown as 13: sending 13 back with a new price limit keeps 12.5.
-    let keep_cap = shown_usd(&app, CAP_KEY) == Some(cap);
     let keep_ceiling = shown_usd(&app, CEILING_KEY) == Some(ceiling);
     let map = app
         .as_object_mut()
         .ok_or("The settings file isn't an object.")?;
-    if cap == 0 {
-        map.remove(CAP_KEY);
-    } else if !keep_cap {
-        map.insert(CAP_KEY.into(), json!(cap));
-    }
+    map.remove(CAP_KEY);
     if !keep_ceiling {
         map.insert(CEILING_KEY.into(), json!(ceiling));
     }
@@ -242,7 +315,6 @@ pub fn save_spend(config_dir: &Path, cap: u32, ceiling: u32) -> Result<Spend, St
     let body = serde_json::to_string_pretty(&app).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    // The router takes what the file now holds, cents included.
     spend::set_spend(grokhub_agent::route::host::read(config_dir).spend);
     Ok(load_spend(config_dir))
 }
@@ -289,15 +361,61 @@ pub fn view(config_dir: &Path, status: &str) -> AiModelsView {
         })
         .collect();
     let (table, table_built_at) = table_view(config_dir);
+    let benched = grokhub_agent::route::user_bench::load(config_dir)
+        .entries
+        .into_iter()
+        .map(|e| BenchedRow {
+            id: e.id,
+            label: e.label,
+            benched_at_ms: e.benched_at_ms,
+        })
+        .collect();
     AiModelsView {
         providers: rows,
         spend: load_spend(config_dir),
         premium,
+        benched,
         table,
         table_built_at,
         locked,
+        web_search: web_search_view(config_dir),
         status: status.to_string(),
     }
+}
+
+/// Bench a model or provider from Settings or chat by name/id.
+pub fn bench_model(config_dir: &Path, target: &str) -> Result<AiModelsView, String> {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return Err("Name a model or provider to bench.".into());
+    }
+    let (reg, _) = grokhub_agent::route::live::snapshot(config_dir);
+    let known: Vec<&str> = reg.models.keys().map(String::as_str).collect();
+    let (id, label) = grokhub_agent::route::user_bench::normalize_target(trimmed, &known)
+        .unwrap_or_else(|| (trimmed.to_ascii_lowercase(), trimmed.to_string()));
+    let outcome = grokhub_agent::route::user_bench::apply_and_save(
+        config_dir,
+        grokhub_agent::route::user_bench::BenchAction::Bench { id, label },
+        grokhub_core::now_ms(),
+    )?;
+    Ok(view(config_dir, &outcome.message))
+}
+
+/// Unbench a benched model or provider so routing can use it again.
+pub fn unbench_model(config_dir: &Path, id: &str) -> Result<AiModelsView, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("Pick a benched model to unbench.".into());
+    }
+    let outcome = grokhub_agent::route::user_bench::apply_and_save(
+        config_dir,
+        grokhub_agent::route::user_bench::BenchAction::Unbench {
+            id: trimmed.to_string(),
+            label: trimmed.to_string(),
+        },
+        grokhub_core::now_ms(),
+    )?;
+    Ok(view(config_dir, &outcome.message))
 }
 
 /// Revoke one premium grant. Auto stops using that route on the next turn.
@@ -448,6 +566,11 @@ pub fn start_allow(config_dir: &Path, provider_id: &str) -> Result<Card, String>
         provider: p.id.clone(),
         action: format!("Send chats and memory to {dest}"),
     })
+}
+
+/// True while the card waits for Save/Allow or Deny.
+pub fn card_open(card_id: &str) -> bool {
+    park(&mut CARDS.lock().unwrap_or_else(|e| e.into_inner())).contains_key(card_id)
 }
 
 /// The card's Save/Allow or Deny.
@@ -656,34 +779,37 @@ mod tests {
     }
 
     #[test]
-    fn the_spend_cap_round_trips_through_app_json_and_keeps_other_keys() {
+    fn the_price_limit_round_trips_through_app_json_without_weekly_cap_blocking() {
         let config = dir("spend");
         std::fs::write(
             config.join("app.json"),
             r#"{"quietStart":"22:00","weeklySpendCapUsd":5}"#,
         )
         .expect("write");
-        assert_eq!(load_spend(&config).weekly_cap_usd, 5);
+        assert_eq!(load_spend(&config).weekly_cap_usd, 0);
         assert_eq!(load_spend(&config).price_ceiling_usd_per_m, 15);
 
         let s = save_spend(&config, 25, 30).expect("saved");
-        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (25, 30));
-        let raw: Value =
-            serde_json::from_str(&std::fs::read_to_string(config.join("app.json")).expect("read"))
-                .expect("json");
-        assert_eq!(raw["weeklySpendCapUsd"], 25);
-        assert_eq!(raw["priceCeilingUsdPerM"], 30);
-        assert_eq!(raw["quietStart"], "22:00");
-        assert_eq!(spend::spend_settings().weekly_cap_usd, 25.0);
-
-        // Off removes the key, as the cabin does.
-        save_spend(&config, 0, 15).expect("off");
+        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (0, 30));
         let raw: Value =
             serde_json::from_str(&std::fs::read_to_string(config.join("app.json")).expect("read"))
                 .expect("json");
         assert!(raw.get("weeklySpendCapUsd").is_none());
+        assert_eq!(raw["priceCeilingUsdPerM"], 30);
         assert_eq!(raw["quietStart"], "22:00");
         assert_eq!(load_spend(&config).weekly_cap_usd, 0);
+    }
+
+    #[test]
+    fn bench_and_unbench_round_trip_through_view() {
+        let config = dir("bench-view");
+        assert!(view(&config, "").benched.is_empty());
+        let v = bench_model(&config, "Grok").expect("bench");
+        assert_eq!(v.benched.len(), 1);
+        assert_eq!(v.benched[0].id, "grok");
+        assert_eq!(v.benched[0].label, "Grok (xAI)");
+        let v = unbench_model(&config, "grok").expect("unbench");
+        assert!(v.benched.is_empty());
     }
 
     #[test]
@@ -701,12 +827,8 @@ mod tests {
     }
 
     #[test]
-    fn a_cap_that_is_not_offered_is_refused_and_nothing_is_written() {
+    fn a_price_limit_that_is_not_offered_is_refused_and_nothing_is_written() {
         let config = dir("spend-bad");
-        assert_eq!(
-            save_spend(&config, 7, 15).unwrap_err(),
-            "Pick one of the weekly caps listed."
-        );
         assert_eq!(
             save_spend(&config, 5, 7).unwrap_err(),
             "Pick one of the price limits listed."
@@ -784,15 +906,20 @@ mod tests {
         assert!(!kept.exists());
     }
 
+    const VAULT: &str = "grokhub_agent::route::providers::use_os_vault();";
+    const LEARNED: &str = "grokhub_agent::harness::use_os_keyring();";
+
     /// Whether `setup` (the body of the app's start) calls the keyring
     /// install as a statement of its own, before the state is managed.
     fn installs_keyring_first(setup: &str) -> bool {
+        installs_first(setup, VAULT)
+    }
+
+    fn installs_first(setup: &str, call: &str) -> bool {
         let Some(state) = setup.find("app.manage(ShellState") else {
             return false;
         };
-        setup[..state]
-            .lines()
-            .any(|line| line.trim() == "grokhub_agent::route::providers::use_os_vault();")
+        setup[..state].lines().any(|line| line.trim() == call)
     }
 
     #[test]
@@ -805,6 +932,13 @@ mod tests {
             .and_then(|s| s.split(".on_window_event(").next())
             .expect("run setup");
         assert!(installs_keyring_first(setup), "{setup}");
+        // Sealed memory, scope grants and the indexers' facts use the
+        // learned-tier key; without it they all stay locked.
+        assert!(installs_first(setup, LEARNED), "{setup}");
+        assert!(!installs_first(
+            &format!("    // {LEARNED}\n    app.manage(ShellState::new());\n"),
+            LEARNED
+        ));
         // The check reads code, not words: a call that is commented out, sits
         // in a string or comes after the state is not an install.
         let call = "grokhub_agent::route::providers::use_os_vault();";
@@ -912,41 +1046,148 @@ mod tests {
         )
         .expect("write");
         let s = load_spend(&config);
-        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (5, 20));
+        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (0, 20));
         assert_eq!(s.caps, vec![0, 5, 10, 25, 50, 100]);
         assert_eq!(s.ceilings, vec![5, 15, 20, 30, 60]);
 
         let s = save_spend(&config, 25, 20).expect("saved");
-        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (25, 20));
+        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (0, 20));
         assert_eq!(s.ceilings, vec![5, 15, 20, 30, 60]);
-        // A value that is neither offered nor stored is still refused.
+        // A price ceiling that is neither offered nor stored is still refused.
         assert_eq!(
             save_spend(&config, 25, 7).unwrap_err(),
             "Pick one of the price limits listed."
         );
+    }
+
+    #[test]
+    fn legacy_weekly_cap_with_cents_does_not_block_and_price_limit_saves() {
+        let config = dir("spend-cents");
+        std::fs::write(config.join("app.json"), r#"{"weeklySpendCapUsd":12.5}"#).expect("write");
+        let s = load_spend(&config);
+        assert_eq!(s.weekly_cap_usd, 0);
+        assert_eq!(s.caps, vec![0, 5, 10, 25, 50, 100]);
+
+        // Changing price limit saves `priceCeilingUsdPerM` and strips any legacy weekly cap.
+        let s = save_spend(&config, 0, 30).expect("saved");
+        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (0, 30));
+        let raw: Value =
+            serde_json::from_str(&std::fs::read_to_string(config.join("app.json")).expect("read"))
+                .expect("json");
+        assert!(raw.get("weeklySpendCapUsd").is_none());
+        assert_eq!(raw["priceCeilingUsdPerM"], 30);
+        assert_eq!(spend::spend_settings().ceiling_usd_per_m, 30.0);
+    }
+
+    #[test]
+    fn a_fresh_profile_searches_with_duckduckgo() {
+        let config = dir("web-fresh");
+        let v = view(&config, "");
         assert_eq!(
-            save_spend(&config, 7, 20).unwrap_err(),
-            "Pick one of the weekly caps listed."
+            v.web_search,
+            WebSearchView {
+                backend: "duckduckgo".into(),
+                backends: vec![
+                    BackendChoice {
+                        id: "duckduckgo".into(),
+                        label: "DuckDuckGo Lite (free, no key)".into(),
+                    },
+                    BackendChoice {
+                        id: "searxng".into(),
+                        label: "SearXNG (self-hosted URL)".into(),
+                    },
+                    BackendChoice {
+                        id: "brave".into(),
+                        label: "Brave Search (your API key)".into(),
+                    },
+                ],
+                searxng_url: String::new(),
+                searxng_problem: String::new(),
+                brave_key_set: false,
+            }
         );
     }
 
     #[test]
-    fn a_stored_cap_with_cents_is_shown_rounded_up_and_stays_as_stored() {
-        let config = dir("spend-cents");
-        std::fs::write(config.join("app.json"), r#"{"weeklySpendCapUsd":12.5}"#).expect("write");
-        let s = load_spend(&config);
-        assert_eq!(s.weekly_cap_usd, 13);
-        assert_eq!(s.caps, vec![0, 5, 10, 13, 25, 50, 100]);
+    fn a_lan_searxng_url_saves_and_an_old_unusable_one_says_why() {
+        let config = dir("web-old-url");
+        let v = save_web_search(&config, "searxng", "http://192.168.1.5:8888").unwrap();
+        assert_eq!(v.web_search.backend, "searxng");
+        assert_eq!(v.web_search.searxng_url, "http://192.168.1.5:8888");
+        assert_eq!(v.web_search.searxng_problem, "");
+        let v = save_web_search(&config, "searxng", "http://nas:8888").unwrap();
+        assert_eq!(v.web_search.searxng_url, "http://nas:8888");
+        std::fs::write(
+            app_json_path(&config),
+            r#"{"webSearch":{"backend":"duckduckgo","searxngUrl":"http://169.254.169.254"}}"#,
+        )
+        .unwrap();
+        assert_eq!(view(&config, "").web_search.searxng_problem, "");
+        let v = save_web_search(&config, "searxng", "http://169.254.169.254").unwrap();
+        assert_eq!(v.web_search.backend, "searxng");
+        assert_eq!(
+            v.web_search.searxng_problem,
+            "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888."
+        );
+        assert_eq!(
+            save_web_search(&config, "searxng", "http://0.0.0.0:8888").unwrap_err(),
+            "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888."
+        );
+    }
 
-        // Changing only the price limit keeps the cap the file holds.
-        let s = save_spend(&config, 13, 30).expect("saved");
-        assert_eq!((s.weekly_cap_usd, s.price_ceiling_usd_per_m), (13, 30));
-        let raw: Value =
-            serde_json::from_str(&std::fs::read_to_string(config.join("app.json")).expect("read"))
-                .expect("json");
-        assert_eq!(raw["weeklySpendCapUsd"], 12.5);
-        assert_eq!(raw["priceCeilingUsdPerM"], 30);
-        assert_eq!(spend::spend_settings().weekly_cap_usd, 12.5);
-        assert_eq!(spend::spend_settings().ceiling_usd_per_m, 30.0);
+    #[test]
+    fn saving_searxng_writes_app_json_and_keeps_price_limit_without_weekly_cap() {
+        let config = dir("web-searx");
+        save_spend(&config, 0, 30).unwrap();
+        let v = save_web_search(&config, "searxng", "  https://searx.example  ").unwrap();
+        assert_eq!(v.status, "Saved.");
+        assert_eq!(v.web_search.backend, "searxng");
+        assert_eq!(v.web_search.searxng_url, "https://searx.example");
+        let app = read_app_json(&config);
+        assert_eq!(
+            app["webSearch"],
+            json!({ "backend": "searxng", "searxngUrl": "https://searx.example" })
+        );
+        assert_eq!(app["priceCeilingUsdPerM"], json!(30));
+        assert!(app.get("weeklySpendCapUsd").is_none());
+    }
+
+    #[test]
+    fn an_unknown_backend_or_bad_url_is_refused_and_nothing_is_written() {
+        let config = dir("web-bad");
+        assert_eq!(
+            save_web_search(&config, "google", "").unwrap_err(),
+            "Pick one of the search backends listed."
+        );
+        assert_eq!(
+            save_web_search(&config, "searxng", "ftp://x").unwrap_err(),
+            "SearXNG URL must start with http:// or https://."
+        );
+        assert!(!app_json_path(&config).exists());
+    }
+
+    #[test]
+    fn a_brave_key_lands_in_the_vault_never_in_app_json_or_the_view() {
+        let config = dir("web-brave");
+        let fake = "sk-abcdefghijklmnopqrstuv";
+        let v = save_brave_key(&config, fake).unwrap();
+        assert_eq!(v.status, "Brave search key saved.");
+        assert!(v.web_search.brave_key_set);
+        assert!(!serde_json::to_string(&v).unwrap().contains(fake));
+        assert!(!std::fs::read_to_string(app_json_path(&config))
+            .unwrap_or_default()
+            .contains(fake));
+        let v = save_brave_key(&config, "").unwrap();
+        assert_eq!(v.status, "Brave search key cleared.");
+        assert!(!v.web_search.brave_key_set);
+    }
+
+    #[test]
+    fn a_brave_key_without_a_keyring_says_so() {
+        let config = dir_without_keyring("web-brave-off");
+        assert_eq!(
+            save_brave_key(&config, "sk-abcdefghijklmnopqrstuv").unwrap_err(),
+            "The keyring isn't available, so the key wasn't saved."
+        );
     }
 }

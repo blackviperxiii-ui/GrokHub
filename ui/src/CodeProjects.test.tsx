@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   codeProjectOpen: vi.fn<(path: string) => Promise<ProjectList>>(),
   codeProjectPick: vi.fn<() => Promise<ProjectList | null>>(),
   codeProjectNew: vi.fn<(name: string) => Promise<ProjectList>>(),
+  codeProjectLinkRemote: vi.fn<(url: string, branch?: string | null) => Promise<ProjectList>>(),
+  codeProjectSetBranch: vi.fn<(id: string, branch?: string | null) => Promise<ProjectList>>(),
   listChats: vi.fn<() => Promise<ChatRow[]>>(),
 }));
 
@@ -18,16 +20,35 @@ vi.mock("./History", () => ({ whenLabel: (updated: number) => `at ${updated}` })
 import {
   CodeProjects,
   folderName,
+  isCodeSession,
+  projectLinkLine,
+  projectRulesLine,
   projectSessions,
+  LINK_REPO,
   PROJECTS_AGENT_BUSY,
   PROJECTS_EMPTY,
   PROJECTS_MISSING,
   PROJECTS_NONE_OPEN,
   PROJECTS_NOT_LISTED,
+  RULES_NONE,
   SESSIONS_EMPTY,
 } from "./CodeProjects";
 
-const harbor = { id: "p1", name: "Harbor", path: "/work/harbor", current: true, missing: false };
+const harbor = {
+  id: "p1",
+  name: "Harbor",
+  path: "/work/harbor",
+  current: true,
+  missing: false,
+  remoteUrl: "https://github.com/org/harbor.git",
+  preferredBranch: "beta",
+  activeBranch: "feat",
+  sync: { ahead: 1, behind: 0, upstream: "origin/feat" },
+  rules: [
+    { path: "AGENTS.md", kind: "agents" },
+    { path: ".cursor/rules/ship.mdc", kind: "cursorRules" },
+  ],
+};
 const dawn = { id: "p2", name: "Dawn", path: "/work/dawn", current: false, missing: false };
 const lost = { id: "p3", name: "Lost", path: "/work/lost", current: false, missing: true };
 
@@ -60,6 +81,8 @@ describe("CodeProjects", () => {
     const calls = show();
     expect(await screen.findByText("Harbor")).toBeInTheDocument();
     expect(screen.getByText("/work/harbor")).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/github.com\/org\/harbor.git · on feat · PR base beta · 1 ahead, 0 behind/)).toBeInTheDocument();
+    expect(screen.getByText(/Rules: AGENTS.md, \.cursor\/rules\/ship\.mdc/)).toBeInTheDocument();
     const rows = within(await screen.findByRole("list", { name: "Sessions" })).getAllByRole("button");
     expect(rows.map((r) => r.textContent)).toEqual(["Chat cat 20", "Chat aat 10"]);
     await userEvent.click(rows[0]);
@@ -68,6 +91,34 @@ describe("CodeProjects", () => {
     expect(calls.onNewSession).toHaveBeenCalledTimes(1);
     // The project list stays folded until asked for.
     expect(screen.queryByRole("list", { name: "Projects" })).not.toBeInTheDocument();
+  });
+
+  it("links a remote repo URL and opens the clone", async () => {
+    api.codeProjectLinkRemote.mockResolvedValue({
+      bound: "/work/app",
+      projects: [
+        { ...harbor, current: false },
+        {
+          id: "p9",
+          name: "app",
+          path: "/work/app",
+          current: true,
+          missing: false,
+          remoteUrl: "https://github.com/org/app.git",
+          preferredBranch: "beta",
+          activeBranch: "beta",
+          rules: [{ path: "AGENTS.md", kind: "agents" }],
+        },
+      ],
+    });
+    const calls = show();
+    await userEvent.click(await screen.findByRole("button", { name: LINK_REPO }));
+    await userEvent.type(screen.getByLabelText("Repo URL"), "https://github.com/org/app.git");
+    await userEvent.type(screen.getByLabelText("Preferred branch"), "beta");
+    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+    expect(api.codeProjectLinkRemote).toHaveBeenCalledWith("https://github.com/org/app.git", "beta");
+    expect(await screen.findByText("/work/app")).toBeInTheDocument();
+    expect(calls.onSwitched).toHaveBeenCalledTimes(1);
   });
 
   it("switches to another project, shows its sessions and tells the tab", async () => {
@@ -214,4 +265,21 @@ describe("helpers", () => {
     expect(projectSessions(rows, "p4")).toEqual([]);
   });
 
+  it("isCodeSession is true only for non-Main project-bound chats", () => {
+    expect(isCodeSession({ project: "p1" })).toBe(true);
+    expect(isCodeSession({ project: "p1", main: true })).toBe(false);
+    expect(isCodeSession({ project: null })).toBe(false);
+    expect(isCodeSession({})).toBe(false);
+  });
+
+  it("projectLinkLine and projectRulesLine summarize the open project", () => {
+    expect(projectLinkLine(harbor)).toBe(
+      "https://github.com/org/harbor.git · on feat · PR base beta · 1 ahead, 0 behind",
+    );
+    expect(projectRulesLine(harbor)).toBe("Rules: AGENTS.md, .cursor/rules/ship.mdc");
+    expect(projectLinkLine({ ...harbor, remoteUrl: null, sync: null, activeBranch: null })).toBe(
+      "Local folder · on beta",
+    );
+    expect(projectRulesLine({ ...harbor, rules: [] })).toBe(RULES_NONE);
+  });
 });

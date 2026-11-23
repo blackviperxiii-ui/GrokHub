@@ -54,6 +54,9 @@ impl ElicitInbox {
 /// Only this pointer is stored in the thread-local, so the closures need not be `'static`.
 struct HookFrame {
     attended: bool,
+    /// The chat the cards go to: a value typed into a secret field is held
+    /// for it ([`crate::held`]).
+    session: String,
     emit: *mut (),
     wait: *mut (),
     emit_fn: fn(*mut (), ElicitView),
@@ -66,6 +69,7 @@ thread_local! {
 
 pub(crate) fn with_elicit<R, E, W>(
     attended: bool,
+    session: &str,
     emit: &mut E,
     wait: &mut W,
     body: impl FnOnce() -> R,
@@ -84,6 +88,7 @@ where
     }
     let frame = HookFrame {
         attended,
+        session: session.to_string(),
         emit: std::ptr::from_mut(emit).cast(),
         wait: std::ptr::from_mut(wait).cast(),
         emit_fn: call_emit::<E>,
@@ -226,6 +231,7 @@ fn ask(server: &str, id: &Value, params: &Value) -> ElicitAnswer {
     }
     let view = view_for(server, id, params);
     let wait_id = view.id.clone();
+    let secret_field = view.field_name.clone().filter(|_| view.secret);
     let emitted = HOOK.with(|slot| {
         let ptr = slot.get();
         if ptr.is_null() {
@@ -246,8 +252,15 @@ fn ask(server: &str, id: &Value, params: &Value) -> ElicitAnswer {
             ElicitAnswer::Decline
         } else {
             // SAFETY: same stack frame. The wait callback does not re-enter this frame.
-            let (wait_fn, wait_ptr) = unsafe { ((*ptr).wait_fn, (*ptr).wait) };
-            wait_fn(wait_ptr, &wait_id)
+            let (wait_fn, wait_ptr, session) =
+                unsafe { ((*ptr).wait_fn, (*ptr).wait, (*ptr).session.clone()) };
+            let answer = wait_fn(wait_ptr, &wait_id);
+            if let (ElicitAnswer::Accept(content), Some(field)) = (&answer, &secret_field) {
+                if let Some(value) = content.get(field).and_then(Value::as_str) {
+                    crate::held::hold_secret(&session, value);
+                }
+            }
+            answer
         }
     })
 }
@@ -333,5 +346,36 @@ mod tests {
         let view = view_for("weather", &json!(7), &params);
         assert_eq!(view.server_name, "weather");
         assert_eq!(view.message, "Paste your GitHub token");
+    }
+
+    #[test]
+    fn a_secret_typed_on_the_card_is_held_for_its_chat_and_a_plain_answer_is_not() {
+        const TOKEN: &str = "sk-abcdefghijklmnopqrstuv";
+        let mut emit = |_view: ElicitView| {};
+        let mut wait = |_id: &str| ElicitAnswer::Accept(json!({ "token": TOKEN }));
+        let got = with_elicit(true, "elicit-holds-secret", &mut emit, &mut wait, || {
+            ask_secret("github", "Paste your token", "Token")
+        });
+        assert_eq!(got.as_deref(), Some(TOKEN));
+        assert_eq!(
+            crate::held::held_secrets("elicit-holds-secret"),
+            vec![TOKEN.to_string()]
+        );
+
+        let plain = json!({
+            "message": "Which branch?",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"branch": {"type": "string", "title": "Branch"}}
+            }
+        });
+        let mut wait = |_id: &str| ElicitAnswer::Accept(json!({ "branch": "release-notes" }));
+        with_elicit(true, "elicit-plain-answer", &mut emit, &mut wait, || {
+            ask("github", &json!(1), &plain)
+        });
+        assert_eq!(
+            crate::held::held_secrets("elicit-plain-answer"),
+            Vec::<String>::new()
+        );
     }
 }

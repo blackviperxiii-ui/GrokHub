@@ -15,7 +15,14 @@ import {
   type ModRow,
   type ModSuggestion,
 } from "./api";
-import { InstalledTab, InstallSheet, ModDrawerPanel, StepLine, useInstall } from "./ModsInstall";
+import {
+  InstalledTab,
+  InstallSheet,
+  ModDrawerPanel,
+  RequestedCard,
+  StepLine,
+  useInstall,
+} from "./ModsInstall";
 
 export type ModsTab = ModList | "newFinds" | "installed";
 
@@ -217,6 +224,7 @@ export function Mods() {
           {note}
         </p>
       )}
+      <RequestedCard install={install} offline={view?.offline ?? false} />
       {view === null && !note && <p className="empty">Loading your games…</p>}
       {view && view.games.length === 0 && view.cant.length === 0 && <p className="empty">{NO_GAMES}</p>}
       {view && (view.games.length > 0 || view.cant.length > 0) && (

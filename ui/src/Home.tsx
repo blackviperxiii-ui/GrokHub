@@ -24,8 +24,11 @@ import {
 import { ChipRow, useChipRow } from "./Chips";
 import { FollowUpRow } from "./Goals";
 import { HomeEdit } from "./HomeEdit";
+import { GameNote, useNoteStatus } from "./GameNote";
+import { PcSheet } from "./PcSheet";
 import { COMPANION_NAME } from "./brand";
 import { openExternal } from "./external";
+import { NyxCard } from "./NyxCard";
 import { artUrl } from "./nyx";
 import type { View } from "./Palette";
 import type { Section } from "./sections";
@@ -101,6 +104,8 @@ export interface HomeRoutes {
   /** Puts the text in the chat box; nothing is sent. */
   onAsk: (text: string) => void;
   onSettings: (section: Section) => void;
+  /** Opens a module's details sheet (PC Loadout → Details). */
+  onDetails?: (module: string) => void;
 }
 
 /** The pages a tile may open; anything else stays put. */
@@ -183,6 +188,10 @@ export function runAction(a: TileAction, go: HomeRoutes, remote: boolean, reload
       // The OS prompt shows on the computer, so a paired browser can't run it.
       if (!remote) void homeSetup(a.module, a.undo).then(reload, reload);
       return;
+    case "details":
+      // The sheet reads this computer's hardware, so a paired browser stays put.
+      if (!remote) go.onDetails?.(a.module);
+      return;
     case "copySetup":
       if (!remote) {
         void homeSetupSteps(a.module)
@@ -238,7 +247,11 @@ function ViewBody({
   const fit = FIT[size];
   const run = (a: TileAction) => runAction(a, go, remote, reload);
   const rows = view.rows.slice(0, fit.rows);
-  const buttons = view.buttons.slice(0, fit.buttons);
+  // A paired browser can't open this computer's Details sheet, so it gets
+  // neither the button nor that tap; a Small tile falls back to its button.
+  const here = (a: TileAction | null) => (a && !(remote && a.kind === "details") ? a : null);
+  const usable = view.buttons.filter((b) => here(b.action));
+  const buttons = usable.slice(0, fit.buttons);
   const head = (
     <>
       <span className={`home-big tone-${view.text.tone}`}>{view.text.big}</span>
@@ -252,7 +265,7 @@ function ViewBody({
     </>
   );
   // A Small tile is one tap; so is any tile whose state wants its one button.
-  const tap = view.tap ?? (size === "small" ? (view.buttons[0]?.action ?? null) : null);
+  const tap = here(view.tap) ?? (size === "small" ? (usable[0]?.action ?? null) : null);
   return (
     <div className={`home-stack state-${view.state}`}>
       {tap ? (
@@ -285,7 +298,7 @@ function ViewBody({
       {buttons.length > 0 && (
         <div className="home-buttons">
           {buttons.map((b) => (
-            <button key={b.label} type="button" className={b.primary ? undefined : "quiet"} onClick={() => run(b.action)}>
+            <button key={b.label} type="button" className={b.primary ? "cta" : "quiet"} onClick={() => run(b.action)}>
               {b.label}
             </button>
           ))}
@@ -395,6 +408,11 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
               type="button"
               className="home-row"
               onClick={() => {
+                // A skill idea is added from Pulse, where Add skill says what it saved.
+                if (idea.skill) {
+                  go.onOpen("pulse");
+                  return;
+                }
                 // Taking the idea is its accept, as in Pulse; the box still waits on Send.
                 void pulseAct(idea.id, "accept").catch(() => {});
                 go.onAsk(idea.action);
@@ -410,7 +428,7 @@ function body(tile: HomeTile, slot: HomeSlot, go: HomeRoutes, remote: boolean, r
       const url = tile.picture ? artUrl(tile.picture) : null;
       const inner = (
         <>
-          {url && <img className="home-nyx" src={url} alt="" draggable={false} />}
+          {url && <NyxCard className="home-nyx" url={url} path={tile.picture} draggable={false} />}
           <span className="home-strong">{tile.name || "Default voice"}</span>
         </>
       );
@@ -465,13 +483,21 @@ export function Home({
 
   function tapChip(chip: QuickChip) {
     row.picked(chip);
-    if (chip.action === "go" && chip.view) go.onOpen(chip.view as View);
+    if (chip.action === "note") {
+      if (chip.noteFor) setNoteFor(chip.noteFor);
+    } else if (chip.action === "go" && chip.view) go.onOpen(chip.view as View);
     else go.onAsk(chip.value);
   }
+  // The game a "Leave a note" chip opened the note dialog for.
+  const [noteFor, setNoteFor] = useState<number | null>(null);
+  const [noteSaved, setNoteSaved] = useNoteStatus();
 
   const [reads, setReads] = useState(0);
   const reload = () => setReads((n) => n + 1);
   const [editing, setEditing] = useState(false);
+  // The module whose details sheet is open (only "pc_loadout" has one).
+  const [sheet, setSheet] = useState<string | null>(null);
+  const routes: HomeRoutes = { ...go, onDetails: setSheet };
   // When the last read was tried, so tiles can say how old their data is.
   const [now, setNow] = useState(() => Date.now());
   // Home has shown data before, so a failed read keeps it and says so.
@@ -555,20 +581,35 @@ export function Home({
           }}
         />
       )}
+      {sheet === "pc_loadout" && <PcSheet onClose={() => setSheet(null)} />}
+      {noteFor !== null && (
+        <GameNote
+          appId={noteFor}
+          onDone={(status) => {
+            setNoteFor(null);
+            setNoteSaved(status);
+          }}
+        />
+      )}
+      {noteSaved && (
+        <p className="status" role="status">
+          {noteSaved}
+        </p>
+      )}
       {page && (
         <>
           <ul className="home-grid" aria-label="Tiles">
             {page.slots.map((slot) => (
               <li
                 key={slot.slot}
-                className={`home-tile ${slot.size}${away(slot.tile) ? " away" : ""}`}
+                className={`home-tile ${slot.size}${slot.tile.kind === "objectives" ? " objective-tile" : ""}${away(slot.tile) ? " away" : ""}`}
                 aria-label={slot.name}
               >
                 <h3>
                   {slot.name}
                   {slot.tile.kind === "view" && slot.tile.view.tag && <span className="home-tag">{slot.tile.view.tag}</span>}
                 </h3>
-                {body(slot.tile, slot, go, remote, reload, now)}
+                {body(slot.tile, slot, routes, remote, reload, now)}
               </li>
             ))}
           </ul>
@@ -585,7 +626,7 @@ export function Home({
           <p className="home-muted home-foot">
             {PRESETS[page.preset] ?? "Your own"} layout.{" "}
             {!editing && (
-              <button type="button" className="quiet" onClick={() => setEditing(true)}>
+              <button type="button" className="link" onClick={() => setEditing(true)}>
                 Edit Home
               </button>
             )}

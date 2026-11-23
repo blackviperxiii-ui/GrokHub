@@ -15,7 +15,7 @@ vi.mock("./api", async () => {
   ...chatTabApiStubs(),
   quickChips: () => Promise.resolve([]),
   chipOutcome: () => Promise.resolve(true),
-  getLastChat: () => Promise.resolve(null),
+  getStartChat: () => Promise.resolve(null),
   loadChat: vi.fn(),
   sendChat: () => {
     seen.sent += 1;

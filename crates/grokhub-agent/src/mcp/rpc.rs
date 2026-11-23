@@ -210,11 +210,20 @@ pub(crate) fn tool_output(result: &Value) -> (String, bool) {
             }
         }
     }
-    if text.chars().count() > 40_000 {
-        text = text.chars().take(40_000).collect();
+    (text, failed)
+}
+
+/// The longest tool answer the model sees, in characters.
+const ANSWER_CAP: usize = 40_000;
+
+/// `text` cut to [`ANSWER_CAP`]. It runs after every check that reads the
+/// whole answer, such as the attached browser's page check.
+pub(crate) fn clip(mut text: String) -> String {
+    if text.chars().count() > ANSWER_CAP {
+        text = text.chars().take(ANSWER_CAP).collect();
         text.push_str("\n…");
     }
-    (text, failed)
+    text
 }
 
 fn push(text: &mut String, piece: &str) {

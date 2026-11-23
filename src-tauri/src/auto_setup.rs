@@ -133,6 +133,8 @@ pub struct Reply {
     pub first_run: bool,
     pub text_size: u16,
     pub reduce_motion: bool,
+    /// Settings → Appearance → Objectives beside chat.
+    pub chat_objectives: bool,
     pub theme: Theme,
     /// First run: the open question.
     pub question: Option<Question>,
@@ -222,6 +224,7 @@ impl Target for Tuner<'_> {
         Some(match key {
             Key::TextSize => Value::Pct(s.text_size),
             Key::ReduceMotion => Value::Bool(s.reduce_motion),
+            Key::ChatObjectives => Value::Bool(s.chat_objectives),
             Key::Theme => Value::pick(theme_word(s.theme)),
             Key::CloseToTray if self.tray => Value::Bool(s.close_to_tray),
             Key::QuietHours => Value::Hours(hour_of(&b.quiet_start)?, hour_of(&b.quiet_end)?),
@@ -246,6 +249,7 @@ impl Target for Tuner<'_> {
         match (key, value) {
             (Key::TextSize, Value::Pct(p)) => s.text_size = auto_settings::text_step_for(*p),
             (Key::ReduceMotion, Value::Bool(on)) => s.reduce_motion = *on,
+            (Key::ChatObjectives, Value::Bool(on)) => s.chat_objectives = *on,
             (Key::Theme, Value::Pick(t)) => match t.as_str() {
                 "light" => s.theme = Theme::Light,
                 "system" => s.theme = Theme::System,
@@ -683,6 +687,7 @@ impl Tuner<'_> {
             first_run,
             text_size: self.settings.text_size,
             reduce_motion: self.settings.reduce_motion,
+            chat_objectives: self.settings.chat_objectives,
             theme: self.settings.theme,
             question: if first_run { question } else { None },
             summary: first_run && self.session.summary,

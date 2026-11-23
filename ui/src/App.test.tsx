@@ -3,13 +3,14 @@ import { Profiler } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Capabilities, RecordStatus } from "./api";
+import type { Capabilities, ChatRow, Profile, RecordStatus } from "./api";
 
 // The App's own chat listener (the Activity Dock); tests push events through it.
 const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
 // The tray's Halt and Super+Shift+Esc reach the window through this.
 const haltHandlers = vi.hoisted(() => [] as ((stopped: string[]) => void)[]);
 const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
+const gameNotices = vi.hoisted(() => [] as ((line: string) => void)[]);
 const updateHandlers = vi.hoisted(() => [] as ((update: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
@@ -20,7 +21,7 @@ const api = vi.hoisted(() => ({
   slashHits: vi.fn(async (draft: string) =>
     [
       { cmd: "/plan", hint: "Plan first", insert: "/plan ", runOnPick: false, disabled: null },
-      { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "In the cabin" },
+      { cmd: "/play", hint: "", insert: "/play", runOnPick: true, disabled: "Not in this app" },
     ].filter((hit) => hit.cmd.startsWith(draft)),
   ),
   // One card, worked by chat "shell-c1", so its dock item can open it.
@@ -49,14 +50,25 @@ const api = vi.hoisted(() => ({
   }),
   onLocalEngineEvent: vi.fn(() => Promise.resolve(() => {})),
   workboardSweepUndo: vi.fn(() => Promise.resolve({})),
-  listChats: vi.fn(() => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
+  listChats: vi.fn((): Promise<ChatRow[]> => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
   quickChips: vi.fn(() => Promise.resolve([])),
   chipOutcome: vi.fn(() => Promise.resolve(true)),
-  recordStatus: vi.fn<() => Promise<RecordStatus>>(() => Promise.resolve({ recording: null, listening: null, events: [] })),
+  recordStatus: vi.fn<() => Promise<RecordStatus>>(() => Promise.resolve({ recording: null, listening: null, diagnosing: null, events: [] })),
   recordStop: vi.fn(() => Promise.resolve(false)),
+  getPrivacy: vi.fn(() => Promise.reject(new Error("not mocked"))),
+  getPersonalities: vi.fn(() => Promise.reject(new Error("not mocked"))),
+  // No avatar on the rail unless a test gives a profile.
+  getProfile: vi.fn<() => Promise<Profile>>(() => Promise.reject(new Error("not mocked"))),
 }));
 
+vi.mock("./gameSession", () => ({
+  onGameSession: () => Promise.resolve(() => {}),
+  onGameCompanionNotice: (fn: (line: string) => void) => {
+    gameNotices.push(fn);
+    return Promise.resolve(() => {});
+  },
+}));
 vi.mock("./api", async () => {
   const { chatTabApiStubs } = await import("./chatTabApiStubs");
   return { ...chatTabApiStubs(), ...api };
@@ -110,11 +122,27 @@ vi.mock("./Journal", () => ({
   ),
 }));
 vi.mock("./History", () => ({
-  History: ({ onOpen, onDeleted }: { onOpen: (id: string) => void; onDeleted: (id: string) => void }) => (
+  History: ({
+    onOpen,
+    onOpenCode,
+    onDeleted,
+  }: {
+    onOpen: (id: string) => void;
+    onOpenCode?: () => void;
+    onDeleted: (id: string) => void;
+  }) => (
     <div>
       <button type="button" onClick={() => onOpen("shell-old")}>
         Open old chat
       </button>
+      <button type="button" onClick={() => onOpen("shell-code")}>
+        Open code session
+      </button>
+      {onOpenCode && (
+        <button type="button" onClick={onOpenCode}>
+          Open Code tab
+        </button>
+      )}
       <button type="button" onClick={() => onDeleted("shell-gone")}>
         Delete a chat
       </button>
@@ -170,19 +198,16 @@ vi.mock("./Memory", () => ({
 vi.mock("./Code", () => ({
   Code: (p: {
     shown: boolean;
-    chatSession?: string;
-    onShowChat?: () => void;
     onSession?: (id: string) => void;
     deleted?: { id: string };
+    open?: { id: string; n: number };
   }) => (
     <div hidden={!p.shown}>
       <p>Code page</p>
       {p.deleted && <p>Code heard deleted {p.deleted.id}</p>}
+      {p.open && <p>Code opened {p.open.id}</p>}
       <button type="button" onClick={() => p.onSession?.("shell-old")}>
         Agent window shows shell-old
-      </button>
-      <button type="button" onClick={p.onShowChat}>
-        That session is in Chat
       </button>
     </div>
   ),
@@ -244,14 +269,26 @@ vi.mock("./Objectives", () => ({
     </button>
   ),
 }));
-vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
+vi.mock("./Pulse", () => ({
+  Pulse: ({ onOpenModel }: { onOpenModel?: (id: string) => void }) => (
+    <div>
+      <p>Pulse page</p>
+      {onOpenModel && (
+        <button type="button" onClick={() => onOpenModel("gemma-4-31b-it-abliterated-q4_k")}>
+          Open in Settings
+        </button>
+      )}
+    </div>
+  ),
+}));
 vi.mock("./Imagine", () => ({ Imagine: () => <p>Imagine page</p> }));
 vi.mock("./Library", () => ({ Library: () => <p>Library page</p> }));
 vi.mock("./Settings", () => ({
-  Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
+  Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string; model?: string } }) => (
     <p>
       Settings for {caps.desktopControl ? "a desktop" : "a phone"}
       {goTo && ` at ${goTo.section}`}
+      {goTo?.model && ` on ${goTo.model}`}
     </p>
   ),
 }));
@@ -270,24 +307,52 @@ const DESKTOP: Capabilities = {
   library: true,
 };
 
-function tabs() {
+/** The rail's items, top to bottom, by their (visually hidden) labels. */
+function rail() {
   const nav = screen.getByRole("navigation", { name: "Views" });
-  return within(nav).getAllByRole("button").map((tab) => tab.textContent);
+  return within(nav).getAllByRole("button").map((item) => item.textContent);
+}
+
+/** One rail item. */
+function view(name: string) {
+  return within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name });
+}
+
+/** The pages More lists, in order; the list is closed again after. */
+async function morePages() {
+  await userEvent.click(view("More"));
+  const more = screen.getByRole("dialog", { name: "More pages" });
+  const names = within(more).getAllByRole("option").map((row) => row.textContent);
+  await userEvent.keyboard("{Escape}");
+  return names;
+}
+
+/** Opens a page that is not on the rail, through More. */
+async function openPage(name: string) {
+  await userEvent.click(view("More"));
+  const more = screen.getByRole("dialog", { name: "More pages" });
+  await userEvent.click(await within(more).findByRole("option", { name }));
 }
 
 describe("App", () => {
-  beforeEach(() => { api.getCapabilities.mockReset(); });
+  beforeEach(() => {
+    api.getCapabilities.mockReset();
+    api.getProfile.mockReset();
+    api.getProfile.mockRejectedValue(new Error("not mocked"));
+    api.listChats.mockReset().mockResolvedValue([
+      { id: "shell-c9", title: "Trip plans", created: 1, updated: 2 },
+    ]);
+  });
 
-  it("shows every tab on a desktop and hands Settings the report", async () => {
+  it("puts the main pages on the rail and the rest under More on a desktop, and hands Settings the report", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
-    expect(tabs()).toEqual([
-      "Home",
-      "Chat",
+    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "More", "Settings"]);
+    expect(await morePages()).toEqual([
+      "Objectives",
       "History",
-      "Pulse",
       "Imagine",
       "Journal",
       "Automations",
@@ -297,9 +362,13 @@ describe("App", () => {
       "Connectors",
       "Workboard",
       "Devices",
-      "Library",
-      "Settings",
+      "Fleet",
+      "Updates & Drivers",
     ]);
+    // Escape closed More and gave the focus back to it.
+    expect(screen.queryByRole("dialog", { name: "More pages" })).toBeNull();
+    expect(view("More")).toHaveFocus();
+    expect(view("More")).toHaveAttribute("aria-haspopup", "dialog");
     await userEvent.click(screen.getByRole("button", { name: "Library" }));
     expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -310,23 +379,96 @@ describe("App", () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
-    expect(tabs()[0]).toBe("Home");
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(rail()[0]).toBe("Home");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText(/Home page/)).toBeNull();
-    // Objectives has no tab; Home and the palette open it.
-    expect(tabs()).not.toContain("Objectives");
+    // Objectives is not on the rail; Home, More and the palette open it.
+    expect(rail()).not.toContain("Objectives");
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
     expect(await screen.findByText("Home page for the last chat")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Objectives tile" }));
     await userEvent.click(await screen.findByRole("button", { name: "Objectives page" }));
     expect(await screen.findByText("Home page for the last chat")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Home")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("gives a page opened from More a rail slot while it is open, so one item always marks where you are", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await openPage("Workboard");
+    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "Workboard", "More", "Settings"]);
+    expect(view("Workboard")).toHaveAttribute("aria-current", "page");
+    const nav = screen.getByRole("navigation", { name: "Views" });
+    expect(nav.querySelectorAll("[aria-current]")).toHaveLength(1);
+    await userEvent.click(view("Chat"));
+    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "More", "Settings"]);
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
+    expect(nav.querySelectorAll("[aria-current]")).toHaveLength(1);
+  });
+
+  it("moves through the rail with the arrow keys, Home and End", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    view("Home").focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(view("Chat")).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(view("Settings")).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(view("Home")).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(view("Settings")).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(view("Home")).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByText("Home page for the last chat")).toBeVisible();
+  });
+
+  it("the arrow keys reach the avatar, and skip it where the layout hides it", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValue({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    render(<App />);
+    const avatar = await screen.findByRole("button", { name: "Pat, Account settings" });
+    view("Home").focus();
+    await userEvent.keyboard("{End}");
+    expect(avatar).toHaveFocus();
+    // The phone tab bar hides it (styles.css); the wrap goes Settings → Home.
+    avatar.style.display = "none";
+    view("Home").focus();
+    await userEvent.keyboard("{End}");
+    expect(view("Settings")).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(view("Home")).toHaveFocus();
+  });
+
+  it("the top bar's pills open Personality and Privacy & data, and the web app has no personality pill", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getPrivacy.mockResolvedValue({ offlineOnly: false, sent: "0 calls sent off-device this week", sentCalls: 0 } as never);
+    api.getPersonalities.mockResolvedValue({ current: "viper", presets: [{ id: "viper", name: "Viper" }] } as never);
+    const { unmount } = render(<App />);
+    const bar = document.querySelector(".topbar") as HTMLElement;
+    await userEvent.click(await within(bar).findByRole("button", { name: "Personality · Viper" }));
+    expect(await screen.findByText("Settings for a desktop at personality")).toBeInTheDocument();
+    await userEvent.click(within(bar).getByRole("button", { name: "Local · 0 sent" }));
+    expect(await screen.findByText("Settings for a desktop at privacy")).toBeInTheDocument();
+    unmount();
+
+    api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
+    render(<App />);
+    await waitFor(() => expect(api.getCapabilities).toHaveBeenCalledTimes(2));
+    const webBar = document.querySelector(".topbar") as HTMLElement;
+    expect(await within(webBar).findByRole("button", { name: "Local · 0 sent" })).toBeInTheDocument();
+    expect(within(webBar).queryByRole("button", { name: /^Personality/ })).toBeNull();
+    api.getPrivacy.mockImplementation(() => Promise.reject(new Error("not mocked")));
+    api.getPersonalities.mockImplementation(() => Promise.reject(new Error("not mocked")));
   });
 
   it("opens Devices, whose Web access link goes to that Settings section", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Devices" }));
+    await openPage("Devices");
     await userEvent.click(await screen.findByRole("button", { name: "Devices page" }));
     expect(await screen.findByText("Settings for a desktop at webAccess")).toBeInTheDocument();
   });
@@ -334,10 +476,10 @@ describe("App", () => {
   it("Run it here on Devices opens Chat and sends the task", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Devices" }));
+    await openPage("Devices");
     await userEvent.click(await screen.findByRole("button", { name: "Devices run" }));
     expect(await screen.findByText("Sends tidy my downloads")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("puts the saved theme on the page at startup", async () => {
@@ -362,46 +504,84 @@ describe("App", () => {
     }
   });
 
+  it("with no system title bar the top bar drags the window and holds its buttons; macOS and the web app don't", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, windowControls: true });
+    const { container, unmount } = render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    const bar = container.querySelector(".topbar");
+    expect(bar).toHaveAttribute("data-tauri-drag-region", "");
+    expect(bar?.querySelector(".brand-mark")).toHaveAttribute("data-tauri-drag-region", "deep");
+    expect(bar?.querySelector(".topbar-fill")).toHaveAttribute("data-tauri-drag-region", "");
+    const buttons = [...(bar?.querySelectorAll(".window-controls button") ?? [])].map((b) => b.getAttribute("aria-label"));
+    expect(buttons).toEqual(["Minimize", "Maximize", "Close"]);
+    // The buttons themselves never start a drag.
+    expect(bar?.querySelector(".window-controls [data-tauri-drag-region]")).toBeNull();
+    unmount();
+
+    for (const caps of [DESKTOP, { ...api.WEB, windowControls: true }]) {
+      api.getCapabilities.mockResolvedValue(caps);
+      const view = render(<App />);
+      await screen.findByRole("button", { name: "Pulse" });
+      expect(view.container.querySelector(".window-controls")).toBeNull();
+      expect(view.container.querySelector("[data-tauri-drag-region]")).toBeNull();
+      view.unmount();
+    }
+  });
+
   it("hides Pulse on a phone", async () => {
     api.getCapabilities.mockResolvedValue(api.CORE_ONLY);
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(tabs()).toEqual(["Home", "Chat", "History", "Imagine", "Journal", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(rail()).toEqual(["Home", "Chat", "More", "Settings"]);
+    expect(await morePages()).toEqual([
+      "Objectives",
+      "History",
+      "Imagine",
+      "Journal",
+      "Automations",
+      "Agents",
+      "Personal",
+      "Skills",
+      "Connectors",
+      "Workboard",
+      "Updates & Drivers",
+    ]);
   });
 
   it("leaves the Journal and History off the web app and keeps Resume on the desktop", async () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Journal" })).toBeNull());
-    expect(tabs()).toEqual(["Home", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
-    await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
+    await waitFor(() => expect(api.getCapabilities).toHaveBeenCalled());
+    expect(rail()).toEqual(["Home", "Chat", "More", "Settings"]);
+    expect(await morePages()).toEqual(["Objectives", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard"]);
+    await openPage("Workboard");
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
 
   it("Resume on the Workboard sends the resume block once in the card's chat", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
+    await openPage("Workboard");
     await userEvent.click(await screen.findByRole("button", { name: "Resume" }));
     expect(screen.getByText("Chat page: Resume the work card in chat-w1")).toBeVisible();
     expect(screen.getByText("Sends Resume the work card")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("To mission puts the prompt in the mission's chat and opens Chat", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Journal" }));
+    await openPage("Journal");
     await userEvent.click(await screen.findByRole("button", { name: "To mission" }));
     expect(screen.getByText("Chat page: Mission: Q in shell-m1")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("every chat Delete all deleted reaches Chat, not only the last one", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "History" }));
+    await openPage("History");
     await userEvent.click(await screen.findByRole("button", { name: "Delete a chat" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete three chats" }));
     expect(screen.getByText("Deleted shell-c")).toBeInTheDocument();
@@ -413,12 +593,12 @@ describe("App", () => {
   it("a chat picked in History opens in Chat, and a deleted one is passed on", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "History" }));
+    await openPage("History");
     await userEvent.click(await screen.findByRole("button", { name: "Delete a chat" }));
     expect(screen.getByText("Deleted shell-gone")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Open old chat" }));
     expect(screen.getByText("Opened shell-old")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("right-clicking the Chat tab offers Clear chat, which asks first and says it's permanent", async () => {
@@ -453,27 +633,36 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Code" }));
     await userEvent.click(await screen.findByRole("button", { name: "Agent window shows shell-old" }));
-    await userEvent.click(screen.getByRole("button", { name: "History" }));
+    await openPage("History");
     await userEvent.click(await screen.findByRole("button", { name: "Open old chat" }));
-    expect(screen.getByRole("button", { name: "Code" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Code")).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Code page")).toBeVisible();
     expect(screen.queryByText("Opened shell-old")).not.toBeInTheDocument();
     // A delete in History reaches the agent window too.
-    await userEvent.click(screen.getByRole("button", { name: "History" }));
+    await openPage("History");
     await userEvent.click(screen.getByRole("button", { name: "Delete a chat" }));
     expect(screen.getByText("Code heard deleted shell-gone")).toBeInTheDocument();
-    // A session the Chat tab holds is shown there.
-    await userEvent.click(screen.getByRole("button", { name: "Code" }));
-    await userEvent.click(screen.getByRole("button", { name: "That session is in Chat" }));
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a Code project session from History opens in the Editor, not Hangout Chat", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, code: true });
+    api.listChats.mockResolvedValue([
+      { id: "shell-code", title: "Fix the build", created: 1, updated: 2, project: "p1" },
+    ]);
+    render(<App />);
+    await openPage("History");
+    await userEvent.click(await screen.findByRole("button", { name: "Open code session" }));
+    await waitFor(() => expect(view("Code")).toHaveAttribute("aria-current", "page"));
+    expect(await screen.findByText("Code opened shell-code")).toBeVisible();
+    expect(screen.queryByText("Opened shell-code")).not.toBeInTheDocument();
   });
 
   it("Run on a queued job opens Chat in the job's chat and sends its prompt", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
+    await openPage("Agents");
     await userEvent.click(await screen.findByRole("button", { name: "Run queued job" }));
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("Chat page: Summarize the logs in shell-t7")).toBeInTheDocument();
     expect(screen.getByText("Sends Summarize the logs")).toBeInTheDocument();
   });
@@ -483,7 +672,7 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Code" }));
     await userEvent.click(await screen.findByRole("button", { name: "Agent window shows shell-old" }));
-    await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+    await openPage("Agents");
     act(() => {
       for (const handler of chatHandlers) handler({ conversationId: "shell-old", event: { kind: "text", text: "hi" } });
     });
@@ -497,22 +686,22 @@ describe("App", () => {
   it("Agents follows the chat the window last heard from and links back to Chat", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
+    await openPage("Agents");
     expect(await screen.findByRole("button", { name: "Agents for no chat" })).toBeVisible();
     act(() => {
       for (const handler of chatHandlers) handler({ conversationId: "shell-c7", event: { kind: "text", text: "hi" } });
     });
     await userEvent.click(screen.getByRole("button", { name: "Agents for shell-c7" }));
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("Work puts the card's prompt in the chat box and opens Chat", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Workboard" }));
+    await openPage("Workboard");
     await userEvent.click(await screen.findByRole("button", { name: "Work" }));
     expect(screen.getByText("Chat page: Work on this workboard card: Ship it in this chat")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("falls back to the core features when the report fails", async () => {
@@ -538,6 +727,37 @@ describe("App", () => {
     expect(await screen.findByText("Settings for a desktop at localAi")).toBeVisible();
   });
 
+  it("a Pulse model card's Open in Settings lands on Local AI at that model", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open in Settings" }));
+    expect(
+      await screen.findByText("Settings for a desktop at localAi on gemma-4-31b-it-abliterated-q4_k"),
+    ).toBeVisible();
+  });
+
+  it("without local AI, Pulse gets no Open in Settings", async () => {
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, localAi: false });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
+    expect(await screen.findByText("Pulse page")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open in Settings" })).toBeNull();
+  });
+
+  it("Ctrl+K over the More list swaps it for the full palette, and again closes it", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(view("More"));
+    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("dialog", { name: "More pages" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("the Command button opens it too, and Ask Loadout fills the chat box", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
@@ -546,16 +766,16 @@ describe("App", () => {
     await userEvent.keyboard("tidy the board");
     await userEvent.click(screen.getByRole("option", { name: "Ask Loadout: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("a skill's Use puts its trigger in the chat box and opens Chat", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Skills" }));
+    await openPage("Skills");
     await userEvent.click(await screen.findByRole("button", { name: "Use" }));
     expect(screen.getByText("Chat page: deploy the site in this chat")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("the chat's sign-in opens Settings at Account", async () => {
@@ -566,13 +786,51 @@ describe("App", () => {
     expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
   });
 
+  it("shows your name and picture at the rail's foot, which opens Settings at Account", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValue({
+      name: "Pat",
+      shownName: "Pat",
+      initial: "P",
+      picture: "data:image/png;base64,iVBORw0KGgo=",
+    });
+    render(<App />);
+    const avatar = await screen.findByRole("button", { name: "Pat, Account settings" });
+    expect(avatar).toHaveAttribute("title", "Pat");
+    expect(avatar.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
+    await userEvent.click(avatar);
+    expect(await screen.findByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("the web app shows the avatar as a picture only: its Settings has no Account page", async () => {
+    api.getCapabilities.mockResolvedValue(api.WEB);
+    api.getProfile.mockResolvedValue({ name: "Pat", shownName: "Pat", initial: "P", picture: null });
+    render(<App />);
+    expect(await screen.findByRole("img", { name: "Pat" })).toHaveTextContent("P");
+    expect(screen.queryByRole("button", { name: /Account settings$/ })).toBeNull();
+  });
+
+  it("shows your initial when there is no picture, and nothing when the profile can't be read", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    api.getProfile.mockResolvedValueOnce({ name: "", shownName: "You", initial: "Y", picture: null });
+    const { unmount } = render(<App />);
+    const avatar = await screen.findByRole("button", { name: "You, Account settings" });
+    expect(avatar).toHaveTextContent("Y");
+    expect(avatar.querySelector("img")).toBeNull();
+    unmount();
+    api.getProfile.mockRejectedValue(new Error("not mocked"));
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    expect(screen.queryByRole("button", { name: /Account settings$/ })).toBeNull();
+  });
+
   it("Ctrl+N starts a new chat from any page", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Personal" }));
+    await openPage("Personal");
     await userEvent.keyboard("{Control>}n{/Control}");
     expect(screen.getByText("Chat page: in shell-new")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("Ctrl+, opens Settings and Ctrl+/ toggles the shortcut sheet", async () => {
@@ -670,7 +928,7 @@ describe("App", () => {
     );
     expect(within(dock).queryByRole("button", { name: "Open card" })).toBeNull();
     await userEvent.click(within(dock).getByRole("button", { name: "Review" }));
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
 
   it("a dock item whose chat works a card opens that card on the Workboard", async () => {
@@ -686,7 +944,7 @@ describe("App", () => {
     await userEvent.click(within(dock).getByRole("button", { name: /Activity/ }));
     await userEvent.click(within(dock).getByRole("button", { name: "Open card" }));
     expect(await screen.findByText("Workboard page at w1")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Workboard" })).toHaveAttribute("aria-pressed", "true");
+    expect(view("Workboard")).toHaveAttribute("aria-current", "page");
   });
 
   it("streamed reply text doesn't re-render the app per chunk", async () => {
@@ -739,6 +997,7 @@ describe("App", () => {
       api.recordStatus.mockResolvedValue({
         recording: { secs: 42, text: "● Recording 0:42 of 2:00" },
         listening: null,
+        diagnosing: null,
         events: [],
       });
       const live = render(<App />);
@@ -747,7 +1006,7 @@ describe("App", () => {
       expect(live.container.querySelector(".app")).not.toHaveClass("bar-away");
       expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     } finally {
-      api.recordStatus.mockResolvedValue({ recording: null, listening: null, events: [] });
+      api.recordStatus.mockResolvedValue({ recording: null, listening: null, diagnosing: null, events: [] });
       vi.unstubAllGlobals();
     }
   });
@@ -794,7 +1053,7 @@ describe("App", () => {
     it("Ctrl+Alt+H halts from any page, button shown or not", async () => {
       api.getCapabilities.mockResolvedValue(DESKTOP);
       render(<App />);
-      await userEvent.click(await screen.findByRole("button", { name: "Personal" }));
+      await openPage("Personal");
       await userEvent.keyboard("{Control>}{Alt>}h{/Alt}{/Control}");
       expect(api.haltDesktop).toHaveBeenCalledTimes(1);
       expect(await screen.findByText(HALT_DONE)).toBeInTheDocument();
@@ -854,6 +1113,17 @@ describe("App", () => {
     expect(within(dock).getByRole("listitem", { name: "summarize my inbox" })).toHaveTextContent(
       "3 new mails.",
     );
+  });
+
+  it("puts a game companion ping in the bell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    gameNotices.length = 0;
+    render(<App />);
+    await waitFor(() => expect(gameNotices.length).toBe(1));
+    act(() => gameNotices[0]("Back to Hades · What changed since you last played: Patch 1.1."));
+    await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 new" }));
+    const menu = screen.getByRole("region", { name: "Notifications" });
+    expect(menu).toHaveTextContent("Back to Hades · What changed since you last played: Patch 1.1.");
   });
 
   it("puts a scheduled run's result in the bell, not the chat, with a follow-up", async () => {
@@ -965,7 +1235,7 @@ describe("App", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       render(<App />);
-      await userEvent.click(await screen.findByRole("button", { name: "Personal" }));
+      await openPage("Personal");
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent("This page hit a snag: Corrupt vector index");
       expect(screen.getByRole("navigation", { name: "Views" })).toBeVisible();

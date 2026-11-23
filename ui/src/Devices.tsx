@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import {
   forgetAllDevices,
   getDevices,
+  getHubJoin,
   getShare,
+  joinHub,
+  leaveHub,
   newShareCode,
   startShare,
   stopShare,
   type Devices as Shape,
+  type HubJoin,
   type PairedBrowser,
   type Share,
 } from "./api";
@@ -28,6 +32,96 @@ export const SHARE_OFF = "Not sharing. Start share to pair another computer.";
 export const PAIR_STEP = "Open this address on the other computer and enter the code.";
 export const PAIRED_NOTE = "Paired. Make a new code after another computer joins.";
 export const CODE_GONE = "That code stopped working. Make a new one.";
+export const JOIN_NOTE =
+  "Join another computer's share to show this one on its Fleet page. Only this computer's CPU, memory and app version are sent, once a minute, on your network.";
+export const JOIN_OFF = "Not joined. Type the address and code the other computer shows under Sharing.";
+
+/** "Sending to Desk (192.168.1.20:18766)" and how the last send went. */
+export function joinLine(join: HubJoin, now: number): string {
+  if (!join.joined) return JOIN_OFF;
+  const to = `Sending to ${join.joined.hubName} (${join.joined.address})`;
+  if (join.lastError) return `${to}. ${join.lastError}`;
+  if (join.lastSentAt !== null) return `${to}. Last sent ${ago(join.lastSentAt, now)}.`;
+  return `${to}.`;
+}
+
+/** Devices → Join another computer: pair with its share and send this computer's card. */
+export function JoinCard() {
+  const [join, setJoin] = useState<HubJoin | null>(null);
+  const [address, setAddress] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const { note, fail, clear } = useNote();
+
+  useEffect(() => {
+    function read() {
+      getHubJoin().then((next) => {
+        setJoin(next);
+        setNow(Date.now());
+        clear();
+      }, fail);
+    }
+    read();
+    const timer = window.setInterval(read, REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [fail, clear]);
+
+  async function step(run: () => Promise<HubJoin>) {
+    setBusy(true);
+    try {
+      setJoin(await run());
+      setNow(Date.now());
+      setCode("");
+      clear();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card device" aria-label="Join">
+      <div className="card-title">Joined computer</div>
+      <div className="card-status">{join === null ? "Checking…" : joinLine(join, now)}</div>
+      {join !== null && !join.joined && (
+        <>
+          <input
+            aria-label="Other computer's address"
+            placeholder="http://192.168.1.20:18766"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+          />
+          <input
+            aria-label="Other computer's code"
+            placeholder="Code"
+            autoComplete="off"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+        </>
+      )}
+      <StatusLine note={note} />
+      <div className="card-buttons">
+        {join?.joined ? (
+          <button type="button" className="quiet" disabled={busy} onClick={() => void step(leaveHub)}>
+            Leave
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={busy || join === null || !address.trim() || !code.trim()}
+            onClick={() => void step(() => joinHub(address, code))}
+          >
+            {busy ? "Joining…" : "Join"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export const RUN_NOTE =
   "Opens a chat with this task, so it runs on this PC with the same approvals as anything else you ask.";
 
@@ -180,6 +274,9 @@ export function Devices({
           ))}
         </ul>
       )}
+      <h2>Join another computer</h2>
+      <p className="note">{JOIN_NOTE}</p>
+      <JoinCard />
       <h2>Run a task on this PC</h2>
       <p className="note">{RUN_NOTE}</p>
       <textarea

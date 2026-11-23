@@ -129,6 +129,9 @@ pub struct PermissionAsk {
     /// The agent's own "reject once" option, if it offered one. Deny selects it so
     /// the agent hears a refusal; `cancelled` means the turn was stopped.
     pub reject_option: Option<String>,
+    /// A hard stop (a delete, a force push, the app's own config): it can
+    /// only be allowed on this computer, never from a paired chat.
+    pub hard: bool,
 }
 
 /// Grok Build 1.0.17 `x.ai/mcp/elicit` — MCP tool needs a form or URL from you.
@@ -180,6 +183,12 @@ pub enum AcpEvent {
     Plan(String),
     /// A findings card body (`grokhub_core::findings`), shown after the reply.
     Findings(String),
+    /// A panel spec (`grokhub_core::panel_spec`), checked and whole, from the
+    /// `show_panel` call `id`.
+    Panel {
+        id: String,
+        spec: Value,
+    },
     Permission(PermissionAsk),
     Elicit(ElicitAsk),
     ElicitComplete {
@@ -1022,6 +1031,7 @@ pub fn parse_permission(id: Value, params: &Value) -> PermissionAsk {
         action,
         reason,
         reject_option: permission_option(params, "reject_once"),
+        hard: false,
     }
 }
 
@@ -2355,7 +2365,7 @@ mod tests {
 
     #[test]
     fn an_offline_only_refusal_is_final_and_keeps_its_words() {
-        let msg = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → AI models to use this.";
+        let msg = "Offline only is on, so Loadout can't reach the internet. Turn it off in Settings → Privacy & data to use this.";
         let no_local = format!("Offline, local model unavailable: runtime missing. {msg}");
         assert_eq!(classify_stream_error(&no_local), StreamErrorKind::Fatal);
         assert_eq!(rewrite_truncation_error(&no_local), no_local);

@@ -23,6 +23,17 @@ describe("Delete message", () => {
     expect(withoutCut(log, cut!).map((item) => item.text)).toEqual(["Welcome back.", "hi", "", " hi ", "Again."]);
   });
 
+  it("a reply's thoughts go with it", () => {
+    const thought = [
+      { kind: "user", text: "snap it" },
+      { kind: "thought", text: "Need a snapshot." },
+      { kind: "assistant", text: "Done." },
+    ];
+    const cut = cutFor(thought, 2, 0);
+    expect(cut).toEqual({ from: 1, to: 3, reply: true, text: "snap it", later: 0 });
+    expect(withoutCut(thought, cut!).map((item) => item.text)).toEqual(["snap it"]);
+  });
+
   it("a reply before any ask has none, unless its ask is still above Show earlier", () => {
     expect(cutFor(log, 0, 0)).toEqual({ from: 0, to: 1, reply: true, text: null, later: 0 });
     expect(cutFor(log, 0, 4)).toBeNull();

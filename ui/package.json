@@ -13,7 +13,9 @@
     "test": "vitest run",
     "tauri": "tauri",
     "smoke": "node e2e/smoke.mjs",
-    "web": "node e2e/web.mjs"
+    "web": "node e2e/web.mjs",
+    "shots": "node e2e/shots.mjs",
+    "colorshare": "node e2e/colorshare.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

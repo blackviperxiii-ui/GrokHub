@@ -573,7 +573,7 @@ fn auth_scheme(value: &str) -> Option<(AuthReach, usize)> {
 /// `Authorization` header's value is a scheme and then the credential
 /// (`Basic dXNlcjpwYXNz`), so the scheme does not stand in for the value:
 /// both are masked ([`AuthReach`]).
-fn redact_credential_values(input: &str) -> String {
+pub(crate) fn redact_credential_values(input: &str) -> String {
     let b = input.as_bytes();
     let mut out = String::with_capacity(input.len());
     let mut i = 0;

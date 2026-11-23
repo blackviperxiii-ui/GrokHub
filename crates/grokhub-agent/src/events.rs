@@ -44,8 +44,9 @@ pub struct NativeEngine {
     context_length: u64,
     /// The main engine clears a previous Halt. A `/bg` engine does not.
     reopen_tasks: bool,
-    /// Imagine and web_fetch bearer. Empty means those tools do not dial.
-    imagine_bearer: String,
+    /// Where Imagine's bearer comes from. `None` leaves Imagine unset;
+    /// web_fetch never uses it.
+    imagine: Option<Arc<dyn crate::ImagineSource>>,
     /// Who started the next prompt (Spike-4c): egress lines carry it.
     origin: crate::harness::Origin,
     /// Spike-3b: the cabin's open desktop episode for the next prompt.
@@ -117,7 +118,7 @@ impl NativeEngine {
             usage: Usage::default(),
             context_length,
             reopen_tasks: true,
-            imagine_bearer: String::new(),
+            imagine: None,
             origin: crate::harness::current_origin(),
             episode_seed: None,
             episode: None,
@@ -167,9 +168,11 @@ impl NativeEngine {
         self.origin = origin;
     }
 
-    /// Credential for `web_fetch` and Imagine. Empty refuses those tools without a dial.
-    pub fn set_imagine_bearer(&mut self, bearer: &str) {
-        self.imagine_bearer = bearer.trim().to_string();
+    /// Where Imagine's bearer comes from. `None` leaves Imagine unset, so a
+    /// picture falls back to the on-device model or asks to sign in. The
+    /// bearer is read on a turn's first media call, never before.
+    pub fn set_imagine(&mut self, source: Option<Arc<dyn crate::ImagineSource>>) {
+        self.imagine = source;
     }
 
     pub fn set_route(
@@ -498,7 +501,7 @@ impl NativeEngine {
         if let Some(seed) = self
             .episode_seed
             .clone()
-            .filter(|_| self.gate.desktop && self.desktop.is_some())
+            .filter(|_| runs_as_episode(self.gate.desktop && self.desktop.is_some(), text))
         {
             return self.prompt_episode(text, &seed, emit);
         }
@@ -554,14 +557,16 @@ impl NativeEngine {
         let before_usage = self.usage.clone();
         // Breaks after this mark belong to this prompt: a cache drop names one.
         let break_mark = crate::prefix_guard::break_mark();
-        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _network = crate::tools::install_network(self.imagine.as_ref(), &self.conversation_id);
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
+        let mut shown = crate::held::Shown::new(&session);
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {
             LoopEvent::Meter { used, limit } => {
                 meter_used = used;
                 meter_limit = limit;
+                shown.end_step();
             }
             LoopEvent::Compact {
                 started,
@@ -589,19 +594,32 @@ impl NativeEngine {
                 ));
             }
             other => {
-                if let Some(acp) = to_acp(other, kind, &session, meter_used, meter_limit) {
-                    emit(acp);
+                for ev in shown.pass(other) {
+                    if let Some(acp) = to_acp(ev, kind, &session, meter_used, meter_limit) {
+                        emit(acp);
+                    }
                 }
             }
         });
+        for ev in shown.finish() {
+            if let Some(acp) = to_acp(ev, kind, &session, meter_used, meter_limit) {
+                emit(acp);
+            }
+        }
         self.usage = out.usage.clone();
         let delta = self.usage.saturating_delta(&before_usage);
         if out.compacted {
-            let _ = crate::session::record_compaction(
+            let kept = out
+                .turn
+                .unwrap_or(crate::run::TurnKept { from: 0, folded: 0 });
+            let own = self.history.len().saturating_sub(kept.from);
+            let _ = crate::session::record_compacted_turn(
                 &session,
                 &cwd,
                 &model,
                 &self.history,
+                (own, kept.folded),
+                &shown.thoughts,
                 &delta,
                 meter,
             );
@@ -610,8 +628,16 @@ impl NativeEngine {
             if let Some(sent) = &tidied {
                 crate::route::cleanup::restore_typed(&mut fresh, sent, typed);
             }
-            let _ =
-                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, typed);
+            let _ = crate::session::record_turn_with(
+                &session,
+                &cwd,
+                &model,
+                &fresh,
+                &shown.thoughts,
+                &delta,
+                meter,
+                typed,
+            );
         }
         let stop = match out.stop {
             StopReason::EndTurn => "end_turn".to_string(),
@@ -689,7 +715,7 @@ impl NativeEngine {
         // ports and the turn's origin, and its gate the workspace policy.
         let policy = crate::perm::Policy::load(&self.workspace);
         crate::mcp::set_workspace(&self.workspace);
-        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _network = crate::tools::install_network(self.imagine.as_ref(), &self.conversation_id);
         let _origin = crate::harness::OriginScope::enter(self.origin);
         let parks = FileParks(&seed.config_dir);
         let clock = grokhub_core::now_ms;
@@ -720,6 +746,9 @@ impl NativeEngine {
             self.usage.clone(),
         );
         let limit = self.context_length;
+        // Values held for the chat leave text, thoughts and tool cards here
+        // too, and the thoughts are kept for the save, as in `prompt`.
+        let mut shown = crate::held::Shown::new(&session);
         let out = crate::episode::run_episode(&k, ep, view, &mut |ev| {
             let ev = match ev {
                 LoopEvent::Usage(u) => {
@@ -729,10 +758,17 @@ impl NativeEngine {
                 }
                 other => other,
             };
+            for ev in shown.pass(ev) {
+                if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                    emit(acp);
+                }
+            }
+        });
+        for ev in shown.finish() {
             if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
                 emit(acp);
             }
-        });
+        }
         self.usage.add(&out.usage);
         let turn = vec![
             InputItem::Message {
@@ -745,11 +781,12 @@ impl NativeEngine {
             },
         ];
         let cwd = self.workspace.display().to_string();
-        let _ = crate::session::record_turn(
+        let _ = crate::session::record_turn_with(
             &session,
             &cwd,
             &self.model,
             &turn,
+            &shown.thoughts,
             &out.usage,
             kind.meter(),
             text,
@@ -857,10 +894,14 @@ impl NativeEngine {
         }
         let (kind, limit) = (self.auth_kind, self.context_length);
         let reply = pick.reply(&crate::tools::fence::display_text(&output.text));
+        // Values held for the chat leave the tool card and the reply.
+        let mut shown = crate::held::Shown::new(&session);
         {
             let mut on_event = |ev: LoopEvent| {
-                if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
-                    emit(acp);
+                for ev in shown.pass(ev) {
+                    if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                        emit(acp);
+                    }
                 }
             };
             let id = call.call_id.clone();
@@ -880,8 +921,13 @@ impl NativeEngine {
                 &output.text,
                 output.image_data_url.clone(),
             );
+            on_event(LoopEvent::Text(reply.clone()));
         }
-        emit(AcpEvent::Text(reply.clone()));
+        for ev in shown.finish() {
+            if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                emit(acp);
+            }
+        }
         // The next model turn sees the ask, the call, its output and the reply,
         // paired by call id like any tool turn.
         let before = self.history.len();
@@ -1020,10 +1066,14 @@ impl NativeEngine {
 
     /// `/flush` is not a model call and is not stored as a user turn.
     fn flush_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
-        let status = match crate::memory::flush_pending(&self.workspace, &self.history) {
-            Ok(true) => "Flushed memory".to_string(),
-            Ok(false) => "Nothing to flush".to_string(),
-            Err(err) => format!("Flush failed: {err}"),
+        let status = if crate::scratch::is_scratch(&self.conversation_id) {
+            crate::scratch::NO_WRITES.to_string()
+        } else {
+            match crate::memory::flush_pending(&self.workspace, &self.history) {
+                Ok(true) => "Flushed memory".to_string(),
+                Ok(false) => "Nothing to flush".to_string(),
+                Err(err) => format!("Flush failed: {err}"),
+            }
         };
         crate::memory::queue_memory_status(status);
         emit(AcpEvent::Done {
@@ -1035,6 +1085,13 @@ impl NativeEngine {
     /// `/dream` is one low-effort call on the session client. A failure leaves
     /// MEMORY.md as it was. The command is not stored as a user turn.
     fn dream_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+        if crate::scratch::is_scratch(&self.conversation_id) {
+            crate::memory::queue_memory_status(crate::scratch::NO_WRITES.to_string());
+            emit(AcpEvent::Done {
+                stop_reason: "end_turn".into(),
+            });
+            return Ok(());
+        }
         let mut spent = Usage::default();
         let status = match crate::memory::dream(
             self.client.as_ref(),
@@ -1097,11 +1154,13 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
         LoopEvent::Task { id, title, done } => AcpEvent::Task { id, title, done },
         LoopEvent::Plan(text) => AcpEvent::Plan(text),
         LoopEvent::Findings(body) => AcpEvent::Findings(body),
+        LoopEvent::Panel { id, spec } => AcpEvent::Panel { id, spec },
         LoopEvent::Permission {
             id,
             name,
             action,
             reason,
+            hard,
         } => AcpEvent::Permission(PermissionAsk {
             rpc_id: serde_json::Value::String(id.clone()),
             session_id: session.to_string(),
@@ -1110,6 +1169,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             action,
             reason,
             reject_option: Some("denied".into()),
+            hard,
         }),
         LoopEvent::Elicit(view) => AcpEvent::Elicit(ElicitAsk {
             rpc_id: serde_json::Value::String(view.id.clone()),
@@ -1185,6 +1245,12 @@ where
     fn halted(&self) -> bool {
         (self.read)().is_some_and(|ms| grokhub_core::stamp_halts(ms, self.started_ms))
     }
+}
+
+/// A turn with desktop control on runs as an episode, except a
+/// `/deep-research` line: that is a research turn of its own.
+pub(crate) fn runs_as_episode(desktop_on: bool, text: &str) -> bool {
+    desktop_on && !crate::research::is_command(text)
 }
 
 #[cfg(test)]
@@ -1418,6 +1484,17 @@ mod tests {
         assert!(events
             .iter()
             .any(|ev| matches!(ev, AcpEvent::Text(t) if t == "hello")));
+        let saved = crate::session::shown_pairs(&crate::session::load_session("c").unwrap());
+        let said = |role: &str, text: &str| (role.to_string(), text.to_string());
+        assert_eq!(
+            saved,
+            vec![
+                said("user", "hi"),
+                said("thought", "think"),
+                said("assistant", "hello")
+            ],
+            "the thought is saved above the reply"
+        );
         assert!(events.iter().any(|ev| matches!(
             ev,
             AcpEvent::Usage(u) if u.meter == "SuperGrok pool" && u.input_tokens == 3 && u.cost_in_usd_ticks == 9
@@ -1676,6 +1753,39 @@ mod tests {
         }
     }
 
+    /// Says hello and notes whether the turn has an Imagine port.
+    struct SeesImagine(Mutex<Vec<bool>>);
+    impl ModelClient for SeesImagine {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            let has = crate::tools::ports::current().imagine.is_some();
+            self.0.lock().unwrap().push(has);
+            Speak.stream(req, cancel, sink)
+        }
+    }
+
+    #[test]
+    fn a_turn_gets_the_imagine_source_but_reads_no_sign_in_until_it_draws() {
+        let dir = crate::harness::test_dir("eng-imagine-lazy");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let client = Arc::new(SeesImagine(Mutex::new(Vec::new())));
+        let mut eng = engine(&dir, "imagine-lazy-1", client.clone());
+        eng.prompt("hello there", None, &mut |_| {}).unwrap();
+        let src = Arc::new(crate::tools::media::tests::FakeSource::signed_in());
+        eng.set_imagine(Some(src.clone()));
+        eng.prompt("hello again", None, &mut |_| {}).unwrap();
+        assert_eq!(*client.0.lock().unwrap(), [false, true]);
+        assert!(
+            src.calls().is_empty(),
+            "no sign-in is read or refreshed for a turn with no picture: {:?}",
+            src.calls()
+        );
+    }
+
     #[test]
     fn a_banned_ask_is_never_sent_sorted_or_stored() {
         let dir = crate::harness::test_dir("eng-adult");
@@ -1738,6 +1848,62 @@ mod tests {
             None,
             "the turn after a compaction starts fresh"
         );
+    }
+
+    /// An instant answer (no model call) shows and saves nothing held for
+    /// the chat: not in its tool card, its reply, or the saved call output.
+    #[test]
+    fn an_instant_answer_redacts_values_held_for_the_chat() {
+        let dir = std::env::temp_dir().join(format!("gh-eng-instant-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        // The config folder the tools read (GROKHUB_CONFIG wins over the pin).
+        let skill = crate::perm::config_dir().join("skills/dock");
+        std::fs::create_dir_all(&skill).unwrap();
+        // A value the user held: skills refuse key-shaped text, so a code word.
+        let token = "bluefin-harbor-4471";
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!(
+                "---\nname: dock\ndescription: Signs in with {token}\n---\nUse the dock key.\n"
+            ),
+        )
+        .unwrap();
+        let id = "native-instant-held";
+        crate::held::hold_secret(id, token);
+        let model = Arc::new(Summarize {
+            calls: AtomicUsize::new(0),
+            fail: true,
+        });
+        let mut engine = engine(&dir, id, model.clone());
+        let events = Mutex::new(Vec::new());
+        engine
+            .prompt("list my skills", None, &mut |ev| {
+                events.lock().unwrap().push(ev)
+            })
+            .unwrap();
+        let events = events.into_inner().unwrap();
+        assert_eq!(
+            model.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "answered with no model call"
+        );
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Tool(card) if card.kind == "skill_list" && card.detail.contains("dock: Signs in with [redacted]")
+        )));
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Text(text) if text.contains("dock: Signs in with [redacted]")
+        )));
+        assert!(!format!("{events:?}").contains(token), "{events:?}");
+        let file = std::fs::read_to_string(crate::session::session_file(id).unwrap()).unwrap();
+        assert!(file.contains("[redacted]"), "{file}");
+        assert!(!file.contains(token), "{file}");
+        let _ = std::fs::remove_dir_all(&skill);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn engine(

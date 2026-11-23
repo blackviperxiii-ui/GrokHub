@@ -18,7 +18,9 @@ use grokhub_core::mods::install::{
     self as engine, Installer, Layout, Manifest, ModInfo, Plan, Removal,
 };
 use grokhub_core::mods::rail::{installed_mods, ModGame};
-use grokhub_core::mods::{archive, managers, Download, Entry, ModFile, Request, Source};
+use grokhub_core::mods::{
+    archive, managers, Download, Entry, ModFile, ModSummary, Request, Source,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -26,6 +28,10 @@ use crate::{capabilities, mods, ShellState};
 
 /// Progress lines for the one install at a time ("Downloading x.zip…").
 pub const JOB_EVENT: &str = "mods://job";
+
+/// The page now waits for a browser download, so the drawer and the chat's
+/// Install card both offer "I downloaded it".
+pub const PICKUP_EVENT: &str = "mods://pickup";
 
 /// How many files the drawer lists, newest first as the source sends them.
 pub const FILES_SHOWN: usize = 6;
@@ -141,10 +147,19 @@ impl Sheet {
 /// A browser download the page waits to find in Downloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pickup {
+    /// The game it is for: a Nexus or Thunderstore id means a different
+    /// mod in another game.
+    pub game: String,
     pub key: String,
     pub file_name: String,
     pub size: u64,
     pub since: SystemTime,
+}
+
+impl Pickup {
+    pub fn is_for(&self, game: &str, key: &str) -> bool {
+        self.game == game && self.key == key
+    }
 }
 
 #[derive(Default)]
@@ -156,6 +171,10 @@ struct Work {
     next: u64,
     pickup: Option<Pickup>,
     recovered: bool,
+    /// The mod the chat asked to set up, waiting on the Mods page, by its
+    /// ask number. One at a time: a newer ask replaces it.
+    requested: Option<(u64, Requested)>,
+    asks: u64,
 }
 
 fn work() -> std::sync::MutexGuard<'static, Work> {
@@ -163,6 +182,46 @@ fn work() -> std::sync::MutexGuard<'static, Work> {
     WORK.get_or_init(Default::default)
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A mod the chat asked to set up. Nothing is fetched or written for it:
+/// the Mods page shows an Install card, and the user's click there starts
+/// the same plan and sheet as the drawer's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Requested {
+    pub game: ModGame,
+    pub source: Source,
+    pub m: ModSummary,
+    pub f: ModFile,
+}
+
+impl Requested {
+    pub fn key(&self) -> String {
+        mod_key(self.source, &self.m.id)
+    }
+}
+
+/// Put the chat's ask on the Mods page, in place of any earlier one.
+/// Returns its number, which Dismiss names.
+pub fn request(r: Requested) -> u64 {
+    let mut w = work();
+    w.asks += 1;
+    let n = w.asks;
+    w.requested = Some((n, r));
+    n
+}
+
+pub fn requested() -> Option<(u64, Requested)> {
+    work().requested.clone()
+}
+
+/// Dismiss: only the ask the page showed, never a newer one, even for the
+/// same mod.
+pub fn drop_request(ask: u64) {
+    let mut w = work();
+    if w.requested.as_ref().is_some_and(|(n, _)| *n == ask) {
+        w.requested = None;
+    }
 }
 
 /// The mod's key in the records: `source:id`.
@@ -305,7 +364,7 @@ fn app_data() -> (Option<PathBuf>, Option<PathBuf>) {
 }
 
 /// The game's own folder on this PC.
-fn game_dir(game: &ModGame, steam_root: Option<&Path>) -> Option<PathBuf> {
+pub fn game_dir(game: &ModGame, steam_root: Option<&Path>) -> Option<PathBuf> {
     let entry = game.entry;
     match (entry.steam_app_id, steam_root) {
         (Some(id), Some(root)) => grokhub_core::steam::install_dir(root, id),
@@ -493,7 +552,7 @@ pub struct DrawerView {
 /// The drawer's rows from the source's files and what is installed.
 pub fn drawer_rows(
     files: &[ModFile],
-    key: &str,
+    (game, key): (&str, &str),
     installed: &[Manifest],
     blocked: bool,
     pickup: Option<&Pickup>,
@@ -510,7 +569,7 @@ pub fn drawer_rows(
             },
             line: file_line(f),
             offer: offer(f, key, installed, blocked),
-            waiting: pickup.is_some_and(|p| p.key == key && p.file_name == f.file_name),
+            waiting: pickup.is_some_and(|p| p.is_for(game, key) && p.file_name == f.file_name),
         })
         .collect();
     let needs = files
@@ -520,6 +579,69 @@ pub fn drawer_rows(
         .map(|f| f.deps.clone())
         .unwrap_or_default();
     (rows, needs)
+}
+
+/// The chat's ask as the Mods page's Install card shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestedView {
+    /// The ask's number: Dismiss drops this ask and no newer one.
+    pub ask: u64,
+    pub key: String,
+    pub game: String,
+    pub source: &'static str,
+    pub source_label: &'static str,
+    /// "Install Sodium for Minecraft?"
+    pub title: String,
+    /// "sodium-0.6.0.jar · 0.6.0 · 1.0 MB · from Modrinth · asked for in chat"
+    pub line: String,
+    /// The game's risk line, as the drawer's game header gives it.
+    pub risk: String,
+    /// Why the app won't install for this game.
+    pub blocked: Option<String>,
+    #[serde(rename = "mod")]
+    pub m: mods::ModRow,
+    pub file: FileRow,
+}
+
+/// The card for the chat's ask, given what is installed and why the game
+/// can't be written, if it can't.
+pub fn requested_view(
+    (ask, r): (u64, &Requested),
+    installed: &[Manifest],
+    blocked: Option<String>,
+    pickup: Option<&Pickup>,
+) -> RequestedView {
+    let key = r.key();
+    let (mut rows, _) = drawer_rows(
+        std::slice::from_ref(&r.f),
+        (r.game.entry.id, &key),
+        installed,
+        blocked.is_some(),
+        pickup,
+    );
+    let line = [r.f.file_name.clone(), file_line(&r.f)]
+        .into_iter()
+        .chain([
+            format!("from {}", r.source.label()),
+            "asked for in chat".to_string(),
+        ])
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    RequestedView {
+        ask,
+        game: r.game.entry.id.to_string(),
+        source: r.source.id(),
+        source_label: r.source.label(),
+        title: format!("Install {} for {}?", r.m.name, r.game.entry.name),
+        line,
+        risk: r.game.entry.risk.to_string(),
+        blocked,
+        m: mods::mod_row(&r.m),
+        file: rows.remove(0),
+        key,
+    }
 }
 
 // ------------------------------------------------------------ the plan
@@ -788,6 +910,27 @@ fn file_of(
         .ok_or_else(|| "That file isn't on the mod's list any more.".into())
 }
 
+/// Take the one-job flag for this mod's plan. Starting it answers the
+/// chat's ask for the same mod in the same game, so its card goes.
+pub fn begin_plan(game: &str, key: &str) -> Result<(), String> {
+    let mut w = work();
+    if w.busy {
+        return Err("Another install is getting ready. Wait for it first.".into());
+    }
+    w.busy = true;
+    if w.requested
+        .as_ref()
+        .is_some_and(|(_, r)| r.game.entry.id == game && r.key() == key)
+    {
+        w.requested = None;
+    }
+    Ok(())
+}
+
+pub fn end_plan() {
+    work().busy = false;
+}
+
 /// Plan an install with the busy flag held; frees staging on failure.
 fn plan_job(
     app: &AppHandle,
@@ -798,13 +941,7 @@ fn plan_job(
     f: &ModFile,
     from: Option<PathBuf>,
 ) -> Result<SheetView, String> {
-    {
-        let mut w = work();
-        if w.busy {
-            return Err("Another install is getting ready. Wait for it first.".into());
-        }
-        w.busy = true;
-    }
+    begin_plan(game.entry.id, &mod_key(source, mod_ref.0))?;
     let say = |line: String| {
         let _ = app.emit(JOB_EVENT, line);
     };
@@ -844,7 +981,7 @@ fn plan_job(
         )
     };
     let out = run();
-    work().busy = false;
+    end_plan();
     match out {
         Ok(sheet) => Ok(park(sheet)),
         Err(e) => {
@@ -899,8 +1036,13 @@ pub(crate) async fn mods_files(
         let key = mod_key(src, &id);
         let installed = engine::installed(&dir, Some(&game));
         let pickup = work().pickup.clone();
-        let (rows, needs) =
-            drawer_rows(&files, &key, &installed, blocked.is_some(), pickup.as_ref());
+        let (rows, needs) = drawer_rows(
+            &files,
+            (&game, &key),
+            &installed,
+            blocked.is_some(),
+            pickup.as_ref(),
+        );
         Ok(DrawerView {
             files: rows,
             blocked,
@@ -941,6 +1083,7 @@ pub(crate) async fn mods_plan_install(
 /// it from Downloads. Opening the page is the page's own link.
 #[tauri::command]
 pub(crate) async fn mods_wait_for_browser(
+    app: AppHandle,
     state: State<'_, ShellState>,
     game: String,
     source: String,
@@ -953,11 +1096,13 @@ pub(crate) async fn mods_wait_for_browser(
         let src = source_of(&source)?;
         let f = file_of(&dir, &game, src, &id, &file)?;
         work().pickup = Some(Pickup {
+            game,
             key: mod_key(src, &id),
             file_name: f.file_name,
             size: f.size,
             since: SystemTime::now() - std::time::Duration::from_secs(5),
         });
+        let _ = app.emit(PICKUP_EVENT, ());
         Ok(())
     })
     .await
@@ -984,7 +1129,7 @@ pub(crate) async fn mods_pickup_download(
         let p = work()
             .pickup
             .clone()
-            .filter(|p| p.key == key)
+            .filter(|p| p.is_for(&game, &key))
             .ok_or("Download it on the site first.")?;
         let found = grokhub_core::mods::pickup::downloads_folder()
             .and_then(|d| find_download(&d, &p))
@@ -1044,6 +1189,39 @@ pub(crate) async fn mods_confirm(
 pub(crate) fn mods_cancel(token: u64) -> Result<(), String> {
     capabilities::needs(capabilities::current().mods, "Mods")?;
     cancel(token);
+    Ok(())
+}
+
+/// The Install card for the mod the chat asked to set up, if there is one.
+#[tauri::command]
+pub(crate) async fn mods_requested(
+    state: State<'_, ShellState>,
+) -> Result<Option<RequestedView>, String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    let dir = state.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some((ask, r)) = requested() else {
+            return Ok(None);
+        };
+        let blocked = target(&r.game).err();
+        let installed = engine::installed(&dir, Some(r.game.entry.id));
+        let pickup = work().pickup.clone();
+        Ok(Some(requested_view(
+            (ask, &r),
+            &installed,
+            blocked,
+            pickup.as_ref(),
+        )))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The Install card's Dismiss.
+#[tauri::command]
+pub(crate) fn mods_drop_request(ask: u64) -> Result<(), String> {
+    capabilities::needs(capabilities::current().mods, "Mods")?;
+    drop_request(ask);
     Ok(())
 }
 

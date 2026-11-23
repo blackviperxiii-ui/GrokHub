@@ -1,5 +1,7 @@
 //! Phase 16 eval harness. Dry-run is the default and uses scripted model clients
-//! plus the fake CLI agent. `--live` is refused before any client is built.
+//! plus the fake CLI agent. `--live` is opt-in: it needs `GROKHUB_EVAL_API_KEY`
+//! and `--budget-usd` (at most $0.20), stays off default PR CI, and runs a
+//! budgeted live probe under [`live::Capped`].
 
 use grokhub_core::wire::AcpEvent;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use crate::perm::ConfigGuard;
 use crate::tools::ImagineApi;
 use crate::{
     AuthKind, CancelToken, EngineParts, HaltCheck, ModelClient, NativeEngine, SteerQueue, Usage,
+    XaiClient, DEFAULT_MODEL,
 };
 
 #[cfg(unix)]
@@ -65,7 +68,10 @@ const ERR_NO_KEY: &str = "refusing --live: GROKHUB_EVAL_API_KEY is not set";
 const ERR_NO_BUDGET: &str =
     "refusing --live: --budget-usd is required and must satisfy 0 < amount <= 0.20";
 const ERR_BAD_BUDGET: &str = "refusing --live: --budget-usd must satisfy 0 < amount <= 0.20";
-const LIVE_UNIMPLEMENTED: &str = "live mode is not implemented in this build";
+/// Hard dollar cap for the parity harness `--live` path (whole cents).
+pub const LIVE_BUDGET_CAP_CENTS: u32 = 20;
+/// Live probe prompt: a short reply keeps spend under the cap.
+const LIVE_REPLY_PROMPT: &str = "Reply with exactly the word pong and nothing else.";
 
 static IMAGINE_SENDS: AtomicU64 = AtomicU64::new(0);
 static SCRATCH_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -79,15 +85,30 @@ pub struct Opts {
     pub out: Option<PathBuf>,
 }
 
+#[derive(Debug)]
 pub struct ItemResult {
     pub item: &'static str,
     pub engine: &'static str,
     pub success: bool,
     pub turns: u32,
-    /// Measured for the example's stderr line. The report writes `dry-run` instead.
+    /// Measured for the example's stderr line. The dry-run report writes `dry-run`.
     pub wall_ms: u128,
     pub status: &'static str,
     pub verified: bool,
+}
+
+/// Spend recorded by a live suite under the dollar/token budget cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveSpend {
+    pub spent_ticks: i64,
+    pub budget_ticks: i64,
+}
+
+/// Result of an opt-in `--live` run.
+#[derive(Debug)]
+pub struct LiveSuite {
+    pub items: Vec<ItemResult>,
+    pub spend: LiveSpend,
 }
 
 /// Sends recorded by the dry-run Imagine path. Stays zero because that path
@@ -96,7 +117,8 @@ pub fn imagine_send_count() -> u64 {
     IMAGINE_SENDS.load(Ordering::SeqCst)
 }
 
-/// Parse harness flags. `--live` is rejected here, before a client exists.
+/// Parse harness flags. `--live` is gated here (key + budget) before a client
+/// is built; dry-run stays the default.
 pub fn parse_args(args: &[String]) -> Result<Opts, String> {
     let key = std::env::var(LIVE_KEY).ok();
     parse_args_with_key(args, key.as_deref())
@@ -162,23 +184,29 @@ fn parse_args_with_key(args: &[String], key: Option<&str>) -> Result<Opts, Strin
     })
 }
 
-/// Even a sanctioned key and a budget do not start a live client in this build.
+/// Live is opt-in. `parse_args` already required the key and budget; this
+/// stays so callers can refuse a dry-run that accidentally set `--live` after
+/// parse, and so dry-run callers keep a single gate. Always `Ok` once opts
+/// are valid.
 pub fn reject_live(opts: &Opts) -> Result<(), String> {
-    if opts.live {
-        Err(LIVE_UNIMPLEMENTED.into())
-    } else {
-        Ok(())
-    }
+    let _ = opts;
+    Ok(())
+}
+
+/// Whole cents → xAI cost ticks for the parity live cap.
+pub fn live_budget_ticks(budget_cents: u32) -> i64 {
+    let cents = budget_cents.min(LIVE_BUDGET_CAP_CENTS) as i64;
+    cents.saturating_mul(live::TICKS_PER_USD / 100)
 }
 
 /// The route class eval items log (not in the §14.3 table, so the shadow keeps today's effort).
 pub const EVAL_CLASS: &str = "eval:item";
 
 pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
-    let _lock = SUITE.lock().unwrap_or_else(|err| err.into_inner());
     if opts.live {
-        return Vec::new();
+        return run_live_suite(opts).items;
     }
+    let _lock = SUITE.lock().unwrap_or_else(|err| err.into_inner());
     let cfg = scratch("cfg");
     let _guard = cfg.as_ref().map(ConfigGuard::set);
     // Router R0: eval runs log their shadow routes under their own class.
@@ -198,25 +226,166 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     items.push(measure("imagine", "native", imagine_native));
     items.push(measure("system-scan", "native", system_scan_native));
     items.push(measure("close-check", "native", close_check::run_fixtures));
-    if !opts.live {
-        if let Ok(report) = ab::run_ab(ab::DEFAULT_MODEL, &ab::CandidateSuffix) {
-            let _ = &report.comparison;
-            let _ = report.tasks.len();
-            let _ = report.report_markdown.len();
-            let _ = report.gate();
-        }
-        if let Ok(care) = ab::run_care_first_ab() {
-            let _ = care_first::status_line(&care);
-            let _ =
-                ab::care_first_default_on(false, care.cost_ratio, care.p95_ratio, care.words_ratio);
-            let _ = ab::CARE_FIRST_SHIPS_ON;
-        }
+    if let Ok(report) = ab::run_ab(ab::DEFAULT_MODEL, &ab::CandidateSuffix) {
+        let _ = &report.comparison;
+        let _ = report.tasks.len();
+        let _ = report.report_markdown.len();
+        let _ = report.gate();
+    }
+    if let Ok(care) = ab::run_care_first_ab() {
+        let _ = care_first::status_line(&care);
+        let _ = ab::care_first_default_on(false, care.cost_ratio, care.p95_ratio, care.words_ratio);
+        let _ = ab::CARE_FIRST_SHIPS_ON;
     }
     cleanup_sessions();
     if let Some(dir) = cfg {
         let _ = std::fs::remove_dir_all(dir);
     }
     items
+}
+
+/// Opt-in live path: builds an [`XaiClient`] from `GROKHUB_EVAL_API_KEY` and
+/// runs under the dollar/token budget cap. Never called from default PR CI.
+pub fn run_live_suite(opts: &Opts) -> LiveSuite {
+    let key = std::env::var(LIVE_KEY).unwrap_or_default();
+    let budget_ticks = live_budget_ticks(opts.budget_cents.unwrap_or(0));
+    let client = Arc::new(XaiClient::new(
+        key.trim(),
+        AuthKind::ApiKey,
+        Duration::from_secs(120),
+    ));
+    run_live_suite_with(client, budget_ticks)
+}
+
+/// Live suite with an injected client so offline tests never dial the network.
+pub fn run_live_suite_with(
+    client: Arc<dyn ModelClient + Send + Sync>,
+    budget_ticks: i64,
+) -> LiveSuite {
+    let _lock = SUITE.lock().unwrap_or_else(|err| err.into_inner());
+    let cfg = scratch("live-cfg");
+    let _guard = cfg.as_ref().map(ConfigGuard::set);
+    let _class = crate::route::live::ClassScope::enter(EVAL_CLASS);
+    let capped = Arc::new(live::Capped::for_provider(
+        client,
+        live::Provider::Grok,
+        budget_ticks,
+    ));
+    let mut items = Vec::with_capacity(SUITE_ITEMS.len());
+    items.push(measure("xvfb-desktop", "native", desktop_item));
+    items.push(live_reply_item(Arc::clone(&capped), budget_ticks));
+    items.push(skipped_live("ask-refusal"));
+    items.push(skipped_live("background-halt"));
+    items.push(skipped_live("mcp-tool"));
+    items.push(skipped_live("compaction"));
+    items.push(skipped_live("tool-output-compact"));
+    items.push(measure("imagine", "native", imagine_native));
+    items.push(measure("system-scan", "native", system_scan_native));
+    items.push(measure("close-check", "native", close_check::run_fixtures));
+    let spent_ticks = capped.spent_ticks();
+    let spend = LiveSpend {
+        spent_ticks,
+        budget_ticks,
+    };
+    cleanup_sessions();
+    if let Some(dir) = cfg {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    LiveSuite { items, spend }
+}
+
+fn skipped_live(item: &'static str) -> ItemResult {
+    ItemResult {
+        item,
+        engine: "native",
+        success: true,
+        turns: 0,
+        wall_ms: 0,
+        status: "skipped: scripted dry-run only",
+        verified: false,
+    }
+}
+
+fn live_reply_item(capped: Arc<live::Capped>, budget_ticks: i64) -> ItemResult {
+    let start = Instant::now();
+    if capped.out_of_budget() || budget_ticks <= 0 {
+        return ItemResult {
+            item: "repo-bugfix",
+            engine: "native",
+            success: false,
+            turns: 0,
+            wall_ms: start.elapsed().as_millis(),
+            status: "skipped: budget",
+            verified: false,
+        };
+    }
+    let Some(dir) = scratch("live-reply") else {
+        return ItemResult {
+            item: "repo-bugfix",
+            engine: "native",
+            success: false,
+            turns: 0,
+            wall_ms: start.elapsed().as_millis(),
+            status: "failed: scratch",
+            verified: false,
+        };
+    };
+    let _guard = ConfigGuard::set(dir.join("cfg"));
+    let _ = std::fs::create_dir_all(dir.join("cfg"));
+    let shared: Arc<dyn ModelClient + Send + Sync> = capped.clone();
+    let mut engine = NativeEngine::new(EngineParts {
+        client: shared,
+        workspace: dir.clone(),
+        model: DEFAULT_MODEL.into(),
+        effort: Some("low".into()),
+        system: String::new(),
+        conversation_id: "eval-live-reply".into(),
+        auth_kind: AuthKind::ApiKey,
+        max_turns: 4,
+        cancel: CancelToken::new(),
+        steer: SteerQueue::new(),
+        halt: Box::new(NoHalt),
+        gate: Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: false,
+            desktop: false,
+        },
+        desktop: None,
+        permits: Arc::new(ClosedPermits),
+    });
+    let mut reply = String::new();
+    let mut stop = String::new();
+    let _ = engine.prompt(LIVE_REPLY_PROMPT, None, &mut |ev| match ev {
+        AcpEvent::Text(chunk) => reply.push_str(&chunk),
+        AcpEvent::Done { stop_reason } => stop = stop_reason,
+        AcpEvent::Err(msg) if stop.is_empty() => stop = format!("error:{msg}"),
+        _ => {}
+    });
+    crate::tasks::forget_session("eval-live-reply");
+    let spent = capped.spent_ticks();
+    let over = spent > budget_ticks;
+    let pong = reply.to_ascii_lowercase().contains("pong");
+    let ended = stop == "end_turn" && !reply.trim().is_empty();
+    let _ = std::fs::remove_dir_all(&dir);
+    let status = if over {
+        "failed: over budget"
+    } else if pong || ended {
+        "live ok"
+    } else if capped.out_of_budget() || stop.contains("cancel") {
+        "skipped: budget"
+    } else {
+        "failed: live"
+    };
+    ItemResult {
+        item: "repo-bugfix",
+        engine: "native",
+        success: status == "live ok",
+        turns: 1,
+        wall_ms: start.elapsed().as_millis(),
+        status,
+        verified: status == "live ok",
+    }
 }
 
 /// Render the R6 technique matrix as deterministic markdown (no wall times).
@@ -420,48 +589,91 @@ fn format_cost_delta(v: f64) -> String {
 }
 
 pub fn render_report(items: &[ItemResult]) -> String {
+    render_report_with(items, None)
+}
+
+/// Dry-run report, or a live report when `spend` is set.
+pub fn render_report_with(items: &[ItemResult], spend: Option<LiveSpend>) -> String {
+    let live = spend.is_some();
     let mut out = String::new();
     out.push_str("# Native parity v1\n\n");
     out.push_str("## Method\n\n");
-    out.push_str(
-        "Phase 16 runs one fixed suite against the native engine. \
+    if live {
+        out.push_str(
+            "Phase 16 `--live` run against the native engine under a hard dollar/token \
+budget cap. Offline dry-run is the default; this live path is opt-in and never \
+runs on default PR CI.\n\n",
+        );
+        if let Some(spend) = spend {
+            out.push_str(&format!(
+                "Budget: {} ticks ({:.2} USD cap). Spent: {} ticks.\n\n",
+                spend.budget_ticks,
+                spend.budget_ticks as f64 / live::TICKS_PER_USD as f64,
+                spend.spent_ticks,
+            ));
+        }
+        out.push_str(
+            "`--live` requires `GROKHUB_EVAL_API_KEY` and `--budget-usd` with \
+`0 < amount <= 0.20`. ",
+        );
+        out.push_str(&credential_boundary());
+        out.push_str(
+            " Model calls go through `live::Capped`, which refuses a request the \
+rest of the budget cannot cover.\n\n",
+        );
+        out.push_str(
+            "Suite: an Xvfb desktop probe, one budgeted live reply probe (listed as \
+repo-bugfix), scripted dry-run-only rows skipped, Imagine request build only, \
+system-scan, and close-check.\n\n",
+        );
+    } else {
+        out.push_str(
+            "Phase 16 runs one fixed suite against the native engine. \
 Dry-run is the default (`--dry-run`, and the mode when no mode flag is given). \
 The native engine uses scripted fake model clients. \
 Dry-run uses no network and no credentials.\n\n",
-    );
-    out.push_str(
-        "Wall time is measured for each item and printed on the example's stderr. \
+        );
+        out.push_str(
+            "Wall time is measured for each item and printed on the example's stderr. \
 This file records wall time as `dry-run`, and pool % and cost as `0`, so two \
 dry-runs are byte-identical.\n\n",
-    );
-    out.push_str(
-        "`--live` is refused before any client is built unless `GROKHUB_EVAL_API_KEY` \
-is set to a non-empty value and `--budget-usd` is set with `0 < amount <= 0.20`. ",
-    );
-    out.push_str(&credential_boundary());
-    out.push_str(
-        " Live mode is not implemented in this build and was not run for this report.\n\n",
-    );
-    out.push_str(
-        "Suite items: an Xvfb desktop probe, a temp repo bugfix with a test, an Ask-mode \
+        );
+        out.push_str(
+            "`--live` is opt-in: it needs `GROKHUB_EVAL_API_KEY` and `--budget-usd` \
+with `0 < amount <= 0.20`, stays off default PR CI, and was not run for this report. ",
+        );
+        out.push_str(&credential_boundary());
+        out.push_str("\n\n");
+        out.push_str(
+            "Suite items: an Xvfb desktop probe, a temp repo bug fix with a test, an Ask-mode \
 refusal, background plus Halt, an MCP tool call through a fake stdio server, compaction \
 of a long transcript, large tool-output compaction with a spooled re-read path, an \
 Imagine call that only builds the request, and a close-check that skips a single \
 reply and runs once when an intention is still open.\n\n",
-    );
+        );
+    }
     out.push_str("This report does not switch the default engine.\n\n");
     out.push_str("## Results\n\n");
     out.push_str("| Item | Engine | Success | Turns | Wall time | Pool % | Cost | Status |\n");
     out.push_str("|---|---|---|---|---|---|---|---|\n");
     for item in items {
         let success = if item.success { "yes" } else { "no" };
+        let wall = if live {
+            format!("{}ms", item.wall_ms)
+        } else {
+            "dry-run".into()
+        };
         out.push_str(&format!(
-            "| {} | {} | {success} | {} | dry-run | 0 | 0 | {} |\n",
+            "| {} | {} | {success} | {} | {wall} | 0 | 0 | {} |\n",
             item.item, item.engine, item.turns, item.status
         ));
     }
     out.push_str("\n## GAPS\n\n");
-    let gaps = gap_lines(items);
+    let gaps = if live {
+        live_gap_lines(items, spend)
+    } else {
+        gap_lines(items)
+    };
     if gaps.is_empty() {
         out.push_str("- none\n");
     } else {
@@ -477,7 +689,7 @@ reply and runs once when an intention is still open.\n\n",
 /// Sentence that names the credential files this harness does not open.
 pub fn credential_boundary() -> String {
     format!(
-        "The key is read only from GROKHUB_EVAL_API_KEY. This harness does not read {}, {}, {}, or a keychain, and it does not read the cabin's stored credentials.",
+        "The key is read only from GROKHUB_EVAL_API_KEY. This harness does not read {}, {}, {}, or a keychain, and it does not read the app's stored credentials.",
         concat!("~/.grok/", "auth", ".json"),
         concat!("config", ".toml"),
         concat!("secrets", ".json"),
@@ -487,7 +699,7 @@ pub fn credential_boundary() -> String {
 fn help_text() -> String {
     "eval [--dry-run] [--live --budget-usd AMOUNT] [--out PATH]\n\
 dry-run is the default and uses no network\n\
---live requires GROKHUB_EVAL_API_KEY and 0 < --budget-usd <= 0.20"
+--live is opt-in (never on default PR CI): requires GROKHUB_EVAL_API_KEY and 0 < --budget-usd <= 0.20"
         .into()
 }
 
@@ -589,6 +801,8 @@ fn success_of(status: &str) -> bool {
             | "probe ok"
             | "covered"
             | "checked"
+            | "live ok"
+            | "skipped: scripted dry-run only"
     )
 }
 
@@ -598,7 +812,7 @@ fn verified_of(status: &str) -> bool {
 
 /// Gaps that hold for every dry-run, whatever the rows say.
 pub const STANDING_GAPS: [&str; 2] = [
-    "- live: `--live` is a stub. It refuses to start without GROKHUB_EVAL_API_KEY and a budget of $0.20 or less, and even with both it only prints \"live mode is not implemented in this build\" and exits non-zero. No live eval has been run, so nothing in this report measures a real model's success, turns, wall time, pool % or cost.",
+    "- live: not run. Pass `--live` with GROKHUB_EVAL_API_KEY and `--budget-usd` at most $0.20 for the budgeted live probe; default PR CI stays offline.",
     "- pool % and cost: written as 0 for every dry-run row. They were not measured.",
 ];
 
@@ -632,6 +846,32 @@ fn gap_lines(items: &[ItemResult]) -> Vec<String> {
         }
         if !parts.is_empty() {
             lines.push(format!("- {name}: {}", parts.join("; ")));
+        }
+    }
+    lines
+}
+
+fn live_gap_lines(items: &[ItemResult], spend: Option<LiveSpend>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(spend) = spend {
+        if spend.spent_ticks > spend.budget_ticks {
+            lines.push(format!(
+                "- budget: spent {} ticks over the {} tick cap",
+                spend.spent_ticks, spend.budget_ticks
+            ));
+        }
+    }
+    if items
+        .iter()
+        .any(|item| item.item == "xvfb-desktop" && item.status == "probe ok")
+    {
+        lines.push(DESKTOP_PROBE_GAP.to_string());
+    }
+    for item in items {
+        if item.status.starts_with("skipped:") || !item.verified {
+            lines.push(format!("- {}: {}", item.item, item.status));
+        } else if !item.success {
+            lines.push(format!("- {}: failed ({})", item.item, item.status));
         }
     }
     lines
@@ -990,7 +1230,6 @@ fn run_native_cancel(
         cancel,
         halt: Box::new(NoHalt),
         desktop_ops: None,
-        imagine_bearer: String::new(),
         resume: false,
     });
     NativeDone {
@@ -1573,7 +1812,7 @@ mod tests {
     }
 
     #[test]
-    fn live_with_key_and_budget_is_not_implemented() {
+    fn live_with_key_and_budget_is_accepted() {
         let opts = parse_args_with_key(
             &["--live".into(), "--budget-usd".into(), "0.20".into()],
             Some("sanctioned-test-key"),
@@ -1581,9 +1820,50 @@ mod tests {
         .expect("parsed");
         assert!(opts.live);
         assert_eq!(opts.budget_cents, Some(20));
-        let err = reject_live(&opts).expect_err("unimplemented");
-        assert_eq!(err, "live mode is not implemented in this build");
-        assert!(run_suite(&opts).is_empty());
+        reject_live(&opts).expect("live ready");
+        assert_eq!(live_budget_ticks(20), live::TICKS_PER_USD / 5);
+    }
+
+    #[test]
+    fn live_suite_with_fake_client_stays_under_budget() {
+        struct Pong;
+        impl ModelClient for Pong {
+            fn stream(
+                &self,
+                _req: &ResponsesRequest,
+                _cancel: &CancelToken,
+                sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<TurnOutput, ClientError> {
+                sink(StreamEvent::TextDelta("pong".into()));
+                Ok(TurnOutput {
+                    text: "pong".into(),
+                    usage: Usage {
+                        input_tokens: 100,
+                        cached_tokens: 0,
+                        output_tokens: 1,
+                        reasoning_tokens: 0,
+                        cost_in_usd_ticks: live::TICKS_PER_USD / 100,
+                    },
+                    ..Default::default()
+                })
+            }
+        }
+        let budget = live_budget_ticks(20);
+        let suite = run_live_suite_with(Arc::new(Pong), budget);
+        assert_eq!(suite.items.len(), SUITE_ITEMS.len());
+        assert!(suite.spend.spent_ticks <= suite.spend.budget_ticks);
+        let reply = suite
+            .items
+            .iter()
+            .find(|item| item.item == "repo-bugfix")
+            .expect("live probe");
+        assert_eq!(reply.status, "live ok");
+        assert!(reply.verified);
+        let report = render_report_with(&suite.items, Some(suite.spend));
+        assert!(report.contains("opt-in"));
+        assert!(report.contains("Capped"));
+        assert!(!report.contains("not implemented"));
+        assert!(report.contains("| repo-bugfix | native | yes |"));
     }
 
     #[test]
@@ -1628,7 +1908,7 @@ mod tests {
         for line in STANDING_GAPS {
             assert_eq!(gaps.matches(line).count(), 1, "{line}");
         }
-        assert!(gaps.starts_with("- live: `--live` is a stub."), "{gaps}");
+        assert!(gaps.starts_with("- live: not run."), "{gaps}");
         assert!(!gaps.contains("- none"));
         assert!(report.contains("No default was switched.\n"));
         assert!(report.contains("GROKHUB_EVAL_API_KEY"));

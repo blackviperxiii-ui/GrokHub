@@ -31,7 +31,7 @@ const api = vi.hoisted(() => ({
   deleteAllChats: vi.fn<() => Promise<DeleteAllResult>>(),
   cancelDeleteAll: vi.fn<() => Promise<void>>(),
   // What the Chat page calls when it mounts ("Delete all and the open chat").
-  getLastChat: vi.fn<() => Promise<Transcript | null>>(),
+  getStartChat: vi.fn<() => Promise<Transcript | null>>(),
   getSettings: vi.fn<() => Promise<Settings>>(),
   quickChips: vi.fn<() => Promise<QuickChip[]>>(),
   slashHits: vi.fn<() => Promise<never[]>>(),
@@ -54,6 +54,7 @@ import {
   grouped,
   groupOf,
   History,
+  HISTORY_CODE_IN_EDITOR,
   HISTORY_EMPTY,
   HISTORY_NO_HITS,
   projectTree,
@@ -338,33 +339,20 @@ describe("Projects tree, Pinned group and read-only chats", () => {
     ]);
   });
 
-  it("lists a project's chats under it, and keeps them out of the day groups", async () => {
-    api.listProjectNodes.mockResolvedValue([
-      node("f", "Boats", "folder"),
-      node("p", "Pier", "project", "f"),
-    ]);
+  it("keeps project sessions out of Chat History and points at the Code tab", async () => {
     api.listChats.mockResolvedValue([{ ...TODAY, project: "p" }, WEEK]);
-    render(<History onOpen={() => {}} onDeleted={() => {}} />);
-    const projects = await screen.findByRole("region", { name: "Projects" });
+    const onOpenCode = vi.fn();
+    render(<History onOpen={() => {}} onDeleted={() => {}} onOpenCode={onOpenCode} />);
+    const code = await screen.findByRole("region", { name: "Code sessions" });
+    expect(within(code).getByText(HISTORY_CODE_IN_EDITOR)).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: "Fix the build" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Projects" })).toBeNull();
     expect(
-      within(projects).getByRole("button", { name: /Boats/ }),
-    ).toHaveAttribute("aria-expanded", "true");
-    expect(
-      within(projects).getByRole("button", { name: "▾ Pier (1)" }),
-    ).toBeVisible();
-    expect(
-      within(projects).getByRole("listitem", { name: "Fix the build" }),
-    ).toBeVisible();
-    expect(
-      within(screen.getByRole("region", { name: "This week" })).getByText(
-        "Plan a trip",
-      ),
+      within(screen.getByRole("region", { name: "This week" })).getByText("Plan a trip"),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Today" })).toBeNull();
-    await userEvent.click(
-      within(projects).getByRole("button", { name: /Boats/ }),
-    );
-    expect(screen.queryByText("Fix the build")).toBeNull();
+    await userEvent.click(within(code).getByRole("button", { name: "Open Code" }));
+    expect(onOpenCode).toHaveBeenCalledTimes(1);
   });
 
   it("lists pinned chats first, and the menu pins and unpins", async () => {
@@ -388,6 +376,23 @@ describe("Projects tree, Pinned group and read-only chats", () => {
       screen.getByRole("button", { name: "More for Fix the build" }),
     );
     expect(screen.getByRole("menuitem", { name: "Pin" })).toBeVisible();
+  });
+
+  it("Main's menu only exports: no pin, rename or delete", async () => {
+    api.listChats.mockResolvedValue([
+      { id: "shell-main-1", title: "Main", created: TODAY.created, updated: TODAY.updated, pinned: true, main: true },
+      TODAY,
+    ]);
+    render(<History onOpen={() => {}} onDeleted={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "More for Main" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Export"]);
+    await userEvent.click(screen.getByRole("button", { name: "More for Fix the build" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Pin",
+      "Rename",
+      "Export",
+      "Delete",
+    ]);
   });
 
   it("Delete all arms first and deletes nothing until the second click", async () => {
@@ -634,7 +639,7 @@ describe("Projects tree, Pinned group and read-only chats", () => {
       name: "Read only chats",
     });
     expect(within(group).getByText("Grok CLI · Read only")).toBeVisible();
-    expect(within(group).getByText(/^Cabin · Read only · /)).toBeVisible();
+    expect(within(group).getByText(/^Older chat · Read only · /)).toBeVisible();
     expect(
       within(group).queryByRole("button", { name: /^More for/ }),
     ).toBeNull();
@@ -693,6 +698,8 @@ const SETTINGS: Settings = {
   version: "3.1.0",
   summonHotkey: false,
   notifications: true,
+  dockPanels: false,
+  dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
 };
 
 /** Chat and History side by side, with the `deleted` state App.tsx keeps
@@ -738,7 +745,7 @@ describe("Delete all and the open chat", () => {
 
   it("closes the open chat when it was the newest of several, not only when it was the last row", async () => {
     // The open chat is the newest, so History lists it first.
-    api.getLastChat.mockResolvedValue({
+    api.getStartChat.mockResolvedValue({
       id: "shell-a",
       title: "Fix the build",
       lines: [

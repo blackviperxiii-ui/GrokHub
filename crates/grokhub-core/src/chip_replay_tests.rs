@@ -14,7 +14,7 @@
 
 use crate::chip_rank::{rank_quick_chips, rank_quick_chips_from, RankCtx, CHIP_ROW_MAX};
 use crate::chip_store::{
-    log_chip_outcome, log_chips_shown, outcome_signals, shown_signals, CHIP_LOG_MAX,
+    log_chip_outcome, log_chips_shown, outcome_signals, shown_signals, ChipClient, CHIP_LOG_MAX,
 };
 use crate::chips::{remember_chip_click, ChipKind, ChipMemory, QuickChip};
 use crate::learn::{Beliefs, Signal};
@@ -126,6 +126,7 @@ fn the_engine_beats_frecency_on_a_month_of_steady_habits() {
     for (i, (at, hour, target)) in script().into_iter().enumerate() {
         let ctx = RankCtx {
             surface: "composer",
+            client: ChipClient::App,
             hour,
             now_ms: at,
             seed: i as u64,
@@ -137,7 +138,7 @@ fn the_engine_beats_frecency_on_a_month_of_steady_habits() {
             // Held back (or gated): neither ranking is counted for this step.
             held_back += 1;
         } else {
-            let told = shown_signals(&mut mem, "composer", &row, at);
+            let told = shown_signals(&mut mem, "composer", ChipClient::App, &row, at);
             hear(&mut beliefs, told);
             let shown: Vec<usize> = row.iter().map(id_of).collect();
             if scored {
@@ -145,7 +146,14 @@ fn the_engine_beats_frecency_on_a_month_of_steady_habits() {
                 base.add(&frecency_row(&history, at, pool.len()), target);
             }
             if shown.contains(&target) {
-                let told = outcome_signals(&mut mem, "composer", &pool[target], true, at + 1_000);
+                let told = outcome_signals(
+                    &mut mem,
+                    "composer",
+                    ChipClient::App,
+                    &pool[target],
+                    true,
+                    at + 1_000,
+                );
                 hear(&mut beliefs, told);
             }
         }
@@ -183,9 +191,16 @@ fn ranking_two_hundred_chips_fits_in_a_frame_and_memory_stays_small() {
         let row: Vec<QuickChip> = (0..3)
             .map(|k| pool[((i * 3 + k) % 200) as usize].clone())
             .collect();
-        log_chips_shown(&mut mem, "composer", &row, 300_000 + i);
+        log_chips_shown(&mut mem, "composer", ChipClient::App, &row, 300_000 + i);
         if i % 4 == 0 {
-            log_chip_outcome(&mut mem, "composer", &row[0], true, 300_000 + i);
+            log_chip_outcome(
+                &mut mem,
+                "composer",
+                ChipClient::App,
+                &row[0],
+                true,
+                300_000 + i,
+            );
         }
     }
     assert_eq!(mem.events.len(), CHIP_LOG_MAX);
@@ -193,6 +208,7 @@ fn ranking_two_hundred_chips_fits_in_a_frame_and_memory_stays_small() {
     for s in 0..200u64 {
         let ctx = RankCtx {
             surface: "home",
+            client: ChipClient::App,
             hour: 9,
             now_ms: 10_000_000 + s,
             seed: s,

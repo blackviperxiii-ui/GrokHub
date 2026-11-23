@@ -1,0 +1,222 @@
+# Claude plan provider: design note
+
+The desktop app (Tauri only) can run chats on the user's own Claude plan by
+starting the official Claude Code CLI on this computer. The user signs in
+through Claude Code's own `claude auth login`. The app never reads, copies,
+stores or passes on a Claude credential or token, never shows its own Claude
+sign-in screen, and never changes the `claude` binary. Requests count against
+the user's plan, the same as when they run Claude Code themselves.
+
+This note ships with the first step, detection. It lists what the CLI
+offers, how it plugs into the app, the build order, and what stays open.
+
+## Why the CLI, and not the plan's token
+
+Source: `code.claude.com/docs/en/legal-and-compliance`.
+
+- **What the page doesn't allow.** Third-party developers may not "offer
+  Claude.ai login into their own applications, or ... route requests through
+  Free, Pro, Max, or Ultra plan credentials on behalf of their users", and
+  may not "collect, store, or intermediate Claude.ai credentials or session
+  tokens".
+- **What it does allow.** It doesn't "prevent an end user from signing in to
+  the unmodified Claude Code binary with their own Claude subscription".
+- **The conditions for running Claude Code inside a product.** The binary
+  is run as published, with none of its sign-in methods removed. Nobody pays
+  for, resells or intermediates the user's Claude usage. Each user signs in
+  with their own credentials.
+
+So the app starts the user's own `claude` and reads its output. It never
+sends a request to Anthropic itself, never sees a token, and never stands
+between the user and their plan.
+
+Naming follows the same page: Claude Code's and Anthropic's names aren't
+used in the app's or a feature's name. The provider is **Claude (your
+plan)**, and its plain-text line says it "runs Claude Code on this computer".
+The existing API-key provider stays **Claude (Anthropic)**.
+
+## What the CLI offers
+
+Sources: `code.claude.com/docs/en/cli-reference`, `/headless`,
+`/agent-sdk/typescript`.
+
+| Need | CLI |
+| --- | --- |
+| Installed | `claude --version` exits 0 |
+| Signed in | `claude auth status` prints JSON and exits 0 when signed in, 1 when not. Only `authMethod` is read: `claude.ai` and `oauth_token` (a `claude setup-token` token, which needs a plan) mean the plan; `api_key` and the rest mean other billing, and the page says so. Nothing else from the output is kept or logged |
+| One turn | `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages`, the prompt as one JSON line on stdin |
+| Model | `--model` with an alias (`opus`, `sonnet`, `haiku`) |
+| Same conversation | `--session-id <uuid>` on the first turn, `--resume <uuid>` after. `--continue` takes the newest conversation in the folder, which may belong to another chat or to the user's own terminal, so it isn't used |
+| Tools | `--tools` (which tools exist), `--allowedTools` and `--disallowedTools` rules, `--permission-mode default` (never `bypassPermissions`) |
+| Approvals | `--permission-prompt-tool mcp__<server>__<tool>` with `--mcp-config`: Claude Code asks that MCP tool before a tool it would otherwise ask about |
+| Usage | Each `result` line has `modelUsage` and `total_cost_usd` (an estimate). `rate_limit_event` lines carry `status`, `utilization` and `resetsAt` |
+| Stop | SIGINT ends the turn and records its result; SIGTERM records nothing |
+
+## How a turn runs
+
+The chat worker already runs turns through the `Engine` trait
+(`crates/grokhub-agent/src/events.rs`). Today the worker holds only a
+`NativeEngine` (`src-tauri/src/agent.rs`). A second engine,
+`ClaudePlanEngine`, starts `claude` for each turn and turns its stream into
+the same `AcpEvent`s the chat already shows:
+
+| stream-json line | Chat event |
+| --- | --- |
+| `system` / `init` | Keeps `session_id`; nothing shown |
+| `stream_event` text delta | Text |
+| `stream_event` thinking delta | Thought |
+| `assistant` `tool_use` block | Tool row, in progress, with a short summary of its input |
+| `user` `tool_result` block | Same row, done or failed, output clipped as for native tools |
+| `permission_denied` | Same row, failed, "Not allowed" |
+| `assistant.error` | Error. `authentication_failed` reads "Sign in to Claude Code: run `claude auth login`" |
+| `result` | Usage, then the turn ends |
+| Exit with no `result` | Error, then the turn ends |
+
+The parser is a pure function from a line to events, tested on literal
+fixture lines. The router path (`providers::stream_model`) only carries text,
+so it isn't used.
+
+## Tools and approvals
+
+A chat turn passes `--restricted`, `--strict-mcp-config` and
+`--permission-mode default`. Restricted mode ignores the user's, the
+project's and the project's local Claude Code settings files, so no allow
+rule or hook there can approve a call without the card (a cloned project's
+`.claude/settings.json` included). It also keeps the file tools inside the
+chat's folder, refuses `bypassPermissions`, and asks before a write to
+settings, git or tool config. `--strict-mcp-config` loads no MCP server from
+the user's own config. Claude Code's own rules
+decide which calls need asking: reading inside the chat's folder and
+read-only commands such as `echo` go ahead, and a command that changes
+something, an edit, a write, or a read outside the folder asks.
+
+- **Asking on the chat's card.** A chat turn passes
+  `--permission-prompt-tool stdio` and `--tools Read Grep Glob Bash Edit Write`.
+  No MCP server is needed: Claude Code writes a `control_request` line
+  (`subtype: can_use_tool`, with `tool_name`, `input`, `description` and
+  `permission_suggestions`) and waits. The app shows its normal approval card
+  (tool, command or file, and why) and writes back a `control_response` line:
+  `{behavior: "allow", updatedInput}` with the input unchanged, or
+  `{behavior: "deny", message}`. Stop or Halt while the card waits denies with
+  `interrupt: true`, which ends the turn. Any other control request gets an
+  error response, so a turn never hangs on one. stdin stays open until the
+  turn's `result` line, then closes so Claude Code exits.
+- **Always allow** takes what Claude Code suggested for that call (its
+  `permission_suggestions`), set to last for that Claude Code session only,
+  and sends them back as `updatedPermissions`, so they hold for the rest of
+  the turn. The app keeps them for the open chat and passes them to later
+  turns: allow rules such as `Bash(touch notes.md)` as `--allowedTools`, an
+  extra folder as `--add-dir`, and accepting edits as
+  `--permission-mode acceptEdits`. Accepting every edit is kept only when the
+  call was itself an edit (Edit, Write), not for a command such as `touch`.
+  Nothing is written to Claude Code's settings or the user's project, and a
+  restart forgets them.
+- **Planning turns stay read-only.** A turn the app runs as a plan not yet
+  approved, or a question, gets only `--tools Read Grep Glob` and none of the
+  "Always allow" grants, as a native turn in that mode does.
+- **When nobody can be asked** (no approval cards, as in tests), a turn has
+  only `--tools Read Grep Glob` and `--permission-prompts none`, so anything
+  that would ask is refused and shows as a failed row.
+
+## Choosing it
+
+There's no per-chat model picker today. Settings → AI models gets a
+**Claude (your plan)** row showing installed, signed in and the billing kind.
+While Claude Code is signed in with a plan, **Allow for chats** asks first
+(what runs, where, and that it counts against the plan). Once allowed, the
+user moves a chat onto the plan in words ("from now on, use Claude") and back
+("stop using Claude"); there is no switch. The choice is kept per chat in
+`{config}/claude-plan-chats.json` (`byWords`; a list the old tab menu switch
+saved reads as empty, so those chats are back on Auto). **Stop using for chats** switches
+every chat back. Auto routing never picks it on its own.
+
+Each turn checks `claude auth status` again (about a quarter of a second). A
+chat on the plan sends nothing while Claude Code is signed out or signed in
+another way, such as an API key, so it never bills somewhere the user didn't
+allow.
+
+## Usage
+
+The per-turn tokens come from `result.modelUsage` and are saved with the
+turn in History, under the meter "Claude plan" with no cost, since the plan
+isn't billed per token. Plan headroom comes from `rate_limit_event`. Its
+`rate_limit_info.unifiedWindows` lists each window the plan has (such as
+`five_hour` and `seven_day`), each with `utilization` (0 to 1), `resetsAt`
+(Unix seconds) and `status` (`rejected` once the limit is reached). The
+window nearest its limit is kept in `{config}/claude-plan-chats.json`, with
+the time it came. Chats run side by side, so a turn that ends later with an
+older reading doesn't replace a newer one. Settings → AI models → Claude
+(your plan) shows it as of that time, since use outside the app counts too:
+"Your last chat on it (Mon, Nov 16, 7:00 PM) saw 43% of your plan's weekly
+limit used. It resets Sun, Nov 22, 4:00 AM." The line shows in red when the
+limit is reached, and goes away once that window resets (or five hours after
+a reading with no reset time), even while the card stays open.
+The Fleet page already reads Claude Code's local transcripts for the 5-hour
+window and the week, so it needs no change.
+
+## Platforms
+
+- **Finding `claude`:** `PATH`, then the installer's usual folders
+  (`~/.local/bin`, `/opt/homebrew/bin`, `%USERPROFILE%\.local\bin`), since an
+  app started from the desktop may not see the shell's `PATH`. On Windows,
+  `claude.exe` first, then `claude.cmd`.
+- **Spawning:** no console window on Windows, stdin carries the prompt, and
+  the working folder is the chat's workspace.
+- **Stopping:** SIGINT on Linux and macOS. On Windows the process tree is
+  ended (`taskkill /T`, since an npm install's `claude.cmd` runs the real CLI
+  as its own child), and that turn's result is lost.
+- **While a turn runs:** words typed into it can't reach Claude Code, so they
+  come back to the chat when the turn ends, as they do for native turns. A
+  side answer on a chat on the plan is refused for now, since it would run on
+  the app's own models.
+
+## Build order
+
+Each step is its own PR into `beta`.
+
+1. **This note.**
+2. **Detection** (ships with this note). `claude_plan::detect` (installed, version, signed in,
+   billing kind) and the Settings row, with a fake `claude` script in tests.
+3. **Stream parser.** Lines to chat events, with fixtures for every kind
+   above.
+4. **Engine.** `ClaudePlanEngine` behind an engine choice in the chat worker,
+   read-only tools, the consent card and the per-chat switch. Proof: a real
+   turn and a read-only tool task on Linux. The session flags from step 5
+   ship here too, since a second message would otherwise start over.
+5. **History.** Turns saved to the chat's history like native turns (the
+   message and the reply, model `claude-plan`, meter "Claude plan"), so a
+   chat on the plan survives a restart and shows in History. The chat's
+   Claude Code session and its folder are kept in
+   `{config}/claude-plan-chats.json`, so after a restart the next message
+   resumes it. Switching the chat back reads those turns into the app's own
+   engine; switching it off and on again starts a new Claude Code session,
+   since that session never saw the turns in between. Deleting a message
+   also starts a new session, since Claude Code's session would still hold
+   it, and deleting a chat drops it from the file. Tool rows aren't saved
+   yet.
+6. **Usage.** Each turn's tokens are saved with it in History, and
+   Settings shows how much of the plan's nearest limit the last turn saw
+   used and when it resets. The chat itself has no per-turn usage line yet,
+   for any engine.
+7. **Live approvals.** Claude Code asks on the chat's approval card before a
+   command, an edit, a write or a read outside the folder, through
+   `--permission-prompt-tool stdio`. "Always allow" lasts for the open chat.
+
+## Open
+
+- **Terms.** The page says running Claude Code "in your products or
+  services (e.g. in hosted sandboxes or other agent infrastructure)" needs
+  Anthropic's Commercial Terms. Whether that covers an open-source desktop
+  app the user installs and runs themselves, against their own sign-in, isn't
+  spelled out; the page points such questions to Anthropic. The design meets
+  every listed condition either way. Showing plan limits may also read as
+  "offering rate limits", which the Agent SDK page doesn't allow without
+  approval, so step 6 shows tokens and the reset only, never as the plan's
+  limit.
+- **Subagents.** Tool calls inside a Claude subagent carry
+  `parent_tool_use_id`. Whether the permission tool is asked for those isn't
+  documented; it's checked in step 7.
+- **Approval wait.** How long Claude Code waits for the permission tool's
+  answer isn't documented; step 7 measures it.
+- **Windows stop.** Whether `--resume` still works after a turn was ended on
+  Windows is checked in step 5.

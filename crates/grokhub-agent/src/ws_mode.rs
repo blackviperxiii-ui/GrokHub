@@ -668,7 +668,9 @@ fn still_open(socket: &mut Socket) -> bool {
     open && restored && socket.flush().is_ok()
 }
 
-fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
+/// The client TLS config every socket here uses: rustls on the ring
+/// provider with webpki roots (the speech-to-text stream uses it too).
+pub fn tls_config() -> Result<Arc<rustls::ClientConfig>, String> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(

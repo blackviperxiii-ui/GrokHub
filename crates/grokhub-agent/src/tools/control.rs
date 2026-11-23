@@ -507,6 +507,7 @@ pub(crate) fn write_automation(
         instructions: prompt.to_string(),
         heartbeat_every_min: mins,
         check_command: String::new(),
+        gate: Default::default(),
         enabled: true,
         last_run: if fire { None } else { Some(now.now_ms) },
         next_run: None,

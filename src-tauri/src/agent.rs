@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use grokhub_agent::claude_plan::engine::ClaudePlanEngine;
 use grokhub_agent::{
     AuthKind, CancelToken, DesktopOps, ElicitInbox, ElicitNote, Engine, EngineParts, Gate,
     HaltCheck, ModelClient, NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote,
@@ -94,9 +95,12 @@ fn volatile_tail(voice: &str, config_dir: &std::path::Path, conversation_id: &st
     if !voice.trim().is_empty() {
         parts.push(voice.to_string());
     }
-    let identity = grokhub_agent::identity_blocks(config_dir);
-    if !identity.is_empty() {
-        parts.push(identity);
+    // A scratch chat reads none of SOUL.md, USER.md or the user model.
+    if !grokhub_agent::scratch::is_scratch(conversation_id) {
+        let identity = grokhub_agent::identity_blocks(config_dir);
+        if !identity.is_empty() {
+            parts.push(identity);
+        }
     }
     let intentions =
         grokhub_core::intentions_block(&grokhub_core::load_intentions(config_dir, conversation_id));
@@ -134,17 +138,36 @@ pub enum UiEvent {
     Text {
         text: String,
     },
+    /// The model's thinking as it streams: shown above the reply, open or
+    /// folded, and never part of the reply. The chat saves it for the chat
+    /// view only (`history::Role::Thought`).
+    Thought {
+        text: String,
+    },
     Tool {
         id: String,
         title: String,
         status: String,
         detail: String,
+        /// The picture a finished `image_generate` made, as a file path. The
+        /// card shows it through `chat_picture`, which reads only the app's
+        /// media folders.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        picture: Option<String>,
     },
     Permission {
         id: String,
         title: String,
         action: String,
         reason: String,
+        /// It asks on every such step whatever the approvals setting says (a
+        /// chat on the Claude plan), so the card offers no "Stop asking me".
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        asks_every_time: bool,
+        /// A hard stop: only a person at this computer may allow it, so the
+        /// decision inbox never lets a paired chat say yes.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        hard: bool,
     },
     /// A permission card answered away from the page, such as Deny on its
     /// notification. `answer` is a word `parse_answer` reads.
@@ -201,6 +224,13 @@ pub enum UiEvent {
         /// together (`Findings::do_all`).
         do_all: Option<Vec<String>>,
     },
+    /// A panel the agent drew with `show_panel` (generative UI): the checked
+    /// spec, keyed by the call that made it. A button on it names an action
+    /// the page sends back as a turn; nothing runs from the panel itself.
+    Panel {
+        id: String,
+        spec: serde_json::Value,
+    },
     /// The reply's `Finished` block as a card. `body` is the reply with the
     /// block taken out, so the page swaps the bubble's text for it.
     Recap {
@@ -224,6 +254,25 @@ pub enum UiEvent {
         confidence: String,
         recovery: String,
         tool_ran_not_verified: bool,
+    },
+    /// The line under an on-device reply: which model answered, with its
+    /// draft or not, and why (`route::local_live::chat_line`). Not saved;
+    /// a reopened chat shows none.
+    ModelLine {
+        text: String,
+    },
+    /// A report something on this computer wrote into the chat after its
+    /// reply ended, such as a screen recording's diagnosis. It is saved as
+    /// an assistant message, so it reads the same when the chat opens later.
+    Report {
+        text: String,
+    },
+    /// A question with Yes from this computer, such as a skill draft from a
+    /// recording. Yes sends `yes` as a slash line; nothing is saved till then.
+    Confirm {
+        command: String,
+        prompt: String,
+        yes: String,
     },
 }
 
@@ -411,25 +460,80 @@ pub fn suggestions_for(ups: &crate::chips::FollowUps) -> Option<UiEvent> {
     (!items.is_empty()).then_some(UiEvent::Suggestions { items })
 }
 
+/// A turn's engine event for the page. On the Claude plan, Claude Code asks
+/// on every step that isn't allowed yet (the approvals setting doesn't reach
+/// it), so its cards say they ask every time.
+fn turn_event(event: AcpEvent, on_plan: bool) -> Option<UiEvent> {
+    let mut ui = ui_event(event)?;
+    if let UiEvent::Permission {
+        asks_every_time, ..
+    } = &mut ui
+    {
+        *asks_every_time = on_plan;
+    }
+    Some(ui)
+}
+
+/// Whether a permission ask is a hard stop. The app's own agent marks its
+/// asks exactly. A helper agent's ask doesn't say, so its action line is read
+/// as a command: a delete or force push there is hard too.
+pub fn ask_is_hard(ask: &grokhub_core::wire::PermissionAsk) -> bool {
+    ask.hard
+        || grokhub_agent::harness::hard_class(
+            "run_terminal_command",
+            &serde_json::json!({ "command": ask.action }).to_string(),
+        )
+        .is_some()
+}
+
+/// The picture file a finished `image_generate` names on its `IMAGINE:`
+/// line. A web address, a relative path or a video gives `None`.
+fn made_picture(tool: &str, status: &str, detail: &str) -> Option<String> {
+    if tool != "image_generate" || status != "completed" {
+        return None;
+    }
+    detail.lines().find_map(|line| {
+        let path = line.strip_prefix("IMAGINE: ")?.trim();
+        let picture = std::path::Path::new(path).is_absolute()
+            && crate::imagine::picture_mime(path).is_some();
+        picture.then(|| path.to_string())
+    })
+}
+
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
     Some(match event {
         AcpEvent::Text(text) => UiEvent::Text { text },
+        AcpEvent::Thought(text) => UiEvent::Thought { text },
         AcpEvent::Tool(card) => UiEvent::Tool {
+            picture: made_picture(&card.kind, &card.status, &card.detail),
             id: card.id,
             title: card.title,
             status: card.status,
             detail: card.detail,
         },
         AcpEvent::Permission(ask) => UiEvent::Permission {
+            hard: ask_is_hard(&ask),
             id: ask.tool_call_id,
             title: ask.title,
             action: ask.action,
             reason: ask.reason,
+            asks_every_time: false,
         },
         AcpEvent::Err(message) => UiEvent::Error { message },
         AcpEvent::Done { stop_reason } => UiEvent::Done { stop: stop_reason },
         AcpEvent::Plan(text) => UiEvent::Plan { text },
         AcpEvent::Findings(body) => findings_event(&body),
+        // Checked again here, so the page only ever gets a spec the core
+        // rules allow (plain text, intent ids, size caps).
+        AcpEvent::Panel { id, spec } => {
+            // Checked again as a spec, not by the length of its re-serialized
+            // text: the engine's form (with a default heading level filled
+            // in) can be longer than what the tool checked.
+            let checked: grokhub_core::panel_spec::PanelSpec =
+                serde_json::from_value(spec.clone()).ok()?;
+            grokhub_core::panel_spec::validate_panel_spec(&checked).ok()?;
+            UiEvent::Panel { id, spec }
+        }
         AcpEvent::Elicit(ask) => UiEvent::Elicit {
             id: ask.tool_call_id,
             server: ask.server_name,
@@ -667,6 +771,11 @@ impl Session {
         self.frames.get()
     }
 
+    /// The chat's latest screenshot with the time it was taken.
+    pub fn stamped_frame(&self) -> Option<(String, u64)> {
+        self.frames.stamped()
+    }
+
     /// A message with desktop control on opens the chat's episode, or goes on
     /// in the open one (a paused one runs again). `resume`: the message is
     /// the window's [`RESUME_TEXT`], not a new goal step.
@@ -688,7 +797,7 @@ impl Session {
             turn: open.turn,
             resume,
             config_dir: self.config_dir.clone(),
-            held: Vec::new(),
+            held: grokhub_agent::held_secrets(&self.id),
             access: grokhub_agent::harness::AccessMode::Supervised,
         }
     }
@@ -985,7 +1094,8 @@ impl Drop for Session {
 /// The real desktop tools behind the hard gate, with the shell as their host.
 #[cfg(desktop)]
 pub(crate) fn native_desktop() -> Box<dyn DesktopOps> {
-    Box::new(grokhub_desktop::NativeDesktop::new())
+    // The user's screen, or the Bot Desktop while Settings has it on.
+    Box::new(grokhub_desktop::AppDesktop::new())
 }
 
 /// Phones have no desktop tools; the capability report keeps them unoffered,
@@ -1063,6 +1173,124 @@ struct Worker {
     desk_on: Arc<AtomicBool>,
 }
 
+/// Reports written into a chat from outside its worker, such as a screen
+/// recording's, and what the worker must do about them.
+#[derive(Default)]
+struct Late {
+    /// The worker is in a turn: a report waits for the turn to be saved, so
+    /// it lands after it, and after a compaction that turn wrote.
+    running: bool,
+    /// The chat's file gained a report: the next message reads it back.
+    reload: bool,
+    /// Reports that came mid-turn, with the folder their chat works in.
+    pending: Vec<(String, String)>,
+}
+
+type LateMap = std::collections::HashMap<String, Late>;
+
+fn late() -> std::sync::MutexGuard<'static, LateMap> {
+    static LATE: std::sync::LazyLock<Mutex<LateMap>> = std::sync::LazyLock::new(Mutex::default);
+    LATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn write_report(chat: &str, cwd: &str, text: &str) -> Result<(), String> {
+    grokhub_agent::record_turn(
+        chat,
+        cwd,
+        grokhub_core::model_for_mode("fast"),
+        &[grokhub_agent::InputItem::Message {
+            role: "assistant".into(),
+            content: vec![grokhub_agent::ContentPart::InputText(text.to_string())],
+        }],
+        &grokhub_agent::Usage::default(),
+        "",
+        "",
+    )
+}
+
+/// Save `text` into `chat` as Grok's message, so it shows when the chat
+/// opens and Grok reads it with the next message. During a turn it is saved
+/// when the turn ends.
+pub fn save_report(chat: &str, cwd: &str, text: &str) -> Result<(), String> {
+    let mut late = late();
+    let entry = late.entry(chat.to_string()).or_default();
+    if entry.running {
+        entry.pending.push((cwd.to_string(), text.to_string()));
+        return Ok(());
+    }
+    write_report(chat, cwd, text)?;
+    entry.reload = true;
+    Ok(())
+}
+
+/// Save a handled user + assistant exchange (e.g., chat model benching) into
+/// `chat` and mark any live engine to reload its history before its next turn.
+pub fn save_bench_exchange(
+    chat: &str,
+    cwd: &str,
+    user_text: &str,
+    reply_text: &str,
+) -> Result<(), String> {
+    grokhub_agent::record_turn(
+        chat,
+        cwd,
+        "system",
+        &[
+            grokhub_agent::InputItem::Message {
+                role: "user".into(),
+                content: vec![grokhub_agent::ContentPart::InputText(user_text.to_string())],
+            },
+            grokhub_agent::InputItem::Message {
+                role: "assistant".into(),
+                content: vec![grokhub_agent::ContentPart::InputText(
+                    reply_text.to_string(),
+                )],
+            },
+        ],
+        &grokhub_agent::Usage::default(),
+        "",
+        "",
+    )?;
+    let mut late = late();
+    let entry = late.entry(chat.to_string()).or_default();
+    entry.reload = true;
+    Ok(())
+}
+
+/// A turn starts: reports wait until it ends. True when the chat's file
+/// gained a report since the last turn, so the engine reads it back.
+fn turn_starts(chat: &str) -> bool {
+    let mut late = late();
+    let entry = late.entry(chat.to_string()).or_default();
+    entry.running = true;
+    std::mem::take(&mut entry.reload)
+}
+
+/// The turn is saved: the reports that came meanwhile go in after it.
+fn turn_ends(chat: &str) {
+    let mut late = late();
+    let Some(entry) = late.get_mut(chat) else {
+        return;
+    };
+    entry.running = false;
+    for (cwd, text) in std::mem::take(&mut entry.pending) {
+        if write_report(chat, &cwd, &text).is_ok() {
+            entry.reload = true;
+        }
+    }
+    if !entry.reload {
+        late.remove(chat);
+    }
+}
+
+/// The line under `conversation_id`'s on-device reply, taken so it never
+/// outlives its turn, as the event to send: none for a side answer, whose
+/// reply has no bubble of its own to sit under.
+fn model_line_event(session: SessionMode, conversation_id: &str) -> Option<UiEvent> {
+    let text = grokhub_agent::route::local_live::take_line(conversation_id)?;
+    (session != SessionMode::Btw).then_some(UiEvent::ModelLine { text })
+}
+
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
@@ -1079,7 +1307,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     } = worker;
     let _config = grokhub_agent::perm::ConfigGuard::set(&config_dir);
     let mut engine: Option<NativeEngine> = None;
-    let mut inbox = Some(inbox);
+    // A chat switched to the user's Claude plan runs its turns here instead.
+    let mut plan: Option<ClaudePlanEngine> = None;
+    // A plan turn ran since the native engine last read the chat's file.
+    let mut plan_ran = false;
+    // Both engines answer approval cards from it, so one chat has one inbox.
+    let inbox = Arc::new(inbox);
     while let Ok(job) = jobs.recv() {
         let Job {
             text,
@@ -1103,6 +1336,37 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
+        // "From now on, use Claude" moves the chat onto the plan from this
+        // turn on, and "stop using Claude" moves it back; there is no switch.
+        if let Some(on) = crate::claude_chat::steer(&text) {
+            if let Err(why) = crate::claude_chat::set_chat(&config_dir, &conversation_id, on) {
+                let _ = done.send(Err(why));
+                continue;
+            }
+        }
+        // "Use Opus for the refactor" or "use high effort for debugging"
+        // steers that kind of task in this chat and its helpers from now on;
+        // "back to auto" clears it. There is no picker.
+        if let Err(why) =
+            grokhub_agent::route::task_steer::hear(&config_dir, &conversation_id, &text)
+        {
+            let _ = done.send(Err(why));
+            continue;
+        }
+        // A Stop from an earlier turn doesn't carry over; one pressed while
+        // Claude Code's sign-in is checked ends this turn before it starts.
+        if crate::claude_chat::is_on(&config_dir, &conversation_id) {
+            cancel.reset();
+        }
+        let plan_cli =
+            match crate::claude_chat::turn_cli(&config_dir, &conversation_id, &route.workspace) {
+                Some(Err(why)) => {
+                    let _ = done.send(Err(why));
+                    continue;
+                }
+                Some(Ok(cli)) => Some(cli),
+                None => None,
+            };
         // The chips block stays in the rules on btw turns too, so the cached
         // prompt doesn't change with the mode; a btw reply's chips are dropped.
         let chips_on =
@@ -1141,59 +1405,101 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         if route.lead {
             crate::task_feed::touch(&conversation_id);
         }
-        let engine = match (&mut engine, inbox.take()) {
-            (Some(engine), _) => {
-                engine.set_workspace(route.workspace);
-                engine.set_gate(gate);
-                engine.set_route(route.client, model, effort, system, route.auth_kind);
-                engine
+        let reload = turn_starts(&conversation_id);
+        let on_plan = plan_cli.is_some();
+        let engine: &mut dyn Engine = if let Some(cli) = plan_cli {
+            let plan = plan.get_or_insert_with(|| {
+                ClaudePlanEngine::new(
+                    cli.clone(),
+                    route.workspace.clone(),
+                    cancel.clone(),
+                    steer.clone(),
+                )
+                .for_chat(&conversation_id)
+                .with_approvals(grokhub_agent::claude_plan::engine::Approvals {
+                    permits: inbox.clone(),
+                    halted: Arc::clone(&halted),
+                })
+            });
+            plan.set_cli(cli);
+            // Read-only until a plan is approved, as the native gate is.
+            plan.set_read_only(route.session != SessionMode::Chat);
+            // The store decides which session goes on: the one kept for this
+            // folder (also after a restart), or a new one when the chat was
+            // switched off and on, a message was deleted, or Settings revoked it.
+            let kept =
+                crate::claude_chat::session_of(&config_dir, &conversation_id, &route.workspace);
+            match kept {
+                Some(kept) => plan.resume_session(&kept),
+                None if plan.session().is_some() => plan.start_new_session(),
+                None => {}
             }
-            (none, inbox) => {
-                let Some(inbox) = inbox else {
-                    let _ = done.send(Err("The chat worker stopped.".into()));
-                    return;
-                };
-                let engine = none.insert(NativeEngine::new(EngineParts {
-                    client: route.client,
-                    workspace: route.workspace,
-                    model,
-                    effort,
-                    system,
-                    conversation_id: conversation_id.clone(),
-                    auth_kind: route.auth_kind,
-                    max_turns: 0,
-                    cancel: cancel.clone(),
-                    steer: steer.clone(),
-                    halt: Box::new(NeverHalted),
-                    gate,
-                    desktop: Some(Box::new(crate::episode::FrameTap {
-                        inner: Box::new(crate::episode::Switched {
-                            inner: desktop(),
-                            on: Arc::clone(&desk_on),
-                        }),
-                        slot: frames.clone(),
-                    })),
-                    permits: Arc::new(inbox),
-                }));
-                engine.set_pause(Arc::clone(&pause));
-                // A chat saved earlier (opened from History, or the last chat
-                // after a restart) goes on from its saved turns, as the cabin's does.
-                if let Ok(info) = grokhub_agent::load_session(&resume) {
-                    engine.resume(info.input(), info.usage);
+            plan.set_workspace(route.workspace.clone());
+            plan_ran = true;
+            plan
+        } else {
+            let engine = match &mut engine {
+                Some(engine) => {
+                    // A report was saved into this chat between turns, or turns
+                    // ran on the Claude plan: read the chat back from its file,
+                    // so the model sees them too.
+                    if reload || std::mem::take(&mut plan_ran) {
+                        if let Ok(info) = grokhub_agent::load_session(&conversation_id) {
+                            engine.resume(info.input(), info.usage);
+                        }
+                    }
+                    engine.set_workspace(route.workspace);
+                    engine.set_gate(gate);
+                    engine.set_route(route.client, model, effort, system, route.auth_kind);
+                    engine
                 }
-                engine
-            }
+                none => {
+                    // This engine reads the chat's file below, plan turns included.
+                    plan_ran = false;
+                    let engine = none.insert(NativeEngine::new(EngineParts {
+                        client: route.client,
+                        workspace: route.workspace,
+                        model,
+                        effort,
+                        system,
+                        conversation_id: conversation_id.clone(),
+                        auth_kind: route.auth_kind,
+                        max_turns: 0,
+                        cancel: cancel.clone(),
+                        steer: steer.clone(),
+                        halt: Box::new(NeverHalted),
+                        gate,
+                        desktop: Some(Box::new(crate::episode::FrameTap {
+                            inner: Box::new(crate::episode::Switched {
+                                inner: desktop(),
+                                on: Arc::clone(&desk_on),
+                            }),
+                            slot: frames.clone(),
+                        })),
+                        permits: inbox.clone(),
+                    }));
+                    engine.set_pause(Arc::clone(&pause));
+                    engine.set_imagine(Some(Arc::new(crate::imagine::ChatImagine)));
+                    // A chat saved earlier (opened from History, or the last chat
+                    // after a restart) goes on from its saved turns, as the cabin's does.
+                    if let Ok(info) = grokhub_agent::load_session(&resume) {
+                        engine.resume(info.input(), info.usage);
+                    }
+                    engine
+                }
+            };
+            // A message with desktop control on belongs to the chat's episode.
+            engine.set_episode(episode.filter(|_| route.desktop));
+            // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
+            #[cfg(desktop)]
+            engine.set_halt(Box::new(grokhub_agent::StampHalt {
+                started_ms: asked_ms,
+                read: grokhub_desktop::read_halt_stamp,
+            }));
+            #[cfg(mobile)]
+            let _ = asked_ms;
+            engine
         };
-        // A message with desktop control on belongs to the chat's episode.
-        engine.set_episode(episode.filter(|_| route.desktop));
-        // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
-        #[cfg(desktop)]
-        engine.set_halt(Box::new(grokhub_agent::StampHalt {
-            started_ms: asked_ms,
-            read: grokhub_desktop::read_halt_stamp,
-        }));
-        #[cfg(mobile)]
-        let _ = asked_ms;
         let mut stop = String::new();
         let mut error = None;
         let mut reply = String::new();
@@ -1209,7 +1515,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // recap card's details fold reads them at Done.
         let mut tool_rows: Vec<(String, grokhub_core::turn_timeline::ToolRow)> = Vec::new();
         let ran = engine.prompt(&message.text, message.image.as_deref(), &mut |event| {
-            let Some(mut ui) = ui_event(event) else {
+            let Some(mut ui) = turn_event(event, on_plan) else {
                 return;
             };
             if let UiEvent::Elicit {
@@ -1264,11 +1570,15 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     }
                     reply.push_str(text);
                 }
+                // Thinking goes to the page only: the reply, the recap and
+                // the saved chat never see it.
+                UiEvent::Thought { text } if text.is_empty() => return,
                 UiEvent::Tool {
                     id,
                     title,
                     status,
                     detail,
+                    ..
                 } => {
                     let row = grokhub_core::turn_timeline::ToolRow {
                         status: status.clone(),
@@ -1294,13 +1604,19 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     }
                     // The turn's extras, before Done as the Goal card is:
                     // the recap card for its Finished block, then the
-                    // evidence receipt the harness recorded for it.
+                    // evidence receipt the harness recorded for it, then the
+                    // line naming the on-device model that answered. The
+                    // line is taken either way, so it never outlives its turn.
+                    let model_line = model_line_event(route.session, &conversation_id);
                     if route.session != SessionMode::Btw {
                         if let Some(card) = recap_event(&reply, &tool_rows) {
                             emit(card);
                         }
                         if let Some(receipt) = evidence_event(&config_dir, &conversation_id) {
                             emit(receipt);
+                        }
+                        if let Some(line) = model_line {
+                            emit(line);
                         }
                     }
                     let btw = route.session == SessionMode::Btw;
@@ -1321,7 +1637,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                             emit(card);
                         }
                     }
-                    if !btw && s != "error" && error.is_none() {
+                    // A scratch chat keeps no goals from what was said.
+                    if !btw
+                        && s != "error"
+                        && error.is_none()
+                        && !grokhub_agent::scratch::is_scratch(&conversation_id)
+                    {
                         let raw = std::mem::take(&mut raw);
                         let ask = crate::goals::read_chat_turn(
                             &config_dir,
@@ -1342,6 +1663,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             }
             emit(ui);
         });
+        turn_ends(&conversation_id);
         crate::helper_asks::turn_ended(&conversation_id);
         if route.lead {
             crate::task_feed::touch(&conversation_id);
@@ -1358,6 +1680,21 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
             (Ok(()), Some(message)) if stop == "error" => Err(message),
             (Ok(()), _) => Ok(stop),
         };
+        // Kept so the chat goes on with the same session after a restart.
+        if let Some(plan) = plan.as_mut().filter(|_| on_plan) {
+            if let Some(session) = plan.session() {
+                let _ = crate::claude_chat::remember_session(
+                    &config_dir,
+                    &conversation_id,
+                    session,
+                    plan.workspace(),
+                );
+            }
+            // How much of the plan's limit is used, for Settings.
+            if let Some((reading, seen_at)) = plan.take_headroom() {
+                let _ = crate::claude_chat::remember_headroom(&config_dir, reading, seen_at);
+            }
+        }
         let _ = done.send(result);
     }
 }
@@ -2192,6 +2529,159 @@ mod tests {
     }
 
     #[test]
+    fn a_checked_panel_reaches_the_page_whole_and_a_bad_one_never_does() {
+        let spec = serde_json::json!({
+            "title": "Linux CI",
+            "elements": [
+                {"type": "key_value", "pairs": [{"key": "Workflow", "value": "ci"}]},
+                {"type": "button", "label": "Re-run", "action": "rerun_ci"}
+            ]
+        });
+        let event = ui_event(AcpEvent::Panel {
+            id: "call-1".into(),
+            spec: spec.clone(),
+        })
+        .expect("a panel");
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({"kind": "panel", "id": "call-1", "spec": spec})
+        );
+        // Raw HTML, a script link or an action that isn't an id stay off the page.
+        for bad in [
+            serde_json::json!({"elements": [{"type": "text", "text": "<b>hi</b>"}]}),
+            serde_json::json!({"elements": [{"type": "text", "text": "javascript:alert(1)"}]}),
+            serde_json::json!({"elements": [{"type": "button", "label": "Go", "action": "Rerun!"}]}),
+            serde_json::json!({"elements": []}),
+        ] {
+            assert_eq!(
+                ui_event(AcpEvent::Panel {
+                    id: "call-2".into(),
+                    spec: bad.clone(),
+                }),
+                None,
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_panel_near_the_cap_still_reaches_the_page() {
+        use grokhub_core::panel_spec::{panel_spec_from_args, PANEL_JSON_MAX, TEXT_MAX};
+        // Headings with no level: the engine's form adds `"level":2` to each,
+        // so it grows past the cap the tool checked the call against.
+        let build = |last: usize| {
+            let mut elements: Vec<serde_json::Value> = (0..11)
+                .map(|_| serde_json::json!({"type": "text", "text": "a".repeat(TEXT_MAX)}))
+                .collect();
+            elements.push(serde_json::json!({"type": "text", "text": "b".repeat(last.max(1))}));
+            for _ in 0..36 {
+                elements.push(serde_json::json!({"type": "heading", "text": "h"}));
+            }
+            serde_json::json!({ "elements": elements }).to_string()
+        };
+        let base = build(1).len();
+        let args = build(1 + PANEL_JSON_MAX - 100 - base);
+        assert_eq!(args.len(), PANEL_JSON_MAX - 100);
+        let spec = serde_json::to_value(panel_spec_from_args(&args).unwrap()).unwrap();
+        assert!(
+            spec.to_string().len() > PANEL_JSON_MAX,
+            "{}",
+            spec.to_string().len()
+        );
+        let event = ui_event(AcpEvent::Panel {
+            id: "call-1".into(),
+            spec,
+        });
+        assert!(matches!(event, Some(UiEvent::Panel { ref id, .. }) if id == "call-1"));
+    }
+
+    #[test]
+    fn a_finished_picture_reaches_the_card_and_nothing_else_does() {
+        #[cfg(unix)]
+        let made = "/home/user/.config/my-app/sessions/c1/media/image-1-local.png";
+        #[cfg(windows)]
+        let made = r"C:\Users\user\AppData\Roaming\my-app\sessions\c1\media\image-1-local.png";
+        let card = |kind: &str, status: &str, detail: String| {
+            AcpEvent::Tool(grokhub_core::wire::ToolCard {
+                id: "call-1".into(),
+                title: kind.into(),
+                kind: kind.into(),
+                status: status.into(),
+                detail,
+                diff: String::new(),
+                image_data_url: None,
+                raw_input: String::new(),
+            })
+        };
+        let picture = |event| match ui_event(event) {
+            Some(UiEvent::Tool { picture, .. }) => picture,
+            other => panic!("a tool row, got {other:?}"),
+        };
+        let done = format!("IMAGINE: {made}\n(Made on this computer with Tiny; nothing was sent.)");
+        assert_eq!(
+            picture(card("image_generate", "completed", done.clone())),
+            Some(made.to_string())
+        );
+        assert_eq!(
+            picture(card("image_generate", "in_progress", done.clone())),
+            None
+        );
+        assert_eq!(picture(card("read_file", "completed", done)), None);
+        for detail in [
+            "IMAGINE: https://imgen.x.ai/a.png",
+            "IMAGINE: media/a.png",
+            "IMAGINE: /home/user/clip.mp4",
+            "Not made, and nothing was sent.",
+        ] {
+            assert_eq!(
+                picture(card("image_generate", "completed", detail.into())),
+                None,
+                "{detail}"
+            );
+        }
+        let json = serde_json::to_value(UiEvent::Tool {
+            id: "call-1".into(),
+            title: "read_file".into(),
+            status: "completed".into(),
+            detail: "ok".into(),
+            picture: None,
+        })
+        .expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({"kind": "tool", "id": "call-1", "title": "read_file", "status": "completed", "detail": "ok"})
+        );
+    }
+
+    #[test]
+    fn the_model_line_goes_out_as_its_own_event_once() {
+        assert_eq!(
+            serde_json::to_value(UiEvent::ModelLine {
+                text: "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer.".into()
+            })
+            .expect("json"),
+            serde_json::json!({"kind": "modelLine", "text": "Answered by Gemma 4 E2B with its draft: Speed, because you asked for a quick answer."})
+        );
+        let id = "shell-model-line-test";
+        assert_eq!(
+            model_line_event(SessionMode::Chat, id),
+            None,
+            "no on-device reply, no line"
+        );
+        let line = "Answered by Gemma 4 E2B with its draft, your pick.";
+        grokhub_agent::route::local_live::keep_line(id, line.into());
+        assert_eq!(
+            model_line_event(SessionMode::Chat, id),
+            Some(UiEvent::ModelLine { text: line.into() })
+        );
+        assert_eq!(model_line_event(SessionMode::Chat, id), None, "taken once");
+        // A side answer's line is taken and dropped: it never shows later.
+        grokhub_agent::route::local_live::keep_line(id, line.into());
+        assert_eq!(model_line_event(SessionMode::Btw, id), None);
+        assert_eq!(model_line_event(SessionMode::Chat, id), None);
+    }
+
+    #[test]
     fn engine_events_map_to_ui_events() {
         assert_eq!(
             ui_event(AcpEvent::Text("hi".into())),
@@ -2203,17 +2693,66 @@ mod tests {
                 message: "boom".into()
             })
         );
-        assert_eq!(ui_event(AcpEvent::Thought("hmm".into())), None);
+        assert_eq!(
+            ui_event(AcpEvent::Thought("hmm".into())),
+            Some(UiEvent::Thought { text: "hmm".into() })
+        );
+        assert_eq!(
+            serde_json::to_value(UiEvent::Thought { text: "hmm".into() }).expect("json"),
+            serde_json::json!({"kind": "thought", "text": "hmm"})
+        );
         let json = serde_json::to_value(UiEvent::Permission {
             id: "c".into(),
             title: "write".into(),
             action: "note.txt".into(),
             reason: String::new(),
+            asks_every_time: false,
+            hard: false,
         })
         .expect("json");
         assert_eq!(
             json,
             serde_json::json!({"kind": "permission", "id": "c", "title": "write", "action": "note.txt", "reason": ""})
+        );
+        // A Claude plan turn's card says so; the page then hides "Stop asking me".
+        let ask = || {
+            AcpEvent::Permission(grokhub_core::wire::PermissionAsk {
+                rpc_id: serde_json::json!(7),
+                session_id: "s".into(),
+                title: "Bash".into(),
+                tool_call_id: "c".into(),
+                action: "touch a.txt".into(),
+                reason: String::new(),
+                reject_option: None,
+                hard: false,
+            })
+        };
+        let card = |asks_every_time| UiEvent::Permission {
+            id: "c".into(),
+            title: "Bash".into(),
+            action: "touch a.txt".into(),
+            reason: String::new(),
+            asks_every_time,
+            hard: false,
+        };
+        assert_eq!(turn_event(ask(), true), Some(card(true)));
+        assert_eq!(turn_event(ask(), false), Some(card(false)));
+        assert_eq!(
+            turn_event(AcpEvent::Text("hi".into()), true),
+            Some(UiEvent::Text { text: "hi".into() })
+        );
+        let plan_ask = serde_json::to_value(UiEvent::Permission {
+            id: "c".into(),
+            title: "Bash".into(),
+            action: "touch a.txt".into(),
+            reason: String::new(),
+            asks_every_time: true,
+            hard: false,
+        })
+        .expect("json");
+        assert_eq!(
+            plan_ask,
+            serde_json::json!({"kind": "permission", "id": "c", "title": "Bash", "action": "touch a.txt", "reason": "", "asksEveryTime": true})
         );
         assert_eq!(
             ui_event(AcpEvent::Plan("1. Read".into())),
@@ -2440,6 +2979,25 @@ mod tests {
             "{prompt}"
         );
         assert!(!rules.contains("HARBOR_SOUL_MARK"));
+        // A scratch chat's prompt carries neither, and keeps its voice.
+        let scratch = system_prompt_for(
+            std::path::Path::new("/tmp"),
+            false,
+            voice,
+            "shell-scratch-a-b",
+            false,
+        );
+        assert!(scratch.contains(voice), "{scratch}");
+        assert!(!scratch.contains("HARBOR_SOUL_MARK"), "{scratch}");
+        assert!(!scratch.contains("HARBOR_USER_MARK"), "{scratch}");
+        let normal = system_prompt_for(
+            std::path::Path::new("/tmp"),
+            false,
+            voice,
+            "shell-a-b",
+            false,
+        );
+        assert!(normal.contains("HARBOR_SOUL_MARK"), "{normal}");
     }
 
     #[test]
@@ -2666,6 +3224,180 @@ mod tests {
             })
             .unwrap_or_default();
         (result, user)
+    }
+
+    /// [`Answers`], but its first call waits for `go`, so a test can act
+    /// while that turn runs.
+    struct Gated {
+        requests: Mutex<Vec<ResponsesRequest>>,
+        go: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl ModelClient for Gated {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.requests.lock().expect("requests").push(req.clone());
+            let wait = self.go.lock().expect("go").take();
+            if let Some(go) = wait {
+                go.recv_timeout(Duration::from_secs(10)).expect("go");
+            }
+            sink(StreamEvent::TextDelta("Seen.".into()));
+            Ok(TurnOutput {
+                text: "Seen.".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    const REPORT: &str = "Screen recording 0:12: slow menu\n\nWhat I saw: The menu opens slowly.";
+
+    /// The chat's messages in a request: the system rules and each user
+    /// message's per-turn notes left out.
+    fn said(req: &ResponsesRequest) -> Vec<(String, String)> {
+        req.input
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::Message { role, content } if role == "user" || role == "assistant" => {
+                    let text = texts(content);
+                    let words = text
+                        .rsplit_once("</cabin-volatile>\n\n")
+                        .map_or(text.as_str(), |(_, words)| words);
+                    Some((role.clone(), words.to_string()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn chat_route(client: &Arc<Gated>, workspace: &std::path::Path) -> Route {
+        Route {
+            client: Arc::clone(client) as Arc<dyn ModelClient + Send + Sync>,
+            auth_kind: AuthKind::ApiKey,
+            workspace: workspace.to_path_buf(),
+            mode: PermMode::Ask,
+            desktop: false,
+            session: SessionMode::Chat,
+            voice: String::new(),
+            voice_session: None,
+            suggestions: false,
+            lead: false,
+        }
+    }
+
+    /// A report saved into the chat between turns reaches the model with
+    /// the next message, though the chat's worker was already running.
+    #[test]
+    fn a_report_saved_between_turns_reaches_the_next_request() {
+        let (workspace, config) = (temp_dir("report-ws"), temp_dir("report-cfg"));
+        let id = "shell-report-reload";
+        let client = Arc::new(Gated {
+            requests: Mutex::new(Vec::new()),
+            go: Mutex::new(None),
+        });
+        let session = Session::spawn_with(id, config.clone(), fake_desktop);
+        let first = session.prompt(
+            "record my screen",
+            vec![],
+            chat_route(&client, &workspace),
+            Box::new(|_| {}),
+        );
+        assert_eq!(first, Ok("end_turn".to_string()));
+        {
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+            save_report(id, &workspace.display().to_string(), REPORT).expect("saved");
+        }
+        let second = session.prompt(
+            "what was step one?",
+            vec![],
+            chat_route(&client, &workspace),
+            Box::new(|_| {}),
+        );
+        assert_eq!(second, Ok("end_turn".to_string()));
+        let requests = client.requests.lock().expect("requests");
+        let pair = |role: &str, text: &str| (role.to_string(), text.to_string());
+        assert_eq!(
+            said(&requests[1]),
+            vec![
+                pair("user", "record my screen"),
+                pair("assistant", "Seen."),
+                pair("assistant", REPORT),
+                pair("user", "what was step one?"),
+            ]
+        );
+        assert!(!turn_starts(id), "the mark is spent");
+        turn_ends(id);
+    }
+
+    /// A report that comes while a turn runs waits for the turn to be saved,
+    /// then lands after it, on screen order, for the next message.
+    #[test]
+    fn a_report_during_a_turn_lands_after_it() {
+        let (workspace, config) = (temp_dir("report-mid-ws"), temp_dir("report-mid-cfg"));
+        let id = "shell-report-mid";
+        let (go, wait) = std::sync::mpsc::channel();
+        let client = Arc::new(Gated {
+            requests: Mutex::new(Vec::new()),
+            go: Mutex::new(Some(wait)),
+        });
+        let session = Arc::new(Session::spawn_with(id, config.clone(), fake_desktop));
+        let running = {
+            let (session, client, workspace) =
+                (Arc::clone(&session), Arc::clone(&client), workspace.clone());
+            std::thread::spawn(move || {
+                session.prompt(
+                    "record my screen",
+                    vec![],
+                    chat_route(&client, &workspace),
+                    Box::new(|_| {}),
+                )
+            })
+        };
+        let t = std::time::Instant::now();
+        while client.requests.lock().expect("requests").is_empty() {
+            assert!(
+                t.elapsed() < Duration::from_secs(10),
+                "the turn never asked"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let file = config.join("sessions").join(format!("{id}.jsonl"));
+        {
+            let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+            save_report(id, &workspace.display().to_string(), REPORT).expect("queued");
+        }
+        let mid = std::fs::read_to_string(&file).unwrap_or_default();
+        assert!(
+            !mid.contains("What I saw"),
+            "nothing is written mid-turn: {mid}"
+        );
+        go.send(()).expect("go");
+        assert_eq!(running.join().expect("join"), Ok("end_turn".to_string()));
+        let saved = std::fs::read_to_string(&file).expect("saved");
+        let seen = saved.find("Seen.").expect("the reply");
+        let report = saved.find("What I saw").expect("the report");
+        assert!(seen < report, "the report comes after the turn: {saved}");
+        let next = session.prompt(
+            "what was step one?",
+            vec![],
+            chat_route(&client, &workspace),
+            Box::new(|_| {}),
+        );
+        assert_eq!(next, Ok("end_turn".to_string()));
+        let requests = client.requests.lock().expect("requests");
+        let pair = |role: &str, text: &str| (role.to_string(), text.to_string());
+        assert_eq!(
+            said(&requests[1]),
+            vec![
+                pair("user", "record my screen"),
+                pair("assistant", "Seen."),
+                pair("assistant", REPORT),
+                pair("user", "what was step one?"),
+            ]
+        );
     }
 
     fn png_bytes() -> Vec<u8> {

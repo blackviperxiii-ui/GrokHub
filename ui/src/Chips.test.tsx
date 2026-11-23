@@ -10,6 +10,15 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+const session = vi.hoisted(() => ({ heard: [] as (() => void)[] }));
+vi.mock("./gameSession", () => ({
+  onGameSession: (fn: () => void) => {
+    session.heard.push(fn);
+    return Promise.resolve(() => {
+      session.heard = session.heard.filter((f) => f !== fn);
+    });
+  },
+}));
 
 import { ChipRow, chipSlotOf, chipTip, DRAFT_SETTLE_MS, useChipRow } from "./Chips";
 
@@ -81,6 +90,21 @@ describe("ChipRow", () => {
     fireEvent.keyDown(window, { code: "Digit2", altKey: true });
     expect(onTap).toHaveBeenCalledWith(chips[1]);
   });
+
+  it("Alt+N leaves a window over the page alone, such as a game's note", () => {
+    const onTap = vi.fn();
+    const chips = [chip("a", "One"), chip("b", "Two")];
+    render(
+      <>
+        <ChipRow chips={chips} onTap={onTap} onHide={vi.fn()} />
+        <div role="dialog" aria-modal="true" aria-label="Note for Hades">
+          <textarea aria-label="Your note" />
+        </div>
+      </>,
+    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Your note" }), { code: "Digit2", altKey: true });
+    expect(onTap).not.toHaveBeenCalled();
+  });
 });
 
 function Harness({ draft = "", busy = false }: { draft?: string; busy?: boolean }) {
@@ -118,6 +142,18 @@ describe("useChipRow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Two" }));
     expect(api.chipOutcome).toHaveBeenLastCalledWith("composer", "b", true);
     await vi.waitFor(() => expect(api.quickChips).toHaveBeenCalledTimes(3));
+  });
+
+  it("asks again when a game starts or closes", async () => {
+    render(<Harness />);
+    expect(await screen.findByRole("button", { name: "One" })).toBeVisible();
+    expect(api.quickChips).toHaveBeenCalledTimes(1);
+    api.quickChips.mockResolvedValue([chip("game:note:after:7", "Leave a note for next time", { action: "note", noteFor: 7 })]);
+    act(() => session.heard.forEach((fn) => fn()));
+    await vi.waitFor(() => expect(api.quickChips).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "Leave a note for next time" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "One" })).toBeNull();
+    expect(session.heard).toHaveLength(1);
   });
 
   it("shows nothing and asks nothing while busy", async () => {

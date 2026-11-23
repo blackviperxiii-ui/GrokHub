@@ -1,31 +1,32 @@
 # Compass: versions, channels, and the build label
 
 ## Owns
-- The one lockstep version (`VERSION`, `[workspace.package] version` in `Cargo.toml`) and what `grokhub --version` prints: `GrokHub 2.13.1-beta.3 (beta @ abc1234)` on beta, `GrokHub 2.13.1 (main @ abc1234)` on stable.
+- The one lockstep version (`VERSION`, `[workspace.package] version` in `Cargo.toml`) and the build label Settings → About shows: `2.13.1-beta.3` on beta, `2.13.1` on stable (`grokhub-shell --version` prints the plain version).
 - Install channels: `stable` builds `main`, `beta` builds `beta`; the choice lives in the `channel` receipt in the config dir.
 ## Quick commands
-- `cargo run -p grokhub-app -- --version`
+- `grokhub-shell --version`
 - `cargo xtask bump --check` / `cargo xtask bump <X.Y.Z>`
-- `cargo test -p grokhub-core channel` · `cargo test -p grokhub-app cabin_reports_version` · `cargo test -p xtask`
+- `cargo test -p grokhub-core channel` · `cargo test -p xtask`
 ## Key files
-- the retired cabin's build.rs: sets GROKHUB_BUILD_CHANNEL, GROKHUB_BUILD_BRANCH, GROKHUB_BUILD_SHA, GROKHUB_BUILD_BETA_N from git and `GROKHUB_CHANNEL`.
-- `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `version_line`, `parse_version_line`, `ChannelTips`, `beta_caught_up_to_main`, `channel_switch_shell`; `fetch_channel_tips` in `update.rs`.
-- `crates/grokhub-core/src/update.rs`: `CabinSemver`, `parse_cabin_semver`, `cabin_version_newer`, `beta_auto_off_for_versions`.
+- `src-tauri/build.rs`: sets the shell's base version, channel and beta N (GROKHUB_SHELL_BASE, GROKHUB_SHELL_CHANNEL, GROKHUB_SHELL_BETA_N) from `VERSION`, git and `GROKHUB_CHANNEL`; the version function in `src-tauri/src/shell_update.rs` builds the label from them.
+- `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `CHANNEL_BETA_SINCE`.
+- `src-tauri/src/shell_update.rs`: the app's Stable/Beta switch (`set_channel` writes the receipt) and its self-update.
 - `xtask/src/main.rs` + `changelog.d/README.md`: release ownership; feature PRs add fragments, bump folds them.
 - `CHANGELOG.md`: dated sections; leftover `## Unreleased` is folded by `xtask bump`.
 ## Change recipe
 - PR into beta: no bump. Add `changelog.d/<slug>.md` and stop (do not edit `CHANGELOG.md` or version files). CI fails version-file edits without the `release` label (`scripts/ci-guards.sh`).
-- Promotion or hotfix only, with the maintainer's approval: label `release`, then `cargo xtask bump <X.Y.Z>` updates `VERSION`, `Cargo.toml`, `Cargo.lock` `grokhub-*`, `docs/REFERENCE.md`, both PKGBUILDs, `packaging/windows/grokhub.iss`, and cabin_reports_version in the retired cabin's cli.rs, then folds fragments (`CLAUDE.md`).
+- Promotion or hotfix only, with the maintainer's approval: label `release`, then `cargo xtask bump <X.Y.Z>` updates `VERSION`, `Cargo.toml`, `Cargo.lock` `grokhub-*`, `docs/REFERENCE.md`, both PKGBUILDs (their `pkgver=` line), `packaging/aur/.SRCINFO` (`pkgver` and `#tag=v…`), `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.lock`, then folds fragments (`CLAUDE.md`).
 ## What breaks it
 - Editing the Cargo version to get a beta label: build.rs derives `-beta.N` from the branch or `GROKHUB_CHANNEL` plus commit count since the newest `vX.Y.Z` tag.
-- Bumping things that must not move: Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, and `Version=` in `packaging/grokhub.desktop`.
-- A partial bump: cabin_reports_version asserts the literal; `ci-guards` runs `cargo xtask bump --check` and blocks non-`release` version edits; `--locked` CI fails if `Cargo.lock` lags.
+- Bumping things that must not move: Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, and `Version=` in `packaging/grokhub-shell.desktop`.
+- A partial bump: `ci-guards` runs `cargo xtask bump --check` and blocks non-`release` version edits; `--locked` CI fails if `Cargo.lock` lags.
+- Editing `packaging/aur/PKGBUILD` without refreshing `.SRCINFO`: `python3 scripts/aur-srcinfo.py --check` (ci-guards) fails. After a recipe edit, run `python3 scripts/aur-srcinfo.py --write`.
 ## What depends on it
-- In-app Update (refuses a clone on the other channel), the Labs Beta toggle, `scripts/install.sh` (writes the receipt), and `grokhub --version`.
+- Settings → About → Updates (reads and writes the receipt) and `scripts/install.sh` (writes the receipt).
 ## Non-obvious
-- Beta N is `git rev-list --count <newest-vX.Y.Z>..HEAD`; missing tags (shallow clone) → `beta.0` until `git fetch --tags`. build.rs reruns on `HEAD`, `packed-refs`, `logs/HEAD`, and the branch ref.
-- A missing, empty, or unknown receipt reads as stable. Updater compares with prerelease order; stable never gets a prerelease offer. Labs auto-off still uses trees (`beta_caught_up_to_main`); `beta_auto_off_for_versions` is the pure version rule.
-- Without a source clone both channels update from signed GitHub releases: stable from `releases/latest`, beta from the newest `vX.Y.Z-beta.N` or legacy `beta-v*` pre-release by `created_at` (`pick_release` in `crates/grokhub-core/src/release_verify.rs`). `.github/workflows/release.yml` publishes those tags as prerelease, never Latest.
-- Every Update or channel switch appends a redacted tail to `update.log`. `.github/`, `clippy.toml`, and release scripts ship in PRs like other changes (squash-merge into `beta` on green).
+- Beta N is `git rev-list --count <newest-vX.Y.Z>..HEAD`; missing tags (shallow clone) → `beta.0` until `git fetch --tags`. The shell's build.rs reruns on `VERSION`, `GROKHUB_CHANNEL`, and git's `HEAD`, `packed-refs` and `logs/HEAD`.
+- In the app, a missing or empty receipt falls back to the channel the build itself is on; an unknown one reads as stable. Beta never turns itself off; switching back is the Updates page's Stable choice.
+- The app updates both channels from signed GitHub releases: stable from `releases/latest`, beta from the newest `vX.Y.Z-beta.N` or legacy `beta-v*` pre-release by `created_at` (`pick_release` in `crates/grokhub-core/src/release_verify.rs`). `.github/workflows/release.yml` publishes those tags as prerelease, never Latest.
+- `.github/`, `clippy.toml`, and release scripts ship in PRs like other changes (squash-merge into `beta` on green).
 ## See also
-- [install-scripts](install-scripts.md), grokhub-app
+- [install-scripts](install-scripts.md), grokhub-shell

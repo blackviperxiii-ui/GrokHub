@@ -36,18 +36,6 @@ pub trait PageFetch: Send + Sync {
     fn get(&self, url: &str) -> Result<FetchResp, String>;
 }
 
-pub(crate) struct BlockedFetch;
-
-impl PageFetch for BlockedFetch {
-    fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, String> {
-        Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
-    }
-
-    fn get(&self, _url: &str) -> Result<FetchResp, String> {
-        Err(grokhub_core::XAI_NEED_SIGNIN.to_string())
-    }
-}
-
 pub(crate) struct UreqFetch {
     agent: grokhub_core::http::Agent,
 }
@@ -73,6 +61,8 @@ impl UreqFetch {
 
 impl PageFetch for UreqFetch {
     fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+        // Offline only refuses before the DNS lookup leaves the computer.
+        grokhub_core::offline::check_host(host).map_err(|e| e.to_string())?;
         let mut ips = Vec::new();
         for sock in (host, port)
             .to_socket_addrs()
@@ -108,7 +98,10 @@ impl PageFetch for UreqFetch {
     }
 }
 
-fn owned_response(status: u16, resp: grokhub_core::http::Response) -> Result<FetchResp, String> {
+pub(super) fn owned_response(
+    status: u16,
+    resp: grokhub_core::http::Response,
+) -> Result<FetchResp, String> {
     let location = resp.header("location").map(str::to_string);
     let content_type = resp.header("content-type").unwrap_or("").to_string();
     if is_redirect(status) {
@@ -175,7 +168,7 @@ pub(crate) fn schema() -> Value {
 pub(crate) fn run_with_ports(args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     match super::ports::current().fetch {
         Some(fetch) => run(args, fetch.as_ref(), stop),
-        None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
+        None => ToolOutput::err(super::NO_WEB_PORT),
     }
 }
 
@@ -528,6 +521,19 @@ pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::Socket
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With no network installed, web fetch and web search name no sign-in:
+    /// neither needs xAI.
+    #[test]
+    fn with_no_network_installed_the_web_tools_ask_for_no_sign_in() {
+        let _none = super::super::ports::enter(super::super::ports::Ports::default());
+        let fetch = run_with_ports(&json!({"url": "https://example.com/"}), &|| false);
+        let search = super::super::web_search::run_with_ports(&json!({"query": "rust"}), &|| false);
+        for out in [fetch, search] {
+            assert!(out.failed);
+            assert_eq!(out.text, "Web access isn't set up for this run.");
+        }
+    }
     use crate::auto_review::{review, ReviewIn};
     use crate::gate::{decide_with, Decision, Gate, PermMode};
     use crate::perm::{parse_rule, Action, Policy};

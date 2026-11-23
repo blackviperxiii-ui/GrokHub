@@ -232,18 +232,21 @@ mod tests {
                     prompt: "Restart the bluetooth service.".into(),
                     kind: crate::card_report::OfferKind::Chat,
                     fix_type: None,
+                    steps: vec![],
                 },
                 FixOffer {
                     label: "Find out why".into(),
                     prompt: "Read its crash history.".into(),
                     kind: crate::card_report::OfferKind::Chat,
                     fix_type: None,
+                    steps: vec![],
                 },
                 FixOffer {
                     label: "Third".into(),
                     prompt: "never shown".into(),
                     kind: crate::card_report::OfferKind::Chat,
                     fix_type: None,
+                    steps: vec![],
                 },
             ],
             ..Default::default()

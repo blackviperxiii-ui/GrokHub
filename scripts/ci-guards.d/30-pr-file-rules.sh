@@ -62,12 +62,12 @@ else:
 PY
 }
 
-# The Setup script's version define (`cargo xtask bump` rewrites it). The rest
-# of grokhub.iss (names, shortcuts, files) is ordinary packaging.
-inno_version_line() {
+# A PKGBUILD's pkgver line (`cargo xtask bump` rewrites it). The rest of the
+# recipe (depends, build, package) is ordinary packaging.
+pkgbuild_version_line() {
   local file="$1"
   [[ -f "$file" ]] || { echo ""; return; }
-  grep -E '^[[:space:]]*#define[[:space:]]+MyAppVersion[[:space:]]' "$file" | head -n1 || true
+  grep -E '^pkgver=' "$file" | head -n1 || true
 }
 
 grokhub_lock_versions() {
@@ -102,12 +102,6 @@ text = open(sys.argv[1], encoding="utf-8").read()
 v = sys.argv[2]
 needles = [
     f"**v{v}**",
-    f"grokhub-linux-v{v}.tar.gz",
-    f"GrokHub-Setup-{v}.exe",
-    f"grokhub-windows-v{v}.zip",
-    f"GrokHub {v}-beta.",
-    f"GrokHub {v} (main",
-    f"GrokHub {v}",
 ]
 print("|".join(f"{n}:{text.count(n)}" for n in needles))
 PY
@@ -194,7 +188,7 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     version_hits=()
     for f in "${pr_changed[@]+"${pr_changed[@]}"}"; do
       case "$f" in
-        VERSION|CHANGELOG.md|packaging/PKGBUILD|packaging/aur/PKGBUILD)
+        VERSION|CHANGELOG.md)
           version_hits+=("$f")
           ;;
       esac
@@ -214,19 +208,20 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       fi
     fi
 
-    if printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx 'packaging/windows/grokhub.iss'; then
-      old_iss=$(mktemp)
-      git show "$pr_merge_base:packaging/windows/grokhub.iss" >"$old_iss" 2>/dev/null || true
-      old_line=$(inno_version_line "$old_iss")
-      new_line=$(inno_version_line "packaging/windows/grokhub.iss")
-      rm -f "$old_iss"
+    for pkgbuild in packaging/PKGBUILD packaging/aur/PKGBUILD; do
+      printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx "$pkgbuild" || continue
+      old_pkg=$(mktemp)
+      git show "$pr_merge_base:$pkgbuild" >"$old_pkg" 2>/dev/null || true
+      old_line=$(pkgbuild_version_line "$old_pkg")
+      new_line=$(pkgbuild_version_line "$pkgbuild")
+      rm -f "$old_pkg"
       if [[ -z "$new_line" ]]; then
-        echo "ci-guards: could not find the MyAppVersion define in packaging/windows/grokhub.iss" >&2
+        echo "ci-guards: could not find the pkgver line in $pkgbuild" >&2
         fail=1
       elif [[ "$old_line" != "$new_line" ]]; then
-        version_hits+=("packaging/windows/grokhub.iss (MyAppVersion)")
+        version_hits+=("$pkgbuild (pkgver)")
       fi
-    fi
+    done
 
     if printf '%s\n' "${pr_changed[@]+"${pr_changed[@]}"}" | grep -qx 'Cargo.lock'; then
       old_lock=$(mktemp)

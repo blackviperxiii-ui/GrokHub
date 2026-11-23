@@ -86,6 +86,9 @@ impl Drop for InFlight {
     }
 }
 
+/// What a paired computer hears while this hub isn't sharing.
+const SHARING_OFF: &str = "Sharing is off on this computer.";
+
 fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     let method = req.method().clone();
     let url = req.url().to_string();
@@ -150,6 +153,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         };
     }
 
+    // A signed webhook proves itself with its HMAC, not a pairing token.
+    if method == Method::Post
+        && let Some(name) = path.strip_prefix("/v1/hook/")
+    {
+        return hook(req, name);
+    }
+
     let token = bearer(&req);
     let mut st = lock(state);
     if st.peer_for_token(&token).is_none() {
@@ -159,6 +169,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             401,
             json!({ "ok": false, "error": "Pair this computer first (Settings → Devices)." }),
         );
+    }
+    // Stop share keeps the listener bound, so a paired computer's token
+    // still reaches here: while sharing is off it gets nothing, not even
+    // the paired list, and the call doesn't count as a use.
+    if !st.sharing {
+        drop(st);
+        return send_json(req, 403, json!({ "ok": false, "error": SHARING_OFF }));
     }
     if let Some(p) = st.peer_for_token_mut(&token) {
         p.last_seen = grokhub_core::now_ms();
@@ -209,16 +226,12 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             Err(e) => return reject_body(req, e),
         };
         let snap = body.get("snapshot").cloned().unwrap_or(body);
-        let local = {
-            let st = lock(state);
-            st.snapshot.clone()
-        };
-        match grokhub_core::merge_put_snapshot(local.as_deref(), snap) {
-            Ok(merged) => {
-                let mut st = lock(state);
-                st.snapshot = Some(std::sync::Arc::new(merged));
-                st.last_incoming_at = grokhub_core::now_ms();
-                drop(st);
+        // A /sync from this computer landing meanwhile is merged, not lost.
+        match grokhub_core::swap_hub_snapshot(state, |local| {
+            grokhub_core::merge_put_snapshot(local, snap.clone())
+        }) {
+            Ok(()) => {
+                lock(state).last_incoming_at = grokhub_core::now_ms();
                 return send_json(req, 200, json!({ "ok": true }));
             }
             Err(e) => return send_json(req, 400, json!({ "ok": false, "error": e })),
@@ -259,6 +272,25 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         let bundle = st.claim_inhabit(&peer);
         drop(st);
         return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
+    }
+
+    if method == Method::Post && path == "/v1/fleet" {
+        drop(st);
+        let body = match read_json(&mut req) {
+            Ok(body) => body,
+            Err(e) => return reject_body(req, e),
+        };
+        let card = match grokhub_core::fleet::card_from_peer(&body, &peer, grokhub_core::now_ms()) {
+            Ok(card) => card,
+            Err(e) => return send_json(req, 400, json!({ "ok": false, "error": e })),
+        };
+        grokhub_core::fleet::keep_card(&mut lock(state).fleet, card);
+        return send_json(req, 200, json!({ "ok": true }));
+    }
+    if method == Method::Get && path == "/v1/fleet" {
+        let machines = st.fleet.clone();
+        drop(st);
+        return send_json(req, 200, json!({ "ok": true, "machines": machines }));
     }
 
     if method == Method::Post && path == "/v1/frame" {
@@ -328,6 +360,54 @@ fn bearer(req: &Request) -> String {
                 .map(|s| s.to_string())
         })
         .unwrap_or_default()
+}
+
+fn header(req: &Request, name: &'static str) -> String {
+    req.headers()
+        .iter()
+        .find(|h| h.field.equiv(name))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default()
+}
+
+/// `POST /v1/hook/<name>`: an inbound webhook the user set up. It must be
+/// signed (`X-Webhook-Signature: sha256=<hex>` over `"{X-Webhook-Timestamp}.{body}"`),
+/// pass its filters, and is then queued for the app. A web page can't send one.
+fn hook(mut req: Request, name: &str) -> Result<(), ()> {
+    use grokhub_core::msg_channels::{self as mc, Received};
+    if from_web_page(&req) {
+        return send_json(
+            req,
+            403,
+            json!({ "ok": false, "error": "Webhooks come from servers, not web pages." }),
+        );
+    }
+    let mut body = Vec::new();
+    if req
+        .as_reader()
+        .take(mc::WEBHOOK_MAX_BODY as u64 + 1)
+        .read_to_end(&mut body)
+        .is_err()
+    {
+        return reject_body(req, "Couldn't read the request body.");
+    }
+    let got = mc::receive(
+        &grokhub_core::paths::config_dir(),
+        name,
+        &header(&req, "X-Webhook-Signature"),
+        &header(&req, "X-Webhook-Timestamp"),
+        &body,
+        grokhub_core::now_ms(),
+    );
+    let status = got.status();
+    let reply = match got {
+        Received::Queued(_) => json!({ "ok": true, "queued": true }),
+        Received::Filtered => json!({ "ok": true, "queued": false }),
+        Received::Unknown => json!({ "ok": false, "error": "unknown webhook" }),
+        Received::TooBig => json!({ "ok": false, "error": "Request body is too large." }),
+        Received::Refused(why) => json!({ "ok": false, "error": why }),
+    };
+    send_json(req, status, reply)
 }
 
 /// The hub state, even after a handler panicked holding it: one bad request must not
@@ -429,7 +509,7 @@ mod tests {
 
     #[test]
     fn pair_frame_contract() {
-        let mut st = HubState::empty();
+        let mut st = sharing();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state.clone(), 0).expect("bind");
@@ -583,7 +663,7 @@ mod tests {
     /// The phone routes are gone. A paired caller gets the unknown-route 404 for each.
     #[test]
     fn phone_routes_are_gone() {
-        let mut st = HubState::empty();
+        let mut st = sharing();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
@@ -623,6 +703,65 @@ mod tests {
                 "{method} {path}"
             );
         }
+    }
+
+    /// A signed webhook reaches the hub with no pairing token and is queued;
+    /// a bad signature, a filtered body and a web page are not.
+    #[test]
+    fn a_signed_webhook_is_queued_without_a_pairing_token() {
+        use grokhub_core::msg_channels as mc;
+        let dir = std::env::temp_dir().join(format!("grokhub-hub-hook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("channels")).unwrap();
+        let secret = "whsec-abcdefghijklmnopqrstuv";
+        std::fs::write(
+            mc::webhooks_path(&dir),
+            format!(
+                r#"[{{"name":"deploys","secret":"{secret}","filters":[{{"path":"status","op":"equals","value":"failed"}}]}}]"#
+            ),
+        )
+        .unwrap();
+        // The hub reads the config folder from here, as the app sets it.
+        unsafe { std::env::set_var("GROKHUB_CONFIG", &dir) };
+        let state = Arc::new(Mutex::new(HubState::empty()));
+        let port = serve_background(state, 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let ts = (grokhub_core::now_ms() / 1000).to_string();
+        let post = |body: &str, sig_body: &str, extra: &str| {
+            let mut signed = format!("{ts}.").into_bytes();
+            signed.extend_from_slice(sig_body.as_bytes());
+            let sig: String = mc::hmac_sha256(secret.as_bytes(), &signed)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            http(
+                port,
+                &format!(
+                    "POST /v1/hook/deploys HTTP/1.0\r\nHost: 127.0.0.1\r\nX-Webhook-Signature: sha256={sig}\r\nX-Webhook-Timestamp: {ts}\r\n{extra}Content-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+        let failed = r#"{"status":"failed"}"#;
+        let (status, _, body) = post(failed, failed, "");
+        assert_eq!(
+            (status, String::from_utf8_lossy(&body).to_string()),
+            (202, r#"{"ok":true,"queued":true}"#.into())
+        );
+        let (status, _, _) = post(r#"{"status":"passed"}"#, r#"{"status":"passed"}"#, "");
+        assert_eq!(status, 204);
+        let (status, _, body) = post(failed, r#"{"status":"passed"}"#, "");
+        assert_eq!(
+            (status, String::from_utf8_lossy(&body).to_string()),
+            (
+                401,
+                r#"{"error":"the webhook signature doesn't match","ok":false}"#.into()
+            )
+        );
+        let (status, _, _) = post(failed, failed, "Origin: https://example.com\r\n");
+        assert_eq!(status, 403);
+        assert_eq!(std::fs::read_dir(mc::inbox_dir(&dir)).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -680,7 +819,7 @@ mod tests {
 
     #[test]
     fn paired_computer_claims_inhabit() {
-        let mut st = HubState::empty();
+        let mut st = sharing();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
@@ -707,6 +846,70 @@ mod tests {
         assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
         let got: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(got["bundle"]["soul"], "stay kind");
+    }
+
+    /// Stop share keeps the listener: a paired computer's token then gets
+    /// no share, hand-off, frame or paired list, and isn't marked as used.
+    #[test]
+    fn a_paired_computer_gets_nothing_while_sharing_is_off() {
+        let (state, port) = hub();
+        let (_, token) = pair_as(&state, port, "d-desk", "desk");
+        let token = token.expect("paired");
+        {
+            let mut st = lock(&state);
+            st.snapshot = Some(Arc::new(serde_json::json!({ "threads": ["old chat"] })));
+            st.sharing = false;
+        }
+        stage(&state, Some("d-desk"), Some("desk"));
+        let seen = lock(&state).peers[0].last_seen;
+        let off = serde_json::json!({ "ok": false, "error": "Sharing is off on this computer." });
+        for (method, path, body) in [
+            ("GET", "/v1/status", ""),
+            ("GET", "/v1/snapshot", ""),
+            ("PUT", "/v1/snapshot", r#"{"snapshot":{}}"#),
+            ("GET", "/v1/inhabit", ""),
+            (
+                "POST",
+                "/v1/inhabit",
+                r#"{"bundle":{"soul":"x","toId":"d-desk"}}"#,
+            ),
+            ("GET", "/v1/frame", ""),
+            (
+                "POST",
+                "/v1/frame",
+                r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgo="}"#,
+            ),
+        ] {
+            let req = format!(
+                "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            let (status, _, out) = http(port, &req);
+            let got: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
+            assert_eq!((status, got), (403, off.clone()), "{method} {path}");
+        }
+        // A wrong token still hears it must pair first.
+        let (status, _, _) = http(
+            port,
+            "GET /v1/snapshot HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer nope\r\n\r\n",
+        );
+        assert_eq!(status, 401);
+        let st = lock(&state);
+        assert_eq!(st.peers[0].last_seen, seen, "an answer refused is no use");
+        assert_eq!(
+            st.inhabit.as_ref().map(|b| b.soul.as_str()),
+            Some("stay kind"),
+            "nothing claimed"
+        );
+        assert!(st.last_frame.is_none(), "no frame stored");
+        assert_eq!(
+            st.snapshot.as_deref(),
+            Some(&serde_json::json!({ "threads": ["old chat"] })),
+            "nothing merged in"
+        );
+        drop(st);
+        lock(&state).sharing = true;
+        assert_eq!(claim(port, &token).1["bundle"]["soul"], "stay kind");
     }
 
     /// Pair `name` under `id` on a fresh code; the status and the token, if any.
@@ -748,8 +951,15 @@ mod tests {
         });
     }
 
+    /// A hub that is sharing, as Start share or `grokhub-hub` leaves it.
+    fn sharing() -> HubState {
+        let mut st = HubState::empty();
+        st.sharing = true;
+        st
+    }
+
     fn hub() -> (Arc<Mutex<HubState>>, u16) {
-        let state = Arc::new(Mutex::new(HubState::empty()));
+        let state = Arc::new(Mutex::new(sharing()));
         let port = serve_background(state.clone(), 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
         (state, port)
@@ -878,14 +1088,17 @@ mod tests {
             drop_at < read_at,
             "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
         );
-        let clone_at = put_snap
-            .find("snapshot.clone()")
-            .expect("PUT clones the Arc");
+        // swap_hub_snapshot clones the Arc and merges off the lock; its own
+        // tests lock the hub from inside the merge, which would deadlock
+        // under it.
+        let swap_at = put_snap
+            .find("swap_hub_snapshot")
+            .expect("PUT merges off lock");
         let merge_at = put_snap
             .find("merge_put_snapshot")
-            .expect("PUT merges off lock");
+            .expect("PUT merges a hub snapshot");
         assert!(
-            read_at < clone_at && clone_at < merge_at && !put_snap.contains(".put_snapshot("),
+            read_at < swap_at && swap_at < merge_at && !put_snap.contains(".put_snapshot("),
             "PUT snapshot must not from_value 8MB under hub.lock(): {put_snap}"
         );
         let get_frame = src
@@ -1121,5 +1334,59 @@ mod tests {
         );
         drop(b);
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    fn fleet_call(port: u16, method: &str, token: &str, body: &str) -> (u16, Value) {
+        let (status, _, out) = http(
+            port,
+            &format!(
+                "{method} /v1/fleet HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        (status, serde_json::from_slice(&out).unwrap_or(Value::Null))
+    }
+
+    #[test]
+    fn a_paired_computers_card_is_kept_under_its_own_name_and_strangers_are_refused() {
+        let (state, port) = hub();
+        let (_, desk) = pair_as(&state, port, "d-desk", "Desk");
+        let desk = desk.expect("paired");
+        let card =
+            r#"{"name":"Not me","cpuPct":41,"ramMb":16000,"freeRamMb":6000,"appVersion":"3.6.0"}"#;
+        assert_eq!(
+            fleet_call(port, "POST", "t-stranger", card).0,
+            401,
+            "no pairing, no card"
+        );
+        assert_eq!(
+            fleet_call(port, "POST", &desk, card),
+            (200, json!({ "ok": true }))
+        );
+        assert_eq!(
+            fleet_call(port, "POST", &desk, r#"{"cpuPct":3}"#),
+            (
+                400,
+                json!({ "ok": false, "error": "appVersion is missing" })
+            )
+        );
+        let (status, got) = fleet_call(port, "GET", &desk, "");
+        assert_eq!(status, 200);
+        let mut machines = got["machines"].clone();
+        let at = machines[0]["atMs"].take();
+        assert!(at.as_u64().unwrap_or(0) > 0, "{at}");
+        assert_eq!(
+            machines,
+            json!([{
+                "id": "d-desk", "name": "Desk", "cpuPct": 41, "ramMb": 16000,
+                "freeRamMb": 6000, "appVersion": "3.6.0", "atMs": null
+            }])
+        );
+        lock(&state).sharing = false;
+        assert_eq!(
+            fleet_call(port, "GET", &desk, "").0,
+            403,
+            "sharing off hands out no cards"
+        );
     }
 }

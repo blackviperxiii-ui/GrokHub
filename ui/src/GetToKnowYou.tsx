@@ -14,6 +14,7 @@ import {
   type OnboardReply,
   type Step,
 } from "./onboardApi";
+import { StepTracker } from "./Progress";
 import { useModalFocus } from "./ui";
 
 export const WELCOME_TITLE = `Help ${PRODUCT_NAME} get to know you`;
@@ -38,9 +39,21 @@ const GROUP_NAMES: Record<string, string> = {
 
 const ORDER: Step[] = ["welcome", "about", "soul", "life", "review", "done"];
 
+const STEP_LABELS: Record<Step, string> = {
+  welcome: "Welcome",
+  about: "About",
+  soul: "Tone",
+  life: "Life",
+  review: "Review",
+  done: "Done",
+};
+
+const TRACK_STEPS = ORDER.map((id) => ({ id, label: STEP_LABELS[id] }));
+
 /** The stage. `after` is true once Auto Setup's first-run window is closed:
  * it never shows over that window. */
-export function OnboardStage({ after }: { after: boolean }) {
+/** `onSaved`: after a Save, which may name the profile. */
+export function OnboardStage({ after, onSaved }: { after: boolean; onSaved?: () => void }) {
   const [reply, setReply] = useState<OnboardReply | null>(null);
   const [step, setStep] = useState<Step>("welcome");
   const [answers, setAnswers] = useState<Answers>(EMPTY_ANSWERS);
@@ -244,6 +257,7 @@ export function OnboardStage({ after }: { after: boolean }) {
         }}
       >
         <h2 id="onboard-title">{title}</h2>
+        <StepTracker steps={TRACK_STEPS} current={step} label="Onboarding steps" />
         {body}
         {error && <p className="note warn">{error}</p>}
         <div className="first-run-foot">
@@ -274,7 +288,10 @@ export function OnboardStage({ after }: { after: boolean }) {
               onClick={async () => {
                 setSaving(true);
                 try {
-                  if (await run({ act: "save", drafts })) setStep("done");
+                  if (await run({ act: "save", drafts })) {
+                    setStep("done");
+                    onSaved?.();
+                  }
                 } finally {
                   setSaving(false);
                 }

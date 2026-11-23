@@ -327,6 +327,25 @@ describe("OnboardStage", () => {
     expect(screen.getByLabelText("How I sound (SOUL.md)")).toHaveValue(DRAFTS.soul);
   });
 
+  it("tells the window after a Save, which may have named the profile, and not after a failed one", async () => {
+    shell({ step: "review" });
+    const onSaved = vi.fn();
+    const plain = mock.onboard.getMockImplementation()!;
+    let saves = 0;
+    mock.onboard.mockImplementation((act) =>
+      act.act === "save" && ++saves === 1 ? Promise.reject("The settings file can't be read.") : plain(act),
+    );
+    render(<OnboardStage after onSaved={onSaved} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    expect(await screen.findByText("The settings file can't be read.")).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByText("Saved USER.md, SOUL.md, MEMORY.md and 2 Personal rows. Edit any of it later in Settings → Personal."),
+    ).toBeInTheDocument();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
   it("Save pressed again while it is saving sends one save", async () => {
     shell({ step: "review" });
     const plain = mock.onboard.getMockImplementation()!;

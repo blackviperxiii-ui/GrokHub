@@ -45,7 +45,7 @@ function Probe({ pinned }: { pinned: boolean }) {
       <p data-testid="bar">{away ? "away" : "shown"}</p>
       <div data-testid="page" />
       <input aria-label="Message" />
-      <nav className="topbar">
+      <nav className="rail">
         <button type="button">Chat</button>
       </nav>
     </div>

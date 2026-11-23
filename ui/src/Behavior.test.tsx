@@ -11,15 +11,24 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { AUTOCOMPLETE_NOTE, Behavior, SCHEDULE_NOTE, SUGGESTIONS_NOTE } from "./Behavior";
+import {
+  AUTOCOMPLETE_NOTE,
+  Behavior,
+  COMPOSER_GLOW_NOTE,
+  LANE_NOTE,
+  SCHEDULE_NOTE,
+  SUGGESTIONS_NOTE,
+} from "./Behavior";
 
 const OFF: Shape = {
   autocomplete: false,
+  composerGlow: false,
   suggestions: true,
   quietStart: "",
   quietEnd: "",
   dailyTokenBudget: 0,
   pauseOverBudget: false,
+  lane: "coding",
 };
 
 function page(over: Partial<Shape> = {}, closeToTray = true): BehaviorPage {
@@ -51,10 +60,10 @@ describe("Behavior", () => {
     api.saveBehavior.mockReset();
   });
 
-  it("starts with autocomplete, budget and quiet hours off, and says nothing waits yet", async () => {
+  it("starts with autocomplete and quiet hours off, without a daily budget cap", async () => {
     render(<Behavior tray />);
     expect(await screen.findByLabelText("Sentence autocomplete")).not.toBeChecked();
-    expect(screen.getByLabelText("Daily token budget")).toHaveValue("0");
+    expect(screen.queryByLabelText("Daily token budget")).toBeNull();
     expect(screen.getByLabelText("Quiet hours start")).toHaveValue("");
     expect(screen.getByLabelText("Quiet hours end")).toHaveValue("");
     expect(screen.queryByLabelText("Pause scheduled work over budget")).toBeNull();
@@ -74,6 +83,30 @@ describe("Behavior", () => {
     expect(await screen.findByLabelText("Suggestions")).not.toBeChecked();
   });
 
+  it("suggestions lean toward Coding until Life is picked, which saves at once", async () => {
+    api.saveBehavior.mockResolvedValueOnce(page({ lane: "life" }));
+    render(<Behavior tray />);
+    const lane = await screen.findByLabelText("Suggestions lean toward");
+    expect(lane).toHaveValue("coding");
+    expect(screen.getByText(LANE_NOTE)).toBeInTheDocument();
+    await userEvent.selectOptions(lane, "life");
+    expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, lane: "life" });
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Suggestions lean toward")).toHaveValue("life");
+  });
+
+  it("hides the lean while suggestions are off, and the web app reads it as text", async () => {
+    api.getBehavior.mockResolvedValue(page({ suggestions: false, lane: "life" }));
+    const off = render(<Behavior tray />);
+    await screen.findByLabelText("Suggestions");
+    expect(screen.queryByLabelText("Suggestions lean toward")).toBeNull();
+    off.unmount();
+    api.getBehavior.mockResolvedValue(page({ lane: "life" }));
+    render(<Behavior tray={false} readOnly />);
+    const term = await screen.findByText("Suggestions lean toward");
+    expect(term.nextElementSibling).toHaveTextContent("Life");
+  });
+
   it("each toggle saves at once", async () => {
     const onCloseToTray = vi.fn();
     api.saveBehavior.mockResolvedValueOnce(page({ autocomplete: true }));
@@ -86,26 +119,20 @@ describe("Behavior", () => {
     await userEvent.click(screen.getByLabelText(/keeps Loadout in the tray/));
     expect(api.saveBehavior).toHaveBeenLastCalledWith(false, { ...OFF, autocomplete: true });
     expect(onCloseToTray).toHaveBeenCalledWith(false);
+    expect(screen.queryByLabelText("Daily token budget")).toBeNull();
+    expect(screen.queryByLabelText("Pause scheduled work over budget")).toBeNull();
+  });
 
-    api.saveBehavior.mockResolvedValueOnce(page({ autocomplete: true, dailyTokenBudget: 1000000 }, false));
-    await userEvent.selectOptions(screen.getByLabelText("Daily token budget"), "1000000");
-    expect(api.saveBehavior).toHaveBeenLastCalledWith(false, {
-      ...OFF,
-      autocomplete: true,
-      dailyTokenBudget: 1000000,
-    });
-    const pause = await screen.findByLabelText("Pause scheduled work over budget");
-    expect(pause).not.toBeChecked();
-    api.saveBehavior.mockResolvedValueOnce(
-      page({ autocomplete: true, dailyTokenBudget: 1000000, pauseOverBudget: true }, false),
-    );
-    await userEvent.click(pause);
-    expect(api.saveBehavior).toHaveBeenLastCalledWith(false, {
-      ...OFF,
-      autocomplete: true,
-      dailyTokenBudget: 1000000,
-      pauseOverBudget: true,
-    });
+  it("composer glow starts off and saves at once", async () => {
+    render(<Behavior tray onCloseToTray={() => {}} />);
+    const glow = await screen.findByLabelText("Composer glow");
+    expect(glow).not.toBeChecked();
+    expect(COMPOSER_GLOW_NOTE).toBe("Soft light around the composer while a reply comes in. Off by default.");
+    expect(screen.getByText(COMPOSER_GLOW_NOTE)).toBeVisible();
+    api.saveBehavior.mockResolvedValueOnce(page({ composerGlow: true }));
+    await userEvent.click(glow);
+    expect(api.saveBehavior).toHaveBeenLastCalledWith(true, { ...OFF, composerGlow: true });
+    expect(await screen.findByLabelText("Composer glow")).toBeChecked();
   });
 
   it("saves quiet hours and shows a refusal", async () => {
@@ -148,10 +175,11 @@ describe("Behavior", () => {
   });
 
   it("the web app sees the choices with nothing to change them", async () => {
-    api.getBehavior.mockResolvedValue(page({ quietStart: "22:00", quietEnd: "07:00", dailyTokenBudget: 1000000 }));
+    api.getBehavior.mockResolvedValue(page({ quietStart: "22:00", quietEnd: "07:00" }));
     render(<Behavior tray readOnly />);
     expect(await screen.findByText("22:00–07:00")).toBeInTheDocument();
-    expect(screen.getByText("1.0M tokens a day")).toBeInTheDocument();
+    expect(screen.queryByText("Daily token budget")).toBeNull();
+    expect(screen.getByText("Composer glow").nextElementSibling).toHaveTextContent("Off");
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();

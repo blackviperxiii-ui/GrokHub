@@ -465,3 +465,52 @@ fn two_saves_at_once_both_finish_and_the_old_text_is_kept() {
         );
     }
 }
+
+#[test]
+fn the_name_typed_in_get_to_know_you_becomes_the_profile_name() {
+    let (dir, _g) = temp("profile-name");
+    fs::write(dir.join("app.json"), r#"{"weeklySpendCapUsd":5}"#).unwrap();
+    let answers = Answers {
+        name: "  Robin  ".into(),
+        call_me: "Rob".into(),
+        ..Answers::default()
+    };
+    run(
+        &dir,
+        Act::Keep {
+            step: Step::Life,
+            answers: answers.clone(),
+        },
+    );
+    let drafts = run(&dir, Act::Draft { answers }).drafts.expect("drafts");
+    run(&dir, Act::Save { drafts });
+    let app: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("app.json")).unwrap()).unwrap();
+    assert_eq!(
+        app,
+        serde_json::json!({ "weeklySpendCapUsd": 5, "displayName": "Robin" })
+    );
+}
+
+#[test]
+fn get_to_know_you_never_replaces_a_saved_profile_name() {
+    let (dir, _g) = temp("profile-keep");
+    fs::write(dir.join("app.json"), r#"{"displayName":"Pat"}"#).unwrap();
+    let answers = Answers {
+        name: "Robin".into(),
+        ..Answers::default()
+    };
+    run(
+        &dir,
+        Act::Keep {
+            step: Step::Life,
+            answers: answers.clone(),
+        },
+    );
+    let drafts = run(&dir, Act::Draft { answers }).drafts.expect("drafts");
+    run(&dir, Act::Save { drafts });
+    assert_eq!(
+        fs::read_to_string(dir.join("app.json")).unwrap(),
+        r#"{"displayName":"Pat"}"#
+    );
+}

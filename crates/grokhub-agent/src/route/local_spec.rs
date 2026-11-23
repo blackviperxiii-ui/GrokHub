@@ -1,8 +1,9 @@
 //! Speculative decoding for the sidecar (`grokhub_core::local_draft` holds the
-//! pairs and the gates). [`plan`] picks the draft for one launch: the model's
-//! own MTP heads when the engine can use them, else the catalog drafter (or
-//! any GGUF in `models/drafters/` with the same tokenizer) when it fits next
-//! to the model, the governor isn't throttling, and the speed test kept it.
+//! pairs and the gates). [`pairing`] finds the model's drafter: its own MTP
+//! heads when the engine can use them, else the catalog drafter (or any GGUF
+//! in `models/drafters/` with the same tokenizer). A paired model always
+//! loads with its drafter; [`plan`] refuses the launch ([`Decision::NoRoom`])
+//! when both don't fit, so a smaller model runs instead.
 //! [`run_bench`] is that speed test: one reply without the drafter, one with,
 //! and the verdict is stored per device.
 
@@ -53,10 +54,23 @@ impl DraftArgs {
     }
 }
 
+/// MB one model takes at `a`'s context and slots: its file, its KV cache
+/// and its compute buffers.
+fn own_need_mb(m: &GgufMeta, a: &LaunchArgs) -> u64 {
+    m.file_mb + autoconfig::kv_mb_for(m, a.ctx, a.kv, a.run.seqs()) + autoconfig::overhead_mb(a.ctx)
+}
+
+/// MB the model and its drafter take together at `a`'s context and slots. A
+/// vision projector the launch loads beside them counts too.
+pub fn pair_need_mb(meta: &GgufMeta, a: &LaunchArgs, drafter: &GgufMeta) -> u64 {
+    own_need_mb(meta, a) + own_need_mb(drafter, a) + a.projector.as_ref().map_or(0, |v| v.mb)
+}
+
 /// Whether the drafter fits next to the planned launch: `Some(true)` on the
-/// GPU with the whole model, `Some(false)` in RAM for a CPU launch, `None`
-/// when there isn't room (a partly offloaded model has none to spare). The
-/// drafter brings its own KV cache at the same context.
+/// GPU beside every layer of the model (a mixture of experts may keep some
+/// layers' experts in RAM, `--n-cpu-moe`), `Some(false)` in RAM for a CPU
+/// launch, `None` when there isn't room (a dense model split across GPU and
+/// RAM has none to spare).
 pub fn fits(
     p: &LocalProfile,
     meta: &GgufMeta,
@@ -65,19 +79,15 @@ pub fn fits(
     drafter: &GgufMeta,
 ) -> Option<bool> {
     let (gpu, ram) = autoconfig::budgets(p, a.backend, state);
-    let seqs = a.run.seqs();
-    let model = meta.file_mb
-        + autoconfig::kv_mb_for(meta, a.ctx, a.kv, seqs)
-        + autoconfig::overhead_mb(a.ctx);
-    let need = model
-        + drafter.file_mb
-        + autoconfig::kv_mb_for(drafter, a.ctx, a.kv, seqs)
-        + autoconfig::overhead_mb(a.ctx);
     if gpu == 0 {
-        return (need <= ram).then_some(false);
+        return (pair_need_mb(meta, a, drafter) <= ram).then_some(false);
     }
-    let whole = a.ngl >= a.all_layers && a.n_cpu_moe.is_none();
-    (whole && need <= gpu).then_some(true)
+    if a.ngl < a.all_layers {
+        return None;
+    }
+    let (on_gpu, in_ram) = autoconfig::launch_need_mb(meta, a);
+    let experts_fit = a.n_cpu_moe.is_none() || in_ram <= ram;
+    (experts_fit && on_gpu + own_need_mb(drafter, a) <= gpu).then_some(true)
 }
 
 /// One launch's draft plan.
@@ -193,7 +203,7 @@ fn cache() -> &'static Mutex<Cache> {
 }
 
 /// A drafter's header, read once per file and size.
-fn header(path: &Path) -> Option<GgufMeta> {
+pub fn header(path: &Path) -> Option<GgufMeta> {
     let len = std::fs::metadata(path).ok()?.len();
     let key = (path.to_path_buf(), len);
     if let Some(m) = cache().lock().ok()?.headers.get(&key) {
@@ -242,34 +252,50 @@ pub struct Launch<'a> {
     pub tune_dir: &'a Path,
     /// The device part of the verdict key.
     pub device: &'a str,
-    /// A game runs: the model is on the CPU beside it, and a drafter may
-    /// join only on its own speed test (see [`GAMING_DEVICE`]).
-    pub gaming: bool,
 }
 
 /// The device part of the verdict key for the gaming setup (CPU, half the
 /// threads), so its speed test never borrows a verdict from the GPU.
 pub const GAMING_DEVICE: &str = "cpu-gaming";
 
-/// The draft for one launch.
-pub fn plan(l: &Launch) -> Plan {
-    let Launch {
-        flags,
-        model,
-        meta,
-        profile: p,
-        state,
-        args,
-        tune_dir,
-        device,
-        gaming,
-    } = *l;
-    let forced = force();
-    if forced == Some(false) {
-        return Plan::off("the speed test is timing the model alone");
+/// A model with a drafter it must load with.
+pub struct Paired {
+    cand: Candidate,
+    key: String,
+    /// The speed test's verdict (or its override); `None` until it runs.
+    verdict: Option<bool>,
+}
+
+/// Whether a model loads with a drafter.
+pub enum Pairing {
+    /// It loads alone; the plan says why.
+    Unpaired(Plan),
+    Paired(Paired),
+}
+
+impl Pairing {
+    /// The drafter file's header, which the launch must leave room for.
+    /// `None` alone or for MTP heads inside the model.
+    pub fn reserve(&self) -> Option<&GgufMeta> {
+        match self {
+            Pairing::Paired(p) => p.cand.meta.as_ref(),
+            Pairing::Unpaired(_) => None,
+        }
     }
+}
+
+/// Whether the model in `model` pairs: a drafter on disk the engine can run,
+/// with the same tokenizer, that no standing verdict turned off. It ignores
+/// the speed test's plain run, so that run is sized like its drafted one.
+pub fn pairing(
+    flags: &DraftFlags,
+    model: &Path,
+    meta: &GgufMeta,
+    tune_dir: &Path,
+    device: &str,
+) -> Pairing {
     let Some(c) = candidate(model, meta, flags, &drafter_dirs(model, tune_dir)) else {
-        return Plan::off("no draft model is installed");
+        return Pairing::Unpaired(Plan::off("no draft model is installed"));
     };
     let target = model
         .file_name()
@@ -283,57 +309,94 @@ pub fn plan(l: &Launch) -> Plan {
     let key = ld::verdict_key(device, &target, &drafter);
     // MTP heads are trained for this one model and carry no tokenizer of
     // their own, so only a separate small model needs the tokenizer check.
-    let (tokenizer_ok, on_gpu) = match &c.meta {
-        None => (true, Some(args.ngl > 0)),
-        Some(m) => (
+    let tokenizer_ok = match &c.meta {
+        None => true,
+        Some(m) => {
             c.kind == DraftKind::Mtp
-                || ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref()),
-            fits(p, meta, args, state, m),
-        ),
+                || ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref())
+        }
     };
     // A verdict live replies set expires, and the speed test runs again.
     let stored = ld::load_verdicts(tune_dir)
         .get(&key)
         .copied()
         .filter(|v| v.standing(now_secs()));
-    let verdict = match forced {
-        Some(true) => Some(true),
-        _ => stored.map(|v| v.keep),
-    };
+    let forced = force().filter(|f| *f);
+    let verdict = forced.or(stored.map(|v| v.keep));
     let live_off = forced.is_none() && stored.is_some_and(|v| !v.keep && v.retest_at.is_some());
     let decision = ld::decide(Check {
-        // The speed test runs whatever the level; it asked for the drafter.
-        // A game throttles the machine, but its CPU setup has its own test.
-        level_ok: state != GovState::Throttle || forced == Some(true) || gaming,
         // A drafter file also needs the flag that loads it.
         engine_ok: flags.supports(c.kind) && (c.file.is_none() || flags.model.is_some()),
         tokenizer_ok,
-        fits: on_gpu.is_some(),
+        fits: true,
         verdict,
     });
+    let Decision::Off(why) = decision else {
+        return Pairing::Paired(Paired {
+            cand: c,
+            key,
+            verdict,
+        });
+    };
     // Say which test turned it off.
-    let decision = match decision {
-        Decision::Off("the speed test found the draft model didn't help") if live_off => {
+    let why = match why {
+        "the speed test found the draft model didn't help" if live_off => {
             // A pair that never ran (it stopped the start) kept no guesses at all.
             if stored.is_some_and(|v| v.acceptance == 0.0 && v.gain == 0.0) {
-                Decision::Off(START_OFF)
+                START_OFF
             } else {
-                Decision::Off(LIVE_OFF)
+                LIVE_OFF
             }
         }
-        d => d,
+        w => w,
     };
-    let draft = (decision == Decision::On).then(|| DraftArgs {
-        kind: c.kind,
-        model: c.file.clone(),
+    Pairing::Unpaired(Plan {
+        decision: Decision::Off(why),
+        draft: None,
+        key: Some(key),
+        name: Some(c.name),
+    })
+}
+
+/// The draft for one launch.
+pub fn plan(l: &Launch) -> Plan {
+    plan_with(l, pairing(l.flags, l.model, l.meta, l.tune_dir, l.device))
+}
+
+/// [`plan`] for a [`pairing`] already found: a paired model drafts whenever
+/// both fit, and is refused ([`Decision::NoRoom`]) when they don't.
+pub fn plan_with(l: &Launch, pairing: Pairing) -> Plan {
+    if force() == Some(false) {
+        return Plan::off("the speed test is timing the model alone");
+    }
+    let p = match pairing {
+        Pairing::Unpaired(plan) => return plan,
+        Pairing::Paired(p) => p,
+    };
+    let args = l.args;
+    let on_gpu = match &p.cand.meta {
+        None => Some(args.ngl > 0),
+        Some(m) => fits(l.profile, l.meta, args, l.state, m),
+    };
+    let decision = ld::decide(Check {
+        engine_ok: true,
+        tokenizer_ok: true,
+        fits: on_gpu.is_some(),
+        verdict: p.verdict,
+    });
+    // A pending speed test runs with the drafter loaded: it times the pair
+    // against the model alone on its own.
+    let draft = matches!(decision, Decision::On | Decision::NeedsTest).then(|| DraftArgs {
+        kind: p.cand.kind,
+        model: p.cand.file.clone(),
         on_gpu: on_gpu.unwrap_or(false),
-        flags: flags.clone(),
+        flags: l.flags.clone(),
     });
     Plan {
         decision,
         draft,
-        key: Some(key),
-        name: Some(c.name),
+        key: Some(p.key),
+        name: Some(p.cand.name),
     }
 }
 
@@ -495,7 +558,9 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
     let Some(paths) = super::local_sidecar::resolve_paths(config_dir) else {
         return;
     };
-    let needs = autoconfig::draft_plan(&paths.binary, &paths.model)
+    let timed = timed_model(&paths);
+    let pick_refused = timed != paths.model || pair_wont_start(&paths);
+    let needs = autoconfig::draft_plan_with(&paths.binary, &timed, fresh_free())
         .is_some_and(|p| p.decision == Decision::NeedsTest);
     // Then the model a game swaps to, timed in the gaming setup now, while
     // no game runs, so its drafter can join it during one.
@@ -507,8 +572,8 @@ pub fn tick_auto_test(config_dir: &Path, q: &ld::Quiet) {
                 .is_some_and(|p| p.decision == Decision::NeedsTest)
         });
     // With the drafters settled, a model that hasn't had its refusal check
-    // gets it next.
-    let refusal = !needs && gaming.is_none() && refusal_due(&paths.model);
+    // gets it next; a pick that can't start with its drafter waits.
+    let refusal = !needs && gaming.is_none() && !pick_refused && refusal_due(&paths.model);
     if !needs && gaming.is_none() && !refusal {
         return;
     }
@@ -566,10 +631,47 @@ pub fn measure(base_url: &str, token: &str) -> Result<Timing, String> {
 }
 
 /// Time the model with and without its drafter and keep the verdict. `None`
-/// when there's no drafter to test.
+/// when there's no drafter to test. When a start refused the pick, the
+/// model that started in its place is timed, loaded for the test as the
+/// pick would be, even after it unloaded.
 pub fn run_bench(config_dir: &Path) -> Option<String> {
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
-    bench(&paths)
+    let model = timed_model(&paths);
+    bench(&super::local_sidecar::SidecarPaths {
+        binary: paths.binary,
+        model,
+    })
+}
+
+/// The model the speed test times: the pick, or the model that started in
+/// its place the last time a start refused it (see
+/// [`super::local_sidecar::stand_in_for_refused`]).
+fn timed_model(paths: &super::local_sidecar::SidecarPaths) -> PathBuf {
+    super::local_sidecar::stand_in_for_refused(&paths.model).unwrap_or_else(|| paths.model.clone())
+}
+
+/// The pick's pair doesn't fit as a fresh start of it would see memory,
+/// though no start has refused it yet this session.
+pub(crate) fn pair_wont_start(paths: &super::local_sidecar::SidecarPaths) -> bool {
+    autoconfig::draft_plan_with(&paths.binary, &paths.model, fresh_free())
+        .is_some_and(|p| p.decision == Decision::NoRoom)
+}
+
+/// What a test's fresh start would see free: with a model loaded, the
+/// probe's reading plus that model's own memory, since the test stops it
+/// first. `None` (the plain probe) with nothing loaded.
+fn fresh_free() -> Option<autoconfig::FreeNow> {
+    super::local_sidecar::loaded().map(|_| autoconfig::replan_free())
+}
+
+/// A test's line when its start failed with `e`. A pair that doesn't fit
+/// waits for room, in plain words.
+fn start_line(test: &str, e: &str) -> String {
+    if e.starts_with(autoconfig::PAIR_NO_ROOM) {
+        format!("The {test} runs once the model and its draft model fit together.")
+    } else {
+        format!("The {test} couldn't start the model: {e}")
+    }
 }
 
 /// [`run_bench`] for `model` in the gaming setup (CPU, half the threads), so
@@ -587,12 +689,12 @@ pub fn run_gaming_bench(config_dir: &Path, model: PathBuf) -> Option<String> {
 }
 
 fn bench(paths: &super::local_sidecar::SidecarPaths) -> Option<String> {
-    let planned = autoconfig::draft_plan(&paths.binary, &paths.model)?;
+    let planned = autoconfig::draft_plan_with(&paths.binary, &paths.model, fresh_free())?;
     match planned.decision {
+        // The pair doesn't fit, so the drafted run couldn't start.
+        Decision::NoRoom => return None,
         Decision::Off(r)
-            if r != "the speed test found the draft model didn't help"
-                && r != LIVE_OFF
-                && r != "the machine is busy, so the draft model is off" =>
+            if r != "the speed test found the draft model didn't help" && r != LIVE_OFF =>
         {
             return None
         }
@@ -631,6 +733,9 @@ fn bench(paths: &super::local_sidecar::SidecarPaths) -> Option<String> {
         }
         (Ok(_), Ok((_, false))) => {
             format!("{name} couldn't run next to the model, so it stays off.")
+        }
+        (Err(e), _) | (_, Err(e)) if e.starts_with(autoconfig::PAIR_NO_ROOM) => {
+            start_line("draft model test", &e)
         }
         (Err(e), _) | (_, Err(e)) => format!("The draft model test stopped: {e}"),
     };
@@ -695,14 +800,19 @@ pub fn run_refusal_check(config_dir: &Path) -> Option<String> {
     use grokhub_core::local_refusal as lr;
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
     let (dir, file) = (autoconfig::tune_dir()?, model_file(&paths.model)?);
-    if !lr::due(&dir, &file) {
+    // A pick a start refused, or whose pair can't start, isn't stopped for
+    // nothing.
+    if !lr::due(&dir, &file)
+        || super::local_sidecar::stand_in_for_refused(&paths.model).is_some()
+        || pair_wont_start(&paths)
+    {
         return None;
     }
     let _gate = super::local_sidecar::speed_test_gate();
     super::local_sidecar::stop_global();
     let side = match super::local_sidecar::start(&paths) {
         Ok(s) => s,
-        Err(e) => return Some(format!("The refusal check couldn't start the model: {e}")),
+        Err(e) => return Some(start_line("refusal check", &e)),
     };
     let mut replies = Vec::with_capacity(lr::PROMPTS.len());
     for p in lr::PROMPTS {

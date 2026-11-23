@@ -40,11 +40,7 @@ const PACKAGING_FILES: &[&str] = &[
     "packaging/aur/PKGBUILD",
     "packaging/aur/.SRCINFO",
     "packaging/aur/grokhub.install",
-    "packaging/windows/grokhub.iss",
     "scripts/install.sh",
-    "scripts/install-windows.ps1",
-    "scripts/make-release-bundle.sh",
-    "scripts/make-windows-release.ps1",
 ];
 
 const DELETED: &[&str] = &[

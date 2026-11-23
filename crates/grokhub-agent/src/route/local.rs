@@ -1,7 +1,8 @@
-//! Router R3a: plumbing for an on-device model (§13). It is **off** by
-//! default. `localModel` in `app.json` is `false` until you turn on Settings →
-//! Cabin defaults → "On-device model for background tasks". The route goes
-//! live only while that toggle is on **and** a runtime is [`installed`]
+//! Router R3a: plumbing for an on-device model (§13). The switch starts off
+//! in-process until [`super::host::sync`] reads `localModel` from `app.json`
+//! and passes it to [`set_enabled`]; it is on unless saved `false` (Settings →
+//! Local AI → Use Local AI on this computer). The route goes live only while that switch is on **and** a
+//! runtime is [`installed`]
 //! (llama-server binary + GGUF, or a test fake). While the route is off the
 //! registry has no `local:*` rows ([`LocalSource`] lists nothing) and
 //! [`super::Router::choose`] drops any `local:*` id, so no route can pick one.
@@ -57,6 +58,90 @@ pub fn ctx_cap() -> u64 {
 pub fn set_ctx_cap(cap: u64) {
     CTX_CAP.store(cap.max(LOCAL_CTX_CAP), Ordering::SeqCst);
 }
+
+/// When an Ollama HTTP server is up, probe `/api/show` for the effective
+/// `num_ctx` and raise [`ctx_cap`]. `get` fetches a URL body; `post` posts
+/// a JSON body. Prefer a discovered model name; otherwise the first `/api/tags`
+/// entry. Returns the applied window when Ollama answered.
+pub fn apply_ollama_num_ctx(
+    ollama_host: Option<&str>,
+    prefer: Option<&str>,
+    ceiling: Option<u64>,
+    mut get: impl FnMut(&str) -> Result<String, String>,
+    mut post: impl FnMut(&str, &str) -> Result<String, String>,
+) -> Option<u64> {
+    use grokhub_core::ollama_show::{self as os};
+    let root = os::root_from_env(ollama_host);
+    let tags = get(&os::tags_url(&root)).ok()?;
+    if !os::looks_like_ollama(&tags) {
+        let ver = get(&os::version_url(&root)).ok()?;
+        if !os::looks_like_ollama(&ver) {
+            return None;
+        }
+    }
+    let name = prefer
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| os::parse_tags(&tags).into_iter().next())?;
+    let body = post(&os::show_url(&root), &os::show_body(&name)).ok()?;
+    let detected = os::show_context(&body, false)?;
+    let cap = os::capped(detected, ceiling);
+    if cap == 0 {
+        return None;
+    }
+    set_ctx_cap(cap);
+    Some(ctx_cap())
+}
+
+/// Probe the default local Ollama root with a short-timeout agent and apply
+/// [`apply_ollama_num_ctx`]. No-op when Ollama is down. `prefer` is an Ollama
+/// model name (`gemma4:e4b`) when one is known.
+pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Option<u64> {
+    use std::time::Duration;
+    let host = std::env::var("OLLAMA_HOST").ok();
+    let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
+        connect: Duration::from_secs(2),
+        read: Some(Duration::from_secs(3)),
+        redirects: 0,
+        // Ollama is loopback; public_only would refuse it.
+        public_only: false,
+        ..Default::default()
+    });
+    // OLLAMA_HOST may name another machine, so each read runs the guard
+    // (a model name only, no user data); loopback goes with no log line.
+    let guard = |url: &str| {
+        crate::harness::guard_quiet(
+            &crate::perm::config_dir(),
+            &crate::harness::EgressReq::new(url, &[]),
+        )
+    };
+    apply_ollama_num_ctx(
+        host.as_deref(),
+        prefer,
+        ceiling,
+        |url| {
+            guard(url)?;
+            let resp = agent
+                .get(url)
+                .header("user-agent", crate::USER_AGENT)
+                .call()
+                .map_err(|e| e.to_string())?;
+            resp.into_string().map_err(|e| e.to_string())
+        },
+        |url, body| {
+            guard(url)?;
+            let resp = agent
+                .post(url)
+                .header("user-agent", crate::USER_AGENT)
+                .header("content-type", "application/json")
+                .send_string(body)
+                .map_err(|e| e.to_string())?;
+            resp.into_string().map_err(|e| e.to_string())
+        },
+    )
+}
+
 /// The classes a local route may take while online (background helpers).
 pub const LOCAL_CLASSES: &[&str] = &[
     "background:classify",
@@ -82,8 +167,9 @@ pub const NO_RUNTIME_MSG: &str = "The on-device model isn't installed.";
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static TIER: AtomicUsize = AtomicUsize::new(0);
 
-/// The cabin sets this from `app.json` `localModel` (default `false`) every
-/// tick, so the Settings toggle takes effect without a restart.
+/// `host::sync` sets this from `app.json` `localModel` (on unless saved
+/// `false`) before every turn and when the switch changes, so it takes effect
+/// without a restart.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
     if !on {
@@ -116,8 +202,8 @@ pub(crate) fn toggle_on() -> bool {
     switched_on() || test_on()
 }
 
-/// The route is live: the toggle is on, a runtime is [`installed`], and the
-/// governor isn't at Unload.
+/// The route is live: the toggle is on, a runtime is [`installed`], no start
+/// failed in the last [`START_RETRY_SECS`], and the governor isn't at Unload.
 pub fn available() -> bool {
     LocalCapacity::now().available()
 }
@@ -125,7 +211,8 @@ pub fn available() -> bool {
 /// What the device can take right now, for [`super::Router::choose`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalCapacity {
-    /// The toggle is on and a runtime is installed (whatever the governor says).
+    /// The toggle is on, a runtime is installed and its last start didn't
+    /// just fail (whatever the governor says).
     pub ready: bool,
     pub level: Level,
 }
@@ -142,7 +229,8 @@ impl Default for LocalCapacity {
 impl LocalCapacity {
     pub fn now() -> Self {
         Self {
-            ready: (ENABLED.load(Ordering::SeqCst) && installed()) || test_on(),
+            ready: (ENABLED.load(Ordering::SeqCst) && installed() && !start_failed_recently())
+                || test_on(),
             level: super::local_gov::level(),
         }
     }
@@ -331,17 +419,38 @@ pub(crate) fn age_start_error(secs: u64) {
 }
 
 /// An on-device runtime and model are present: a test fake, or a binary + GGUF
-/// under the config dir / env overrides. Not for [`START_RETRY_SECS`] after a
-/// start failed; then the next request tries again.
+/// under the config dir / env overrides. A failed start doesn't change it, so
+/// it agrees with the models page; [`available`] waits out the retry pause.
 pub fn installed() -> bool {
-    if test_runtime().is_some() {
-        return true;
-    }
-    if !production_assets_present() {
-        return false;
-    }
-    !start_failed_recently()
+    test_runtime().is_some() || production_assets_present()
 }
+
+/// A person's own turn is the retry: when the last start failed, forget it so
+/// this turn starts the model again instead of waiting out the pause. The
+/// app's background work still waits.
+pub fn retry_for_turn(class: &str) {
+    if !class.trim().starts_with("background:")
+        && start_failed_recently()
+        && production_assets_present()
+    {
+        clear_start_error();
+    }
+}
+
+/// Why a local call found no runtime: the start failure when the files are on
+/// disk, else [`NO_RUNTIME_MSG`].
+pub fn no_runtime_msg() -> String {
+    match start_failure() {
+        Some(why) => format!(
+            "{START_FAILED_HEAD}{}. It tries again on your next message.",
+            why.trim().trim_end_matches('.')
+        ),
+        None => NO_RUNTIME_MSG.into(),
+    }
+}
+
+/// How [`no_runtime_msg`] starts when the files are there but didn't start.
+pub const START_FAILED_HEAD: &str = "The model is on this computer, but it didn't start: ";
 
 /// The files are on disk but the last start failed: why, for the chat.
 pub fn start_failure() -> Option<String> {
@@ -450,8 +559,9 @@ pub fn local_verify_failed() -> bool {
 
 static FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// What the cabin shows while online calls fall back to the device.
-pub const LOCAL_FALLBACK_MSG: &str = "Using local: no cloud model is answering";
+/// What chat shows while a turn answers on this computer because Grok has no
+/// usable credential (missing or a 401 / refused sign-in).
+pub const LOCAL_FALLBACK_MSG: &str = "Using local model, Grok not connected";
 
 /// Live path: the last routed call went to the device because no cloud model could take it.
 ///
@@ -492,6 +602,9 @@ pub struct LocalGate {
     pub local_verify_failed: bool,
     /// The governor's level and whether the runtime is there at all.
     pub capacity: LocalCapacity,
+    /// The model loaded now reads pictures: its launch carries its vision
+    /// projector, the same launch a step that rides on it uses.
+    pub sees_pictures: bool,
 }
 
 impl LocalGate {
@@ -508,6 +621,9 @@ impl LocalGate {
             offline: super::connectivity::state().prefer_local(),
             offline_switch: grokhub_core::offline::enabled(),
             local_verify_failed: local_verify_failed(),
+            sees_pictures: super::local_sidecar::loaded()
+                .and_then(|l| l.launch)
+                .is_some_and(|l| l.projector.is_some()),
         }
     }
 }
@@ -692,6 +808,12 @@ pub trait LocalRuntime: Send + Sync {
         None
     }
 
+    /// The server reads pictures (its launch carries its vision projector),
+    /// so a chat's pictures go to it as they are.
+    fn sees_pictures(&self) -> bool {
+        false
+    }
+
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
     /// back to plain [`chat_stream`] and returns no tool calls.
     fn chat_tools(
@@ -856,7 +978,7 @@ pub fn serve_request(
     req: &crate::client::ResponsesRequest,
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
-    let (text, _) = super::live::last_user_text(&req.input);
+    let (text, picture) = super::live::last_user_text(&req.input);
     let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
     // Only the app's own background work is text-only; every other class is a
     // reply someone reads (a math turn, a plan, an 18+ turn kept on device).
@@ -868,6 +990,37 @@ pub fn serve_request(
         super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
     let kind = super::local_task::kind(class_norm, tokens, &text);
     let _kind = super::local_task::KindGuard::set(kind);
+    // The chat's tier: the person's words this turn, else the chat's setting.
+    // The router decides the model from it; the model never picks it.
+    let config_dir = crate::perm::config_dir();
+    let helper = super::local_scale::helper_turn(class, &req.conversation_id);
+    let care_first = crate::brain::care_first_enabled(&config_dir);
+    let mut standing = super::local_pin::get(&config_dir, &req.conversation_id);
+    // "From now on, be quick" keeps the tier after a restart; "back to auto"
+    // drops it. A save that fails still serves this turn as asked.
+    if let Some(ask) = super::local_scale::standing_ask(&text, care_first, helper) {
+        standing = super::local_pin::set(&config_dir, &req.conversation_id, ask).unwrap_or(ask);
+    }
+    let tier = super::local_scale::chat_tier(&text, care_first, helper, standing);
+    let _tier = super::local_scale::ChatGuard::set(tier);
+    // The person's newest message carries a picture: the swap loads a model
+    // that can see it, when one is on disk and fits (a helper's turn never
+    // swaps a model for a picture it quotes).
+    let _picture = super::local_vision::PictureGuard::set(picture && !helper);
+    // Background helpers hold the model right after a person's message: the
+    // picture waits for them (a while) instead of losing to them.
+    if picture && !helper {
+        let waited = super::local_sidecar::wait_for_vision(
+            &config_dir,
+            super::local_sidecar::VISION_DRAIN,
+            &|| cancel.is_cancelled(),
+        );
+        if waited == super::local_sidecar::Drain::Cancelled {
+            return Err(ClientError::Cancelled);
+        }
+        super::local_vision::note_waited();
+    }
+    super::local_sidecar::take_ask_outcome();
     if heavy(class_norm, tokens) && super::local_gov::level() != Level::RampUp {
         match super::local_gov::wait_for_ramp_up(HEAVY_WAIT, &|| cancel.is_cancelled()) {
             None => return Err(ClientError::Cancelled),
@@ -878,7 +1031,7 @@ pub fn serve_request(
         }
     }
     let Some(rt) = runtime() else {
-        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+        return Err(ClientError::Protocol(no_runtime_msg()));
     };
     // The prompt calls the assistant Grok: the device is told which model it
     // is (the file the running sidecar loaded), so it says so when asked.
@@ -889,6 +1042,13 @@ pub fn serve_request(
         super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
         req.effort.as_deref(),
     );
+    // A server without its vision projector (`--mmproj`) refuses any
+    // request with a picture in it, and the picture stays in the chat, so
+    // each later turn would fail too: unless the launch reads pictures, the
+    // model is told a picture was there instead. One that reads them gets
+    // each as PNG or JPEG (WebP transcoded for llama.cpp's stb_image).
+    let vision = super::local_vision::prepare_images(&mut req.input, rt.sees_pictures());
+    let blind = vision.stripped > 0;
     // The device window is often 4k to 16k: send only what fits, with room to
     // answer. With or without tools, so a long chat is trimmed on the way
     // (the oldest turns first) instead of being refused for its length.
@@ -897,14 +1057,42 @@ pub fn serve_request(
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
     // A picture ask, or a computer that can draw, keeps the picture tool
     // even on a small window, and the device is told it can draw.
-    let keep = super::local_image::ready_on_device(
-        &mut req,
-        super::local_image::can_draw_here(),
-        crate::brain::is_picture_ask(&text),
-    );
-    let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
-    let out = rt.chat_tools(&fitted, cancel);
+    let can_draw = super::local_image::can_draw_here();
+    let ask = crate::brain::is_picture_ask(&text);
+    let keep = super::local_image::ready_on_device(&mut req, can_draw, ask);
+    // A picture ask this computer can draw: the step must call the picture
+    // tool. An engine that refuses a required tool call answers as usual.
+    let forced = super::local_image::picture_step(&req, can_draw, ask).then(|| {
+        let narrow = super::local_image::only_picture_tool(&req);
+        let (fitted, _) = super::local_fit::fit_keeping(&narrow, n_ctx, keep);
+        let _force = super::local_image::ForceGuard::set();
+        rt.chat_tools(&fitted, cancel)
+    });
+    let out = match forced {
+        Some(Ok(out)) => Ok(super::local_image::with_picture_call(out, &text)),
+        Some(Err(e)) if cancel.is_cancelled() => Err(e),
+        _ => {
+            let (fitted, _) = super::local_fit::fit_keeping(&req, n_ctx, keep);
+            rt.chat_tools(&fitted, cancel)
+        }
+    };
     note_task_reply(kind, &out, cancel);
+    // The line under the reply: which model answered and why. A helper's
+    // steps never show one.
+    let ask = super::local_sidecar::take_ask_outcome();
+    if !helper {
+        match &out {
+            Ok(_) => {
+                super::local_live::note_reply(&req.conversation_id, ask);
+                // Only the person's newest message: an older picture the
+                // chat carries isn't news under this reply.
+                if blind && picture {
+                    super::local_live::note_blind(&req.conversation_id);
+                }
+            }
+            Err(_) => super::local_live::forget_line(&req.conversation_id),
+        }
+    }
     out.map_err(ClientError::Protocol)
 }
 
@@ -956,7 +1144,7 @@ fn serve_within_at(
         }
     }
     let Some(rt) = runtime() else {
-        return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
+        return Err(ClientError::Protocol(no_runtime_msg()));
     };
     let class = class_row(class).map(|r| r.class).unwrap_or(class);
     if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
@@ -993,6 +1181,50 @@ fn serve_within_at(
         usage: Usage::default(),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod ollama_ctx_tests {
+    use super::*;
+
+    #[test]
+    fn apply_ollama_num_ctx_sets_cap_from_show() {
+        set_ctx_cap(LOCAL_CTX_CAP);
+        let cap = apply_ollama_num_ctx(
+            Some("http://127.0.0.1:11434"),
+            Some("gemma4:e4b"),
+            None,
+            |url| {
+                assert!(url.ends_with("/api/tags"));
+                Ok(r#"{"models":[{"name":"gemma4:e4b"}]}"#.into())
+            },
+            |url, body| {
+                assert!(url.ends_with("/api/show"));
+                assert!(body.contains("gemma4:e4b"));
+                Ok(
+                    r#"{"parameters":"num_ctx 8192","model_info":{"gemma3.context_length":32768}}"#
+                        .into(),
+                )
+            },
+        );
+        assert_eq!(cap, Some(8192));
+        assert_eq!(ctx_cap(), 8192);
+        set_ctx_cap(LOCAL_CTX_CAP);
+    }
+
+    #[test]
+    fn apply_ollama_num_ctx_skips_when_not_ollama() {
+        set_ctx_cap(LOCAL_CTX_CAP);
+        let cap = apply_ollama_num_ctx(
+            None,
+            None,
+            None,
+            |_| Ok(r#"{"ok":true}"#.into()),
+            |_, _| panic!("no show"),
+        );
+        assert_eq!(cap, None);
+        assert_eq!(ctx_cap(), LOCAL_CTX_CAP);
+    }
 }
 
 /// What [`scan_pii`] found.

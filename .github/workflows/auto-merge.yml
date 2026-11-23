@@ -57,6 +57,9 @@ jobs:
             if (Object.values(latest).includes('CHANGES_REQUESTED')) return disable('changes requested');
             const body = (pr.body || '').split(/\r?\n/)
               .filter(l => !/^\s*(co-authored-by|signed-off-by|reviewed-by|acked-by|tested-by|helped-by|suggested-by|reported-by)\s*:/i.test(l))
+              // Agent attribution lines (requester name, session links) stay in the
+              // PR, not in beta's history.
+              .filter(l => !/^\s*(_Requested by\b|<!--.*-->\s*$)/.test(l) && !/claude\.ai\/code\//.test(l))
               .join('\n').replace(/\n{3,}/g, '\n\n').trim();
             await github.graphql(`mutation($id:ID!,$head:GitObjectID!,$title:String!,$body:String!){
               enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH,expectedHeadOid:$head,commitHeadline:$title,commitBody:$body}){clientMutationId}}`,

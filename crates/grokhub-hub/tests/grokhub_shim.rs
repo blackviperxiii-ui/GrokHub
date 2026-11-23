@@ -26,6 +26,19 @@ fn the_shim_forwards_args_and_exit_code_with_one_note() {
         String::from_utf8_lossy(&out.stderr),
         "grokhub was renamed to grokhub-hub; this grokhub shim forwards for at least one more release, so point your config at grokhub-hub.\n"
     );
+    // The old cabin's `bench local` and `--oauth` reach the hub the same way.
+    for args in [&["bench", "local"][..], &["--oauth"][..]] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_grokhub"))
+            .args(args)
+            .env("GROKHUB_SHIM_TARGET", &target)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(3));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("args: {}\n", args.join(" "))
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -40,6 +53,6 @@ fn the_shim_refuses_the_old_window_flags() {
     assert!(out.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&out.stderr),
-        "grokhub was renamed: the desktop app is grokhub-shell, and --mcp-* and --doctor are in grokhub-hub.\n"
+        "grokhub was renamed: the desktop app is grokhub-shell (grokhub-shell --autostart starts it in the tray; --agent and --tray work there too), and --mcp-*, --doctor, --oauth, --update, --hub and bench local are in grokhub-hub.\n"
     );
 }

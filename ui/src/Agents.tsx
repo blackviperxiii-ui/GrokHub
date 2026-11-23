@@ -25,6 +25,7 @@ import {
   type TodoState,
 } from "./api";
 import { CodeShip } from "./CodeShip";
+import { StatusTracker, statusFromWork } from "./Progress";
 import { TaskDetailWindow } from "./TaskDetail";
 import { inShell } from "./transport";
 import { useModalFocus } from "./ui";
@@ -41,7 +42,7 @@ export const AGENTS_NO_CHAT =
 
 export const AGENTS_EMPTY = "No jobs yet. Queued work from this chat shows up here.";
 
-/** The Code tab's Tasks panel, beside the agent window. */
+/** The Code tab's Helpers panel, in the Editor window's Helpers tab. */
 export const TASKS_NOTE = "The lead's tasks and helpers for this session.";
 export const TASKS_EMPTY = "No tasks yet. The lead's tasks and helpers show up here.";
 
@@ -82,6 +83,13 @@ export function taskProgress(p: QueueProgress): string {
   if (p.tokens > 0) parts.push(`${p.tokens < 1000 ? p.tokens : `${(p.tokens / 1000).toFixed(1)}k`} tokens`);
   parts.push(p.seconds < 60 ? `${p.seconds}s` : `${Math.floor(p.seconds / 60)}m ${p.seconds % 60}s`);
   return parts.join(" · ");
+}
+
+/** Which model and effort the router gave a helper, and why; null before its
+ * first routed step. */
+export function taskRoute(p: QueueProgress): string | null {
+  if (!p.model) return null;
+  return p.why ? `Ran on ${p.model} · ${p.why}` : `Ran on ${p.model}`;
 }
 
 export const WORK_TITLE = "Helper work";
@@ -444,8 +452,8 @@ export function Agents({
 }: {
   /** The chat the window last heard from; none before the first message. */
   conversationId?: string;
-  /** Opens the chat. Without it this is the Code tab's Tasks panel, which
-   * sits beside its own conversation and has nowhere to go. */
+  /** Opens the chat. Without it this is the Code tab's Helpers panel, which
+   * lives in the Editor window's Helpers tab and has nowhere to go. */
   onOpenChat?: () => void;
   /** False while the panel's tab is not the one on screen: nothing is read. */
   active?: boolean;
@@ -475,7 +483,7 @@ export function Agents({
   /** What the last click on helper work did. */
   const [said, setSaid] = useState<string | null>(null);
   /** The helper work whose click just ended: focus goes back to its row. */
-  const [ended, setEnded] = useState<{ key: string } | null>(null);
+  const [ended, setEnded] = useState<{ key: string; action: WorkAction } | null>(null);
   /** The queue a Review click was made on: its buttons wait for the next
    * read, and then for the turn the click started to end. */
   const [askedOn, setAskedOn] = useState<Queue | null>(null);
@@ -538,8 +546,9 @@ export function Agents({
   }, [conversationId]);
 
   // A click disables its button, and its row may be gone when the call
-  // ends. Focus that was left on nothing goes to the row's first button, or
-  // to the line that says what happened.
+  // ends. A browser moves focus off a button while it is disabled, so focus
+  // that was left on nothing goes back to the button that was used, else to
+  // the row's first button, or to the line that says what happened.
   useEffect(() => {
     if (!ended) return;
     const at = document.activeElement;
@@ -547,7 +556,11 @@ export function Agents({
     const row = [...(section.current?.querySelectorAll<HTMLElement>("[data-work]") ?? [])].find(
       (el) => el.dataset.work === ended.key,
     );
-    (row?.querySelector<HTMLElement>("button:not(:disabled)") ?? saidLine.current)?.focus();
+    (
+      row?.querySelector<HTMLElement>(`button[data-action="${ended.action}"]:not(:disabled)`) ??
+      row?.querySelector<HTMLElement>("button:not(:disabled)") ??
+      saidLine.current
+    )?.focus();
   }, [ended]);
 
   useEffect(() => {
@@ -803,7 +816,7 @@ export function Agents({
       if (onScreen.current === id) setRefused({ key: work.key, text: String(err) });
     } finally {
       setBusy(null);
-      if (onScreen.current === id) setEnded({ key: work.key });
+      if (onScreen.current === id) setEnded({ key: work.key, action });
     }
   }
 
@@ -867,8 +880,8 @@ export function Agents({
   return (
     <section
       ref={section}
-      className={onOpenChat ? "agents" : "agents embedded"}
-      aria-label={onOpenChat ? "Agents" : "Agent tasks"}
+      className={onOpenChat ? "agents" : "agents helpers-panel"}
+      aria-label={onOpenChat ? "Agents" : "Helpers"}
     >
       <div className="card-buttons">
         {onOpenChat && (
@@ -930,6 +943,11 @@ export function Agents({
                     {todo.owner ? ` · helper ${todo.owner}` : ""}
                   </div>
                   {progress && <div className="card-status task-progress">{taskProgress(progress)}</div>}
+                  {progress && taskRoute(progress) && (
+                    <div className="card-status task-route" data-effort={progress.effort || undefined}>
+                      {taskRoute(progress)}
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -944,7 +962,12 @@ export function Agents({
               const progress = progressOf(task.id);
               const made = workOf(task.id);
               return (
-                <li key={task.id} className={`card agent ${task.status}`} aria-label={task.title}>
+                <li
+                  key={task.id}
+                  className={`card agent ${task.status}`}
+                  aria-label={task.title}
+                  data-model={task.model || progress?.model || undefined}
+                >
                   {onOpenChat ? (
                     <button type="button" className="card-title link" onClick={onOpenChat}>
                       {task.title}
@@ -956,6 +979,11 @@ export function Agents({
                     {TASK_LABELS[task.status]} · {task.id}
                   </div>
                   {progress && <div className="card-status task-progress">{taskProgress(progress)}</div>}
+                  {progress && taskRoute(progress) && (
+                    <div className="card-status task-route" data-effort={progress.effort || undefined}>
+                      {taskRoute(progress)}
+                    </div>
+                  )}
                   {made && <div className="card-status task-work">{made}</div>}
                   {(task.live || progress) && (
                     <div className="card-buttons">
@@ -1010,6 +1038,7 @@ export function Agents({
                 return (
                   <li key={row.key} data-work={row.key} className={`card agent work ${row.state}`} aria-label={row.title}>
                     <div className="card-title">{row.title}</div>
+                    <StatusTracker current={statusFromWork(row.state)} label={`${row.title} status`} />
                     <div className="card-status task-work">{workLine(row, true)}</div>
                     {row.partial && <div className="card-status work-partial">Partial · {row.ended}</div>}
                     {row.redoOf && <div className="card-status work-detail">Redo of: {row.redoOf}</div>}
@@ -1034,12 +1063,18 @@ export function Agents({
                       <div className="card-buttons">
                         {row.landing && (
                           <>
-                            <button type="button" disabled={busy !== null} onClick={() => void act(row, "finish")}>
+                            <button
+                              type="button"
+                              data-action="finish"
+                              disabled={busy !== null}
+                              onClick={() => void act(row, "finish")}
+                            >
                               {working("finish", row.key, "Finish merge")}
                             </button>
                             <button
                               type="button"
                               className="quiet"
+                              data-action="putBack"
                               disabled={busy !== null}
                               onClick={() => void act(row, "putBack")}
                             >
@@ -1050,6 +1085,7 @@ export function Agents({
                         {merge && (
                           <button
                             type="button"
+                            data-action="merge"
                             disabled={busy !== null}
                             onClick={() => (merge.asks ? setAsk({ key: row.key, step: "merge" }) : void act(row, "merge"))}
                           >
@@ -1060,6 +1096,7 @@ export function Agents({
                           <button
                             type="button"
                             className="quiet danger"
+                            data-action="discard"
                             disabled={busy !== null}
                             onClick={() => setAsk({ key: row.key, step: "discard" })}
                           >

@@ -148,6 +148,10 @@ struct TaskSlot {
     owner: Option<String>,
     /// A subagent, whose finished result our own code already fenced.
     agent: bool,
+    /// The model a helper was started with; empty for commands and monitors.
+    model: String,
+    /// The model, effort and reason the router last sent a helper's step with.
+    route: Mutex<Option<crate::route::live::RouteSeen>>,
     /// A subagent's progress, kept only when it started with the watch on.
     progress: Option<Mutex<Progress>>,
 }
@@ -162,6 +166,13 @@ struct Progress {
 }
 
 impl TaskSlot {
+    fn route(&self) -> Option<crate::route::live::RouteSeen> {
+        self.route
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+    }
+
     fn progress(&self) -> Option<std::sync::MutexGuard<'_, Progress>> {
         self.progress
             .as_ref()
@@ -300,6 +311,12 @@ pub struct TaskProgress {
     pub last_step: String,
     /// Input tokens that were not cached, plus output tokens.
     pub tokens: u64,
+    /// The model this helper ran on; empty when unknown.
+    pub model: String,
+    /// The effort its last step was sent with; empty when none or unknown.
+    pub effort: String,
+    /// Why the router sent it there; empty when no step was routed yet.
+    pub why: String,
 }
 
 /// One task's steps and result, read without taking them from the model.
@@ -420,6 +437,8 @@ impl TaskHub {
             owned_by_monitor,
             owner,
             agent: false,
+            model: String::new(),
+            route: Mutex::new(None),
             progress: None,
         });
         self.lock().tasks.insert(id.to_string(), Arc::clone(&slot));
@@ -536,11 +555,13 @@ impl TaskHub {
     /// Register a running subagent. `sN` ids share the counter with commands and monitors.
     /// `kill` cancels it. Output is appended by the agent when it finishes.
     /// `title` (its description) names it in a queue view.
+    /// `model` is the model the helper runs on (for the Helpers tab).
     pub fn register_agent(
         self: &Arc<Self>,
         owner: Option<String>,
         title: &str,
         kill: Arc<dyn Fn() + Send + Sync>,
+        model: &str,
     ) -> Result<String, String> {
         if self.is_halted() {
             return Err("halted".into());
@@ -566,6 +587,8 @@ impl TaskHub {
             owned_by_monitor: false,
             owner,
             agent: true,
+            model: model.trim().to_string(),
+            route: Mutex::new(None),
             progress: watching().then(|| {
                 Mutex::new(Progress {
                     started_ms: grokhub_core::now_ms(),
@@ -693,6 +716,7 @@ impl TaskHub {
     /// id, and a helper that started while the watch was off.
     pub fn progress(&self, id: &str) -> Option<TaskProgress> {
         let slot = self.lock().tasks.get(id).cloned()?;
+        let route = slot.route();
         let progress = slot.progress()?;
         Some(TaskProgress {
             started_ms: progress.started_ms,
@@ -700,7 +724,45 @@ impl TaskHub {
             steps: progress.steps,
             last_step: progress.last_step.clone(),
             tokens: progress.tokens,
+            model: route
+                .as_ref()
+                .map_or_else(|| slot.model.clone(), |r| r.model.clone()),
+            effort: route.as_ref().map(|r| r.effort.clone()).unwrap_or_default(),
+            why: route.map(|r| r.why).unwrap_or_default(),
         })
+    }
+
+    /// What the router last sent helper `id`'s step with: its model, effort
+    /// and why. A command, a monitor or an unknown id is left alone.
+    pub fn note_route(&self, id: &str, seen: &crate::route::live::RouteSeen) {
+        let Some(slot) = self.lock().tasks.get(id).cloned() else {
+            return;
+        };
+        if slot.agent {
+            *slot.route.lock().unwrap_or_else(|err| err.into_inner()) = Some(seen.clone());
+            self.mark();
+        }
+    }
+
+    /// The model, effort and reason helper `id`'s last routed step went out
+    /// with. `None` for a command, a monitor, an unknown id, or a helper with
+    /// no routed step yet.
+    pub fn agent_route(&self, id: &str) -> Option<crate::route::live::RouteSeen> {
+        let slot = self.lock().tasks.get(id).cloned()?;
+        slot.agent.then(|| slot.route()).flatten()
+    }
+
+    /// The model helper `id` ran on. `None` for a command, a monitor, an
+    /// unknown id, or a helper registered without a model.
+    pub fn agent_model(&self, id: &str) -> Option<String> {
+        let slot = self.lock().tasks.get(id).cloned()?;
+        if !slot.agent {
+            return None;
+        }
+        let model = slot
+            .route()
+            .map_or_else(|| slot.model.trim().to_string(), |r| r.model);
+        (!model.is_empty()).then_some(model)
     }
 
     /// Task `id`'s steps and everything it wrote, for a person to read. The
@@ -1416,7 +1478,7 @@ mod tests {
     fn watch_off_marks_nothing() {
         let _watch = WatchScope::set(false);
         let hub = TaskHub::new("w0");
-        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        let id = hub.register_agent(None, "look", no_kill(), "").unwrap();
         hub.finish_agent(&id, "ok");
         assert_eq!(drain_task_changes(), Vec::<String>::new());
     }
@@ -1425,7 +1487,7 @@ mod tests {
     fn hub_changes_mark_the_session_once() {
         let _watch = WatchScope::set(true);
         let hub = TaskHub::new("w1");
-        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        let id = hub.register_agent(None, "look", no_kill(), "").unwrap();
         assert_eq!(id, "s1");
         hub.finish_agent("s1", "ok");
         assert_eq!(drain_task_changes(), vec!["w1".to_string()]);
@@ -1436,16 +1498,16 @@ mod tests {
     fn each_hub_change_marks_the_session() {
         let _watch = WatchScope::set(true);
         let hub = TaskHub::new("w4");
-        hub.register_agent(None, "look", no_kill()).unwrap();
+        hub.register_agent(None, "look", no_kill(), "").unwrap();
         assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
         hub.finish_agent("s1", "ok");
         assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
-        hub.register_agent(Some("s1".into()), "child", no_kill())
+        hub.register_agent(Some("s1".into()), "child", no_kill(), "")
             .unwrap();
         drain_task_changes();
         hub.kill_owner("s1");
         assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
-        hub.register_agent(None, "third", no_kill()).unwrap();
+        hub.register_agent(None, "third", no_kill(), "").unwrap();
         drain_task_changes();
         assert_eq!(hub.kill("s3").unwrap(), "killed s3");
         assert_eq!(drain_task_changes(), vec!["w4".to_string()]);
@@ -1481,7 +1543,7 @@ mod tests {
         let _watch = WatchScope::set(true);
         let dir = scratch("mark-mon");
         let hub = TaskHub::new("w6");
-        hub.register_agent(None, "watched", no_kill()).unwrap();
+        hub.register_agent(None, "watched", no_kill(), "").unwrap();
         drain_task_changes();
         let id = hub
             .start_monitor(&dir, None, Some("s1".into()), None, 200, String::new())
@@ -1502,10 +1564,53 @@ mod tests {
     }
 
     #[test]
+    fn register_agent_keeps_the_model_for_the_helpers_tab() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("model-1");
+        let id = hub
+            .register_agent(None, "look", no_kill(), "grok-4.7")
+            .unwrap();
+        assert_eq!(hub.agent_model(&id).as_deref(), Some("grok-4.7"));
+        assert_eq!(hub.progress(&id).unwrap().model, "grok-4.7");
+        assert_eq!(hub.agent_model("nope"), None);
+    }
+
+    #[test]
+    fn a_routed_step_shows_the_helpers_model_effort_and_why() {
+        let _watch = WatchScope::set(true);
+        let hub = TaskHub::new("route-1");
+        let id = hub
+            .register_agent(None, "refactor", no_kill(), "grok-4.7")
+            .unwrap();
+        assert_eq!(hub.agent_route(&id), None);
+        let sink_hub = Arc::clone(&hub);
+        let sink_id = id.clone();
+        {
+            let _route = crate::route::live::RouteWatch::enter(Box::new(move |seen| {
+                sink_hub.note_route(&sink_id, seen)
+            }));
+            crate::route::live::tell_route(&crate::route::live::RouteSeen {
+                model: "grok-4.3".into(),
+                effort: "high".into(),
+                why: "quality · High: a multi-file change.".into(),
+            });
+        }
+        assert_eq!(hub.agent_model(&id).as_deref(), Some("grok-4.3"));
+        let p = hub.progress(&id).unwrap();
+        assert_eq!(
+            (p.model.as_str(), p.effort.as_str(), p.why.as_str()),
+            ("grok-4.3", "high", "quality · High: a multi-file change.")
+        );
+        // A command row never takes a route.
+        hub.note_route("c9", &crate::route::live::RouteSeen::default());
+        assert_eq!(hub.agent_route("c9"), None);
+    }
+
+    #[test]
     fn helper_steps_and_usage_show_as_progress() {
         let _watch = WatchScope::set(true);
         let hub = TaskHub::new("p1");
-        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        let id = hub.register_agent(None, "look", no_kill(), "").unwrap();
         assert_eq!(id, "s1");
         drain_task_changes();
         hub.note_step("s1", &tool_event("read_file", "in_progress"));
@@ -1541,7 +1646,7 @@ mod tests {
     fn watch_off_records_no_progress() {
         let _watch = WatchScope::set(false);
         let hub = TaskHub::new("p2");
-        let id = hub.register_agent(None, "look", no_kill()).unwrap();
+        let id = hub.register_agent(None, "look", no_kill(), "").unwrap();
         assert_eq!(id, "s1");
         hub.note_step("s1", &tool_event("read_file", "in_progress"));
         hub.note_step("s1", &tool_event("read_file", "completed"));
@@ -1557,7 +1662,7 @@ mod tests {
     fn step_log_keeps_the_last_40() {
         let _watch = WatchScope::set(true);
         let hub = TaskHub::new("p3");
-        hub.register_agent(None, "look", no_kill()).unwrap();
+        hub.register_agent(None, "look", no_kill(), "").unwrap();
         for n in 1..=45 {
             hub.note_step("s1", &tool_event(&format!("tool-{n}"), "in_progress"));
         }
@@ -1571,7 +1676,7 @@ mod tests {
     #[test]
     fn peek_leaves_the_result_for_the_lead() {
         let hub = TaskHub::new("p4");
-        hub.register_agent(None, "look", no_kill()).unwrap();
+        hub.register_agent(None, "look", no_kill(), "").unwrap();
         let text = format!(
             "{}\nlooked at: a.rs",
             crate::tools::fence::fence_helper_result("the answer")
@@ -1594,7 +1699,7 @@ mod tests {
     #[test]
     fn peek_keeps_the_finish_notice_queued_for_the_lead() {
         let hub = TaskHub::new("p5");
-        hub.register_agent(None, "look", no_kill()).unwrap();
+        hub.register_agent(None, "look", no_kill(), "").unwrap();
         hub.finish_agent("s1", "the answer");
         assert_eq!(hub.peek("s1").unwrap().result, "the answer");
         let notices = hub.drain_notices();
@@ -1627,8 +1732,8 @@ mod tests {
     fn a_helper_clock_stops_when_it_ends_or_is_killed() {
         let _watch = WatchScope::set(true);
         let hub = TaskHub::new("p7");
-        hub.register_agent(None, "one", no_kill()).unwrap();
-        hub.register_agent(None, "two", no_kill()).unwrap();
+        hub.register_agent(None, "one", no_kill(), "").unwrap();
+        hub.register_agent(None, "two", no_kill(), "").unwrap();
         hub.note_step("s1", &usage_event());
         hub.note_end(
             "s1",
@@ -1810,8 +1915,12 @@ mod tests {
     #[test]
     fn one_read_waits_for_several_helpers_and_their_notices_are_not_repeated() {
         let hub = TaskHub::new("join");
-        let first = hub.register_agent(None, "one", Arc::new(|| {})).unwrap();
-        let second = hub.register_agent(None, "two", Arc::new(|| {})).unwrap();
+        let first = hub
+            .register_agent(None, "one", Arc::new(|| {}), "")
+            .unwrap();
+        let second = hub
+            .register_agent(None, "two", Arc::new(|| {}), "")
+            .unwrap();
         hub.finish_agent(&first, "found the config");
         let finisher = {
             let hub = Arc::clone(&hub);
@@ -1847,7 +1956,9 @@ mod tests {
     #[test]
     fn a_helper_nobody_waited_on_still_gets_its_notice() {
         let hub = TaskHub::new("unjoined");
-        let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+        let id = hub
+            .register_agent(None, "look", Arc::new(|| {}), "")
+            .unwrap();
         let snapshot = hub.read_output(&id, 0).expect("still running");
         assert_eq!(snapshot, "status: running");
         hub.finish_agent(&id, "done looking");
@@ -1900,7 +2011,9 @@ mod tests {
         thread::spawn(move || {
             crate::tools::fence::reset_run_nonce_for_tests();
             let hub = TaskHub::new("local-notice");
-            let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            let id = hub
+                .register_agent(None, "look", Arc::new(|| {}), "")
+                .unwrap();
             hub.finish_agent(&id, &body);
             let notes = hub.drain_notices();
             assert_eq!(notes.len(), 1);
@@ -1916,13 +2029,13 @@ mod tests {
         thread::spawn(move || {
             crate::tools::fence::reset_run_nonce_for_tests();
             let hub = TaskHub::new("local-output");
-            let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            let id = hub.register_agent(None, "look", Arc::new(|| {}), "").unwrap();
             hub.finish_agent(&id, &result);
             assert_eq!(
                 hub.read_output(&id, 0).unwrap(),
                 format!("status: exited\nexit_code: 0\noutput:\n{result}")
             );
-            let listed = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            let listed = hub.register_agent(None, "look", Arc::new(|| {}), "").unwrap();
             hub.finish_agent(&listed, &format!("{result}\nlooked at: src/lib.rs"));
             let read = hub.read_output(&listed, 0).unwrap();
             assert!(
@@ -1951,7 +2064,9 @@ mod tests {
         thread::spawn(move || {
             crate::tools::fence::reset_run_nonce_for_tests();
             let hub = TaskHub::new("mark-notice");
-            let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            let id = hub
+                .register_agent(None, "look", Arc::new(|| {}), "")
+                .unwrap();
             hub.finish_agent(&id, &body);
             let notes = hub.drain_notices();
             assert_eq!(notes.len(), 1);
@@ -1968,7 +2083,9 @@ mod tests {
         thread::spawn(move || {
             crate::tools::fence::reset_run_nonce_for_tests();
             let hub = TaskHub::new("mark-output");
-            let id = hub.register_agent(None, "look", Arc::new(|| {})).unwrap();
+            let id = hub
+                .register_agent(None, "look", Arc::new(|| {}), "")
+                .unwrap();
             hub.finish_agent(&id, &result);
             assert!(!crate::tools::fence::run_saw_untrusted());
             assert_eq!(
@@ -2189,9 +2306,9 @@ mod tests {
     fn rows_list_subagents_and_monitors_oldest_first_with_their_state() {
         let hub = TaskHub::new("rows");
         let named = hub
-            .register_agent(None, "  Read the docs ", Arc::new(|| {}))
+            .register_agent(None, "  Read the docs ", Arc::new(|| {}), "")
             .unwrap();
-        let bare = hub.register_agent(None, "", Arc::new(|| {})).unwrap();
+        let bare = hub.register_agent(None, "", Arc::new(|| {}), "").unwrap();
         hub.finish_agent(&named, "all read");
         hub.start_monitor(
             Path::new("."),
@@ -2216,7 +2333,8 @@ mod tests {
             ]
         );
         for _ in 0..7 {
-            hub.register_agent(None, "more", Arc::new(|| {})).unwrap();
+            hub.register_agent(None, "more", Arc::new(|| {}), "")
+                .unwrap();
         }
         hub.kill(&bare).unwrap();
         let rows = hub.rows();

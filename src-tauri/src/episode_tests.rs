@@ -267,6 +267,23 @@ fn a_locked_screen_an_oversized_picture_or_a_failed_shot_never_reach_the_page() 
 }
 
 #[test]
+fn a_frame_carries_the_time_it_was_set_and_clearing_drops_both() {
+    let slot = FrameSlot::default();
+    assert_eq!(slot.stamped(), None);
+    let before = grokhub_core::now_ms();
+    slot.set(Some("data:image/png;base64,AAAA".into()));
+    let (frame, at) = slot.stamped().expect("a frame");
+    assert_eq!(frame, "data:image/png;base64,AAAA");
+    assert!(
+        at >= before && at <= grokhub_core::now_ms(),
+        "{at} vs {before}"
+    );
+    assert_eq!(slot.get().as_deref(), Some("data:image/png;base64,AAAA"));
+    slot.set(None);
+    assert_eq!(slot.stamped(), None);
+}
+
+#[test]
 fn the_watcher_emits_when_the_panel_changes_and_marks_a_closed_episode_ended() {
     let d = dir("watch");
     let open = Open {
@@ -328,12 +345,18 @@ fn the_cua_flag_comes_from_the_saved_app_json_and_defaults_off() {
 }
 
 #[test]
-fn the_cua_gate_registers_only_on_linux_with_both_switches_and_the_hub() {
+fn the_cua_gate_registers_only_on_linux_and_mac_with_both_switches_and_the_hub() {
     let hub = Some(PathBuf::from("/opt/grokhub/grokhub-hub"));
     assert!(!sync_cua(false, true, hub.clone()), "desktop control off");
     assert!(!sync_cua(true, false, hub.clone()), "cuaDriver off");
     assert!(!sync_cua(true, true, None), "no hub binary");
-    assert_eq!(sync_cua(true, true, hub), cfg!(target_os = "linux"));
+    assert_eq!(
+        sync_cua(true, true, hub),
+        matches!(
+            (std::env::consts::OS, std::env::consts::ARCH),
+            ("linux" | "macos", "x86_64" | "aarch64")
+        )
+    );
     assert!(!sync_cua(true, true, None));
 }
 

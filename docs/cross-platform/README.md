@@ -2,16 +2,15 @@
 
 Goal: GrokHub on Windows, macOS, Linux, iOS, Android and the web. The Rust
 crates (`grokhub-core`, `grokhub-agent`, `grokhub-hub`) stay and sit behind
-Tauri commands. Only the egui UI in `grokhub-app` is rewritten in React. The
-egui cabin keeps shipping until the new shell reaches parity, and user decides
-when it is dropped.
+Tauri commands. Loadout is built with Tauri; the egui cabin is retired.
 
 Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 
 ## Decisions
 
-- **Tauri is approved** for the new cross-platform shell. "No Electron. No
-  Tauri." now describes only the egui cabin. Electron stays out.
+- **Tauri is the shipping shell.** Loadout is built with Tauri. Electron stays
+  out. Older "No Electron. No Tauri." notes applied only to the retired egui
+  cabin.
 - **Repo rules win** over any planning notes where they differ. Since #832
   (2026-10-24; confirmed 2026-10-25) those rules are:
   - Every PR targets `beta`. The agent squash-merges it once CI is green,
@@ -24,7 +23,9 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
   desktop runs the chats and keeps the key.
 - **Packaging (2026-10-25):** the shell ships as Tauri's own bundles
   (.deb, .AppImage, NSIS setup .exe, .dmg). AUR, Inno and the cabin tarball
-  stay as they are, for the cabin only, until the shell reaches parity.
+  stayed for the cabin only until the shell reached parity. With the cabin
+  retired, the Inno Setup and the tarball scripts are gone and both
+  PKGBUILDs build the shell and the hub.
 
 ## Phases
 
@@ -83,9 +84,12 @@ In `grokhub-agent` they sit in `sudo_pass.rs`, `tools/shell.rs`,
   iOS: `apple-native-keyring-store` needs its `protected` feature there.
 - CI job `cross-check` runs that clippy matrix on macOS and Ubuntu (NDK)
   runners.
-- Known for Phase 4: keyring's `v1` feature has no Android store. On Android,
-  `keyring::Entry::new` will fail until the app enables
-  `android-native-keyring-store`.
+- Android keyring (Order 966): keyring's `v1` facade still has no Android
+  store, so phone builds depend on `android-native-keyring-store` +
+  `keyring-core` behind `cfg(target_os = "android")`. Startup calls
+  `grokhub_agent::keyring_blob::ensure_android_store()` (SharedPreferences
+  sealed with the OS Keystore) before `use_os_keyring`, and `OsBackend`
+  reads/writes through `keyring_core::Entry` on Android only.
 
 
 ## Phase 2 status
@@ -314,7 +318,10 @@ Pulse ledger (`memory/pulse-ledger.md`) as input (`src-tauri/src/pulse.rs`).
   to `memory/pulse-ledger.md` (older lines still in MEMORY.md are read too),
   so the next ranking learns from them. Snooze hides
   a card until the next 9 AM local.
-- Not yet: Undo on done-for-you posts. The cabin still makes the cards. A dismissed
+- Done for you (Settings → Pulse, off by default) pauses an automation
+  that failed 5 runs in a row, and its card has Undo and Stop doing this
+  (`src-tauri/src/done_for_you.rs`). A failing automation's card also has
+  Pause it. A dismissed
   idea is not added to the cabin's turned-down list (that lives in its
   `config.json`, which the shell does not write), so the cabin's next idea
   pass can offer a reworded copy.
@@ -411,8 +418,8 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
 - Rust tests cover listing, the transcript with folded tool steps, a second
   worker sending the first turn again, search, rename, delete and that cabin
   sessions stay out. vitest covers the page, its search and delete prompt,
-  and Chat reopening the last chat. Not yet: the smoke test does not walk
-  History.
+  and Chat reopening the last chat. The smoke test opens History (under More),
+  checks a saved chat from the run, searches, and reopens the row in Chat.
 
 **3i, the Code tab.** A Code page for the project folder. Its logic is the
 `grokhub-code` crate (`crates/grokhub-code`), which the egui cabin's Code tab
@@ -502,8 +509,8 @@ uses too; the shell wraps it in the `code_*` commands
   and the redactors, the editor's path rules and the terminal.
   `no_code_tab_command_is_a_web_command` (`src-tauri/src/remote.rs`) reads
   the window's handler list and fails when a Code command is on the web
-  list. vitest covers the pages. Not yet: the smoke test does not walk the
-  Code tab.
+  list. vitest covers the pages. The smoke test walks the Code tab: projects,
+  the agent window, and Helpers ship (review, commit, push, Open PR).
 
 Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
 gate tests on all three desktop OSes, and the smoke test confirms it on
@@ -542,9 +549,9 @@ connectors only.
   `phone_smoke_report` command refuses.
 - CI jobs `phone (android)` (an API 34 x86_64 emulator) and `phone (ios)` (a
   booted iPhone simulator) run this on every PR.
-- Not yet: saving an API key on Android, because keyring has no Android store
-  until the app enables `android-native-keyring-store`. Sign-in on phones is
-  only mocked so far.
+- Android credentials seal in the OS Keystore via
+  `android-native-keyring-store` (see Phase 1). Sign-in on phones is still
+  only mocked in the smoke path so far.
 
 ## Phase 5 status
 

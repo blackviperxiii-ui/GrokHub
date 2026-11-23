@@ -81,6 +81,8 @@ const PAIRS: [string, string, number][] = [
   ["muted", "bg", 4.5],
   ["muted", "panel", 4.5],
   ["muted", "raised", 4.5],
+  // The open tab's label on its fill (solid red on light, red-tinted on dark).
+  ["tab-open-text", "tab-open-bg", 4.5],
   ["steel", "panel", 4.5],
   // Code in a reply: strings and numbers on the code well.
   ["steel", "bg", 4.5],
@@ -94,6 +96,15 @@ const PAIRS: [string, string, number][] = [
   ["accent", "panel", 3],
   ["field-border", "bg", 3],
   ["field-border", "panel", 3],
+  // Red and amber used as small text (queued badges, medium severity).
+  ["red-text", "bg", 4.5],
+  ["red-text", "panel", 4.5],
+  ["warn-text", "bg", 4.5],
+  ["warn-text", "panel", 4.5],
+  // A switch that is on: its fill against the page, and its thumb against the fill.
+  ["toggle-on", "bg", 3],
+  ["toggle-on", "panel", 3],
+  ["toggle-on-thumb", "toggle-on", 3],
 ];
 
 describe("theme contrast", () => {
@@ -110,21 +121,25 @@ describe("theme contrast", () => {
     expect(contrast("#c8304a", "#1d1e22")).toBeLessThan(4.5);
   });
 
-  // A danger button's text is danger-text. On the accent fill every plain
-  // button starts with it could not be read, so the button is outlined.
-  it("a danger button is outlined, because danger text on the accent fill can't be read", () => {
+  // Destructive differs from primary outline by fill + a "!" mark, not color alone.
+  it("a danger button is filled red with a bang mark", () => {
     const block = /\nbutton\.danger:not\(:disabled\) \{([^}]*)\}/.exec(css)?.[1] ?? "";
-    expect(block.trim()).toBe("background: transparent;");
-    const ratios = THEMES.map((id) => {
-      const vars = theme(rules, id);
-      return Number(contrast(resolve(vars, "danger-text"), resolve(vars, "accent")).toFixed(2));
-    });
-    expect(ratios).toEqual([1.5, 1.5, 1.5, 2.32]);
+    expect(block).toMatch(/background:\s*var\(--red\)/);
+    expect(css).toMatch(/button\.danger:not\(:disabled\)::before[\s\S]*?content:\s*"! "/);
+  });
+
+  it("default buttons are red outline, not a filled accent", () => {
+    const block = /\nbutton \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/background:\s*transparent/);
+    expect(block).toMatch(/border:\s*1\.5px solid var\(--red\)/);
+    expect(css).toMatch(/button\.cta[\s\S]*?background:\s*var\(--amber\)/);
   });
 
   it("reads the real themes, not an empty table", () => {
     const vars = theme(rules, "ops-dark");
     expect(resolve(vars, "bg")).toBe("#0b0b0d");
-    expect(resolve(vars, "accent")).toBe("#ffb000");
+    expect(resolve(vars, "accent")).toBe("#d7263d");
+    expect(resolve(vars, "amber")).toBe("#ff9f1a");
+    expect(resolve(vars, "line")).toBe("#3a161d");
   });
 });

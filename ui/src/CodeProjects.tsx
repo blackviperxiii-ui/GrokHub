@@ -1,11 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  codeProjectLinkRemote,
   codeProjectNew,
   codeProjectOpen,
   codeProjectPick,
+  codeProjectSetBranch,
   codeProjects,
   listChats,
   type ChatRow,
+  type CodeProject,
   type CodeProjects as ProjectList,
 } from "./api";
 import { whenLabel } from "./History";
@@ -19,6 +22,8 @@ export const SESSIONS_EMPTY = "No sessions in this project yet.";
 /** Sessions shown before Show all. */
 export const SESSIONS_SHOWN = 6;
 export const PROJECTS_AGENT_BUSY = "The agent is still replying. Stop it or wait, then switch.";
+export const LINK_REPO = "Link repo…";
+export const RULES_NONE = "No rule files found";
 
 /** The last part of a folder path, for a folder with no project row. */
 export function folderName(path: string): string {
@@ -26,9 +31,45 @@ export function folderName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** A chat bound to a Code project: its sessions and runners live in the
+ * Editor (Projects / Helpers), not in Chat Hangout, History or Agents. */
+export function isCodeSession(row: { project?: string | null; main?: boolean }): boolean {
+  return !row.main && !!row.project;
+}
+
 /** The open project's saved chats, newest first. */
 export function projectSessions(chats: ChatRow[], project: string): ChatRow[] {
   return chats.filter((c) => c.project === project).sort((a, b) => b.updated - a.updated);
+}
+
+/** One-line source / branch / sync for the open project. */
+export function projectLinkLine(project: CodeProject): string {
+  const parts: string[] = [];
+  if (project.remoteUrl) {
+    parts.push(project.remoteUrl);
+  } else {
+    parts.push("Local folder");
+  }
+  const branch = project.activeBranch || project.preferredBranch;
+  if (branch) {
+    parts.push(`on ${branch}`);
+  }
+  if (project.preferredBranch && project.activeBranch && project.preferredBranch !== project.activeBranch) {
+    parts.push(`PR base ${project.preferredBranch}`);
+  }
+  if (project.sync && (project.sync.ahead || project.sync.behind)) {
+    parts.push(`${project.sync.ahead} ahead, ${project.sync.behind} behind`);
+  }
+  return parts.join(" · ");
+}
+
+/** Short list of rule file names in force. */
+export function projectRulesLine(project: CodeProject): string {
+  const rules = project.rules ?? [];
+  if (rules.length === 0) return RULES_NONE;
+  const names = rules.map((r) => r.path).slice(0, 6);
+  const more = rules.length > names.length ? ` (+${rules.length - names.length})` : "";
+  return `Rules: ${names.join(", ")}${more}`;
 }
 
 interface Props {
@@ -62,7 +103,10 @@ export function CodeProjects({
   const [chats, setChats] = useState<ChatRow[]>([]);
   const [picking, setPicking] = useState(false);
   const [naming, setNaming] = useState(false);
+  const [linking, setLinking] = useState(false);
   const [name, setName] = useState("");
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [branchOverride, setBranchOverride] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [all, setAll] = useState(false);
@@ -94,7 +138,10 @@ export function CodeProjects({
       setList(next);
       setPicking(false);
       setNaming(false);
+      setLinking(false);
       setName("");
+      setRemoteUrl("");
+      setBranchOverride("");
       setAll(false);
       listChats().then(setChats, () => {});
       if (moved) onSwitched();
@@ -111,6 +158,22 @@ export function CodeProjects({
     if (trimmed) void change(() => codeProjectNew(trimmed));
   }
 
+  function linkRepo(event: FormEvent) {
+    event.preventDefault();
+    const url = remoteUrl.trim();
+    if (!url) return;
+    const branch = branchOverride.trim() || null;
+    void change(() => codeProjectLinkRemote(url, branch));
+  }
+
+  function saveBranch(event: FormEvent) {
+    event.preventDefault();
+    const current = list?.projects.find((p) => p.current);
+    if (!current) return;
+    const branch = branchOverride.trim() || null;
+    void change(() => codeProjectSetBranch(current.id, branch));
+  }
+
   const current = list?.projects.find((p) => p.current);
   const sessions = current ? projectSessions(chats, current.id) : [];
   const shown = all ? sessions : sessions.slice(0, SESSIONS_SHOWN);
@@ -122,6 +185,12 @@ export function CodeProjects({
         <div>
           <div className="card-title">{current?.name ?? (bound ? folderName(bound) : PROJECTS_NONE_OPEN)}</div>
           {bound && <div className="note">{bound}</div>}
+          {current && (
+            <>
+              <div className="note">{projectLinkLine(current)}</div>
+              <div className="note">{projectRulesLine(current)}</div>
+            </>
+          )}
         </div>
         <div className="card-buttons">
           {bound && list && list.projects.length > 0 && (
@@ -132,7 +201,26 @@ export function CodeProjects({
           <button type="button" className="quiet" onClick={() => void change(codeProjectPick)} disabled={busy}>
             Open folder…
           </button>
-          <button type="button" className="quiet" aria-expanded={naming} onClick={() => setNaming((open) => !open)}>
+          <button
+            type="button"
+            className="quiet"
+            aria-expanded={linking}
+            onClick={() => {
+              setLinking((open) => !open);
+              setNaming(false);
+            }}
+          >
+            {LINK_REPO}
+          </button>
+          <button
+            type="button"
+            className="quiet"
+            aria-expanded={naming}
+            onClick={() => {
+              setNaming((open) => !open);
+              setLinking(false);
+            }}
+          >
             New project
           </button>
         </div>
@@ -153,6 +241,54 @@ export function CodeProjects({
           </button>
           <button type="button" className="quiet" onClick={() => setNaming(false)} disabled={busy}>
             Cancel
+          </button>
+        </form>
+      )}
+      {linking && (
+        <form className="code-test-row" onSubmit={linkRepo}>
+          <label>
+            Repo URL
+            <input
+              value={remoteUrl}
+              autoFocus
+              autoComplete="off"
+              placeholder="https://github.com/org/app.git"
+              disabled={busy}
+              onChange={(e) => setRemoteUrl(e.target.value)}
+            />
+          </label>
+          <label>
+            Preferred branch
+            <input
+              value={branchOverride}
+              autoComplete="off"
+              placeholder="beta (optional)"
+              disabled={busy}
+              onChange={(e) => setBranchOverride(e.target.value)}
+            />
+          </label>
+          <button type="submit" disabled={busy || !remoteUrl.trim()}>
+            Link
+          </button>
+          <button type="button" className="quiet" onClick={() => setLinking(false)} disabled={busy}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {current && !linking && !naming && (
+        <form className="code-test-row" onSubmit={saveBranch}>
+          <label>
+            Working branch
+            <input
+              value={branchOverride}
+              autoComplete="off"
+              placeholder={current.preferredBranch ?? "beta"}
+              disabled={busy}
+              onChange={(e) => setBranchOverride(e.target.value)}
+            />
+          </label>
+          <button type="submit" disabled={busy}>
+            Set branch
           </button>
         </form>
       )}

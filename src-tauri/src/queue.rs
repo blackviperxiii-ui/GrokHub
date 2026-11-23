@@ -28,6 +28,9 @@ pub struct Task {
     pub status: Status,
     /// Still going, so Stop has something to stop.
     pub live: bool,
+    /// The model a helper ran on; empty for commands and monitors.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
     /// A helper's progress, when this app watched it run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<Progress>,
@@ -42,6 +45,15 @@ pub struct Progress {
     pub last_step: String,
     pub tokens: u64,
     pub seconds: u64,
+    /// The model this helper ran on; empty when unknown.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    /// The effort its last step went out with; empty when none or unknown.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub effort: String,
+    /// Why the router sent it there; empty before its first routed step.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub why: String,
 }
 
 /// A helper's progress as the page shows it, with its clock read at `now_ms`.
@@ -52,6 +64,9 @@ fn progress_of(progress: &TaskProgress, now_ms: u64) -> Progress {
         last_step: progress.last_step.clone(),
         tokens: progress.tokens,
         seconds: end.saturating_sub(progress.started_ms) / 1000,
+        model: progress.model.clone(),
+        effort: progress.effort.clone(),
+        why: progress.why.clone(),
     }
 }
 
@@ -505,6 +520,10 @@ pub fn queue(config_dir: &Path, conversation_id: &str) -> Queue {
             title: row.title.clone(),
             status: status(row),
             live: row.state == TaskState::Running,
+            model: hub
+                .as_ref()
+                .and_then(|hub| hub.agent_model(&row.id))
+                .unwrap_or_default(),
             progress: hub
                 .as_ref()
                 .and_then(|hub| hub.progress(&row.id))
@@ -609,6 +628,7 @@ mod tests {
             title: title.into(),
             status,
             live,
+            model: String::new(),
             progress: None,
         }
     }
@@ -1619,9 +1639,9 @@ mod tests {
             .unwrap();
         }
         let hub = grokhub_agent::hub_for(&id);
-        hub.register_agent(None, "task-1: Add the parser", Arc::new(|| {}))
+        hub.register_agent(None, "task-1: Add the parser", Arc::new(|| {}), "")
             .unwrap();
-        hub.register_agent(None, "task-2: Add the page", Arc::new(|| {}))
+        hub.register_agent(None, "task-2: Add the page", Arc::new(|| {}), "")
             .unwrap();
         hub.finish_agent("s2", "done");
         let states = |queue: Queue| -> Vec<(String, Option<String>, TodoState)> {
@@ -1647,6 +1667,8 @@ mod tests {
                 title: "write".into(),
                 action: "parser.rs".into(),
                 reason: String::new(),
+                asks_every_time: false,
+                hard: false,
             },
         );
         let queue = queue(&cfg, &id);
@@ -1674,11 +1696,11 @@ mod tests {
         assert!(!grokhub_agent::session_is_live(&id), "looking opens no hub");
 
         let hub = grokhub_agent::hub_for(&id);
-        hub.register_agent(None, "Index the repo", Arc::new(|| {}))
+        hub.register_agent(None, "Index the repo", Arc::new(|| {}), "")
             .unwrap();
-        hub.register_agent(None, "failed to fetch the docs", Arc::new(|| {}))
+        hub.register_agent(None, "failed to fetch the docs", Arc::new(|| {}), "")
             .unwrap();
-        hub.register_agent(None, "Sum the logs", Arc::new(|| {}))
+        hub.register_agent(None, "Sum the logs", Arc::new(|| {}), "")
             .unwrap();
         hub.finish_agent("s3", "42");
         assert_eq!(
@@ -1722,6 +1744,9 @@ mod tests {
             steps: 2,
             last_step: "shell".into(),
             tokens: 750,
+            model: "grok-4.7".into(),
+            effort: "high".into(),
+            why: "quality · High: debugging.".into(),
         };
         assert_eq!(
             progress_of(&running, 43_500),
@@ -1730,6 +1755,9 @@ mod tests {
                 last_step: "shell".into(),
                 tokens: 750,
                 seconds: 42,
+                model: "grok-4.7".into(),
+                effort: "high".into(),
+                why: "quality · High: debugging.".into(),
             }
         );
         let ended = TaskProgress {
@@ -1748,15 +1776,26 @@ mod tests {
             serde_json::to_string(&plain).unwrap(),
             r#"{"id":"t1","title":"x","status":"running","live":true}"#
         );
+        plain.model = "grok-4.7".into();
         plain.progress = Some(Progress {
             steps: 2,
             last_step: "shell".into(),
             tokens: 750,
             seconds: 42,
+            model: "grok-4.7".into(),
+            effort: String::new(),
+            why: String::new(),
         });
         assert_eq!(
             serde_json::to_string(&plain).unwrap(),
-            r#"{"id":"t1","title":"x","status":"running","live":true,"progress":{"steps":2,"lastStep":"shell","tokens":750,"seconds":42}}"#
+            r#"{"id":"t1","title":"x","status":"running","live":true,"model":"grok-4.7","progress":{"steps":2,"lastStep":"shell","tokens":750,"seconds":42,"model":"grok-4.7"}}"#
+        );
+        let p = plain.progress.as_mut().unwrap();
+        p.effort = "high".into();
+        p.why = "quality · High: debugging.".into();
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap()["progress"],
+            serde_json::json!({"steps":2,"lastStep":"shell","tokens":750,"seconds":42,"model":"grok-4.7","effort":"high","why":"quality · High: debugging."})
         );
     }
 
@@ -1772,7 +1811,7 @@ mod tests {
     fn details_show_a_helpers_result_and_leave_it_for_the_session() {
         let id = format!("queue-detail-{}", grokhub_core::now_ms());
         let hub = grokhub_agent::hub_for(&id);
-        hub.register_agent(None, "task-1: Add the parser", Arc::new(|| {}))
+        hub.register_agent(None, "task-1: Add the parser", Arc::new(|| {}), "")
             .unwrap();
         assert_eq!(
             detail(&id, "s1"),

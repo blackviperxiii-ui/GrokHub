@@ -1,7 +1,8 @@
+import { StrictMode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiModelsCard, AiModelsView } from "./api";
+import type { AiModelsCard, AiModelsView, ClaudePlan, OpenRouterSignIn, OpenRouterSignInStatus } from "./api";
 
 const api = vi.hoisted(() => ({
   getAiModels: vi.fn<() => Promise<AiModelsView>>(),
@@ -11,20 +12,71 @@ const api = vi.hoisted(() => ({
   removeAiProvider: vi.fn<(id: string) => Promise<AiModelsView>>(),
   saveAiSpend: vi.fn<(cap: number, ceiling: number) => Promise<AiModelsView>>(),
   revokeAiPremium: vi.fn<(id: string) => Promise<AiModelsView>>(),
+  unbenchAiModel: vi.fn<(id: string) => Promise<AiModelsView>>(),
+  saveWebSearch: vi.fn<(backend: string, searxngUrl: string) => Promise<AiModelsView>>(),
+  saveBraveKey: vi.fn<(key: string) => Promise<AiModelsView>>(),
+  startOpenRouterSignIn: vi.fn<() => Promise<OpenRouterSignIn>>(),
+  waitOpenRouterSignIn: vi.fn<() => Promise<AiModelsCard>>(),
+  stopOpenRouterSignIn: vi.fn<() => Promise<void>>(),
+  openRouterSignInStatus: vi.fn<() => Promise<OpenRouterSignInStatus>>(),
+  claudePlanStatus: vi.fn<() => Promise<ClaudePlan>>(),
+  claudePlanChats: vi.fn<() => Promise<{ allowed: boolean; chats: string[] }>>(),
 }));
 vi.mock("./api", () => api);
 
-import { AiModels, LOCAL_NOTE, PREMIUM_NONE } from "./AiModels";
+import {
+  AiModels,
+  BRAVE_SET,
+  BRAVE_UNSET,
+  LOCAL_NOTE,
+  OPENROUTER_BY_HAND,
+  OPENROUTER_KEY_WAIT,
+  OPENROUTER_REOPEN,
+  OPENROUTER_STOPPED,
+  OPENROUTER_WAIT,
+  PREMIUM_NONE,
+  SEARXNG_NOTE,
+  WEB_SEARCH_NOTE,
+} from "./AiModels";
+
+const SIGN_IN_URL = "https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback&state=s";
+
+/** A promise the test settles by hand. */
+function later<T>() {
+  let settle: (value: T) => void = () => undefined;
+  let refuse: (err: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolve, reject) => {
+    settle = resolve;
+    refuse = reject;
+  });
+  return { promise, settle, refuse };
+}
 
 const EMPTY: AiModelsView = {
   providers: [],
-  spend: { weeklyCapUsd: 0, priceCeilingUsdPerM: 15, caps: [0, 5, 10, 25, 50, 100], ceilings: [5, 15, 30, 60] },
+  spend: { weeklyCapUsd: 0, priceCeilingUsdPerM: 15, caps: [0], ceilings: [5, 15, 30, 60] },
   premium: [],
+  benched: [],
   table: [],
   tableBuiltAt: 0,
   locked: "",
+  webSearch: {
+    backend: "duckduckgo",
+    backends: [
+      { id: "duckduckgo", label: "DuckDuckGo Lite (free, no key)" },
+      { id: "searxng", label: "SearXNG (self-hosted URL)" },
+      { id: "brave", label: "Brave Search (your API key)" },
+    ],
+    searxngUrl: "",
+    searxngProblem: "",
+    braveKeySet: false,
+  },
   status: "",
 };
+
+function searching(over: Partial<AiModelsView["webSearch"]>): AiModelsView {
+  return { ...EMPTY, webSearch: { ...EMPTY.webSearch, ...over } };
+}
 
 const WITH_PROVIDER: AiModelsView = {
   ...EMPTY,
@@ -51,6 +103,10 @@ const KEY_CARD: AiModelsCard = {
 beforeEach(() => {
   vi.resetAllMocks();
   api.getAiModels.mockResolvedValue(EMPTY);
+  api.stopOpenRouterSignIn.mockResolvedValue(undefined);
+  api.claudePlanStatus.mockResolvedValue({ state: "missing" });
+  api.claudePlanChats.mockResolvedValue({ allowed: false, chats: [] });
+  api.openRouterSignInStatus.mockResolvedValue({ waiting: null, card: null });
 });
 
 describe("AiModels", () => {
@@ -68,8 +124,9 @@ describe("AiModels", () => {
     expect(screen.getByRole("heading", { name: "Spend limits" })).toBeVisible();
     expect(screen.getByText(PREMIUM_NONE)).toBeVisible();
     expect(screen.getByText("No routing table yet. It builds after the first few chats.")).toBeVisible();
-    expect(screen.getByLabelText("Weekly spend cap")).toHaveValue("0");
+    expect(screen.queryByLabelText("Weekly spend cap")).toBeNull();
     expect(screen.getByLabelText("Price limit")).toHaveValue("15");
+    expect(screen.getByRole("heading", { name: "Benched models" })).toBeVisible();
   });
 
   it("keeps the key field write-only and empties it as the key leaves", async () => {
@@ -127,14 +184,31 @@ describe("AiModels", () => {
     expect(screen.queryByRole("button", { name: "Allow openrouter.ai" })).toBeNull();
   });
 
-  it("saves a new weekly cap keeping the price limit", async () => {
-    api.saveAiSpend.mockResolvedValue({ ...EMPTY, spend: { ...EMPTY.spend, weeklyCapUsd: 25 }, status: "Saved." });
+  it("saves a new price limit without a weekly spend cap", async () => {
+    api.saveAiSpend.mockResolvedValue({ ...EMPTY, spend: { ...EMPTY.spend, priceCeilingUsdPerM: 30 }, status: "Saved." });
     render(<AiModels />);
     await screen.findByText("No other providers yet.");
-    await userEvent.selectOptions(screen.getByLabelText("Weekly spend cap"), "25");
-    expect(api.saveAiSpend).toHaveBeenCalledWith(25, 15);
+    await userEvent.selectOptions(screen.getByLabelText("Price limit"), "30");
+    expect(api.saveAiSpend).toHaveBeenCalledWith(0, 30);
     expect(await screen.findByText("Saved.")).toBeVisible();
-    expect(screen.getByLabelText("Weekly spend cap")).toHaveValue("25");
+    expect(screen.getByLabelText("Price limit")).toHaveValue("30");
+  });
+
+  it("shows benched models and lets you unbench one", async () => {
+    api.getAiModels.mockResolvedValue({
+      ...EMPTY,
+      benched: [{ id: "grok", label: "Grok (xAI)", benchedAtMs: 123 }],
+    });
+    api.unbenchAiModel.mockResolvedValue({
+      ...EMPTY,
+      benched: [],
+      status: "Unbenched Grok (xAI). It is available to routing again.",
+    });
+    render(<AiModels />);
+    const row = await screen.findByRole("listitem", { name: "Grok (xAI)" });
+    await userEvent.click(within(row).getByRole("button", { name: "Unbench" }));
+    expect(api.unbenchAiModel).toHaveBeenCalledWith("grok");
+    expect(await screen.findByText("Unbenched Grok (xAI). It is available to routing again.")).toBeVisible();
   });
 
   it("revokes a paid upgrade and shows the empty line", async () => {
@@ -188,6 +262,189 @@ describe("AiModels", () => {
     await screen.findByText("No other providers yet.");
     expect(screen.queryByRole("heading", { name: "AI models" })).toBeNull();
     expect(container.querySelector("section")).toHaveAttribute("aria-label", "AI models");
+  });
+
+  it("signs in with OpenRouter: waits for the browser, then shows the key card", async () => {
+    const card = later<AiModelsCard>();
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    api.answerAiModelsCard.mockResolvedValue({ ...WITH_PROVIDER, status: "openrouter added, still off. Allow it so Auto can use its models." });
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(OPENROUTER_WAIT).toBe("Waiting for OpenRouter. Finish signing in in your browser.");
+    // The browser opened; the link stays at hand for a tab that was closed.
+    const byHand = screen.getByRole("group", { name: "Open OpenRouter by hand" });
+    expect(byHand).toHaveTextContent(OPENROUTER_REOPEN);
+    expect(within(byHand).getByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    // Nothing else starts meanwhile.
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeDisabled();
+
+    card.settle(KEY_CARD);
+    const group = await screen.findByRole("group", { name: "Save its API key (openrouter)" });
+    expect(screen.getByText(OPENROUTER_KEY_WAIT)).toBeVisible();
+    expect(api.answerAiModelsCard).not.toHaveBeenCalled();
+    await userEvent.click(within(group).getByRole("button", { name: "Save" }));
+    expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", true);
+    expect(await screen.findByText("openrouter added, still off. Allow it so Auto can use its models.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sign in to OpenRouter again" })).toBeEnabled();
+  });
+
+  it("shows the sign-in link to open by hand when the browser didn't open", async () => {
+    const card = later<AiModelsCard>();
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: false, why: "No browser opened" });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    const byHand = await screen.findByRole("group", { name: "Open OpenRouter by hand" });
+    expect(byHand).toHaveTextContent(`${OPENROUTER_BY_HAND} (No browser opened)`);
+    expect(within(byHand).getByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    await userEvent.click(within(byHand).getByRole("button", { name: "Copy link" }));
+    expect(writeText).toHaveBeenCalledWith(SIGN_IN_URL);
+    expect(await screen.findByText("Link copied.")).toBeVisible();
+
+    card.settle(KEY_CARD);
+    await screen.findByRole("group", { name: "Save its API key (openrouter)" });
+    expect(screen.queryByRole("group", { name: "Open OpenRouter by hand" })).toBeNull();
+  });
+
+  it("shows why a sign-in ended with no key and lets you try again", async () => {
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockRejectedValue("OpenRouter sign-in timed out");
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    expect(await screen.findByText("OpenRouter sign-in timed out")).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Save its API key (openrouter)" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled();
+  });
+
+  it("shows a refused start, such as Offline only, without waiting", async () => {
+    api.startOpenRouterSignIn.mockRejectedValue("Offline only is on.");
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    expect(await screen.findByText("Offline only is on.")).toBeVisible();
+    expect(api.waitOpenRouterSignIn).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled();
+  });
+
+  it("denies the sign-in's key card when it arrives after the page was left", async () => {
+    const card = later<AiModelsCard>();
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    api.answerAiModelsCard.mockResolvedValue(EMPTY);
+    const { unmount } = render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    await screen.findByText(OPENROUTER_WAIT);
+    expect(api.stopOpenRouterSignIn).not.toHaveBeenCalled();
+    unmount();
+    // Leaving stops the sign-in, so no new key is bought for a page nobody sees.
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+    expect(api.answerAiModelsCard).not.toHaveBeenCalled();
+    card.settle(KEY_CARD);
+    await waitFor(() => expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false));
+    expect(api.answerAiModelsCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a sign-in on Stop signing in and says nothing was saved", async () => {
+    const card = later<AiModelsCard>();
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    api.stopOpenRouterSignIn.mockImplementation(() => {
+      card.refuse("OpenRouter sign-in stopped");
+      return Promise.resolve();
+    });
+    const { unmount } = render(<AiModels />);
+    await screen.findByText("No other providers yet.");
+    await userEvent.type(screen.getByLabelText("Provider address"), "https://openrouter.ai/api/v1");
+    await userEvent.type(screen.getByLabelText("Provider API key"), "test-key-aaaaaaaa");
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Sign in with OpenRouter" }));
+    // A pasted key waits while the browser sign-in does, so two cards never race.
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Stop signing in" }));
+    expect(await screen.findByText(OPENROUTER_STOPPED)).toBeVisible();
+    expect(OPENROUTER_STOPPED).toBe("Sign-in stopped. Nothing was saved.");
+    expect(screen.queryByText(OPENROUTER_WAIT)).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add provider" })).toBeEnabled();
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+    // The sign-in is over, so leaving stops nothing more.
+    unmount();
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks up a sign-in that still waits when the page loads after a reload", async () => {
+    const card = later<AiModelsCard>();
+    api.openRouterSignInStatus.mockResolvedValue({ waiting: { url: SIGN_IN_URL, opened: true, why: "" }, card: null });
+    api.waitOpenRouterSignIn.mockReturnValue(card.promise);
+    render(<AiModels />);
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(screen.getByLabelText("OpenRouter sign-in link")).toHaveValue(SIGN_IN_URL);
+    // Nothing new was started: this page waits for the one that runs.
+    expect(api.startOpenRouterSignIn).not.toHaveBeenCalled();
+    expect(api.waitOpenRouterSignIn).toHaveBeenCalledTimes(1);
+    card.settle(KEY_CARD);
+    expect(await screen.findByRole("group", { name: "Save its API key (openrouter)" })).toBeVisible();
+    expect(screen.getByText(OPENROUTER_KEY_WAIT)).toBeVisible();
+  });
+
+  it("shows the key card a reloaded page never got to show", async () => {
+    api.openRouterSignInStatus.mockResolvedValue({ waiting: null, card: KEY_CARD });
+    api.answerAiModelsCard.mockResolvedValue({ ...EMPTY, status: "Nothing saved. The key was denied." });
+    render(<AiModels />);
+    const group = await screen.findByRole("group", { name: "Save its API key (openrouter)" });
+    expect(api.waitOpenRouterSignIn).not.toHaveBeenCalled();
+    await userEvent.click(within(group).getByRole("button", { name: "Deny" }));
+    expect(api.answerAiModelsCard).toHaveBeenCalledWith("ai-key-openrouter-1", false);
+  });
+
+  it("keeps waiting when a click and the load-time pick-up both follow one sign-in", async () => {
+    const status = later<OpenRouterSignInStatus>();
+    const waits: Array<ReturnType<typeof later<AiModelsCard>>> = [];
+    api.openRouterSignInStatus.mockReturnValue(status.promise);
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    // As in the shell: a newer wait ends the older one with WAITED_ELSEWHERE.
+    api.waitOpenRouterSignIn.mockImplementation(() => {
+      waits.at(-1)?.refuse("This sign-in moved to a newer page.");
+      const next = later<AiModelsCard>();
+      waits.push(next);
+      return next.promise;
+    });
+    const { unmount } = render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    status.settle({ waiting: { url: SIGN_IN_URL, opened: true, why: "" }, card: null });
+    await waitFor(() => expect(waits).toHaveLength(2));
+    // The older wait's end leaves the newer one's waiting line and Stop.
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stop signing in" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeDisabled();
+    unmount();
+    expect(api.stopOpenRouterSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("picks a waiting sign-in up once under StrictMode", async () => {
+    api.openRouterSignInStatus.mockResolvedValue({ waiting: { url: SIGN_IN_URL, opened: true, why: "" }, card: null });
+    api.waitOpenRouterSignIn.mockReturnValue(new Promise<AiModelsCard>(() => undefined));
+    render(
+      <StrictMode>
+        <AiModels />
+      </StrictMode>,
+    );
+    expect(await screen.findByText(OPENROUTER_WAIT)).toBeVisible();
+    expect(api.waitOpenRouterSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends quietly when a newer page took the sign-in over", async () => {
+    api.startOpenRouterSignIn.mockResolvedValue({ url: SIGN_IN_URL, opened: true, why: "" });
+    api.waitOpenRouterSignIn.mockRejectedValue("This sign-in moved to a newer page.");
+    render(<AiModels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with OpenRouter" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Sign in with OpenRouter" })).toBeEnabled());
+    expect(screen.queryByText("This sign-in moved to a newer page.")).toBeNull();
+    expect(screen.queryByText(OPENROUTER_WAIT)).toBeNull();
   });
 
   it("denies a key card that is still open when the page is left", async () => {
@@ -257,5 +514,119 @@ describe("AiModels", () => {
     expect(said).toHaveClass("status--error");
     expect(screen.getByLabelText("Provider address")).toHaveValue("https://openrouter.ai/api/v1");
     expect(screen.getByLabelText("Provider API key")).toHaveValue("");
+  });
+
+  describe("web search", () => {
+    it("picks free DuckDuckGo Lite by default and shows no URL or key field", async () => {
+      render(<AiModels />);
+      expect(await screen.findByText(WEB_SEARCH_NOTE)).toBeVisible();
+      expect(WEB_SEARCH_NOTE).toBe(
+        "For OpenRouter and the local model. Free DuckDuckGo Lite by default, no account. Grok still uses xAI's own search.",
+      );
+      expect(screen.getByLabelText("Search backend")).toHaveValue("duckduckgo");
+      expect(screen.getByRole("option", { name: "DuckDuckGo Lite (free, no key)" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("SearXNG URL")).toBeNull();
+      expect(screen.queryByLabelText("Brave API key")).toBeNull();
+    });
+
+    it("saves SearXNG when picked and then shows its URL field", async () => {
+      api.saveWebSearch.mockResolvedValue({ ...searching({ backend: "searxng" }), status: "Saved." });
+      render(<AiModels />);
+      await userEvent.selectOptions(await screen.findByLabelText("Search backend"), "searxng");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "");
+      expect(await screen.findByLabelText("SearXNG URL")).toHaveValue("");
+      expect(screen.getByText(SEARXNG_NOTE)).toBeVisible();
+      expect(screen.getByText("Saved.")).toBeVisible();
+    });
+
+    it("saves the SearXNG URL trimmed, on Enter", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "searxng" }));
+      api.saveWebSearch.mockResolvedValue({
+        ...searching({ backend: "searxng", searxngUrl: "https://searx.example" }),
+        status: "Saved.",
+      });
+      render(<AiModels />);
+      const field = await screen.findByLabelText("SearXNG URL");
+      expect(screen.getByRole("button", { name: "Save URL" })).toBeDisabled();
+      await userEvent.type(field, "  https://searx.example  {Enter}");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "https://searx.example");
+      await waitFor(() => expect(field).toHaveValue("https://searx.example"));
+      expect(screen.getByRole("button", { name: "Save URL" })).toBeDisabled();
+    });
+
+    it("shows why a SearXNG URL wasn't saved", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "searxng" }));
+      api.saveWebSearch.mockRejectedValue("SearXNG URL must start with http:// or https://.");
+      render(<AiModels />);
+      await userEvent.type(await screen.findByLabelText("SearXNG URL"), "searx.example");
+      await userEvent.click(screen.getByRole("button", { name: "Save URL" }));
+      expect(await screen.findByText("SearXNG URL must start with http:// or https://.")).toHaveClass("status--error");
+      expect(screen.getByLabelText("SearXNG URL")).toHaveValue("searx.example");
+    });
+
+    it("lets you pick SearXNG with an old unusable URL and shows why it won't work", async () => {
+      api.getAiModels.mockResolvedValue(searching({ searxngUrl: "http://169.254.169.254" }));
+      api.saveWebSearch.mockResolvedValue({
+        ...searching({
+          backend: "searxng",
+          searxngUrl: "http://169.254.169.254",
+          searxngProblem: "That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.",
+        }),
+        status: "Saved.",
+      });
+      render(<AiModels />);
+      await userEvent.selectOptions(await screen.findByLabelText("Search backend"), "searxng");
+      expect(api.saveWebSearch).toHaveBeenCalledWith("searxng", "http://169.254.169.254");
+      expect(await screen.findByText("That address can't be a SearXNG server. Use its name or a plain IP address, like http://192.168.1.5:8888.")).toHaveClass("warn");
+      expect(screen.getByLabelText("SearXNG URL")).toHaveValue("http://169.254.169.254");
+      expect(screen.getByLabelText("SearXNG URL")).toBeEnabled();
+    });
+
+    it("closes the Remove key confirm when the backend changes", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "brave", braveKeySet: true }));
+      api.saveWebSearch
+        .mockResolvedValueOnce({ ...searching({ backend: "duckduckgo", braveKeySet: true }), status: "Saved." })
+        .mockResolvedValueOnce({ ...searching({ backend: "brave", braveKeySet: true }), status: "Saved." });
+      render(<AiModels />);
+      await userEvent.click(await screen.findByRole("button", { name: "Remove key" }));
+      expect(screen.getByRole("group", { name: "Remove the Brave Search key?" })).toBeVisible();
+      await userEvent.selectOptions(screen.getByLabelText("Search backend"), "duckduckgo");
+      await waitFor(() => expect(screen.queryByLabelText("Brave API key")).toBeNull());
+      await userEvent.selectOptions(screen.getByLabelText("Search backend"), "brave");
+      expect(await screen.findByLabelText("Brave API key")).toBeVisible();
+      expect(screen.queryByRole("group", { name: "Remove the Brave Search key?" })).toBeNull();
+      expect(api.saveBraveKey).not.toHaveBeenCalled();
+    });
+
+    it("sends the Brave key only to saveBraveKey and empties the field", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "brave" }));
+      api.saveBraveKey.mockResolvedValue({ ...searching({ backend: "brave", braveKeySet: true }), status: "Brave search key saved." });
+      render(<AiModels />);
+      const field = await screen.findByLabelText("Brave API key");
+      expect(field).toHaveAttribute("type", "password");
+      expect(screen.getByText(BRAVE_UNSET)).toBeVisible();
+      expect(screen.getByRole("button", { name: "Save key" })).toBeDisabled();
+      await userEvent.type(field, "sk-abcdefghijklmnopqrstuv");
+      await userEvent.click(screen.getByRole("button", { name: "Save key" }));
+      expect(api.saveBraveKey).toHaveBeenCalledWith("sk-abcdefghijklmnopqrstuv");
+      expect(api.saveWebSearch).not.toHaveBeenCalled();
+      expect(field).toHaveValue("");
+      expect(await screen.findByText(BRAVE_SET)).toBeVisible();
+      expect(screen.getByText("Brave search key saved.")).toBeVisible();
+    });
+
+    it("removes a saved Brave key only after a confirm, never on Enter", async () => {
+      api.getAiModels.mockResolvedValue(searching({ backend: "brave", braveKeySet: true }));
+      api.saveBraveKey.mockResolvedValue({ ...searching({ backend: "brave" }), status: "Brave search key cleared." });
+      render(<AiModels />);
+      await userEvent.type(await screen.findByLabelText("Brave API key"), "{Enter}");
+      expect(api.saveBraveKey).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Remove key" }));
+      expect(api.saveBraveKey).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+      expect(api.saveBraveKey).toHaveBeenCalledWith("");
+      expect(await screen.findByText(BRAVE_UNSET)).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
+    });
   });
 });

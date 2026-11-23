@@ -11,6 +11,7 @@ pub mod chat_push;
 pub mod commit;
 pub mod deploy;
 pub mod files;
+pub mod link;
 pub mod push;
 pub mod repo;
 pub mod rollback;

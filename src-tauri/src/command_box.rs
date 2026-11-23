@@ -1,7 +1,8 @@
 //! The Command page: one shell line on the bound project, the Tauri side of
 //! the cabin's Command page. A line never runs here. It is checked, then
-//! queued to the agent as a chat message, the way the cabin queues `/sh`, so
-//! it runs through the agent's own approval gate like any step it takes.
+//! queued to the agent as a chat message, so it runs through the agent's own
+//! approval gate like any step it takes. Chat's `/sh` and `$ ` lines take
+//! the same checks.
 //!
 //! Before it goes, the line passes the cabin's host checks: the forbidden
 //! list, the bound-project fence and, for a typed `git push`, the Code tab's
@@ -39,9 +40,13 @@ pub const FORCE_PUSH: &str = "Force pushes never run from here.";
 pub enum Verdict {
     /// Remembered for this repo: it goes to the agent now.
     Queue { command: String, prompt: String },
-    /// The first run of this exact text, or a destructive line: show it and
-    /// ask before it goes.
-    Confirm { command: String, destructive: bool },
+    /// The first run of this exact text, a destructive line, or one with a
+    /// key or token in it: show it and ask before it goes.
+    Confirm {
+        command: String,
+        destructive: bool,
+        secret: bool,
+    },
     /// It doesn't run, and `message` says why.
     Blocked { command: String, message: String },
 }
@@ -56,22 +61,8 @@ pub struct Repo {
     pub host: Option<Host>,
 }
 
-/// The chat message that asks the agent to run `command`. The fence is
-/// longer than any run of backticks in the command, so it can't close early.
-pub fn agent_prompt(command: &str) -> String {
-    let mut longest = 0;
-    let mut run = 0;
-    for c in command.chars() {
-        run = if c == '`' { run + 1 } else { 0 };
-        longest = longest.max(run);
-    }
-    let fence = "`".repeat((longest + 1).max(3));
-    format!(
-        "Run this shell command in the project folder, exactly as written and once, \
-         then show me what it printed and its exit code. Don't change it or run \
-         anything else.\n\n{fence}sh\n{command}\n{fence}"
-    )
-}
+/// The chat message that asks the agent to run `command`.
+pub use grokhub_core::shell_line::prompt as agent_prompt;
 
 /// Reads `line` against the host checks and the remembered lines.
 /// `project_root` is the bound project; `home` expands `~` in paths.
@@ -87,10 +78,12 @@ pub fn judge(
         return Verdict::Blocked { command, message };
     }
     let destructive = grokhub_core::host_risk(&command) == HostRisk::Destructive;
-    if destructive || holds_secret(&command) || !remembered.iter().any(|r| r == &command) {
+    let secret = holds_secret(&command);
+    if destructive || secret || !remembered.iter().any(|r| r == &command) {
         return Verdict::Confirm {
             command,
             destructive,
+            secret,
         };
     }
     Verdict::Queue {

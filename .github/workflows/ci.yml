@@ -1,19 +1,23 @@
 name: CI
 
 on:
-  # Push to beta runs only the light gate (changes, fmt, guards, linux,
-  # windows; pii-guard lives in pii-guard.yml). Push to main adds shell
-  # (ubuntu + windows) and deny; macOS jobs run on v* tags, the nightly
-  # schedule (which checks out beta) and manual runs; windows-release runs
-  # only on the nightly and manual runs (release.yml builds tags).
+  # Push to beta runs the light gate only (changes, fmt, guards, linux;
+  # pii-guard lives in pii-guard.yml). Windows and ui-shots skip on beta
+  # push — PRs already ran them; nightly covers beta. Push to main adds
+  # windows, shell (ubuntu + windows) and deny; macOS jobs run on v* tags,
+  # the nightly schedule (which checks out beta) and manual runs;
+  # windows-release runs only on the nightly and manual runs
+  # (release.yml builds tags).
   push:
     branches: [main, beta]
     tags: ["v*"]
   pull_request:
     branches: [main, beta]
     # labeled/unlabeled so the Cargo.lock → dependencies escape hatch retriggers
-    # when the label is added (guards job reads live labels too).
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    # when the label is added (guards job reads live labels too). No
+    # ready_for_review: drafts already run the full gate, so leaving draft only
+    # turns on auto-merge (auto-merge.yml) for the run that is already green.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
   merge_group:
   # Nightly full run on beta (~3 AM America/Chicago): everything PRs and beta
@@ -46,14 +50,15 @@ env:
 # PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
 # build) and windows (same, skipped when a PR only touches ui/ or workflows
 # other than this one), plus path-filtered shell (ubuntu only) and
-# phone-android. Push to main adds deny, shell on ubuntu + windows and
-# path-filtered phone-android. The macOS jobs (cross-check, macOS shell,
-# phone-ios) run on v* tags, nightly (on beta) and manual runs;
-# windows-release only on nightly and manual runs. Push to beta runs only the
-# gate. Every gate is a job-level `if:`, never a workflow-level path filter,
-# so a skipped job still reports and required checks never hang.
-# Each job restores its own build cache; caches save only from pushes to beta
-# and main, so PRs start warm from their base branch.
+# phone-android. Push to beta keeps changes/fmt/guards/linux (linux seeds
+# the rust cache) and skips windows/ui-shots. Push to main adds windows,
+# deny, shell on ubuntu + windows and path-filtered phone-android. The
+# macOS jobs (cross-check, macOS shell, phone-ios) run on v* tags, nightly
+# (on beta) and manual runs; windows-release only on nightly and manual.
+# Every gate is a job-level `if:`, never a workflow-level path filter, so a
+# skipped job still reports and required checks never hang. Each job
+# restores its own build cache; caches save from pushes (linux on beta,
+# full on main) and schedule, so PRs start warm from their base branch.
 jobs:
   # Decides whether the build jobs run. A PR that only touches docs, Markdown,
   # screenshots or research skips them; a skipped job counts as passed for
@@ -84,9 +89,11 @@ jobs:
       # windows-release: nightly and manual only. release.yml's shell-bundles
       # builds the Windows installer for every tag and beta push.
       release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-      # windows on PRs: skipped (still reports, so the required check passes)
-      # when the PR only touches ui/, docs, or workflows other than this one.
-      windows: ${{ github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true' }}
+      # windows: skipped on push to beta (PR already ran it; nightly covers
+      # beta). On PRs, skipped when the PR only touches ui/, docs, or
+      # workflows other than this one (still reports, so the required check
+      # passes).
+      windows: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/beta') && (github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true') }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -263,6 +270,10 @@ jobs:
         run: python3 .github/scripts/test_cards_sync.py
       - name: Model profiles updater test
         run: python3 .github/scripts/test_model_profiles.py
+      - name: Built-in vstack skills match their manifest
+        run: python3 .github/scripts/test_vstack_sync.py
+      - name: Bundled vstack skills match upstream main
+        run: python3 .github/scripts/vstack_sync.py check-upstream
       - name: Local model profiles are up to date
         run: python3 .github/scripts/test_local_profiles.py
       - name: Repo friction guards
@@ -307,7 +318,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: nextest
       # Each test runs in its own process (see .config/nextest.toml), so they
@@ -331,7 +342,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-deny
       - run: cargo deny --locked check
@@ -400,8 +411,10 @@ jobs:
 
   # The Tauri desktop shell (src-tauri/ + ui/, cross-platform Phase 2). It is
   # its own Cargo workspace, so only this job needs the webview libraries.
-  # Bundles build on all three OSes; the tauri-driver smoke test (a chat to a
-  # mock model) runs where tauri-driver has a backend: Linux and Windows.
+  # PRs run lint/test, a debug smoke build and tauri-driver smoke (Linux /
+  # Windows). Release bundles (`tauri build`) run on merge_group, push to
+  # main, tags, nightly and manual — not on every PR revision (CI audit
+  # 916.7/900.73: bundles were ~15 min / ~62% of PR shell wall-clock).
   # The web app smoke test (Phase 5) runs on Linux.
   shell:
     needs: changes
@@ -462,7 +475,11 @@ jobs:
           node ui/e2e/web.mjs
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      # Release installer/AppImage/dmg. Skipped on pull_request: the debug
+      # smoke build below already compiles the shell the smoke test drives.
+      # release.yml still publishes tagged/beta channel bundles.
       - name: Bundles
+        if: github.event_name != 'pull_request'
         shell: bash
         run: ui/node_modules/.bin/tauri build -- --locked
       - name: Smoke-test build
@@ -506,6 +523,43 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # LO-UI-1: Vite + stubbed Tauri screenshots and color-share. Non-required —
+  # today's amber-accent UI fails the share thresholds until LO-UI-2 lands.
+  ui-shots:
+    needs: changes
+    # Skip on push to beta: not a required check; nightly and PRs cover it.
+    if: needs.changes.outputs.code == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
+    name: ui-shots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui
+      - name: Install Chromium
+        run: ui/node_modules/.bin/playwright install --with-deps chromium
+      - name: Shots
+        run: npm run shots --prefix ui
+      # Amber-accent UI fails share until LO-UI-2; keep the table as an artifact.
+      - name: Color-share
+        continue-on-error: true
+        run: npm run colorshare --prefix ui
+      - name: Upload shots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-shots
+          path: ui/e2e/shots/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Phone builds of the shell (cross-platform Phase 4). A smoke build carries
   # the mock model's loopback URL and drives one chat itself
   # (ui/src/phoneSmoke.ts); ui/e2e/phone.mjs serves the mock, installs the app
@@ -527,7 +581,7 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: 17
@@ -545,7 +599,7 @@ jobs:
       # The Gradle and Xcode projects call the CLI back while they build. The
       # npm CLI records a path relative to where it ran, which they can't
       # find, so the phone jobs use cargo's.
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: tauri-cli@2.12.4
       - name: Smoke build
@@ -645,7 +699,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: nextest
       - run: cargo nextest run --workspace --locked --profile ci
@@ -673,9 +727,6 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
-      - name: Pack script locks
-        shell: pwsh
-        run: ./scripts/make-windows-release.tests.ps1
       - name: No Electron leftover
         shell: pwsh
         run: |

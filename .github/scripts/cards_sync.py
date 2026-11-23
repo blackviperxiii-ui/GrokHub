@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Notion Command Center cards <-> GitHub issues (stdlib only).
+"""Notion Command Center <-> GitHub sync for Antigravity cards (stdlib only).
+
+GitHub Actions never dispatches Claude or starts Jules sessions, and never
+touches cards assigned to other coders.
 
 Modes (argv[1]):
-  sync  - Ready cards for this repo's Project become issues (capped per coder),
-          card -> Doing with the issue URL in Result; closed card issues -> Done.
-  done  - issues/pull_request closed event: mark the linked card Done.
+  sync  - Ready cards assigned to Antigravity for this repo's Project become
+          'antigravity' GitHub issues (capped at CAP, leaving Notion at Ready
+          for work until Antigravity starts them). Closed-as-completed card
+          issues and open card issues whose PR already merged into beta are
+          marked Completed in Notion.
+          Optional workflow_dispatch inputs:
+            START_ISSUE  - mark the linked Antigravity card(s) Working on it now.
+            RESET_ISSUES - return card(s) to Ready for work and close not_planned.
+  done  - issues/pull_request closed event: mark the linked card Completed.
 
-Env: NOTION_TOKEN, NOTION_DATA_SOURCE_ID (Notion API 2025-09-03 data source id),
-GITHUB_TOKEN, GITHUB_REPOSITORY, CARDS_PROJECT (board Project option, default Loadout),
-JULES_API_KEY (optional; Jules sessions are started through the Jules API,
-the 'jules' label alone does not start Jules).
+Env: NOTION_TOKEN, NOTION_DATA_SOURCE_ID, GITHUB_TOKEN, GITHUB_REPOSITORY,
+CARDS_PROJECT (board Project option, default Loadout).
 """
 import json
 import os
@@ -28,10 +35,10 @@ CAP = 2
 MARK_RE = re.compile(r"<!--\s*notion-card:\s*([0-9a-fA-F-]{32,36})\s*-->")
 # GitHub's closing keywords, with or without a colon ("Fixes #12", "Fixes: #12").
 CLOSES_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b", re.I)
-CODERS = {
-    "claude": {"label": "claude", "authors": set(), "branch": "claude/"},
-    "jules": {"label": "jules", "authors": {"google-labs-jules", "google-labs-jules[bot]", "app/google-labs-jules"}, "branch": ""},
-}
+STATUS_READY = "Ready for work"
+STATUS_DOING = "Working on it now"
+STATUS_DONE = "Completed"
+DONE_STATUSES = (STATUS_DONE, "Done", "Notes")
 RULES = """## Rules
 - Base branch is `beta`, never `main`. Branch from `origin/beta`.
 - Keep the change small and inside this card only.
@@ -124,9 +131,9 @@ def page_body(page_id):
 def set_card(page_id, status, result=None):
     props = {"Status": {"select": {"name": status}}}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    if status == "Doing":
+    if status == STATUS_DOING:
         props["Picked up"] = {"date": {"start": now}}
-    if status == "Done":
+    if status in (STATUS_DONE, "Done"):
         props["Done at"] = {"date": {"start": now}}
     if result is not None:
         props["Result"] = {"rich_text": [{"type": "text", "text": {"content": result[:1900]}}]}
@@ -153,143 +160,150 @@ def card_issues(state):
     return out
 
 
-def coder_load(open_prs, open_card_issues):
-    load = {}
-    for key, c in CODERS.items():
-        prs = sum(1 for p in open_prs if p["user"]["login"] in c["authors"]
-                  or (c["branch"] and p["head"]["ref"].startswith(c["branch"]))
-                  or c["label"] in {lb["name"] for lb in p.get("labels", [])})
-        iss = sum(1 for i in open_card_issues.values()
-                  if c["label"] in {lb["name"] for lb in i.get("labels", [])})
-        load[key] = max(prs, iss)
-    return load
+def antigravity_load(open_prs, open_card_issues):
+    prs = sum(
+        1 for p in open_prs
+        if (p.get("head") or {}).get("ref", "").startswith("antigravity/")
+        or "antigravity" in {lb["name"].lower() for lb in p.get("labels", [])}
+    )
+    iss = sum(
+        1 for i in open_card_issues.values()
+        if "antigravity" in {lb["name"].lower() for lb in i.get("labels", [])}
+    )
+    return max(prs, iss)
 
 
-def query_ready():
-    ds = os.environ["NOTION_DATA_SOURCE_ID"]
-    body = {"filter": {"and": [
-        {"property": "Status", "select": {"equals": "Ready"}},
-        {"property": "Project", "select": {"equals": PROJECT}},
-    ]}, "sorts": [{"property": "Order", "direction": "ascending"}], "page_size": 100}
+def query_ready_antigravity():
+    ds = os.environ.get("NOTION_DATA_SOURCE_ID", "").strip()
+    if not ds:
+        return []
+    body = {
+        "filter": {"and": [
+            {"property": "Status", "select": {"equals": STATUS_READY}},
+            {"property": "Project", "select": {"equals": PROJECT}},
+            {"property": "Assigned", "select": {"equals": "Antigravity"}},
+        ]},
+        "sorts": [{"property": "Order", "direction": "ascending"}],
+        "page_size": 100,
+    }
     return notion(f"/data_sources/{ds}/query", "POST", body).get("results", [])
 
 
-JULES = "https://jules.googleapis.com/v1alpha"
-JULES_MARK = "<!-- jules-session: "
-JULES_DONE = {"COMPLETED", "FAILED", "CANCELLED", "STATE_UNSPECIFIED"}
-
-
-def jules(path, method="GET", body=None):
-    return req(JULES + path, method, body, {"X-Goog-Api-Key": os.environ["JULES_API_KEY"]})
-
-
-def jules_active():
-    source = f"sources/github/{REPO}"
-    active, token = 0, ""
-    for _ in range(10):
-        res = jules("/sessions?pageSize=100" + (f"&pageToken={token}" if token else ""))
-        for s in res.get("sessions", []):
-            if (s.get("sourceContext") or {}).get("source") == source and s.get("state") not in JULES_DONE:
-                active += 1
-        token = res.get("nextPageToken")
-        if not token:
-            break
-    return active
-
-
-def start_jules_sessions(open_prs):
-    """Start one Jules session per open 'jules' issue that has none, cap 2."""
-    if not os.environ.get("JULES_API_KEY"):
-        print("JULES_API_KEY is not set; Jules sessions skipped.")
+def sync_ready_antigravity(open_issues, closed_issues):
+    """Create 'antigravity' issues for Ready cards assigned to Antigravity (never touching other coders)."""
+    if not os.environ.get("NOTION_DATA_SOURCE_ID", "").strip():
         return
-    if REPO.split("/")[-1].lower() == "genesis":
-        return
-    try:
-        busy = max(jules_active(), coder_load(open_prs, {})["jules"])
-    except RuntimeError as e:
-        print(f"jules list failed: {e}")
-        return
-    issues = gh_all(f"/repos/{REPO}/issues?state=open&labels=jules&sort=created&direction=asc")
-    for issue in issues:
-        if "pull_request" in issue:
-            continue
-        comments = gh_all(f"/repos/{REPO}/issues/{issue['number']}/comments")
-        if any(JULES_MARK in (c.get("body") or "") for c in comments):
-            continue
-        if busy >= CAP:
-            print(f"jules at cap {CAP}; #{issue['number']} left queued")
-            return
-        body = issue.get("body") or ""
-        if "## Rules" not in body:
-            body += "\n\n" + RULES
-        prompt = (f"Implement GitHub issue #{issue['number']} in {REPO}: {issue['title']}\n\n{body}\n\n"
-                  f"Open one PR against beta whose body says Closes #{issue['number']}.")
-        try:
-            sess = jules("/sessions", "POST", {
-                "prompt": prompt[:30000],
-                "title": f"#{issue['number']} {issue['title']}"[:200],
-                "sourceContext": {"source": f"sources/github/{REPO}",
-                                  "githubRepoContext": {"startingBranch": "beta"}},
-                "automationMode": "AUTO_CREATE_PR",
-            })
-        except RuntimeError as e:
-            print(f"jules session failed for #{issue['number']}: {e}")
-            return
-        sid = sess.get("id") or sess.get("name", "").split("/")[-1]
-        gh(f"/repos/{REPO}/issues/{issue['number']}/comments", "POST",
-           {"body": f"Started Jules session `{sid}` (base beta).\n\n{JULES_MARK}{sid} -->"})
-        print(f"#{issue['number']} -> jules session {sid}")
-        busy += 1
-
-
-def dispatch_claude(number):
-    try:
-        gh(f"/repos/{REPO}/actions/workflows/claude.yml/dispatches", "POST",
-           {"ref": "beta", "inputs": {"issue_number": str(number)}})
-    except RuntimeError as e:
-        print(f"claude dispatch failed for #{number}: {e}")
-
-
-def sync():
-    open_issues = card_issues("open")
-    closed_issues = card_issues("closed")
     open_prs = gh_all(f"/repos/{REPO}/pulls?state=open")
-    load = coder_load(open_prs, open_issues)
-    print(f"coder load: {load}")
-    for card in query_ready():
+    load = antigravity_load(open_prs, open_issues)
+    print(f"antigravity load: {load}/{CAP}")
+    for card in query_ready_antigravity():
         pid = card["id"].replace("-", "")
         title = prop(card, "Name") or "Untitled card"
-        coder = (prop(card, "Assigned") or "").strip().lower()
-        existing = open_issues.get(pid) or closed_issues.get(pid)
-        if existing:
-            print(f"card {pid} already linked to #{existing['number']}; marking Doing")
-            set_card(card["id"], "Doing", existing["html_url"])
+        assigned = (prop(card, "Assigned") or "").strip().lower()
+        if assigned != "antigravity":
+            print(f"card {pid} '{title}': Assigned '{assigned}' is not Antigravity; skipped")
             continue
-        if coder not in CODERS:
-            print(f"card {pid} '{title}': Assigned '{coder}' is not a GitHub coder; skipped")
+        if card.get("archived") or card.get("in_trash"):
+            print(f"card {pid} is archived; skipped")
             continue
-        if coder != "claude" and load[coder] >= CAP:
-            print(f"card {pid} '{title}': {coder} is at cap {CAP}; left queued")
+        if pid in open_issues:
             continue
+        closed = closed_issues.get(pid)
+        if closed and closed.get("state_reason") == "completed":
+            continue
+        if load >= CAP:
+            print(f"card {pid} '{title}': antigravity is at cap {CAP}; left queued")
+            break
         body = page_body(card["id"]) or "_No card body._"
         issue_body = (f"{body}\n\nNotion card: {card.get('url', '')}\n\n{RULES}\n"
                       f"<!-- notion-card: {pid} -->\n")
         issue = gh(f"/repos/{REPO}/issues", "POST",
-                   {"title": title, "body": issue_body, "labels": [CODERS[coder]["label"]]})
-        print(f"card {pid} -> #{issue['number']} ({coder})")
-        load[coder] += 1
+                   {"title": title, "body": issue_body, "labels": ["antigravity"]})
+        print(f"card {pid} -> #{issue['number']} (antigravity)")
+        load += 1
         open_issues[pid] = issue
-        if coder == "claude":
-            dispatch_claude(issue["number"])
-        set_card(card["id"], "Doing", issue["html_url"])
-    start_jules_sessions(open_prs)
-    # Sweep: closed-as-completed card issues whose card is not Done yet.
+
+
+def start_antigravity(raw):
+    """Mark picked-up antigravity card issues as Working on it now in Notion."""
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token.isdigit():
+            continue
+        number = int(token)
+        issue = gh(f"/repos/{REPO}/issues/{number}")
+        if "pull_request" in issue or not trusted(issue):
+            print(f"#{number}: untrusted or PR; skipped")
+            continue
+        labels = {lb["name"].lower() for lb in issue.get("labels", [])}
+        if "antigravity" not in labels:
+            print(f"#{number}: missing 'antigravity' label ({sorted(labels)}); refused")
+            continue
+        m = MARK_RE.search(issue.get("body") or "")
+        if not m:
+            print(f"#{number}: no notion-card marker; skipped")
+            continue
+        pid = m.group(1).replace("-", "")
+        page = notion(f"/pages/{pid}")
+        if page.get("archived") or page.get("in_trash"):
+            print(f"card {pid} is archived; skipped")
+            continue
+        assigned = (prop(page, "Assigned") or "").strip().lower()
+        if assigned and assigned != "antigravity":
+            print(f"card {pid} (#{number}): Assigned is '{assigned}', not Antigravity; refused")
+            continue
+        status = prop(page, "Status")
+        if status in DONE_STATUSES:
+            print(f"card {pid} (#{number}) already {status}; skipped")
+            continue
+        print(f"card {pid} (#{number}) -> {STATUS_DOING}")
+        set_card(pid, STATUS_DOING, issue["html_url"])
+
+
+def reset_ready(raw):
+    """Return unstarted card issues' Notion cards to Ready for work and close them not_planned."""
+    for token in re.split(r"[\s,]+", raw.strip()):
+        if not token.isdigit():
+            continue
+        number = int(token)
+        issue = gh(f"/repos/{REPO}/issues/{number}")
+        m = MARK_RE.search(issue.get("body") or "")
+        if not m or not trusted(issue):
+            continue
+        pid = m.group(1).replace("-", "")
+        page = notion(f"/pages/{pid}")
+        if page.get("archived") or page.get("in_trash"):
+            print(f"card {pid} is archived; skipped")
+        elif prop(page, "Status") not in DONE_STATUSES:
+            print(f"card {pid} (#{number}) -> {STATUS_READY}")
+            notion(f"/pages/{pid}", "PATCH", {"properties": {
+                "Status": {"select": {"name": STATUS_READY}},
+                "Picked up": {"date": None},
+                "Result": {"rich_text": []},
+            }})
+        if issue.get("state") == "open":
+            gh(f"/repos/{REPO}/issues/{number}", "PATCH",
+               {"state": "closed", "state_reason": "not_planned"})
+
+
+def sync():
+    """Sync Ready+Antigravity cards, sweep completions, or handle explicit start/reset."""
+    reset_raw = os.environ.get("RESET_ISSUES", "").strip()
+    if reset_raw:
+        reset_ready(reset_raw)
+        return
+    start_raw = os.environ.get("START_ISSUE", "").strip()
+    if start_raw:
+        start_antigravity(start_raw)
+        return
+    open_issues = card_issues("open")
+    closed_issues = card_issues("closed")
+    sync_ready_antigravity(open_issues, closed_issues)
     for pid, issue in closed_issues.items():
         if issue.get("state_reason") == "completed":
             mark_done(pid, issue["html_url"])
     # Sweep: open card issues whose PR already merged into beta. beta is not the
     # default branch, so "Fixes #N" never closes them, and a missed done event
-    # would leave the card at Doing.
+    # would leave the card open and not Completed.
     for pid, issue in open_issues.items():
         if "number" not in issue:
             continue
@@ -324,15 +338,24 @@ def close_issue(number):
 
 def mark_done(pid, url, issue_number=None):
     page = notion(f"/pages/{pid}")
-    if prop(page, "Status") not in ("Done", "Notes"):
-        print(f"card {pid} -> Done ({url})")
-        set_card(pid, "Done", f"Done: {url}")
+    if page.get("archived") or page.get("in_trash"):
+        print(f"card {pid} is archived; skipped")
+    elif prop(page, "Status") not in DONE_STATUSES:
+        print(f"card {pid} -> {STATUS_DONE} ({url})")
+        try:
+            set_card(pid, STATUS_DONE, f"Done: {url}")
+        except RuntimeError as e:
+            if "archived" in str(e).lower():
+                print(f"card {pid} is archived; skipped")
+            else:
+                raise
     if issue_number:
         close_issue(issue_number)
 
 
 def done():
-    event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+    with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
+        event = json.load(f)
     if "pull_request" in event:
         pr = event["pull_request"]
         if not pr.get("merged") or pr["base"]["ref"] != "beta":
@@ -356,7 +379,5 @@ def done():
 if __name__ == "__main__":
     if not os.environ.get("NOTION_TOKEN"):
         print("NOTION_TOKEN is not set; Notion steps skipped.")
-        if (sys.argv[1:] or ["sync"])[0] == "sync" and os.environ.get("JULES_API_KEY"):
-            start_jules_sessions(gh_all(f"/repos/{REPO}/pulls?state=open"))
         sys.exit(0)
     {"sync": sync, "done": done}[sys.argv[1] if len(sys.argv) > 1 else "sync"]()

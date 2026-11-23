@@ -285,6 +285,7 @@ mod tests {
                 bridge: None,
                 net_confined: proxy,
             }),
+            container: None,
         }
     }
 
@@ -382,6 +383,7 @@ mod tests {
                 bridge: None,
                 net_confined: true,
             }),
+            container: None,
         };
         let plain = |p: &Path| crate::tools::shell::plain_dir(&p.display().to_string());
         let ps = |script: String| {

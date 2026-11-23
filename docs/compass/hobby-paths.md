@@ -3,11 +3,11 @@
 ## Owns
 - Opt-in bite-sized tips from Know me hobby tags (3D print, Blender, Rust, modding, art, CAD).
 - Pure catalog, progress, difficulty, and Pulse card shape in `hobby_paths.rs`.
-- Settings toggles and tick in `hobby_paths_ui.rs`; ledger in `hobby-paths.json`.
+- Shell Pulse tick in `src-tauri/src/pulse_digests.rs`; ledger in `hobby-paths.json`.
 
 ## Quick commands
 - `cargo test -p grokhub-core hobby_paths --locked -- --test-threads=1`
-- `cargo test -p grokhub-app hobby_paths_ui --locked -- --test-threads=1`
+- `cargo test --manifest-path src-tauri/Cargo.toml hobby --locked -- --test-threads=1`
 
 ## Key files
 - `crates/grokhub-core/src/hobby_paths.rs`: tags → hobbies, catalog, feedback, `tick`.

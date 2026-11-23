@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useEffectEvent, useState, type FormEvent } from "react";
 import {
   fetchPluginMarket,
   getPlugins,
@@ -10,14 +10,11 @@ import {
   type PluginRow,
 } from "./api";
 import { COMPANION_NAME } from "./brand";
-import {
-  desktopNyxGet,
-  desktopNyxSet,
-  type DesktopNyxState,
-} from "./desktopNyxApi";
+import { desktopNyxSet } from "./desktopNyxApi";
 import { Diagnostics } from "./Diagnostics";
 import { Toggle } from "./Toggle";
 import { inShell } from "./transport";
+import { useDesktopNyx } from "./useDesktopNyx";
 import { StatusLine, useNote } from "./ui";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
@@ -25,12 +22,18 @@ export const CHANNEL_NOTE = "Switch between beta and stable in About, under Upda
 export const CHANNEL_NOTE_REMOTE =
   "Switch between beta and stable on your computer, in About, under Updates.";
 export const PLUGINS_TIP =
-  "A preview: the same plugins as the cabin's Labs page, with fewer details on each bundle.";
+  "A preview: plugins work, but how they install and trust may change.";
+export const PLUGINS_MCP_NOTE = "MCP servers you add yourself are on the Connectors page.";
+export const INSTALL_HINT = "Nothing from the bundle runs. It installs off and untrusted.";
+export const MARKET_HINT = "An https index URL. Fetch only lists entries; Install is a separate step.";
+export const MARKET_EMPTY = "No marketplace entries.";
+export const REMOVE_HINT = "Remove the installed copy.";
 export const PLUGINS_NOTE =
   "Bundles stay off until you trust this version and turn them on. Trust covers the hook commands, MCP server commands, skills and agents a bundle lists. Fetching a marketplace list installs nothing.";
 export const PLUGINS_EMPTY =
   "No plugins yet. Install a bundle above. It stays off until you trust it and turn it on.";
 export const DESKTOP_NYX_TIP = `Puts a pop-out on ${COMPANION_NAME}'s dock. Popped out, she stands on a holo pedestal in a small see-through window over your desktop.`;
+export const DESKTOP_NYX_GAME = "On the desktop, hidden while you game.";
 export const DESKTOP_NYX_WAYLAND =
   "On this desktop, a see-through always-on-top window may not be honoured (common on Wayland). She still opens; the glass and float may not.";
 
@@ -43,16 +46,20 @@ function next(row: PluginRow): { act: PluginAct; label: string } {
 }
 
 function state(row: PluginRow) {
-  if (!row.trusted) return "Not trusted · off";
-  return row.enabled ? "Trusted · on" : "Trusted · off";
+  const base = !row.trusted ? "Not trusted · off" : row.enabled ? "Trusted · on" : "Trusted · off";
+  if (row.parts.some((p) => p.warn && p.label === "Can't be trusted")) return `${base} · can't be trusted`;
+  if (row.parts.some((p) => p.warn)) return `${base} · has refused parts`;
+  return base;
 }
 
-/** Settings → Labs: plugins, from the same files as the cabin's Labs page. */
-export function Labs() {
+/** Settings → Labs: early features, and the plugin bundles with their trust and on/off state. */
+export function Labs({ onOpenConnectors }: { onOpenConnectors?: () => void } = {}) {
   const [page, setPage] = useState<PluginPage | null>(null);
   const [source, setSource] = useState("");
   const [marketUrl, setMarketUrl] = useState("");
   const [entries, setEntries] = useState<PluginEntry[]>([]);
+  /** A fetch came back, so an empty list means the index has none. */
+  const [fetched, setFetched] = useState(false);
   const { note, ok, fail } = useNote();
   const [busy, setBusy] = useState(false);
 
@@ -93,12 +100,19 @@ export function Labs() {
   async function fetchList(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
-    await run(async () => {
+    const done = await run(async () => {
       const market = await fetchPluginMarket(marketUrl);
       setEntries(market.entries);
+      setFetched(market.read);
       setMarketUrl(market.page.marketUrl);
       return market.page;
     });
+    // A fetch that fails reads nothing, so it never keeps an earlier
+    // "empty" or that list's entries. The list stays up while one runs.
+    if (done === null) {
+      setFetched(false);
+      setEntries([]);
+    }
   }
 
   return (
@@ -114,6 +128,19 @@ export function Labs() {
         </span>
       </h3>
       <p className="note">{PLUGINS_NOTE}</p>
+      <p className="note">
+        {onOpenConnectors ? (
+          <>
+            MCP servers you add yourself are on the{" "}
+            <button type="button" className="link" onClick={onOpenConnectors}>
+              Connectors
+            </button>{" "}
+            page.
+          </>
+        ) : (
+          PLUGINS_MCP_NOTE
+        )}
+      </p>
       <form className="labs-row" onSubmit={(e) => void install(e, source)}>
         <label>
           Install a bundle
@@ -127,6 +154,7 @@ export function Labs() {
           Install
         </button>
       </form>
+      <p className="note">{INSTALL_HINT}</p>
       <StatusLine note={note} className="note" />
       {page === null && !note && <p className="empty">Loading plugins…</p>}
       {page && page.rows.length === 0 && (
@@ -140,7 +168,28 @@ export function Labs() {
               <div className="card-title">
                 {row.name} {row.version}
               </div>
-              <pre className="card-detail plain">{row.summary}</pre>
+              {row.description && (
+                <p className="card-detail-line plain plugin-desc">{row.description}</p>
+              )}
+              {row.parts
+                .filter((part) => !part.label)
+                .map((part, i) => (
+                  <p key={i} className="card-detail-line plain plugin-whole">
+                    {part.text}
+                  </p>
+                ))}
+              {row.parts.some((part) => part.label) && (
+                <dl className="plugin-parts">
+                  {row.parts
+                    .filter((part) => part.label)
+                    .map((part, i) => (
+                      <Fragment key={i}>
+                        <dt>{part.label}</dt>
+                        <dd className={part.warn ? "warn" : undefined}>{part.text}</dd>
+                      </Fragment>
+                    ))}
+                </dl>
+              )}
               <div className="card-buttons">
                 <button
                   type="button"
@@ -164,6 +213,7 @@ export function Labs() {
                   </button>
                 )}
               </div>
+              {row.installed && <p className="note">{REMOVE_HINT}</p>}
             </li>
           ))}
         </ul>
@@ -181,6 +231,8 @@ export function Labs() {
           Fetch list
         </button>
       </form>
+      <p className="note">{MARKET_HINT}</p>
+      {fetched && entries.length === 0 && <p className="empty">{MARKET_EMPTY}</p>}
       {entries.length > 0 && (
         <ul className="rows" aria-label="Marketplace">
           {entries.map((entry) => (
@@ -210,13 +262,11 @@ export function Labs() {
   );
 }
 
-/** Settings → Labs → Desktop companion (cabin desktop_nyx). Off by default. */
+/** Settings → Labs → Desktop companion. Off by default. */
 function DesktopCompanion() {
-  const [desk, setDesk] = useState<DesktopNyxState | null>(null);
   const { fail } = useNote();
-  useEffect(() => {
-    void desktopNyxGet().then(setDesk, fail);
-  }, [fail]);
+  // The tray and the desk page change it too; their events land here.
+  const [desk, setDesk] = useDesktopNyx(true, fail);
   if (!desk) return null;
   const effectsOk = desk.effects.transparent && desk.effects.onTop;
   return (
@@ -257,9 +307,11 @@ function DesktopCompanion() {
             personalities on.
           </p>
           <p className="note">
-            {desk.undocked
-              ? "On the desktop. Use Bring her back on her dock or right-click menu."
-              : "Docked in the chat. Use Put her on the desktop on her dock."}
+            {!desk.undocked
+              ? "Docked in the chat. Use Put her on the desktop on her dock."
+              : desk.hiddenForGame
+                ? DESKTOP_NYX_GAME
+                : "On the desktop. Use Bring her back on her dock or right-click menu."}
           </p>
         </>
       )}

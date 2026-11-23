@@ -205,8 +205,26 @@ fn feed_tiles_read_their_pulse_cards_and_turn_on_in_place() {
         .any(|b| b.action == TileAction::setup("patch_notes", true)));
     crate::game_companion::set(&d, false).unwrap();
 
+    // Turned off here, an old desktop app's switch no longer turns it on.
     std::fs::write(
         d.join("app.json"),
+        r#"{"gameCompanion":true,"theme":"dark"}"#,
+    )
+    .unwrap();
+    assert_eq!(feed("patch_notes", &d, NOW).state, TileState::Off);
+    assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
+    let _ = std::fs::remove_dir_all(&d);
+
+    // With no switch of this app's yet, the old one carries over once, and
+    // this app can then turn it off.
+    let fresh = std::env::temp_dir().join(format!(
+        "grokhub-shell-feed-legacy-{}-{}",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    std::fs::create_dir_all(&fresh).unwrap();
+    std::fs::write(
+        fresh.join("app.json"),
         r#"{"gameCompanion":true,"theme":"dark"}"#,
     )
     .unwrap();
@@ -217,17 +235,22 @@ fn feed_tiles_read_their_pulse_cards_and_turn_on_in_place() {
         6,
     );
     card.created_at = NOW - 60_000;
-    crate::pulse::add_post(&d, card).unwrap();
-    let on = feed("patch_notes", &d, NOW);
+    crate::pulse::add_post(&fresh, card).unwrap();
+    let on = feed("patch_notes", &fresh, NOW);
     assert_eq!(on.state, TileState::Ready);
     assert_eq!(on.text.big, "Back to Dota 2");
-    // Turned on in the desktop app: that app's to turn off, not this one's.
-    assert!(!on
+    assert!(on
         .buttons
         .iter()
-        .any(|b| b.action == TileAction::setup("patch_notes", true)));
-    assert_eq!(feed("deals", &d, NOW).state, TileState::Off);
-    let _ = std::fs::remove_dir_all(&d);
+        .any(|b| b.label == "Turn off" && b.action == TileAction::setup("patch_notes", true)));
+    assert_eq!(
+        crate::game_companion::load(&fresh),
+        crate::game_companion::Switch {
+            on: true,
+            ping: false
+        }
+    );
+    let _ = std::fs::remove_dir_all(&fresh);
 }
 
 #[test]
@@ -258,6 +281,35 @@ fn pc_loadout_shows_temps_and_what_starts_with_the_pc() {
     let bare = pc_view(&m, &PcExtras::default());
     assert!(bare.rows.iter().all(|r| !r.label.contains("temp")));
     assert!(bare.rows.iter().all(|r| r.label != "Startup apps"));
+    // Tune-up asks; Details and a tap on the tile open the hardware sheet.
+    assert_eq!(
+        v.buttons
+            .iter()
+            .map(|b| (b.label.as_str(), b.primary, b.action.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Tune-up", true, TileAction::ask(TUNE_UP_ASK)),
+            ("Details", false, TileAction::details("pc_loadout")),
+        ]
+    );
+    assert_eq!(v.tap, Some(TileAction::details("pc_loadout")));
+}
+
+#[test]
+fn chat_side_gets_the_same_pc_loadout_tile_on_its_own() {
+    let d = std::env::temp_dir().join(format!("shell-pc-tile-{}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    let v = pc_tile(&d);
+    assert_eq!(v.state, TileState::Ready);
+    assert_eq!(
+        v.buttons
+            .iter()
+            .map(|b| b.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Tune-up", "Details"]
+    );
+    assert_eq!(v.tap, Some(TileAction::details("pc_loadout")));
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
@@ -299,7 +351,6 @@ fn an_on_feed_tile_says_what_its_check_found_and_can_turn_off() {
         "deals",
         on,
         Some("Checked 4 wishlisted games. No new sales.".into()),
-        true,
     );
     assert_eq!(
         v.text.detail.as_deref(),
@@ -315,7 +366,6 @@ fn an_on_feed_tile_says_what_its_check_found_and_can_turn_off() {
         "achievements",
         off,
         Some("Sign in to Steam on this PC once, then tap Turn on again.".into()),
-        true,
     );
     assert_eq!(v.buttons[0].label, "Turn on");
     assert!(v
@@ -382,4 +432,69 @@ fn the_journal_tile_opens_a_mission_chat_only_for_a_viewer_who_sees_it() {
     let desktop = journal_view(&page, &Viewer::Desktop);
     assert_eq!(desktop.rows[0].tap, open);
     assert_eq!(desktop.rows[1].tap, Some(TileAction::nav("journal")));
+}
+
+#[test]
+fn todays_pick_sends_a_skill_idea_to_pulse_instead_of_a_chat() {
+    let idea = |skill: bool| crate::pulse::Idea {
+        id: "i1".into(),
+        title: "Tidy the board".into(),
+        icon: String::new(),
+        summary: "Sort open cards".into(),
+        kind: "Learn".into(),
+        action: "sort cards by due date".into(),
+        verdict: None,
+        fix: String::new(),
+        more: String::new(),
+        chips: Vec::new(),
+        loved: false,
+        skill,
+    };
+    let page = |skill: bool| crate::pulse::Page {
+        feed: Vec::new(),
+        today: 0,
+        ideas: vec![crate::pulse::Group {
+            label: String::new(),
+            ideas: vec![idea(skill)],
+        }],
+        note: String::new(),
+    };
+    let skill = daily_drop_view(&page(true));
+    assert_eq!(skill.buttons.len(), 1);
+    assert_eq!(skill.buttons[0].label, "Open Pulse");
+    assert_eq!(skill.buttons[0].action, TileAction::nav("pulse"));
+    let plain = daily_drop_view(&page(false));
+    assert_eq!(plain.buttons[0].label, "Let's do it");
+    assert_eq!(
+        plain.buttons[0].action,
+        TileAction::ask("sort cards by due date")
+    );
+    assert_eq!(plain.buttons[1].label, "Open Pulse");
+}
+
+#[test]
+fn the_local_ai_tile_says_off_when_the_switch_is_off() {
+    let cfg = local_ai::LocalAiConfig::default();
+    let tile = |on, ready| {
+        let v = local_ai_view(&cfg, true, on, ready);
+        (v.text.big, v.text.tone, v.text.detail)
+    };
+    let steps_aside = Some("Steps aside while you play".to_string());
+    assert_eq!(tile(false, false), ("Off".to_string(), Tone::Quiet, None));
+    assert_eq!(
+        tile(true, true),
+        ("Ready".to_string(), Tone::Normal, steps_aside.clone())
+    );
+    assert_eq!(
+        tile(true, false),
+        ("Paused".to_string(), Tone::Warn, steps_aside)
+    );
+    for on in [true, false] {
+        let empty = local_ai_view(&cfg, false, on, false);
+        assert_eq!(
+            (empty.state, empty.text.big.as_str()),
+            (TileState::Empty, "—"),
+            "with nothing installed the tile offers Set up either way"
+        );
+    }
 }

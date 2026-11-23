@@ -284,8 +284,13 @@ export function AutoSetupPage() {
   );
 }
 
-/** Settings → Appearance: text size and reduce motion. A pick here is the
- * person's, so auto setup leaves it alone from then on. */
+/** Settings → Appearance → Objectives beside chat. */
+export const CHAT_OBJECTIVES_NOTE =
+  "Chats show the open objective's steps and recent chats on the left and a PC snapshot on the right, in place of the companion dock.";
+
+/** Settings → Appearance: text size, reduce motion and Objectives beside
+ * chat. A pick here is the person's, so auto setup leaves it alone from then
+ * on. */
 export function LookRows() {
   const [reply, setReply] = useState<AutoReply | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -326,6 +331,13 @@ export function LookRows() {
       >
         Reduce motion
       </Toggle>
+      <Toggle
+        checked={reply.chatObjectives}
+        onChange={(on) => run({ act: "set", key: "chatObjectives", value: { t: "bool", v: on } })}
+      >
+        Objectives beside chat
+      </Toggle>
+      <p className="note">{CHAT_OBJECTIVES_NOTE}</p>
       {note && <p className="note warn">{note}</p>}
     </>
   );

@@ -57,6 +57,48 @@ fn child_log(dir: &Path) -> Vec<Value> {
     Vec::new()
 }
 
+/// A child started for the Bot Desktop gets its screen, with Wayland's
+/// variable taken away, so it never reaches the user's own screen.
+#[test]
+fn a_child_on_the_bot_desktop_gets_that_screen() {
+    let dir = scratch("screen");
+    let bin = fake();
+    let child_dir = dir.clone();
+    let mut proxy: CuaProxy<StdioChild> = CuaProxy::new(Box::new(move || {
+        hx::spawn_cua_child(
+            &bin,
+            &child_dir,
+            &[
+                ("DISPLAY", Some(":93".into())),
+                (
+                    "XAUTHORITY",
+                    Some("/home/user/.config/GrokHub/bot-desktop/bot-desktop-93.xauth".into()),
+                ),
+                ("WAYLAND_DISPLAY", None),
+                ("XDG_SESSION_TYPE", Some("x11".into())),
+            ],
+        )
+    }));
+    let out = proxy
+        .handle_line(
+            &call("click", json!({"x":10,"y":20})),
+            ON,
+            &dir,
+            &mut || false,
+        )
+        .unwrap();
+    assert!(out.contains("click done"), "{out}");
+    assert_eq!(
+        child_log(&dir)[0]["screen"],
+        json!({
+            "DISPLAY": ":93",
+            "XAUTHORITY": "/home/user/.config/GrokHub/bot-desktop/bot-desktop-93.xauth",
+            "XDG_SESSION_TYPE": "x11",
+        })
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn fake_child_gets_the_bounded_env_one_soft_click_and_nothing_after_a_halt() {
     let dir = scratch("proxy");
@@ -64,7 +106,7 @@ fn fake_child_gets_the_bounded_env_one_soft_click_and_nothing_after_a_halt() {
     let bin = fake();
     let child_dir = dir.clone();
     let mut proxy: CuaProxy<StdioChild> =
-        CuaProxy::new(Box::new(move || hx::spawn_cua_child(&bin, &child_dir)));
+        CuaProxy::new(Box::new(move || hx::spawn_cua_child(&bin, &child_dir, &[])));
 
     let out = proxy
         .handle_line(

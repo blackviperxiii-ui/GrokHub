@@ -1128,7 +1128,10 @@ pub fn compact_after_flush(
     modified_paths: &[String],
     tools: &[Value],
 ) -> Result<Compacted, CompactError> {
-    let _ = crate::memory::flush_pending(workspace, history);
+    // A scratch chat's words never go to the memory flush file.
+    if !crate::scratch::is_scratch(conversation_id) {
+        let _ = crate::memory::flush_pending(workspace, history);
+    }
     compact_transcript(
         client,
         cancel,
@@ -1848,6 +1851,8 @@ pub fn recent_tail(items: &[InputItem]) -> Vec<InputItem> {
 }
 
 fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
+    use std::collections::HashSet;
+
     if budget == 0 || items.is_empty() {
         return Vec::new();
     }
@@ -1859,35 +1864,84 @@ fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
         match &items[i] {
             InputItem::FunctionCallOutput { call_id, .. } => {
                 let end = i;
-                let start = match i.checked_sub(1) {
-                    Some(prev) => match &items[prev] {
-                        InputItem::FunctionCall { call_id: cid, .. } if cid == call_id => prev,
-                        _ => continue,
-                    },
-                    None => continue,
+                // Collect the contiguous outputs run (skipping sealed reasoning)
+                // so a parallel batch of calls+outputs stays one atomic unit.
+                let mut needed: HashSet<&str> = HashSet::new();
+                let mut out_idxs = Vec::new();
+                let mut j = end;
+                loop {
+                    match &items[j] {
+                        InputItem::FunctionCallOutput { call_id, .. } => {
+                            needed.insert(call_id.as_str());
+                            out_idxs.push(j);
+                        }
+                        InputItem::Reasoning { .. } => {}
+                        _ => break,
+                    }
+                    if j == 0 {
+                        break;
+                    }
+                    j -= 1;
+                }
+                let calls_cursor_start = match &items[j] {
+                    InputItem::FunctionCallOutput { .. } | InputItem::Reasoning { .. } => None,
+                    _ => Some(j),
                 };
-                let slice = &items[start..=end];
-                let cost = estimate_input_tokens(slice);
+                let mut call_idxs = Vec::new();
+                let mut batch_start = out_idxs.last().copied().unwrap_or(end);
+                if let Some(mut k) = calls_cursor_start {
+                    loop {
+                        match &items[k] {
+                            InputItem::FunctionCall { call_id: cid, .. } => {
+                                needed.remove(cid.as_str());
+                                call_idxs.push(k);
+                                batch_start = k;
+                                if needed.is_empty() {
+                                    break;
+                                }
+                            }
+                            InputItem::Reasoning { .. } => {}
+                            _ => break,
+                        }
+                        if k == 0 {
+                            break;
+                        }
+                        k -= 1;
+                    }
+                }
+                // Skip an orphan output whose matching call is absent before it.
+                if needed.contains(call_id.as_str()) {
+                    continue;
+                }
+                let mut unit: Vec<InputItem> = call_idxs
+                    .into_iter()
+                    .rev()
+                    .map(|idx| items[idx].clone())
+                    .collect();
+                unit.extend(
+                    out_idxs
+                        .into_iter()
+                        .rev()
+                        .filter(|&idx| match &items[idx] {
+                            InputItem::FunctionCallOutput { call_id, .. } => {
+                                !needed.contains(call_id.as_str())
+                            }
+                            _ => false,
+                        })
+                        .map(|idx| items[idx].clone()),
+                );
+                let cost = estimate_input_tokens(&unit);
                 if used.saturating_add(cost) > budget {
                     break;
                 }
                 used = used.saturating_add(cost);
                 // Accumulate reverse so the final acc.reverse() restores chronology.
-                acc.extend(slice.iter().rev().cloned());
-                i = start;
+                acc.extend(unit.into_iter().rev());
+                i = batch_start;
             }
-            InputItem::FunctionCall { call_id, .. } => {
-                // Paired call+output is handled when we see the output.
-                if i + 1 < items.len()
-                    && matches!(
-                        &items[i + 1],
-                        InputItem::FunctionCallOutput {
-                            call_id: oid, ..
-                        } if oid == call_id
-                    )
-                {
-                    continue;
-                }
+            InputItem::FunctionCall { .. } => {
+                // Any call paired with a trailing output was consumed when scanning
+                // that batch (since `i = batch_start` jumped past the batch).
                 let cost = estimate_input_tokens(std::slice::from_ref(&items[i]));
                 if used.saturating_add(cost) > budget {
                     break;
@@ -2058,6 +2112,38 @@ If the prior conversation contains a note about files at /tmp/compaction/segment
 pub fn format_compact_summary_content(raw_summary: &str) -> String {
     wrap_summary(&format_compact_summary(raw_summary))
 }
+
+/// A message a compaction wrote: its summary (or digest), ledger or
+/// standing rules.
+pub(crate) fn is_compaction_message(item: &InputItem) -> bool {
+    let InputItem::Message { role, .. } = item else {
+        return false;
+    };
+    let text = message_text(item);
+    let text = text.trim_start();
+    role == "user"
+        && (text.starts_with(SUMMARY_OPEN)
+            || text.starts_with(ledger::LEDGER_OPEN)
+            || text.starts_with(STANDING_OPEN))
+}
+
+/// A note the app adds to the chat for the model as a user message: a cabin
+/// note ([`cabin_note_text`]) or a background helper's notice.
+pub(crate) fn is_app_note(item: &InputItem) -> bool {
+    let InputItem::Message { role, .. } = item else {
+        return false;
+    };
+    let text = message_text(item);
+    let text = text.trim_start();
+    role == "user" && (text.starts_with(CABIN_NOTE_OPEN) || text.starts_with(NOTICE_OPEN))
+}
+
+/// How a background helper's notice to the model opens.
+const NOTICE_OPEN: &str = "<background-notice>";
+
+/// How a summary (or the digest that stands in for one) opens.
+const SUMMARY_OPEN: &str =
+    "This session is being continued from a previous conversation that ran out of context.";
 
 fn wrap_summary(cleaned: &str) -> String {
     format!(
@@ -2469,6 +2555,56 @@ mod tests {
     }
 
     #[test]
+    fn the_messages_a_compaction_writes_are_known_by_their_opening() {
+        let items = vec![
+            text_message("user", "fix the dock"),
+            text_message("assistant", "On it."),
+            text_message("user", "and the bar"),
+        ];
+        let paths = ["src/dock.rs".to_string()];
+        let rebuilt =
+            build_compacted_history_for("chat-1", &items, "<summary>Dock.</summary>", &paths);
+        let made: Vec<(String, bool)> = rebuilt
+            .iter()
+            .map(|item| (message_text(item), is_compaction_message(item)))
+            .filter(|(text, _)| !text.is_empty())
+            .map(|(text, made)| (text.lines().next().unwrap_or("").to_string(), made))
+            .collect();
+        assert_eq!(
+            made,
+            [
+                (format!("{SUMMARY_OPEN} The summary below covers the earlier portion of the conversation."), true),
+                ("<harness_ledger>".to_string(), true),
+                ("<standing_rules>".to_string(), true),
+                ("and the bar".to_string(), false),
+            ]
+        );
+        let digest = fallback_digest_message("dock, bar").unwrap();
+        assert!(is_compaction_message(&text_message("user", &digest)));
+        assert!(!is_compaction_message(&text_message("assistant", &digest)));
+        assert!(!is_compaction_message(&text_message("user", "continue")));
+    }
+
+    #[test]
+    fn notes_the_app_adds_are_known_by_their_opening() {
+        let note = text_message("user", &cabin_note_text("Check the build first."));
+        let notice = text_message(
+            "user",
+            "<background-notice>\nSubagent s1 finished.\n</background-notice>",
+        );
+        assert!(is_app_note(&note));
+        assert!(is_app_note(&notice));
+        assert!(!is_app_note(&text_message(
+            "assistant",
+            &cabin_note_text("x")
+        )));
+        assert!(!is_app_note(&text_message(
+            "user",
+            "what is a <cabin-note>?"
+        )));
+    }
+
+    #[test]
     fn auto_compact_runs_at_the_threshold_and_counts_summary_usage() {
         let old = text_message("user", &format!("OLD_TOPIC {}", text_for_total_tokens(900)));
         let script = Script {
@@ -2494,6 +2630,11 @@ mod tests {
         let out = drive(&script, &mut history, 1_000);
         assert_eq!(out.stop, crate::run::StopReason::EndTurn);
         assert!(out.compacted);
+        let kept = out.turn.expect("a compacting turn says where it starts");
+        assert_eq!(kept.folded, 0, "the ask was kept");
+        let from = kept.from;
+        let own: Vec<String> = history[from..].iter().map(message_text).collect();
+        assert_eq!(own, ["go", "done"], "the turn's ask and reply are its own");
         assert_eq!(out.usage.input_tokens, 14);
         assert_eq!(out.usage.output_tokens, 5);
         assert_eq!(out.usage.cost_in_usd_ticks, 7);
@@ -2780,6 +2921,43 @@ mod tests {
     }
 
     #[test]
+    fn a_scratch_chat_compacts_without_writing_the_flush_file() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        struct Summary;
+        impl ModelClient for Summary {
+            fn stream(
+                &self,
+                _req: &ResponsesRequest,
+                _cancel: &CancelToken,
+                _sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<TurnOutput, ClientError> {
+                Ok(TurnOutput {
+                    text: "kept the quay".into(),
+                    ..Default::default()
+                })
+            }
+        }
+        let mut history = vec![text_message("user", "keep the quay lantern")];
+        compact_after_flush(
+            &dir,
+            &Summary,
+            &CancelToken::new(),
+            "grok-4.7",
+            Some("low"),
+            "shell-scratch-a-b",
+            &mut history,
+            &[],
+            &[],
+        )
+        .expect("compact");
+        assert!(message_text(&history[0]).contains("kept the quay"));
+        assert!(!crate::memory::flush_memory_path(&dir).exists());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn take_tool_suffix_keeps_call_and_output_as_one_pair() {
         let call = InputItem::FunctionCall {
             call_id: "c1".into(),
@@ -2837,6 +3015,158 @@ mod tests {
         assert!(!compacted
             .iter()
             .any(|item| message_text(item).contains("OLD_TOPIC")));
+    }
+
+    #[test]
+    fn take_tool_suffix_keeps_parallel_batch_calls_and_outputs_as_one_unit() {
+        let call = |id: &str| InputItem::FunctionCall {
+            call_id: id.into(),
+            name: "read_file".into(),
+            arguments: format!(r#"{{"path":"{id}.rs"}}"#),
+        };
+        let output = |id: &str| InputItem::FunctionCallOutput {
+            call_id: id.into(),
+            output: format!("contents of {id}"),
+        };
+        let batch = vec![
+            call("c1"),
+            call("c2"),
+            call("c3"),
+            output("c1"),
+            output("c2"),
+            output("c3"),
+        ];
+        let batch_cost = estimate_input_tokens(&batch);
+        let kept = take_tool_suffix(&batch, batch_cost);
+        assert_eq!(kept.len(), 6, "whole parallel batch fits as a unit");
+        assert!(matches!(&kept[0], InputItem::FunctionCall { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&kept[1], InputItem::FunctionCall { call_id, .. } if call_id == "c2"));
+        assert!(matches!(&kept[2], InputItem::FunctionCall { call_id, .. } if call_id == "c3"));
+        assert!(
+            matches!(&kept[3], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
+        assert!(
+            matches!(&kept[4], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c2")
+        );
+        assert!(
+            matches!(&kept[5], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c3")
+        );
+
+        let below = batch_cost.saturating_sub(1).max(1);
+        assert!(
+            take_tool_suffix(&batch, below).is_empty(),
+            "budget below the parallel batch keeps neither orphaned calls nor orphaned outputs"
+        );
+
+        // Out-of-order outputs still pair atomically with their calls.
+        let reordered = vec![call("c1"), call("c2"), output("c2"), output("c1")];
+        let reordered_cost = estimate_input_tokens(&reordered);
+        let kept_reordered = take_tool_suffix(&reordered, reordered_cost);
+        assert_eq!(kept_reordered.len(), 4);
+        assert!(
+            matches!(&kept_reordered[2], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c2")
+        );
+        assert!(
+            matches!(&kept_reordered[3], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
+
+        // Two consecutive batches with budget fitting only the second batch.
+        let two_batches = vec![
+            call("a1"),
+            output("a1"),
+            call("b1"),
+            call("b2"),
+            output("b1"),
+            output("b2"),
+        ];
+        let second_cost = estimate_input_tokens(&two_batches[2..]);
+        let kept_second = take_tool_suffix(&two_batches, second_cost);
+        assert_eq!(kept_second.len(), 4);
+        assert!(
+            matches!(&kept_second[0], InputItem::FunctionCall { call_id, .. } if call_id == "b1")
+        );
+        assert!(
+            matches!(&kept_second[1], InputItem::FunctionCall { call_id, .. } if call_id == "b2")
+        );
+        assert!(
+            matches!(&kept_second[2], InputItem::FunctionCallOutput { call_id, .. } if call_id == "b1")
+        );
+        assert!(
+            matches!(&kept_second[3], InputItem::FunctionCallOutput { call_id, .. } if call_id == "b2")
+        );
+
+        // Sealed reasoning items inside a parallel batch are skipped without splitting the batch.
+        let reasoning = InputItem::Reasoning {
+            raw: r#"{"type":"reasoning","id":"r1"}"#.into(),
+            model: "grok-4.7".into(),
+        };
+        let with_reasoning = vec![
+            call("c1"),
+            reasoning.clone(),
+            call("c2"),
+            output("c1"),
+            reasoning,
+            output("c2"),
+        ];
+        let kept_without_reasoning = take_tool_suffix(&with_reasoning, batch_cost);
+        assert_eq!(kept_without_reasoning.len(), 4);
+        assert!(
+            matches!(&kept_without_reasoning[2], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
+        assert!(
+            matches!(&kept_without_reasoning[3], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c2")
+        );
+
+        // Orphan outputs without a matching call are skipped cleanly.
+        let with_orphan = vec![call("c1"), output("c1"), output("orphan")];
+        let kept_valid = take_tool_suffix(&with_orphan, batch_cost);
+        assert_eq!(kept_valid.len(), 2);
+        assert!(
+            matches!(&kept_valid[0], InputItem::FunctionCall { call_id, .. } if call_id == "c1")
+        );
+        assert!(
+            matches!(&kept_valid[1], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
+    }
+
+    #[test]
+    fn recent_tail_keeps_parallel_tool_batch_outputs_in_compacted_history() {
+        let last = text_message("user", "inspect all three files");
+        let call = |id: &str| InputItem::FunctionCall {
+            call_id: id.into(),
+            name: "read_file".into(),
+            arguments: format!(r#"{{"path":"src/{id}.rs"}}"#),
+        };
+        let output = |id: &str| InputItem::FunctionCallOutput {
+            call_id: id.into(),
+            output: format!("pub fn {id}() {{}}"),
+        };
+        let history = vec![
+            text_message("user", "OLD_TOPIC"),
+            text_message("assistant", "working"),
+            last,
+            call("c1"),
+            call("c2"),
+            call("c3"),
+            output("c1"),
+            output("c2"),
+            output("c3"),
+        ];
+        let compacted = build_compacted_history(&history, "summary body", &[]);
+        for id in ["c1", "c2", "c3"] {
+            assert!(
+                compacted
+                    .iter()
+                    .any(|i| matches!(i, InputItem::FunctionCall { call_id, .. } if call_id == id)),
+                "missing FunctionCall {id}"
+            );
+            assert!(
+                compacted.iter().any(
+                    |i| matches!(i, InputItem::FunctionCallOutput { call_id, .. } if call_id == id)
+                ),
+                "missing FunctionCallOutput {id}"
+            );
+        }
     }
 
     #[test]

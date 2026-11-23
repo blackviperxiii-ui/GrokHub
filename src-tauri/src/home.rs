@@ -378,6 +378,8 @@ pub struct IdeaLine {
     pub title: String,
     /// What Let's do it puts in the chat box.
     pub action: String,
+    /// A skill idea: the row saves the skill instead of asking.
+    pub skill: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -606,7 +608,7 @@ pub fn toggle_for(src: &Sources<'_>, done: bool, now: u64) -> Result<MissionPage
 fn recent_chats(src: &Sources<'_>) -> Tile {
     let chats = history::list(src.config_dir)
         .into_iter()
-        .filter(|row| src.viewer.sees(&row.id))
+        .filter(|row| src.viewer.sees(&row.id) && (row.main || row.project.is_none()))
         .take(TILE_ROWS)
         .map(|row| ChatLine {
             id: row.id,
@@ -667,6 +669,7 @@ fn pulse_tile(src: &Sources<'_>) -> Tile {
                     id: i.id,
                     title: i.title,
                     action: i.action,
+                    skill: i.skill,
                 }),
         },
         Err(message) => Tile::Error { message },

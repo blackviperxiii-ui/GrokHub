@@ -18,6 +18,9 @@ use std::sync::Mutex;
 
 use grokhub_core::local_setup::LocalModel;
 
+use super::ladder::Steer;
+pub use super::table::SpeedQuality;
+
 /// How much model a task needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Need {
@@ -40,6 +43,8 @@ pub enum Mode {
     Performance,
     /// Dynamic is off: the pick answers every task.
     Fixed,
+    /// A chat asked for speed, or is set to it: the fastest model that fits.
+    Speed,
 }
 
 impl Mode {
@@ -57,6 +62,9 @@ impl Mode {
             }
             Mode::Fixed => {
                 "Mode: Your pick. Dynamic is off, so your pick answers every task. A game, a low battery or too little memory still swaps to a lighter one."
+            }
+            Mode::Speed => {
+                "Mode: Speed. A chat asked for speed, so the fastest model that fits answers it."
             }
         }
     }
@@ -127,6 +135,120 @@ pub fn current_need() -> Need {
     NEED.with(Cell::get)
 }
 
+/// Where a chat's tier came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Words in this turn of the person's own ("be quick", "think hard").
+    Words,
+    /// A standing ask from earlier words in the chat ([`super::local_pin`]).
+    Pin,
+}
+
+/// The tier a chat asked for this turn, and where the ask came from.
+pub type ChatTier = (SpeedQuality, Source);
+
+/// The tier for this on-device turn: words in this turn beat the chat's
+/// pin, which beats none (the automatic pick). A helper's turn reads no
+/// words, since its text is a brief another model wrote; nor does a side
+/// answer, whose prompt carries the main reply so far. **Tell the main
+/// task** text counts only its question, not the side model's answer. Only
+/// words count: a quick class is never a speed ask, and "keep it short"
+/// alone asks for a short reply, not a faster model.
+pub fn chat_tier(
+    text: &str,
+    care_first: bool,
+    helper: bool,
+    pin: Option<SpeedQuality>,
+) -> Option<ChatTier> {
+    if !helper {
+        let text = super::intent::person_words(text);
+        match super::ladder::steer_for_turn(text, care_first) {
+            Steer::Harder => return Some((SpeedQuality::Quality, Source::Words)),
+            Steer::Quicker if super::ladder::asks_for_speed(text) => {
+                return Some((SpeedQuality::Speed, Source::Words));
+            }
+            _ => {}
+        }
+    }
+    pin.map(|t| (t, Source::Pin))
+}
+
+/// Words that make this turn's tier ask stand for the rest of the chat.
+const FROM_NOW_ON: &[&str] = &[
+    "from now on",
+    "from here on",
+    "going forward",
+    "for the rest of this chat",
+    "for this whole chat",
+];
+
+/// Words that hand the chat's model back to Auto.
+const BACK_TO_AUTO: &[&str] = &[
+    "back to auto",
+    "go back to normal",
+    "let auto pick",
+    "pick the model yourself",
+];
+
+/// What this turn's words do to the chat's standing tier: `Some(Some(t))`
+/// keeps `t` from now on ("from now on, be quick"), `Some(None)` hands the
+/// chat back to Auto ("back to auto"), and `None` leaves it as it is. Only
+/// the person's own words count, never a helper's or a side answer's, and
+/// only words [`chat_tier`] already reads as a tier ask.
+pub fn standing_ask(text: &str, care_first: bool, helper: bool) -> Option<Option<SpeedQuality>> {
+    if helper {
+        return None;
+    }
+    let words = super::intent::person_words(text).to_ascii_lowercase();
+    if BACK_TO_AUTO.iter().any(|p| words.contains(p)) {
+        return Some(None);
+    }
+    if !FROM_NOW_ON.iter().any(|p| words.contains(p)) {
+        return None;
+    }
+    match chat_tier(text, care_first, false, None) {
+        Some((tier, Source::Words)) => Some(Some(tier)),
+        _ => None,
+    }
+}
+
+/// The mark in a side answer's conversation id (`<chat>~side-<n>`).
+pub const SIDE_MARK: &str = "~side-";
+
+/// A turn whose text isn't the person's own ask: the helper class, a
+/// helper's own conversation id (`parent/child`), or a side answer
+/// (`<chat>`[`SIDE_MARK`]`<n>`), whose prompt quotes the main reply.
+pub fn helper_turn(class: &str, conversation_id: &str) -> bool {
+    class.trim() == super::boundary::HELPER_CLASS
+        || conversation_id.contains('/')
+        || conversation_id.contains(SIDE_MARK)
+}
+
+thread_local! {
+    static CHAT: Cell<Option<ChatTier>> = const { Cell::new(None) };
+}
+
+/// Sets this thread's [`ChatTier`] until dropped, for the load the request
+/// makes.
+pub struct ChatGuard(Option<ChatTier>);
+
+impl ChatGuard {
+    pub fn set(tier: Option<ChatTier>) -> Self {
+        ChatGuard(CHAT.with(|c| c.replace(tier)))
+    }
+}
+
+impl Drop for ChatGuard {
+    fn drop(&mut self) {
+        CHAT.with(|c| c.set(self.0));
+    }
+}
+
+/// The tier of the request this thread is loading for.
+pub fn current_chat() -> Option<ChatTier> {
+    CHAT.with(Cell::get)
+}
+
 /// What is free on the machine, from the cabin's sampler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Room {
@@ -156,15 +278,17 @@ pub fn usable_mb(room: &Room, resident_mb: u64) -> u64 {
     room.free_vram_mb.unwrap_or(0) + room.free_ram_mb * RAM_SHARE_PCT / 100 + resident_mb
 }
 
-/// `m` fits with `headroom` to spare once the resident model is gone.
-pub fn fits(m: &LocalModel, room: &Room, resident_mb: u64, headroom: u64) -> bool {
-    m.run_mb + headroom <= usable_mb(room, resident_mb)
+/// A model needing `need_mb` (with its drafter, see
+/// [`grokhub_core::local_draft::pair_mb`]) fits with `headroom` to spare
+/// once the resident model is gone.
+pub fn fits(need_mb: u64, room: &Room, resident_mb: u64, headroom: u64) -> bool {
+    need_mb + headroom <= usable_mb(room, resident_mb)
 }
 
-/// Rough generation speed of `m` with this room: all on the GPU, a mixture
-/// of experts with its experts in RAM, or a dense split by the share of it on
-/// the GPU.
-pub fn est_tok_s(m: &LocalModel, room: &Room, resident_vram_mb: u64) -> u32 {
+/// Rough generation speed of `m`, needing `need_mb` with its drafter, with
+/// this room: all on the GPU, a mixture of experts with its experts in RAM,
+/// or a dense split by the share of it on the GPU.
+pub fn est_tok_s(m: &LocalModel, need_mb: u64, room: &Room, resident_vram_mb: u64) -> u32 {
     let vram = room.free_vram_mb.unwrap_or(0) + resident_vram_mb;
     if vram == 0 {
         return if room.unified {
@@ -173,13 +297,13 @@ pub fn est_tok_s(m: &LocalModel, room: &Room, resident_vram_mb: u64) -> u32 {
             m.tok_s.cpu
         };
     }
-    if m.run_mb <= vram {
+    if need_mb <= vram {
         return m.tok_s.gpu;
     }
-    if m.badges.contains(&"moe") && vram * 3 >= m.run_mb {
+    if m.badges.contains(&"moe") && vram * 3 >= need_mb {
         return m.tok_s.gpu * 2 / 3;
     }
-    let on_gpu = vram * 100 / m.run_mb.max(1);
+    let on_gpu = vram * 100 / need_mb.max(1);
     let cpu = u64::from(m.tok_s.cpu);
     let gpu = u64::from(m.tok_s.gpu);
     u32::try_from(cpu + gpu.saturating_sub(cpu) * on_gpu / 100 / 2).unwrap_or(u32::MAX)
@@ -190,13 +314,14 @@ pub fn performance_ready(room: &Room) -> bool {
     !room.on_battery && room.cpu_busy_pct.is_none_or(|c| c <= CPU_FREE_PCT)
 }
 
-/// A bigger model loaded for hard work should stop: the computer got busy,
-/// went on battery, or no longer has room for it. With no reading it stays.
-pub fn step_down_due(m: &LocalModel, scale: &Scale) -> bool {
+/// A bigger model loaded for hard work, needing `need_mb` with its drafter,
+/// should stop: the computer got busy, went on battery, or no longer has
+/// room for it. With no reading it stays.
+pub fn step_down_due(need_mb: u64, scale: &Scale) -> bool {
     let Some(room) = scale.room else {
         return false;
     };
-    scale.gaming || scale.saving || !performance_ready(&room) || !fits(m, &room, m.run_mb, 0)
+    scale.gaming || scale.saving || !performance_ready(&room) || !fits(need_mb, &room, need_mb, 0)
 }
 
 static ROOM: Mutex<Option<(Room, u64)>> = Mutex::new(None);
@@ -210,9 +335,13 @@ pub fn set_room(room: Room, now_ms: u64) {
 
 /// The latest reading, unless it is older than [`ROOM_STALE_MS`].
 pub fn room(now_ms: u64) -> Option<Room> {
+    room_at(now_ms).map(|(room, _)| room)
+}
+
+/// [`room`] with the time it was read.
+pub fn room_at(now_ms: u64) -> Option<(Room, u64)> {
     let r = ROOM.lock().ok()?;
     r.filter(|(_, at)| now_ms.saturating_sub(*at) <= ROOM_STALE_MS)
-        .map(|(room, _)| room)
 }
 
 #[cfg(test)]

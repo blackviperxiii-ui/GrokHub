@@ -6,7 +6,7 @@
 
 Local-first Grok desktop assistant for Windows and Linux with permission-gated tools and on-device memory.
 
-Loadout (formerly GrokHub) runs natively on your computer from the system tray so Grok can help with coding, research, files, terminal commands, and desktop apps without giving up local control or privacy. Chats, memory, and credentials stay on your machine, and high-impact actions always wait at an approval gate for your confirmation.
+Loadout (formerly GrokHub) is built with Tauri. It runs on your computer from the system tray so Grok can help with coding, research, files, terminal commands, and desktop apps without giving up local control or privacy. Chats, memory, and credentials stay on your machine, and high-impact actions always wait at an approval gate for your confirmation.
 
 ## Table of Contents
 
@@ -68,12 +68,24 @@ Prerequisites:
     sudo apt-get install -y git pkg-config nodejs npm libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libwayland-dev libasound2-dev
     ```
 
-Clone and install on Linux (`~/.local/bin/grokhub-shell` and `~/.local/bin/grokhub-hub`):
+Install the prebuilt app with nothing to compile (Linux x86_64 gets the self-updating AppImage in `~/.local/bin/grokhub-shell`, an Apple silicon Mac gets the app in `~/Applications`). The script checks `SHA256SUMS` against the release's minisign key, and the download against `SHA256SUMS`, before it installs anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/blackviperxiii-ui/GrokHub/main/scripts/install.sh | bash
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/blackviperxiii-ui/GrokHub/main/scripts/install.ps1 | iex
+```
+
+Or build from a clone on Linux (`~/.local/bin/grokhub-shell` and `~/.local/bin/grokhub-hub`; the packages above are needed only for this):
 
 ```bash
 git clone https://github.com/blackviperxiii-ui/GrokHub.git
 cd GrokHub
-./scripts/install.sh --user
+./scripts/install.sh --user --from-source
 ```
 
 Build the Tauri desktop shell directly on Linux, Windows, or macOS:
@@ -94,21 +106,20 @@ Launch `grokhub-shell` (or open **Loadout** from your system launcher) and conne
 
 ```bash
 grokhub-shell                                     # launch the Tauri desktop app
-./scripts/install.sh --user --app cabin           # build and install the legacy egui cabin
-cargo run -p grokhub-app                          # run the legacy egui cabin from source
-cargo run -p grokhub-app -- --agent               # start the cabin hidden in the system tray
-cargo run -p grokhub-app -- --oauth               # SuperGrok device-code sign-in
-cargo run -p grokhub-app -- --doctor              # check sandbox, tools, and config health
+grokhub-shell --autostart                         # start in the tray when Close to tray is on (also --agent, --tray)
+grokhub-hub --oauth                               # SuperGrok device-code sign-in
+grokhub-hub --doctor                              # check sandbox, tools, and config health
+ui/node_modules/.bin/tauri dev                    # run the desktop app from source (after npm ci --prefix ui)
 GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub   # run the standalone LAN sync hub
 ```
 
 ### Beta Channel
 
-- **In-app (Linux):** switch to **Beta** in **About → Updates** (Windows stays on stable releases unless switched to beta pre-releases). You can switch back to stable anytime.
+- **In the app:** switch to **Beta** in **Settings → About → Updates**. The Windows installer, the AppImage, the `.deb` (it asks for your password to install the new package) and the Mac app then install the newest signed beta pre-release. Per-merge betas carry no Mac build, so a Mac waits for the next tagged or nightly one. An AUR or clone install keeps the choice and updates outside the app. You can switch back to stable anytime.
 - **From a Linux source clone:**
   ```bash
-  ./scripts/install.sh --user --channel beta     # track origin/beta, build, and install
-  ./scripts/install.sh --user --channel stable   # switch back to origin/main
+  ./scripts/install.sh --user --from-source --channel beta     # track origin/beta, build, and install
+  ./scripts/install.sh --user --from-source --channel stable   # switch back to origin/main
   ```
 
 ### Development Checks
@@ -143,7 +154,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 | [`crates/grokhub-hub/`](crates/grokhub-hub) | Standalone LAN `/v1` sync and pairing hub (`grokhub-hub`) |
 | [`crates/grokhub-proto/`](crates/grokhub-proto) | Portable wire types (`wasm32`-compatible, no I/O) |
 | [`crates/grokhub-fps-probe/`](crates/grokhub-fps-probe) | Lightweight frame-rate probe binary (`loadout-fps-probe`) |
-| [`crates/grokhub-app/`](crates/grokhub-app) | Legacy native `eframe`/`egui` cabin (`grokhub`) |
 | [`xtask/`](xtask) | Release version lockstep and changelog tooling (`cargo xtask bump --check`) |
 
 ## Documentation
@@ -152,7 +162,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 - [docs/cross-platform/README.md](docs/cross-platform/README.md) — Tauri 2 + React + TypeScript shell architecture and smoke tests
 - [docs/compass/README.md](docs/compass/README.md) — Short module maps for each crate and subsystem
 - [PRIVACY.md](PRIVACY.md) — Privacy policy and on-device model routing rules
-- [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md) — Windows SignPath Authenticode code signing policy
 - [CHANGELOG.md](CHANGELOG.md) — Release notes history
 
 ## Contributing

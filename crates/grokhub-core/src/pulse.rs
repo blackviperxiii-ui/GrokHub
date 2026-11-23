@@ -4,6 +4,8 @@
 //! structured ledger line per choice, and the ledger feeds the next ranking and
 //! the feed instructions rewrite.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ideas::{same_topic_words, topic_words};
@@ -1189,11 +1191,16 @@ pub struct PingAsk<'a> {
 }
 
 /// The one gate every Pulse-origin OS notification goes through.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Saved next to `proactive.json` so a relaunch keeps the day's count.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PingGate {
     day: String,
     sent: u32,
 }
+
+/// Sibling of `proactive.json`: the day's reminder ping count.
+pub const PING_GATE_FILE: &str = "ping_gate.json";
 
 impl PingGate {
     pub const fn new() -> Self {
@@ -1226,6 +1233,31 @@ impl PingGate {
         self.sent = self.sent_on(ask.day) + 1;
         self.day = ask.day.to_string();
         true
+    }
+
+    /// The day's count from a sibling of `proactive.json`, or a fresh gate.
+    pub fn load(config_dir: &std::path::Path) -> Self {
+        let path = config_dir.join(PING_GATE_FILE);
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return Self::default();
+        };
+        // A few small fields; anything bigger is not one.
+        if meta.len() > 4 * 1024 {
+            return Self::default();
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write the day's count next to `proactive.json`.
+    pub fn save(&self, config_dir: &std::path::Path) -> Result<(), String> {
+        std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+        let raw = serde_json::to_string(self).map_err(|e| e.to_string())?;
+        let tmp = config_dir.join(format!("{PING_GATE_FILE}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, &raw).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, config_dir.join(PING_GATE_FILE)).map_err(|e| e.to_string())
     }
 }
 
@@ -1523,6 +1555,188 @@ pub fn gallery_images(html: &str, page_url: &str) -> Vec<String> {
     out
 }
 
+/// What a source page says about itself, as plain text: its own summary,
+/// its first real paragraphs, who wrote it and when. All of it is outside
+/// text, so the writer gets it fenced as data, never as instructions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageContext {
+    /// `og:description`, else `description`, else `twitter:description`.
+    pub description: String,
+    /// The first paragraphs of the article, else the main part, else the body.
+    pub lead: String,
+    pub author: Option<String>,
+    pub published_ms: Option<u64>,
+}
+
+/// A paragraph shorter than this is a caption, a byline or a button.
+const LEAD_MIN_CHARS: usize = 60;
+/// Words that mark a paragraph as the page's furniture, not its story.
+const LEAD_SKIP: &[&str] = &[
+    "cookie",
+    "subscribe",
+    "newsletter",
+    "sign in",
+    "sign up",
+    "log in",
+    "javascript",
+    "advertisement",
+    "all rights reserved",
+];
+/// Longest author name kept.
+const AUTHOR_CHARS: usize = 80;
+
+/// Read a page's own text for a post: its description and its first
+/// paragraphs, each at most `max_chars`, plus its author and published time.
+/// A page that is not HTML, or holds only short lines, gives empty text.
+pub fn page_context(html: &str, max_chars: usize) -> PageContext {
+    use crate::pulse_sources::{decode_entities, parse_date_ms, strip_tags};
+    let lower = html.to_ascii_lowercase();
+    let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let description = ["og:description", "description", "twitter:description"]
+        .iter()
+        .filter_map(|key| meta_content(html, &lower, key))
+        .map(|raw| flat(&strip_tags(&decode_entities(raw))))
+        .find(|text| !text.is_empty())
+        .map(|text| clip_chars(&text, max_chars))
+        .unwrap_or_default();
+    let (from, to) = ["article", "main", "body"]
+        .iter()
+        .find_map(|tag| element_span(&lower, tag))
+        .unwrap_or((0, lower.len()));
+    let mut lead = String::new();
+    let mut at = from;
+    while lead.chars().count() < max_chars {
+        let Some((start, end, next)) = next_paragraph(&lower, at, to) else {
+            break;
+        };
+        at = next;
+        let text = flat(&decode_entities(&strip_tags(&html[start..end])));
+        let text_lower = text.to_lowercase();
+        if text.chars().count() < LEAD_MIN_CHARS
+            || text == description
+            || LEAD_SKIP.iter().any(|w| text_lower.contains(w))
+        {
+            continue;
+        }
+        if !lead.is_empty() {
+            lead.push(' ');
+        }
+        lead.push_str(&text);
+    }
+    let author = ["author", "article:author"]
+        .iter()
+        .filter_map(|key| meta_content(html, &lower, key))
+        .map(|raw| plain_name(&flat(&strip_tags(&decode_entities(raw)))))
+        .find(|name| !name.is_empty() && !name.contains("://"))
+        .map(|name| clip_chars(&name, AUTHOR_CHARS));
+    PageContext {
+        description,
+        lead: clip_chars(&lead, max_chars),
+        author,
+        published_ms: meta_content(html, &lower, "article:published_time").and_then(parse_date_ms),
+    }
+}
+
+/// The first non-empty `content` of a `<meta>` whose `property` or `name` is `key`.
+fn meta_content<'a>(html: &'a str, lower: &str, key: &str) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find("<meta") {
+        let start = from + pos;
+        let end = lower[start..]
+            .find('>')
+            .map(|e| start + e)
+            .unwrap_or(lower.len());
+        let (tag, tag_lower) = (&html[start..end], &lower[start..end]);
+        from = end;
+        let named = [
+            attr(tag, tag_lower, "property"),
+            attr(tag, tag_lower, "name"),
+        ]
+        .iter()
+        .flatten()
+        .any(|n| n.trim().eq_ignore_ascii_case(key));
+        if let Some(content) =
+            attr(tag, tag_lower, "content").filter(|c| named && !c.trim().is_empty())
+        {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// Where the first `<tag …>` element's content starts and ends, in bytes.
+fn element_span(lower: &str, tag: &str) -> Option<(usize, usize)> {
+    let open = format!("<{tag}");
+    let mut from = 0;
+    loop {
+        let at = from + lower[from..].find(&open)?;
+        let after = at + open.len();
+        from = after;
+        if !matches!(
+            lower.as_bytes().get(after),
+            Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+        ) {
+            continue;
+        }
+        let start = after + lower[after..].find('>')? + 1;
+        let end = lower[start..]
+            .find(&format!("</{tag}"))
+            .map_or(lower.len(), |e| start + e);
+        return Some((start, end));
+    }
+}
+
+/// The next `<p>` between `from` and `to`: its content's start and end, and
+/// where to look after it.
+fn next_paragraph(lower: &str, from: usize, to: usize) -> Option<(usize, usize, usize)> {
+    let mut at = from;
+    loop {
+        let open = at + lower.get(at..to)?.find("<p")?;
+        at = open + 2;
+        if !matches!(
+            lower.as_bytes().get(at),
+            Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+        ) {
+            continue;
+        }
+        let start = at + lower[at..to].find('>')? + 1;
+        // An unclosed paragraph ends where the next one opens. Looking for
+        // the close only up to there keeps a page of unclosed `<p>` linear.
+        let next_open = lower[start..to].find("<p").map_or(to, |e| start + e);
+        let end = lower[start..next_open]
+            .find("</p")
+            .map_or(next_open, |e| start + e);
+        return Some((start, end, end));
+    }
+}
+
+/// A name with the characters that would make it markdown or a tag dropped.
+fn plain_name(name: &str) -> String {
+    let kept: String = name
+        .chars()
+        .filter(|c| {
+            !matches!(
+                c,
+                '[' | ']' | '(' | ')' | '<' | '>' | '*' | '_' | '`' | '#' | '|' | '\\' | '!'
+            )
+        })
+        .collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// At most `max` characters, cut at a word with "…" when it was longer.
+fn clip_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    if let Some(cut) = out.rfind(' ') {
+        out.truncate(cut);
+    }
+    out.push('…');
+    out
+}
+
 /// Most images on one post.
 pub const GALLERY_MAX: usize = 3;
 /// An image marked narrower or shorter than this is not a content image.
@@ -1535,12 +1749,92 @@ const GALLERY_SKIP: &[&str] = &[
     "logo", "icon", "avatar", "sprite", "badge", "pixel", "spacer", "emoji", "favicon", "button",
 ];
 
+/// The MIME type of a JPEG, PNG or WebP file, read from its magic bytes.
+/// Anything else (GIF, SVG, an HTML error page) is `None`.
+pub fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Whether a JPEG or WebP file arrived whole. A JPEG must end with its
+/// end-of-image marker (trailing zero or whitespace padding allowed), and a
+/// WebP must be as long as its RIFF header says; JPEG decoders fill a cut-off
+/// scan with grey instead of failing. A PNG is left to its decoder, which
+/// refuses one cut short. Anything that isn't one of the three is `false`.
+pub fn image_is_whole(bytes: &[u8]) -> bool {
+    match image_mime(bytes) {
+        Some("image/jpeg") => {
+            let end = bytes
+                .iter()
+                .rposition(|b| *b != 0 && !b.is_ascii_whitespace())
+                .map_or(0, |i| i + 1);
+            bytes[..end].ends_with(&[0xFF, 0xD9])
+        }
+        Some("image/webp") => {
+            let riff = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            usize::try_from(riff).is_ok_and(|len| bytes.len() >= len.saturating_add(8))
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 /// A downloaded image worth caching: a real JPEG, PNG or WebP, not tiny, not huge.
 pub fn image_bytes_ok(bytes: &[u8]) -> bool {
-    let real = bytes.starts_with(&[0xFF, 0xD8, 0xFF])
-        || bytes.starts_with(&[0x89, b'P', b'N', b'G'])
-        || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP");
-    real && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
+    image_mime(bytes).is_some() && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
+}
+
+/// A file found in the image cache folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedFile {
+    pub name: String,
+    pub modified_ms: u64,
+}
+
+/// How long an unreferenced cache file is kept: covers the gap between
+/// caching a post's images and adding the post to the store.
+pub const PRUNE_GRACE_MS: u64 = 3_600_000;
+
+/// The cache files to delete: names the cache itself writes (a 16-hex stem
+/// and an image extension, or that name's temp file) that no card in
+/// `keep` references and that are older than [`PRUNE_GRACE_MS`]. Every
+/// other file in the folder is left alone.
+pub fn prune_plan(files: &[CachedFile], keep: &HashSet<String>, now_ms: u64) -> Vec<String> {
+    files
+        .iter()
+        .filter(|f| cache_owned_name(&f.name))
+        .filter(|f| !keep.contains(&f.name))
+        .filter(|f| now_ms.saturating_sub(f.modified_ms) > PRUNE_GRACE_MS)
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+/// `<16 hex>.<jpg|png|webp|img|miss>`, optionally followed by `.<pid>-<n>.tmp`.
+fn cache_owned_name(name: &str) -> bool {
+    let Some((stem, rest)) = name.split_once('.') else {
+        return false;
+    };
+    if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return false;
+    }
+    let (ext, temp) = rest.split_once('.').unwrap_or((rest, ""));
+    if !matches!(ext, "jpg" | "png" | "webp" | "img" | "miss") {
+        return false;
+    }
+    if temp.is_empty() {
+        return true;
+    }
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    temp.strip_suffix(".tmp")
+        .and_then(|t| t.split_once('-'))
+        .is_some_and(|(pid, n)| digits(pid) && digits(n))
 }
 
 fn attr<'a>(tag: &'a str, tag_lower: &str, name: &str) -> Option<&'a str> {
@@ -1607,6 +1901,81 @@ pub fn image_cache_name(url: &str) -> String {
         .map(|e| if e == ".jpeg" { ".jpg" } else { e })
         .unwrap_or(".img");
     format!("{h:016x}{ext}")
+}
+
+/// The negative-cache marker for an image URL that failed to download:
+/// the URL's cache stem with `.miss`. It sits next to the cache files and is
+/// pruned like them.
+pub fn image_miss_name(url: &str) -> String {
+    let name = image_cache_name(url);
+    let stem = name.split_once('.').map_or(name.as_str(), |(stem, _)| stem);
+    format!("{stem}.miss")
+}
+
+/// How long a download that failed for a passing reason waits, times the
+/// failures so far, before it is tried again.
+pub const IMAGE_RETRY_MS: u64 = 15 * 60_000;
+/// Failures for a passing reason after which a URL is never tried again.
+pub const IMAGE_TRIES_MAX: u32 = 3;
+
+/// What a `.miss` marker ([`image_miss_name`]) says about an image URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageMiss {
+    /// The address answered for good (an HTTP 4xx, not an image, too big)
+    /// or failed [`IMAGE_TRIES_MAX`] times: never asked again.
+    Gone,
+    /// Failed `tries` times for a passing reason (the network, a server
+    /// error, the egress guard); asked again from `retry_at_ms`.
+    Later { tries: u32, retry_at_ms: u64 },
+}
+
+impl ImageMiss {
+    /// Read a marker's text. Anything that isn't a well-formed `later` line
+    /// is [`ImageMiss::Gone`], so a damaged marker never brings back a fetch.
+    pub fn parse(text: &str) -> Self {
+        let mut words = text.split_whitespace();
+        if words.next() != Some("later") {
+            return Self::Gone;
+        }
+        let tries = words.next().and_then(|w| w.parse().ok());
+        let retry_at_ms = words.next().and_then(|w| w.parse().ok());
+        match (tries, retry_at_ms, words.next()) {
+            (Some(tries), Some(retry_at_ms), None) => Self::Later { tries, retry_at_ms },
+            _ => Self::Gone,
+        }
+    }
+
+    pub fn render(self) -> String {
+        match self {
+            Self::Gone => "gone\n".into(),
+            Self::Later { tries, retry_at_ms } => format!("later {tries} {retry_at_ms}\n"),
+        }
+    }
+
+    /// Whether the URL may be asked again at `now_ms`.
+    pub fn due(self, now_ms: u64) -> bool {
+        match self {
+            Self::Gone => false,
+            Self::Later { retry_at_ms, .. } => now_ms >= retry_at_ms,
+        }
+    }
+
+    /// The marker after one more failure. `gone` is a failure that asking
+    /// again can't fix.
+    pub fn after_failure(prev: Option<Self>, gone: bool, now_ms: u64) -> Self {
+        let tries = match prev {
+            Some(Self::Later { tries, .. }) => tries.saturating_add(1),
+            Some(Self::Gone) => return Self::Gone,
+            None => 1,
+        };
+        if gone || tries >= IMAGE_TRIES_MAX {
+            return Self::Gone;
+        }
+        Self::Later {
+            tries,
+            retry_at_ms: now_ms.saturating_add(IMAGE_RETRY_MS.saturating_mul(u64::from(tries))),
+        }
+    }
 }
 
 /// Site name for a post's source line: `www.theverge.com/…` → `theverge.com`.
@@ -2517,6 +2886,96 @@ mod tests {
         );
     }
 
+    const STORY_PAGE: &str = r#"<html><head>
+<meta property="og:description" content="Async closures are stable.">
+<meta name="description" content="Rust 1.99 notes">
+<meta name="author" content="The *Rust* [Release](x) Team">
+<meta property="article:published_time" content="2026-10-20T12:00:00Z">
+</head><body>
+<nav><p>Home, Blog, Releases, Community, Install, Learn, Tools, Governance, Get help</p></nav>
+<article class="post">
+<p>Rust 1.99</p>
+<p>We use cookies to improve your reading experience. Accept cookies to keep reading this.</p>
+<p>Rust 1.99 stabilizes async closures, so <a href="/x">closures</a> can be <em>awaited</em> directly &amp; without boxing.</p>
+<pre>let f = async || {}; // a long code sample that should never be read as a paragraph at all</pre>
+<p class="lead">The release also ships 12 new Clippy lints and faster incremental builds on Windows.</p>
+</article>
+<p>Copyright notice and other footer text that sits outside the article element.</p>
+</body></html>"#;
+
+    #[test]
+    fn page_context_reads_description_and_article_paragraphs() {
+        let page = page_context(STORY_PAGE, 1200);
+        assert_eq!(page.description, "Async closures are stable.");
+        assert_eq!(
+            page.lead,
+            "Rust 1.99 stabilizes async closures, so closures can be awaited directly & without boxing. The release also ships 12 new Clippy lints and faster incremental builds on Windows."
+        );
+        assert!(!page.lead.contains("cookies"), "{}", page.lead);
+        assert_eq!(page.author.as_deref(), Some("The Rust Releasex Team"));
+        assert_eq!(page.published_ms, Some(1_792_497_600_000));
+    }
+
+    #[test]
+    fn page_context_caps_text() {
+        let para = format!(
+            "<p>{}</p>",
+            "Async closures ship in this release today. ".repeat(10)
+        );
+        let html = format!(
+            "<meta name=\"description\" content=\"{}\"><main>{}</main>",
+            "word ".repeat(400),
+            para.repeat(10)
+        );
+        let page = page_context(&html, 1200);
+        assert!(page.lead.chars().count() <= 1200, "{}", page.lead.len());
+        assert!(page.lead.ends_with('…'), "{}", page.lead);
+        assert!(page.description.chars().count() <= 1200);
+        assert!(page.description.ends_with('…'));
+    }
+
+    #[test]
+    fn page_context_reads_a_huge_page_of_unclosed_paragraphs_in_one_pass() {
+        // A 2 MB page (the page cap) where no paragraph is ever closed.
+        let mut html = "<p>ab".repeat(400_000);
+        html.push_str(
+            "<p>The one real paragraph of this page is long enough to be read as the story.",
+        );
+        let started = std::time::Instant::now();
+        let page = page_context(&html, 1200);
+        assert_eq!(
+            page.lead,
+            "The one real paragraph of this page is long enough to be read as the story."
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn page_context_reads_published_time() {
+        let html = r#"<meta property="article:published_time" content="2026-10-20T12:00:00Z">"#;
+        assert_eq!(
+            page_context(html, 1200).published_ms,
+            Some(1_792_497_600_000)
+        );
+        assert_eq!(page_context("<p>x</p>", 1200).published_ms, None);
+    }
+
+    #[test]
+    fn page_context_of_a_page_that_is_not_html_is_empty() {
+        let json = r#"{"title":"Rust 1.99 ships async closures and much more for everyone today","url":"https://x"}"#;
+        assert_eq!(page_context(json, 1200), PageContext::default());
+        let binary =
+            String::from_utf8_lossy(&[0x25, 0x50, 0x44, 0x46, 0xff, 0x00, 0x3c, 0x70]).into_owned();
+        assert_eq!(page_context(&binary, 1200), PageContext::default());
+        // An author that is a link is no name.
+        let linked = r#"<meta name="author" content="https://example.com/team">"#;
+        assert_eq!(page_context(linked, 1200).author, None);
+    }
+
     #[test]
     fn og_image_reads_the_source_page_preview() {
         let html = r#"<html><head><meta charset="utf-8">
@@ -2740,6 +3199,127 @@ mod tests {
     }
 
     #[test]
+    fn image_mime_reads_magic_bytes() {
+        assert_eq!(image_mime(&[0xFF, 0xD8, 0xFF]), Some("image/jpeg"));
+        assert_eq!(image_mime(&[0x89, b'P', b'N', b'G']), Some("image/png"));
+        assert_eq!(image_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(image_mime(b"GIF89a"), None);
+        assert_eq!(image_mime(b"<!doctype html>"), None);
+    }
+
+    #[test]
+    fn image_is_whole_spots_a_cut_off_jpeg_or_webp() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 0xFF, 0xD9];
+        assert!(image_is_whole(&jpeg));
+        assert!(!image_is_whole(&jpeg[..7]));
+        jpeg.extend_from_slice(b"\0\0\r\n");
+        assert!(image_is_whole(&jpeg), "padding after the marker");
+        jpeg.extend_from_slice(b"tail");
+        assert!(!image_is_whole(&jpeg), "data after the marker");
+
+        let mut webp = b"RIFF\x0c\0\0\0WEBPVP8 ".to_vec();
+        webp.extend_from_slice(&[0; 8]);
+        assert_eq!(webp.len(), 24);
+        assert!(!image_is_whole(&webp[..19]), "header says 20 bytes");
+        assert!(image_is_whole(&webp[..20]));
+
+        assert!(image_is_whole(&[0x89, b'P', b'N', b'G']));
+        assert!(!image_is_whole(b"GIF89a"));
+    }
+
+    #[test]
+    fn prune_plan_drops_only_old_unreferenced_owned_files() {
+        let now = 1_800_000_000_000;
+        let file = |name: &str, age_ms: u64| CachedFile {
+            name: name.into(),
+            modified_ms: now - age_ms,
+        };
+        let hours_2 = 2 * 3_600_000;
+        let files = [
+            file("aaaaaaaaaaaaaaaa.jpg", hours_2),
+            file("bbbbbbbbbbbbbbbb.jpg", hours_2),
+            file("cccccccccccccccc.img", 10 * 60_000),
+            file("dddddddddddddddd.png.7-0.tmp", hours_2),
+            file("notes.txt", hours_2),
+            file("eeeeeeeeeeeeeeee.miss", hours_2),
+            file("ffffffffffffffff.miss", hours_2),
+            file("1111111111111111.miss", 10 * 60_000),
+            file("short.miss", hours_2),
+        ];
+        let keep: HashSet<String> = [
+            "aaaaaaaaaaaaaaaa.jpg".to_string(),
+            "ffffffffffffffff.miss".to_string(),
+        ]
+        .into();
+        assert_eq!(
+            prune_plan(&files, &keep, now),
+            vec![
+                "bbbbbbbbbbbbbbbb.jpg",
+                "dddddddddddddddd.png.7-0.tmp",
+                "eeeeeeeeeeeeeeee.miss"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_miss_marker_shares_the_cache_stem() {
+        let url = "https://cdn.akamai.steamstatic.com/steam/apps/620/header.jpg";
+        let name = image_cache_name(url);
+        assert_eq!(name.len(), 20);
+        assert_eq!(image_miss_name(url), format!("{}.miss", &name[..16]));
+        assert_eq!(
+            image_miss_name("https://img.test/a?x=1"),
+            format!("{}.miss", &image_cache_name("https://img.test/a?x=1")[..16])
+        );
+        assert!(image_cache_name("https://img.test/a?x=1").ends_with(".img"));
+    }
+
+    #[test]
+    fn a_miss_marker_retries_a_passing_failure_twice_then_gives_up() {
+        let now = 1_800_000_000_000;
+        let first = ImageMiss::after_failure(None, false, now);
+        assert_eq!(
+            first,
+            ImageMiss::Later {
+                tries: 1,
+                retry_at_ms: now + 900_000
+            }
+        );
+        assert!(!first.due(now + 899_999));
+        assert!(first.due(now + 900_000));
+        let second = ImageMiss::after_failure(Some(first), false, now + 900_000);
+        assert_eq!(
+            second,
+            ImageMiss::Later {
+                tries: 2,
+                retry_at_ms: now + 900_000 + 1_800_000
+            }
+        );
+        assert_eq!(
+            ImageMiss::after_failure(Some(second), false, now),
+            ImageMiss::Gone
+        );
+        assert_eq!(ImageMiss::after_failure(None, true, now), ImageMiss::Gone);
+        assert!(!ImageMiss::Gone.due(u64::MAX));
+    }
+
+    #[test]
+    fn a_miss_marker_round_trips_and_a_damaged_one_means_gone() {
+        let later = ImageMiss::Later {
+            tries: 2,
+            retry_at_ms: 1_800_000_900_000,
+        };
+        assert_eq!(later.render(), "later 2 1800000900000\n");
+        assert_eq!(ImageMiss::parse(&later.render()), later);
+        assert_eq!(ImageMiss::Gone.render(), "gone\n");
+        assert_eq!(ImageMiss::parse("gone\n"), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse(""), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse("later 2"), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse("later x 5"), ImageMiss::Gone);
+        assert_eq!(ImageMiss::parse("later 1 5 junk"), ImageMiss::Gone);
+    }
+
+    #[test]
     fn pulse_pings_only_when_time_sensitive_never_in_game_and_three_a_day() {
         let ask = |time_sensitive, game_running, quiet_hours, day| PingAsk {
             time_sensitive,
@@ -2759,5 +3339,44 @@ mod tests {
         assert_eq!(gate.sent_on("2026-11-06"), 3);
         assert!(gate.take(&ask(true, false, false, "2026-11-07")));
         assert_eq!(gate.sent_on("2026-11-07"), 1);
+    }
+
+    #[test]
+    fn the_ping_gate_survives_a_save_and_a_new_day() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-ping-gate-{}-{}",
+            std::process::id(),
+            crate::new_token()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let mut gate = PingGate::default();
+        let ask = |day| PingAsk {
+            time_sensitive: true,
+            game_running: false,
+            quiet_hours: false,
+            day,
+        };
+        assert!(gate.take(&ask("2026-11-18")));
+        assert!(gate.take(&ask("2026-11-18")));
+        gate.save(&dir).expect("save");
+        let path = dir.join(PING_GATE_FILE);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            r#"{"day":"2026-11-18","sent":2}"#
+        );
+        let loaded = PingGate::load(&dir);
+        assert_eq!(loaded.sent_on("2026-11-18"), 2);
+        assert_eq!(loaded.sent_on("2026-11-19"), 0);
+        let mut next = loaded;
+        assert!(next.take(&ask("2026-11-19")));
+        assert_eq!(next.sent_on("2026-11-19"), 1);
+        assert_eq!(next.sent_on("2026-11-18"), 0);
+        // Broken or oversized files start a fresh day.
+        std::fs::write(&path, "not json").expect("write");
+        assert_eq!(PingGate::load(&dir), PingGate::default());
+        std::fs::write(&path, vec![b'x'; 5 * 1024]).expect("write");
+        assert_eq!(PingGate::load(&dir), PingGate::default());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

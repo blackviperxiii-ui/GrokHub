@@ -256,6 +256,12 @@ mod tests {
             "clone install must skip grim/ydotool sidecars, turn off the old cabin unit and enable the hub: {sh}"
         );
         assert!(
+            sh.contains(
+                r#"[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")""#
+            ),
+            "install.sh must resolve a relative CARGO_TARGET_DIR before cargo/tauri: {sh}"
+        );
+        assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
             "clone install must not hard-require pacman ydotool"
         );
@@ -281,41 +287,12 @@ mod tests {
             PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
             "leftover hands copy still mentions pyatspi"
         );
-        let bundle = include_str!("../../../scripts/make-release-bundle.sh");
-        assert!(
-            !bundle.contains("build-hands.sh")
-                && !bundle.contains("ydotoold.service")
-                && bundle.contains("grokhub-hub.service")
-                && bundle.contains("enable --now grokhub-hub.service")
-                && bundle.contains("release-binary-size-ceiling"),
-            "release tarball install must skip sidecars, keep cabin/hub, and size-check: {bundle}"
-        );
-        let ceiling = include_str!("../../../packaging/release-binary-size-ceiling");
-        let ceiling_bytes: u64 = ceiling
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty() && !line.starts_with('#'))
-            .and_then(|line| line.parse().ok())
-            .expect("packaging/release-binary-size-ceiling must name a byte count");
-        assert!(
-            (1_048_576..=209_715_200).contains(&ceiling_bytes),
-            "release size ceiling must stay a plausible binary size: {ceiling_bytes}"
-        );
-        assert!(
-            !bundle.contains("sudo pacman -S --needed ydotool"),
-            "release tarball must not hard-require pacman ydotool"
-        );
-        let aur_install = include_str!("../../../packaging/aur/grokhub.install");
+        let aur_install =
+            include_str!("../../../packaging/aur/grokhub.install").replace("\r\n", "\n");
         assert!(
             aur_install.contains("update-desktop-database")
-                && aur_install.contains("Run:    grokhub"),
-            "AUR post_install refreshes the menu and names the cabin: {aur_install}"
-        );
-        let iss = include_str!("../../../packaging/windows/grokhub.iss");
-        assert!(
-            iss.contains(r#"Source: "stage\grokhub.exe"; DestDir: "{app}""#)
-                && iss.contains(r#"Source: "stage\grokhub-hub.exe"; DestDir: "{app}""#),
-            "Windows Setup installs the cabin and hub: {iss}"
+                && aur_install.contains("Run:    grokhub-shell\n"),
+            "AUR post_install refreshes the menu and names the desktop app: {aur_install}"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
@@ -331,36 +308,258 @@ mod tests {
     /// running binary, so both PKGBUILDs must rewrite the relative Exec.
     #[test]
     fn pkgbuilds_install_desktop_entry_with_absolute_exec() {
-        let rewrite = "sed -e 's|^Exec=grokhub$|Exec=/usr/bin/grokhub|' \\\n      -e 's|^TryExec=grokhub$|TryExec=/usr/bin/grokhub|' \\\n      packaging/grokhub.desktop >";
+        let rewrite = "sed -e 's|^Exec=grokhub-shell$|Exec=/usr/bin/grokhub-shell|' \\\n      -e 's|^TryExec=grokhub-shell$|TryExec=/usr/bin/grokhub-shell|' \\\n      packaging/grokhub-shell.desktop >";
         for (name, pkg, dest) in [
             (
                 "packaging/PKGBUILD",
                 include_str!("../../../packaging/PKGBUILD"),
-                "\"$pkgdir/usr/share/applications/grokhub.desktop\"",
+                "\"$pkgdir/usr/share/applications/grokhub-shell.desktop\"",
             ),
             (
                 "packaging/aur/PKGBUILD",
                 include_str!("../../../packaging/aur/PKGBUILD"),
-                "\"${pkgdir}/usr/share/applications/grokhub.desktop\"",
+                "\"${pkgdir}/usr/share/applications/grokhub-shell.desktop\"",
             ),
         ] {
             let pkg = pkg.replace("\r\n", "\n");
             assert!(
                 pkg.contains(&format!("{rewrite}{dest}\n")),
-                "{name} must write Exec=/usr/bin/grokhub"
+                "{name} must write Exec=/usr/bin/grokhub-shell"
             );
             assert!(
-                !pkg.contains("install -Dm644 packaging/grokhub.desktop"),
+                !pkg.contains("install -Dm644 packaging/grokhub-shell.desktop"),
                 "{name} must not install the relative-Exec .desktop unchanged"
             );
         }
-        let desktop = include_str!("../../../packaging/grokhub.desktop").replace("\r\n", "\n");
+        let desktop =
+            include_str!("../../../packaging/grokhub-shell.desktop").replace("\r\n", "\n");
         let lines: Vec<&str> = desktop.lines().collect();
         assert!(lines.contains(&"X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
         assert!(
-            lines.contains(&"Exec=grokhub"),
+            lines.contains(&"Exec=grokhub-shell"),
             "the PKGBUILD sed matches this exact line"
         );
-        assert!(lines.contains(&"TryExec=grokhub"));
+        assert!(lines.contains(&"TryExec=grokhub-shell"));
+    }
+
+    /// KWin's ScreenShot2 check reads the caller's binary from procfs and
+    /// grants the call when an entry's `Exec` canonicalizes to that path. This
+    /// runs install.sh's own `install_desktop_entry` into a temp prefix and
+    /// checks the entry it writes matches the installed binary that way.
+    /// Linux only: install.sh is, and it uses GNU `install -D`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn install_sh_desktop_entry_matches_the_binary_the_way_kwin_does() {
+        let script = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
+        let start = script
+            .find("install_desktop_entry() {\n")
+            .expect("install.sh defines install_desktop_entry");
+        let end = start + script[start..].find("\n}\n").expect("function end") + 3;
+        let function = &script[start..end];
+        let prefix =
+            std::env::temp_dir().join(format!("grokhub-kwin-entry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&prefix);
+        let bin = prefix.join("bin/grokhub-shell");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "").unwrap();
+        let entry = prefix.join("share/applications/grokhub-shell.desktop");
+        let src = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/grokhub-shell.desktop"
+        );
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "set -euo pipefail\n{function}install_desktop_entry \"$1\" \"$2\" \"$3\""
+            ))
+            .arg("bash")
+            .arg(src)
+            .arg(&entry)
+            .arg(&bin)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let text = std::fs::read_to_string(&entry).unwrap();
+        let exec = text
+            .lines()
+            .find_map(|line| line.strip_prefix("Exec="))
+            .expect("Exec line");
+        assert_eq!(exec, bin.display().to_string());
+        assert_eq!(
+            Path::new(exec.split_whitespace().next().unwrap())
+                .canonicalize()
+                .unwrap(),
+            bin.canonicalize().unwrap()
+        );
+        assert!(text
+            .lines()
+            .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
+        assert_eq!(
+            text.lines().find_map(|line| line.strip_prefix("TryExec=")),
+            Some(bin.display().to_string().as_str())
+        );
+        let _ = std::fs::remove_dir_all(&prefix);
+    }
+
+    /// Both recipes build the Tauri shell and the hub the way install.sh
+    /// does, never the removed cabin crate, and point the packaged hub unit
+    /// at /usr/bin.
+    #[test]
+    fn pkgbuilds_build_and_install_the_shell_and_hub() {
+        // Each build step as the recipes write it, next to the same step in
+        // install.sh (which adds the channel and absolute paths). A change to
+        // either side fails here until the other follows.
+        let shared_steps = [
+            (
+                "cargo build --release --locked -p grokhub-hub",
+                r#"GROKHUB_CHANNEL="$CHANNEL" cargo build --release --locked -p grokhub-hub"#,
+            ),
+            ("npm ci --prefix ui", r#"npm ci --prefix "$ROOT/ui""#),
+            (
+                "ui/node_modules/.bin/tauri build --no-bundle -- --locked",
+                r#"GROKHUB_CHANNEL="$CHANNEL" "$ROOT/ui/node_modules/.bin/tauri" build --no-bundle -- --locked"#,
+            ),
+        ];
+        let install_sh = include_str!("../../../scripts/install.sh").replace("\r\n", "\n");
+        let install_steps: Vec<&str> = install_sh
+            .lines()
+            .map(str::trim)
+            .filter(|l| {
+                l.contains("cargo build") || l.contains("npm ci") || l.contains("build --no-bundle")
+            })
+            .filter(|l| !l.starts_with('#') && !l.starts_with("echo"))
+            .collect();
+        assert_eq!(
+            install_steps,
+            shared_steps.map(|(_, sh)| sh),
+            "scripts/install.sh build steps changed: update both PKGBUILDs to match"
+        );
+        for (name, pkg, pkgdir, cd) in [
+            (
+                "packaging/PKGBUILD",
+                include_str!("../../../packaging/PKGBUILD"),
+                "$pkgdir",
+                // The local recipe builds the clone it sits in.
+                r#"cd "$startdir/..""#,
+            ),
+            (
+                "packaging/aur/PKGBUILD",
+                include_str!("../../../packaging/aur/PKGBUILD"),
+                "${pkgdir}",
+                // The AUR recipe builds the tag makepkg checked out.
+                r#"cd "${srcdir}/${pkgname}""#,
+            ),
+        ] {
+            let pkg = pkg.replace("\r\n", "\n");
+            let build = pkg
+                .split("build() {\n")
+                .nth(1)
+                .and_then(|rest| rest.split("\n}\n").next())
+                .unwrap_or_else(|| panic!("{name} has no build()"));
+            let steps: Vec<&str> = build
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            assert_eq!(
+                steps,
+                [
+                    cd,
+                    r#"[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")""#,
+                    shared_steps[0].0,
+                    shared_steps[1].0,
+                    shared_steps[2].0,
+                ],
+                "{name} build() must match scripts/install.sh"
+            );
+            for line in [
+                // src-tauri is its own workspace: the shell is not under target/.
+                "local hub=\"${CARGO_TARGET_DIR:-target}/release\"".to_string(),
+                "local shell=\"${CARGO_TARGET_DIR:-src-tauri/target}/release\"".to_string(),
+                format!("install -Dm755 \"$shell/grokhub-shell\" \"{pkgdir}/usr/bin/grokhub-shell\""),
+                format!("install -Dm755 \"$hub/grokhub-hub\" \"{pkgdir}/usr/bin/grokhub-hub\""),
+                format!("install -Dm755 \"$hub/grokhub\" \"{pkgdir}/usr/bin/grokhub\""),
+                "sed -e 's|^ExecStart=%h/.local/bin/grokhub-hub$|ExecStart=/usr/bin/grokhub-hub|' \\".to_string(),
+                "for icon in packaging/icons/hicolor/*/apps/*; do".to_string(),
+                format!(
+                    "install -Dm644 \"$icon\" \"{pkgdir}/usr/share/icons/hicolor/${{icon#packaging/icons/hicolor/}}\""
+                ),
+                format!("packaging/systemd/grokhub-hub.service >\"{pkgdir}/usr/lib/systemd/user/grokhub-hub.service\""),
+            ] {
+                assert!(
+                    pkg.lines().any(|l| l.trim() == line),
+                    "{name} must contain {line:?}"
+                );
+            }
+            assert_eq!(
+                pkg.lines().filter(|l| l.trim() == cd).count(),
+                2,
+                "{name}: build() and package() both start with {cd:?}"
+            );
+            for dep in ["'webkit2gtk-4.1'", "'libayatana-appindicator'"] {
+                let depends = pkg
+                    .lines()
+                    .find(|l| l.starts_with("depends=("))
+                    .unwrap_or_else(|| panic!("{name} has no depends"));
+                assert!(depends.contains(dep), "{name} depends needs {dep}");
+            }
+            for dep in ["'nodejs'", "'npm'"] {
+                let make = pkg
+                    .lines()
+                    .find(|l| l.starts_with("makedepends=("))
+                    .unwrap_or_else(|| panic!("{name} has no makedepends"));
+                assert!(make.contains(dep), "{name} makedepends needs {dep}");
+            }
+            assert!(
+                !pkg.contains("cp -a"),
+                "{name}: cp -a would record the build user as the owner"
+            );
+            assert!(
+                !pkg.contains("grokhub-app"),
+                "{name} names the removed cabin crate"
+            );
+        }
+        let unit =
+            include_str!("../../../packaging/systemd/grokhub-hub.service").replace("\r\n", "\n");
+        assert!(
+            unit.lines()
+                .any(|l| l == "ExecStart=%h/.local/bin/grokhub-hub"),
+            "the PKGBUILD sed matches this exact line: {unit}"
+        );
+    }
+
+    /// A relative CARGO_TARGET_DIR must become absolute before cargo/tauri run,
+    /// otherwise the shell build (cwd src-tauri) and the install paths disagree.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn install_sh_resolves_relative_cargo_target_dir_absolute() {
+        let root =
+            std::env::temp_dir().join(format!("grokhub-cargo-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"set -euo pipefail
+cd "$1"
+CARGO_TARGET_DIR=rel-out
+[[ -z "${CARGO_TARGET_DIR:-}" ]] || export CARGO_TARGET_DIR="$(realpath -m "$CARGO_TARGET_DIR")"
+case "$CARGO_TARGET_DIR" in
+  /*) ;;
+  *) echo "expected absolute, got $CARGO_TARGET_DIR" >&2; exit 1 ;;
+esac
+test "$CARGO_TARGET_DIR" = "$1/rel-out"
+TARGET="${CARGO_TARGET_DIR:-$1/target}"
+SHELL_TARGET="${CARGO_TARGET_DIR:-$1/src-tauri/target}"
+test "$TARGET" = "$CARGO_TARGET_DIR"
+test "$SHELL_TARGET" = "$CARGO_TARGET_DIR"
+"#,
+            )
+            .arg("bash")
+            .arg(&root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

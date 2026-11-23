@@ -61,7 +61,7 @@ impl Report {
             Verdict::Paused(why) => format!("The model is paused because {why}. It comes back by itself."),
             Verdict::Breaker(why) => format!("{}.", capital(why)),
             Verdict::StartFailed(why) => format!(
-                "The model is on disk, but it didn't start: {why}. It tries again on the next message."
+                "The model is on disk, but it didn't start: {why}. It tries again on your next message."
             ),
         }
     }
@@ -151,12 +151,13 @@ fn name(p: &Path) -> String {
         .unwrap_or_else(|| p.display().to_string())
 }
 
-/// The raw pick in `local_ai.json`, when one is set.
-fn raw_pick(config_dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(config_dir.join("local_ai.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let pick = v.get("localModel")?.get("selected")?.as_str()?.trim();
-    (!pick.is_empty()).then(|| pick.to_string())
+/// How many model files the user added in `local_ai.json` (`ownFiles`).
+fn added_files(config_dir: &Path) -> usize {
+    std::fs::read_to_string(config_dir.join("local_ai.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("ownFiles")?.as_array().map(Vec::len))
+        .unwrap_or(0)
 }
 
 /// What the models folders hold, one line each.
@@ -236,12 +237,14 @@ pub fn diagnose(config_dir: &Path) -> Report {
         None => "Engine: llama-server not found in the app's bin folder or on PATH.".into(),
     });
     folder_facts(config_dir, &mut facts);
-    let pick = raw_pick(config_dir);
-    let picked = local_sidecar::picked_model(config_dir);
-    if let Some(p) = &pick {
-        facts.push(match &picked {
-            Some(f) => format!("Picked model: {}.", f.display()),
-            None => format!("Picked model {p} isn't on disk, so the engine looks for another."),
+    let added = added_files(config_dir);
+    if added > 0 {
+        facts.push(match local_sidecar::own_model(config_dir) {
+            Some(f) => format!(
+                "Added model file: {} (loads when no downloaded model is there).",
+                f.display()
+            ),
+            None => format!("None of the {added} added model file(s) is on disk."),
         });
     }
     let model = local_sidecar::find_model(config_dir);
@@ -250,13 +253,7 @@ pub fn diagnose(config_dir: &Path) -> Report {
         None => "The engine finds no chat model to load.".into(),
     });
     if let Some((drafter, decision)) = local_spec::draft_status() {
-        facts.push(match decision {
-            ld::Decision::On => format!("Draft model {drafter}: on."),
-            ld::Decision::Off(why) => format!("Draft model {drafter}: off, because {why}."),
-            ld::Decision::NeedsTest => {
-                format!("Draft model {drafter}: waiting for its speed test.")
-            }
-        });
+        facts.push(draft_fact(&drafter, decision));
     }
     let start_error = local::start_failure();
     if let Some(e) = &start_error {
@@ -318,9 +315,45 @@ pub fn note(report: &Report) -> String {
     )
 }
 
+/// The check's line for the running model's drafter and its decision.
+fn draft_fact(drafter: &str, decision: ld::Decision) -> String {
+    match decision {
+        ld::Decision::On => format!("Draft model {drafter}: on."),
+        ld::Decision::Off(why) => format!("Draft model {drafter}: off, because {why}."),
+        ld::Decision::NeedsTest => format!("Draft model {drafter}: on; speed test pending."),
+        ld::Decision::NoRoom => {
+            format!("Draft model {drafter}: no room beside the model, so a smaller model runs.")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_draft_line_says_on_off_pending_or_no_room() {
+        let d = "Gemma 4 12B draft model";
+        assert_eq!(
+            draft_fact(d, ld::Decision::On),
+            "Draft model Gemma 4 12B draft model: on."
+        );
+        assert_eq!(
+            draft_fact(
+                d,
+                ld::Decision::Off("the speed test found the draft model didn't help")
+            ),
+            "Draft model Gemma 4 12B draft model: off, because the speed test found the draft model didn't help."
+        );
+        assert_eq!(
+            draft_fact(d, ld::Decision::NeedsTest),
+            "Draft model Gemma 4 12B draft model: on; speed test pending."
+        );
+        assert_eq!(
+            draft_fact(d, ld::Decision::NoRoom),
+            "Draft model Gemma 4 12B draft model: no room beside the model, so a smaller model runs."
+        );
+    }
 
     #[test]
     fn asks_about_the_local_model_get_the_check_and_others_dont() {
@@ -350,11 +383,11 @@ mod tests {
         };
         assert_eq!(
             r.summary(),
-            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on the next message."
+            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on your next message."
         );
         assert_eq!(
             r.text(),
-            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on the next message.\nWhat the check read:\n- Engine: /bin/llama-server."
+            "The model is on disk, but it didn't start: the draft model's tokenizer doesn't match. It tries again on your next message.\nWhat the check read:\n- Engine: /bin/llama-server."
         );
         let n = note(&r);
         assert!(n.starts_with(NOTE_OPENS), "{n}");

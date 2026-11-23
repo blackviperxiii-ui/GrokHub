@@ -1,11 +1,14 @@
 import {
+  Fragment,
   memo,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import {
   addAutomation,
@@ -13,14 +16,15 @@ import {
   codeSessionPlan,
   answerPermission,
   cancelChat,
+  chatPicture,
   closeChat,
-  deleteChat,
+  clearChat,
   exportChat,
   forgetMessage,
   composerGhostSuggest,
   getBehavior,
   getHangoutMode,
-  getLastChat,
+  getStartChat,
   getSettings,
   helperQuestions,
   loadChat,
@@ -28,6 +32,8 @@ import {
   onEventGap,
   readTurn,
   replyPick,
+  commandBoxApprove,
+  hubSendApprove,
   runSlash,
   saveSettings,
   sendChat,
@@ -39,6 +45,7 @@ import {
   type ChatEvent,
   type ElicitAction,
   type HangoutMode,
+  type HubSend,
   type SavedFile,
   type SessionMode,
   type Settings,
@@ -48,6 +55,7 @@ import {
   type Transcript,
   type TurnRead,
 } from "./api";
+import { GameNote, useNoteStatus } from "./GameNote";
 import { ChipRow, useChipRow } from "./Chips";
 import { ChatTabs, HangoutHeader } from "./ChatTabs";
 import { GoalAsk } from "./Goals";
@@ -66,15 +74,18 @@ import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
 import { appendDraft, Mic } from "./Mic";
-import { useVoiceMode, VoiceButton } from "./VoiceMode";
+import { useVoiceMode, VoiceButton, VoiceCaption, VoiceLine } from "./VoiceMode";
 import { ElicitCard, type ElicitItem } from "./Modes";
 import { SIDE_MARK, SideCards, withSide, type Side } from "./Side";
-import { NyxDock } from "./NyxDock";
+import { DOCK_MIN_WIDTH, NyxDock, SIDE_MIN_WIDTH } from "./NyxDock";
+import { useMinWidth } from "./useMinWidth";
 import { NyxFace } from "./NyxFace";
 import { Orb, orbFor, orbLabel } from "./Orb";
 import { activityOf, useNyx } from "./nyx";
 import { PRODUCT_NAME } from "./brand";
-import { isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
+import { isShellLine, isSlashCommand, SlashMenu, useSlashHits } from "./SlashMenu";
+import { COMMAND_DESTRUCTIVE, COMMAND_FIRST } from "./commandText";
+import { shownText } from "./shellLine";
 import {
   acceptSuggestion,
   cursorAtEnd,
@@ -88,15 +99,44 @@ import { settingAsk } from "./autoSetupApi";
 import { Episode } from "./Episode";
 import { ScreenshotOffer } from "./ScreenshotOffer";
 import { openImport } from "./onboardApi";
-import { EvidenceCard, FindingsCard, RecapCard } from "./TurnExtras";
+import { EvidenceCard, FindingsCard, ModelLine, RecapCard } from "./TurnExtras";
 import { Inbox } from "./Inbox";
+import { desktopNyxLook, desktopNyxTalk } from "./desktopNyxApi";
+import { inShell } from "./transport";
+import { deskLook, deskSpeaker, leaveDesk, updateDesk } from "./nyxLife";
 import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
+import { DeviceGlanceRow } from "./DeviceGlance";
+import { PanelCard, panelActionText } from "./PanelCard";
+import { ChatFindBar } from "./ChatFindBar";
+import { findLabel, findRows, findStep, itemText } from "./chatFind";
+import { scrubHeld } from "./heldScrub";
+import { dialogOpen, isChatShortcut } from "./chatKeys";
+import { splitSources } from "./replySources";
+import { SourceChips } from "./SourceChips";
+import {
+  collapseAll,
+  COLLAPSE,
+  expandOne,
+  EXPAND,
+  foldOf,
+  onlyFoldsChanged,
+  startsCollapsed,
+  THOUGHT_LABEL,
+  THOUGHT_ROW_LABEL,
+  type Fold,
+} from "./thoughts";
 
 export type Item =
-  | { kind: "user"; text: string }
+  /** `sent` is what went to the model when the bubble shows something else:
+   * a shell line's message, shown as `$ <line>`. */
+  | { kind: "user"; text: string; sent?: string }
   | { kind: "assistant"; text: string; streaming: boolean }
-  | { kind: "tool"; id: string; title: string; status: string; detail: string }
+  /** The model's thinking before or between replies. `fold` is set once the
+   * person collapses or expands it (thoughts.ts). The chat saves its text,
+   * never its fold. */
+  | { kind: "thought"; text: string; fold?: Fold }
+  | { kind: "tool"; id: string; title: string; status: string; detail: string; picture?: string }
   | {
       kind: "permission";
       id: string;
@@ -108,6 +148,8 @@ export type Item =
       answer: Answer | Ended | null;
       /** A helper asked; it waits past the end of the reply. */
       helper?: boolean;
+      /** It asks every time whatever Settings says (the Claude plan). */
+      asksEveryTime?: boolean;
     }
   /** A saved chat's tool steps, named on one muted line instead of cards. */
   | { kind: "tools"; text: string }
@@ -119,12 +161,23 @@ export type Item =
   | { kind: "saved"; saved: SavedFile }
   /** A destructive slash command asks first; Yes runs `yes`. */
   | { kind: "confirm"; command: string; prompt: string; yes: string }
+  /** A `/sh` or `$ ` line asks first. Its Yes is the Command page's, which
+   * runs the checks again; no typed line can stand in for it. */
+  | { kind: "shell"; line: string; destructive: boolean; secret: boolean }
+  /** `/sync` or `/inhabit` asks before anything leaves this computer. Its
+   * Send is the hub's own command, which checks again. */
+  | { kind: "hub"; command: string; send: HubSend; prompt: string; note: string }
+  /** A show_panel panel. Dismissed stays in the list, so the same panel
+   * sent again stays hidden; a changed one comes back. */
+  | (Extract<ChatEvent, { kind: "panel" }> & { dismissed?: boolean })
   /** A report_findings card under the reply (Order 733). */
   | Extract<ChatEvent, { kind: "findings" }>
   /** The reply's Finished block as a card (Order 733). */
   | Extract<ChatEvent, { kind: "recap" }>
   /** The evidence receipt for the turn that just ended (Order 733). */
   | Extract<ChatEvent, { kind: "evidence" }>
+  /** Which on-device model answered the reply above, and why. Never saved. */
+  | Extract<ChatEvent, { kind: "modelLine" }>
   | ElicitItem;
 
 type Ended = "ended" | "halted";
@@ -141,6 +194,13 @@ export interface QueueAct {
 }
 
 /** Text to put back in the box, after what is typed there. */
+/** The log row a find match is on: each row sits right after its hidden
+ * `data-row` marker. */
+function findRow(log: HTMLElement, i: number): Element | null {
+  const next = log.querySelector(`[data-row="${i}"]`)?.nextElementSibling;
+  return next && !next.hasAttribute("data-row") ? next : null;
+}
+
 function withQueued(draft: string, texts: readonly string[]): string {
   const back = texts.join("\n\n");
   return draft.trim() ? `${draft.trimEnd()}\n\n${back}` : back;
@@ -219,6 +279,7 @@ export function itemsFrom(transcript: Transcript): Item[] {
   return transcript.lines.map((line): Item => {
     if (line.role === "user") return { kind: "user", text: line.text };
     if (line.role === "tools") return { kind: "tools", text: line.text };
+    if (line.role === "thought") return { kind: "thought", text: line.text };
     return { kind: "assistant", text: line.text, streaming: false };
   });
 }
@@ -230,10 +291,25 @@ export const OPEN_BUSY = "A reply is still running. Stop it or wait, then open t
 
 export const EVENTS_LOST = `Lost touch with ${PRODUCT_NAME} on your computer for a while. Part of this reply may be missing.`;
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
+/** How long a chat picked while a finished reply wraps up waits quietly
+ * before it says the reply still runs. */
+const OPEN_WAIT_MS = 2000;
+/** Drops a "reply is still running" error once the reply is over. */
+function stillBusy(now: string | null) {
+  return now === OPEN_BUSY || now === MISSION_BUSY ? null : now;
+}
 /** Slash lines that leave the running reply alone, so they run beside it. */
-const BESIDE_REPLY = /^\/(queue|bg|background|send|consult)(\s|$)/i;
+const BESIDE_REPLY = /^\/(queue|bg|background|send|consult|deep-research)(\s|$)/i;
 /** Every other slash line typed during a reply stays in the box with this. */
 export const SLASH_WAITS = "That command waits for the reply. /stop ends it.";
+/** A `/sh` card's question for a line that asks every time. */
+export const SHELL_ASK = "Run this command?";
+/** Under a `/sh` card: where the line runs, and that it is remembered. */
+export const SHELL_NOTE =
+  "It goes to the agent, which runs it in the project folder with the usual approvals. After a yes, this exact line runs without asking here again.";
+/** Under a `/sh` card for a line with a key or token in it. */
+export const SHELL_SECRET =
+  "This line has a key or token in it. It goes to the model and stays in this chat, so it asks every time.";
 /** The web app has no /stop. */
 export const SLASH_WAITS_REMOTE = "That command waits for the reply.";
 /** Enter again on a slash line whose answer is still out. */
@@ -245,8 +321,20 @@ function runsBesideReply(line: string, remote?: boolean): boolean {
   return (/^\/(stop|undo)$/i.test(line) && !remote) || BESIDE_REPLY.test(line);
 }
 
-export function newConversationId(): string {
-  return `shell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+/** A scratch chat's id starts `shell-scratch-` (`grokhub_agent::scratch`):
+ * the engine reads no memory into it and writes none from it. */
+export function newConversationId(scratch = false): string {
+  return `shell-${scratch ? "scratch-" : ""}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** What `/scratch` says once its chat opens. */
+export const SCRATCH_NOTE = "Scratch chat: it doesn't read your memory, and nothing said here is saved to it.";
+
+/** The line a scratch chat keeps above its log, reopened or not. */
+export const SCRATCH_MARK = "Scratch chat · no memory read or saved";
+
+export function isScratchChat(conversationId: string): boolean {
+  return conversationId.trimStart().startsWith("shell-scratch-");
 }
 
 /** Folds one engine event into the log. Errors and Done are handled by the caller. */
@@ -258,6 +346,18 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
         return [...items.slice(0, -1), { ...last, text: last.text + event.text }];
       }
       return [...items, { kind: "assistant", text: event.text, streaming: true }];
+    }
+    // Thinking streams into the thought just above, until a tool card or
+    // anything else comes between; then a new thought starts. Thinking that
+    // lands mid-reply (a resume or rate-wait note) goes above the streaming
+    // reply, so the reply stays one bubble for its next words and its recap.
+    case "thought": {
+      const at = liveStart(items);
+      const above = items[at - 1];
+      if (above?.kind === "thought") {
+        return [...items.slice(0, at - 1), { ...above, text: above.text + event.text }, ...items.slice(at)];
+      }
+      return [...items.slice(0, at), { kind: "thought", text: event.text }, ...items.slice(at)];
     }
     case "tool": {
       const card: Item = { ...event };
@@ -277,9 +377,38 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
+    // One card per panel id: a new spec replaces it in place.
+    case "panel": {
+      // A new spec for a panel id replaces its card, but only within this
+      // turn: a provider that sends no call ids gives every panel the same
+      // id ("tool-show_panel"), and an earlier turn's card must stay.
+      let at = -1;
+      for (let i = items.length - 1; i >= 0 && items[i].kind !== "user"; i--) {
+        const item = items[i];
+        if (item.kind === "panel" && item.id === event.id) {
+          at = i;
+          break;
+        }
+      }
+      if (at < 0) return [...items, { ...event }];
+      const was = items[at];
+      if (was.kind === "panel" && JSON.stringify(was.spec) === JSON.stringify(event.spec)) return items;
+      return items.map((item, i) => (i === at ? { ...event } : item));
+    }
     case "findings":
     case "evidence":
       return [...items, { ...event }];
+    // The model line sits right under the reply it names.
+    case "modelLine": {
+      let at = items.length;
+      for (let i = items.length - 1; i >= 0 && items[i].kind !== "user"; i--) {
+        if (items[i].kind === "assistant") {
+          at = i + 1;
+          break;
+        }
+      }
+      return [...items.slice(0, at), { ...event }, ...items.slice(at)];
+    }
     // The Finished block leaves the bubble for its card: the last reply's
     // text becomes the reply without the block.
     case "recap": {
@@ -304,12 +433,20 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
   }
 }
 
-/** Adds a command's line to the log. A reply that is streaming stays the last
- * item, so its next words join the same bubble: the line goes just above it. */
-function withNotice(items: Item[], notice: Item): Item[] {
+/** Where the live end of the log starts: the reply that is streaming, or the
+ * end when none is. Thinking and command lines go just above it. */
+function liveStart(items: Item[]): number {
   const last = items[items.length - 1];
-  if (last?.kind === "assistant" && last.streaming) return [...items.slice(0, -1), notice, last];
-  return [...items, notice];
+  return last?.kind === "assistant" && last.streaming ? items.length - 1 : items.length;
+}
+
+/** Adds a command's line to the log. A reply that is streaming stays the last
+ * item, so its next words join the same bubble, and the thought being written
+ * stays last, so its next words join the same thought: the line goes above both. */
+function withNotice(items: Item[], notice: Item): Item[] {
+  let at = liveStart(items);
+  if (items[at - 1]?.kind === "thought") at -= 1;
+  return [...items.slice(0, at), notice, ...items.slice(at)];
 }
 
 /** The turn ended: stop streaming, and retire cards nobody answered. A
@@ -329,6 +466,15 @@ export function withHelperAsk(items: Item[], event: ChatEvent): Item[] {
   if (event.kind !== "permission" && event.kind !== "elicit") return items;
   const shown = items.some((item) => (item.kind === "permission" || item.kind === "elicit") && item.id === event.id);
   return shown ? items : [...items, { ...event, answer: null, helper: true }];
+}
+
+/** A report written into the chat from this computer (a screen
+ * recording's): it reads as Grok's message, as it does when the chat opens.
+ * A reply that is streaming stays last, so its next words join its bubble. */
+export function withHelperEvent(items: Item[], event: ChatEvent): Item[] {
+  if (event.kind === "report") return withNotice(items, { kind: "assistant", text: event.text, streaming: false });
+  if (event.kind === "confirm") return withNotice(items, { ...event });
+  return withHelperAsk(items, event);
 }
 
 /** Halt ended the turn: its cards read halted, and one line says so. */
@@ -396,14 +542,59 @@ const AssistantBubble = memo(function AssistantBubble({
   onMenu?: MenuAt;
 }) {
   // Capped like the cabin's bubble, so a runaway stream can't stall the page.
+  const shown = displayText(text);
+  // A list is only trailing once the reply stops, so it splits after the stream.
+  const split = streaming ? null : splitSources(shown);
   return (
     <div
       className={`bubble assistant${streaming ? " streaming" : ""}`}
       data-role="assistant"
       onContextMenu={contextMenuAt(onMenu)}
     >
-      <Markdown text={displayText(text)} />
+      {split ? (
+        <>
+          {split.answer && <Markdown text={split.answer} />}
+          <SourceChips sources={split.sources} />
+        </>
+      ) : (
+        <Markdown text={shown} />
+      )}
       {onMenu && <MoreButton onMenu={onMenu} />}
+    </div>
+  );
+});
+
+/** One thought: open with its text and Collapse, or one folded row with Expand. */
+const ThoughtCard = memo(function ThoughtCard({
+  text,
+  fold,
+  onFold,
+}: {
+  text: string;
+  fold: Fold;
+  onFold: (fold: Fold) => void;
+}) {
+  if (fold === "minimized") {
+    return (
+      <div className="thought minimized" data-role="thought">
+        <span className="thought-label">{THOUGHT_ROW_LABEL}</span>
+        <button type="button" className="link thought-fold" aria-expanded={false} onClick={() => onFold("expanded")}>
+          {EXPAND}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="thought" data-role="thought">
+      <div className="thought-head">
+        <span className="thought-label">{THOUGHT_LABEL}</span>
+        <button type="button" className="link thought-fold" aria-expanded={true} onClick={() => onFold("minimized")}>
+          {COLLAPSE}
+        </button>
+      </div>
+      <div className="thought-body">
+        <Markdown text={displayText(text)} />
+      </div>
     </div>
   );
 });
@@ -412,15 +603,34 @@ const ToolCard = memo(function ToolCard({
   title,
   status,
   detail,
+  picture,
 }: {
   title: string;
   status: string;
   detail?: string;
+  /** The made picture's file; shown above the detail once it loads. */
+  picture?: string;
 }) {
+  const [shown, setShown] = useState<{ path: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!picture) return;
+    let live = true;
+    chatPicture(picture).then(
+      (url) => {
+        if (live) setShown({ path: picture, url });
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [picture]);
+  const url = shown && shown.path === picture ? shown.url : null;
   return (
     <div className="card tool" data-status={status}>
       <span className="card-title">{title}</span>
       <span className="card-status">{status}</span>
+      {url && <img className="card-picture" src={url} alt="The picture this made" />}
       {detail && <pre className="card-detail">{detail}</pre>}
     </div>
   );
@@ -458,7 +668,7 @@ function PermissionCard({
         <p className="card-answer">{ANSWERED[item.answer]}</p>
       ) : (
         <div className="card-buttons">
-          <button type="button" onClick={() => onAnswer("allow")}>
+          <button type="button" className="cta" onClick={() => onAnswer("allow")}>
             Allow once
           </button>
           {!merge && (
@@ -497,13 +707,21 @@ function LogItem({
   onAnswerCard,
   onConfirm,
   onStopAsking,
+  onPanelAction,
+  onPanelDismiss,
   onFix,
   onChipPick,
   nyxUrl,
   editable,
+  thoughtsFolded,
+  onFold,
 }: {
   item: Item;
   busy: boolean;
+  /** New thoughts in this chat start folded (thoughts.ts startsCollapsed). */
+  thoughtsFolded: boolean;
+  /** Collapse or Expand on this item's thought. */
+  onFold: (fold: Fold) => void;
   /** The agent window: a plan card can be edited and sent back. */
   editable: boolean;
   /** The bubble's Delete message… menu; absent where it can't be offered. */
@@ -518,6 +736,10 @@ function LogItem({
   onStopAsking?: (id: string) => void;
   /** A findings pill: put the fix in the composer, unsent. */
   onFix: (text: string) => void;
+  /** A panel button: the chat sends its action as the next turn. */
+  onPanelAction: (panelId: string, action: string) => void;
+  /** Hides this row's card; rows, not ids, since ids can repeat across turns. */
+  onPanelDismiss: () => void;
   /** A reply chip was picked; the shell remembers it for the next card. */
   onChipPick: (key: string) => void;
 }) {
@@ -536,14 +758,16 @@ function LogItem({
         );
       return <AssistantBubble text={item.text} streaming={Boolean(item.streaming)} onMenu={menu} />;
     }
+    case "thought":
+      return <ThoughtCard text={item.text} fold={foldOf(item.fold, thoughtsFolded)} onFold={onFold} />;
     case "tool":
-      return <ToolCard title={item.title} status={item.status} detail={item.detail} />;
+      return <ToolCard title={item.title} status={item.status} detail={item.detail} picture={item.picture} />;
     case "permission":
       return (
         <PermissionCard
           item={item}
           onAnswer={(a) => onAnswer(item.id, a)}
-          onStopAsking={onStopAsking && (() => onStopAsking(item.id))}
+          onStopAsking={onStopAsking && !item.asksEveryTime ? () => onStopAsking(item.id) : undefined}
         />
       );
     case "elicit":
@@ -556,17 +780,69 @@ function LogItem({
           onChipPick={onChipPick}
         />
       );
+    case "panel":
+      return item.dismissed ? null : (
+        <PanelCard
+          id={item.id}
+          spec={item.spec}
+          onAction={(action) => onPanelAction(item.id, action)}
+          onDismiss={onPanelDismiss}
+        />
+      );
     case "findings":
       return <FindingsCard event={item} onFix={onFix} />;
     case "recap":
       return <RecapCard event={item} />;
     case "evidence":
       return <EvidenceCard event={item} />;
+    case "modelLine":
+      return <ModelLine text={item.text} />;
     case "slash":
       return (
         <div className="card notice slash-notice" role="status" aria-label={`${item.command} result`}>
           <span className="card-title">{item.command}</span>
           <p className="card-detail-line plain">{item.text}</p>
+        </div>
+      );
+    case "shell":
+      return (
+        <div className="card notice slash-notice" role="group" aria-label="/sh asks first">
+          <span className="card-title">/sh</span>
+          <p className="card-detail-line plain">{item.destructive || item.secret ? SHELL_ASK : COMMAND_FIRST}</p>
+          <pre className="card-detail-line">
+            <code>$ {item.line}</code>
+          </pre>
+          <p className="card-detail-line plain">
+            {item.secret ? SHELL_SECRET : item.destructive ? COMMAND_DESTRUCTIVE : SHELL_NOTE}
+          </p>
+          <div className="card-buttons">
+            <button
+              type="button"
+              className={item.destructive ? "quiet danger" : "quiet"}
+              onClick={() => onConfirm(item, true)}
+            >
+              Run
+            </button>
+            <button type="button" onClick={() => onConfirm(item, false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    case "hub":
+      return (
+        <div className="card notice slash-notice" role="group" aria-label={`${item.command} asks first`}>
+          <span className="card-title">{item.command}</span>
+          <p className="card-detail-line plain">{item.prompt}</p>
+          <p className="card-detail-line plain">{item.note}</p>
+          <div className="card-buttons">
+            <button type="button" className="quiet" onClick={() => onConfirm(item, true)}>
+              Send
+            </button>
+            <button type="button" onClick={() => onConfirm(item, false)}>
+              Cancel
+            </button>
+          </div>
         </div>
       );
     case "confirm":
@@ -601,6 +877,19 @@ function LogItem({
   }
 }
 
+/** Whether `row` showed in the log before the log lost `shrunk` pixels at
+ * its bottom. */
+function wasInView(row: Element, log: Element, shrunk: number): boolean {
+  const r = row.getBoundingClientRect();
+  const l = log.getBoundingClientRect();
+  return r.bottom >= l.top && r.top <= l.bottom + Math.max(shrunk, 0);
+}
+
+/** Whether the log is scrolled to (within a few pixels of) its end. */
+function atLogEnd(log: HTMLElement): boolean {
+  return log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+}
+
 /** `prefill`: text another page put in the box (Pulse's Run, Journal's To
  * mission). A new `n` replaces the draft; nothing is sent until the person
  * sends it. With `conversationId` the chat moves to that conversation first,
@@ -631,6 +920,10 @@ export function Chat({
   grokSignIn = false,
   embedded = false,
   lead = false,
+  side,
+  left,
+  snapshot,
+  tuned,
   onConversation,
   onBusy,
   onRan,
@@ -663,6 +956,17 @@ export function Chat({
   embedded?: boolean;
   /** The agent window's session has a lead: its plan card can be edited. */
   lead?: boolean;
+  /** Cards for the right column under the docked companion, on wide windows. */
+  side?: ReactNode;
+  /** Objectives beside chat (Settings → Appearance): the column on the
+   * chat's left from DOCK_MIN_WIDTH, in place of the companion dock. */
+  left?: ReactNode;
+  /** Objectives beside chat: the PC snapshot on the right, from
+   * SIDE_MIN_WIDTH. */
+  snapshot?: ReactNode;
+  /** Auto setup's latest reply. A new one may have changed settings (Yes on
+   * an offer, the first-run summary), so the chat reads them again. */
+  tuned?: object | null;
   /** The conversation on screen, at the start and each time it changes. */
   onConversation?: (conversationId: string) => void;
   /** A reply started or ended. */
@@ -673,6 +977,9 @@ export function Chat({
   "use memo";
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
+  /** The chat whose thoughts were collapsed: its new thoughts start folded.
+   * Another chat starts open again; nothing of this is saved. */
+  const [foldedChat, setFoldedChat] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   /** Hangout TALK / TYPE — keeps the draft when switching (card 732). */
   const [hangoutMode, setHangout] = useState<HangoutMode>("type");
@@ -687,20 +994,39 @@ export function Chat({
   const [runIn, setRunIn] = useState<string>();
   /** The chat on screen now, read after a reply ends. */
   const openNow = useRef(conversationId);
-  useEffect(() => {
+  useLayoutEffect(() => {
     openNow.current = conversationId;
   }, [conversationId]);
   const busyHere = busy && runIn === conversationId;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  /** The running reply already sent its last event (`done`): only the app's
+   * own wrap-up after it is left. */
+  const replyDone = useRef(false);
+  /** A chat picked in that wrap-up: it opens as soon as the reply settles,
+   * so the person never sees "still running" for a reply that finished. */
+  const openAfter = useRef<string | null>(null);
   /** Messages sent while a reply runs wait here, in order, and show only in
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
+  const deskChat = useRef(Symbol("chat"));
   const voice = useVoiceMode();
   const voiceSession = voice.session;
+  /** Which engine push to talk heard the last words with, and why. */
+  const [micLine, setMicLine] = useState("");
   /** The queued message whose turn came: it sends after this render. */
-  const [nextUp, setNextUp] = useState<{ text: string; n: number; as?: SessionMode }>();
+  const [nextUp, setNextUp] = useState<{
+    text: string;
+    n: number;
+    as?: SessionMode;
+    /** Files from the box that go with it; the box is cleared once it is sent. */
+    files?: typeof attach.files;
+    /** The bubble's text when it isn't `text`: `$ <line>` for a shell line. */
+    shown?: string;
+  }>();
+  /** A reopened chat's shell line that `/retry` runs through the checks again. */
+  const [checkAgain, setCheckAgain] = useState<{ line: string; n: number }>();
   /** `/plan` or `/chat` named how the next message runs; otherwise the app reads it. */
   const nextAs = useRef<SessionMode | undefined>(undefined);
   /** Questions answered beside the running reply. */
@@ -717,7 +1043,10 @@ export function Chat({
   const [settings, setSettings] = useState<Settings | null>(null);
   /** Behavior → Sentence autocomplete; off until the page says otherwise. */
   const [autocomplete, setAutocomplete] = useState(false);
-  const [ghost, setGhost] = useState("");
+  // Settings → Behavior → Composer glow: light around the box while a reply runs here.
+  const [glow, setGlow] = useState(false);
+  /** The ghost suggestion, and the draft it was suggested for. */
+  const [ghostFor, setGhostFor] = useState<{ draft: string; text: string } | null>(null);
   const ghostGen = useRef(0);
   const ghostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -728,6 +1057,9 @@ export function Chat({
   const [slashShut, setSlashShut] = useState<string | null>(null);
   const slashOpen = slashRows.length > 0 && slashShut !== draft;
   const slashPick = Math.min(slashAt, slashRows.length - 1);
+  // The game a "Leave a note" chip opened the note dialog for.
+  const [noteFor, setNoteFor] = useState<number | null>(null);
+  const [noteSaved, setNoteSaved] = useNoteStatus();
   const row = useChipRow({
     surface: "composer",
     // The computer refuses a browser chips for a chat it has not sent in, so
@@ -741,26 +1073,70 @@ export function Chat({
   // Nyx's pose follows what the chat does, not each chunk of text.
   const activity = activityOf(items, busy);
   const nyx = useNyx(activity, active);
+  // Her desktop pedestal follows the voice, and "Pick for me" wears the
+  // chat's activity. A live voice speaks for her, else the chat last on
+  // screen, so a reply that ends while Settings is open still settles her.
+  const look = deskLook(voice.state, busyHere);
+  const voiced = voice.state !== "off";
+  useEffect(() => {
+    if (!inShell()) return;
+    const send = () => void desktopNyxLook(look, activity).catch(() => {});
+    updateDesk(deskChat.current, send, { onScreen: active, voiced });
+  }, [active, voiced, look, activity]);
+  useEffect(() => {
+    const me = deskChat.current;
+    return () => {
+      if (inShell()) leaveDesk(me);
+    };
+  }, []);
+  // A spoken reply makes her hop on the desk, from the chat that speaks for her.
+  useEffect(() => {
+    // A piece this chat started always gets its stop, even once another
+    // chat speaks for her (this one going away mid-piece).
+    let out = false;
+    voice.session.talkTo((talk) => {
+      if (!inShell()) return;
+      if (talk && deskSpeaker() !== deskChat.current) return;
+      if (!talk && !out) return;
+      out = talk !== null;
+      desktopNyxTalk(talk).catch(() => {});
+    });
+  }, [voice.session]);
+  const sideWide = useMinWidth(SIDE_MIN_WIDTH);
+  const leftWide = useMinWidth(DOCK_MIN_WIDTH);
 
   useEffect(() => {
     if (active) getSettings().then(setSettings, () => {});
-  }, [active]);
+  }, [active, tuned]);
 
   useEffect(() => {
     if (!active) return;
     getBehavior().then(
-      (page) => setAutocomplete(page.behavior.autocomplete),
-      () => setAutocomplete(false),
+      (page) => {
+        setAutocomplete(page.behavior.autocomplete);
+        setGlow(page.behavior.composerGlow);
+      },
+      () => {
+        setAutocomplete(false);
+        setGlow(false);
+      },
     );
   }, [active]);
 
-  // Debounced ghost suggestion while autocomplete is on.
+  // Debounced ghost suggestion while autocomplete is on. A suggestion shows
+  // only while the draft it was made for is still the draft, so a change
+  // hides it without a state update here: one per keystroke would queue a
+  // render that a fast typist (or a dictation tool) never lets run, and
+  // past 50 of them React throws "Maximum update depth" and drops the key.
+  const ghost =
+    ghostFor && ghostFor.draft === draft && autocomplete && shouldRequest(draft, slashOpen, busyHere)
+      ? ghostFor.text
+      : "";
   useEffect(() => {
     if (ghostTimer.current) {
       clearTimeout(ghostTimer.current);
       ghostTimer.current = null;
     }
-    setGhost("");
     if (!autocomplete || !shouldRequest(draft, slashOpen, busyHere)) {
       ghostGen.current += 1;
       return;
@@ -775,10 +1151,10 @@ export function Chat({
         (suggestion) => {
           if (gen !== ghostGen.current) return;
           if (draftKey(draft, composerRef.current?.selectionStart ?? draft.length) !== key) return;
-          setGhost(suggestion);
+          setGhostFor({ draft, text: suggestion });
         },
         () => {
-          if (gen === ghostGen.current) setGhost("");
+          if (gen === ghostGen.current) setGhostFor(null);
         },
       );
     }, GHOST_DEBOUNCE_MS);
@@ -821,30 +1197,46 @@ export function Chat({
     setQueue(next);
   }
 
-  function startFresh() {
-    // Messages lined up in the chat being left go back in the box, never
-    // into the new chat by themselves.
+  /** Messages lined up in the chat being left go back in the box, never
+   * into the next chat by themselves. */
+  function queueBackToBox() {
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
       setDraft((now) => withQueued(now, waiting));
     }
+  }
+
+  function startFresh(scratch = false) {
+    const nextId = newConversationId(scratch);
+    openAfter.current = null;
+    openNow.current = nextId;
+    queueBackToBox();
     leaveSides();
     touched.current = true;
     setGoalAsk(null);
     setItems([]);
     setEarlier(0);
     setError(null);
-    setConversationId(newConversationId());
+    setConversationId(nextId);
   }
 
   function show(transcript: Transcript) {
+    openAfter.current = null;
+    openNow.current = transcript.id;
     leaveSides();
     setGoalAsk(null);
     setConversationId(transcript.id);
     setItems(itemsFrom(transcript));
     setEarlier(transcript.earlier);
     setError(null);
+  }
+
+  /** Clear on Main hands back an empty Main: like a new chat, the old
+   * chat's waiting messages go back in the box. */
+  function showClearedMain(fresh: Transcript) {
+    queueBackToBox();
+    show(fresh);
   }
 
   // The saved chat shows only if nothing was typed or picked meanwhile.
@@ -854,8 +1246,8 @@ export function Chat({
 
   useEffect(() => {
     if (remote || embedded) return;
-    getLastChat().then(
-      (last) => restoreLast(last),
+    getStartChat().then(
+      (start) => restoreLast(start),
       () => {},
     );
   }, [remote, embedded]);
@@ -879,20 +1271,39 @@ export function Chat({
 
   // Only a new pick acts; the conversation it leaves is the latest, not a
   // dependency.
-  const openPicked = useEffectEvent((id: string) => {
-    if (id === conversationId) return;
+  function openChat(id: string) {
+    // Picking the chat on screen keeps it, and drops a pick still waiting.
+    if (id === conversationId) {
+      openAfter.current = null;
+      return;
+    }
     if (busyRef.current) {
+      // Past its `done` with nothing queued, the reply here only wraps up:
+      // the pick waits for it rather than refusing.
+      if (replyDone.current && queueRef.current.length === 0 && runIn === conversationId) {
+        openAfter.current = id;
+        window.setTimeout(() => {
+          if (openAfter.current === id) setError(OPEN_BUSY);
+        }, OPEN_WAIT_MS);
+        return;
+      }
       setError(OPEN_BUSY);
       return;
     }
+    openAfter.current = null;
     touched.current = true;
     closeChat(conversationId).catch(() => {});
     loadChat(id).then(show, (err) => setError(String(err)));
-  });
+  }
+  const openPicked = useEffectEvent((id: string) => openChat(id));
 
   useEffect(() => {
     if (open) openPicked(open.id);
   }, [open]);
+  const [openNext, setOpenNext] = useState<{ id: string; n: number } | null>(null);
+  useEffect(() => {
+    if (openNext) openPicked(openNext.id);
+  }, [openNext]);
 
   // Deleting the chat on screen starts a new one; deleting another leaves it.
   const dropDeleted = useEffectEvent((ids: string[]) => {
@@ -907,11 +1318,15 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [deleted]);
 
-  // Clear chat: stop any reply, delete the open chat's saved history, start over.
+  // Clear chat: stop any reply, delete the open chat's saved history, start
+  // over. On Main the backend hands back an empty Main instead.
   const clearOpen = useEffectEvent(() => {
     const id = conversationId;
     touched.current = true;
-    deleteChat(id).then(startFresh, (err) => setError(String(err)));
+    clearChat(id).then(
+      (fresh) => (fresh ? showClearedMain(fresh) : startFresh()),
+      (err) => setError(String(err)),
+    );
   });
 
   useEffect(() => {
@@ -936,6 +1351,7 @@ export function Chat({
     const switched = !!to && to !== conversationId;
     if (switched) {
       if (busyRef.current) {
+        openAfter.current = null;
         setError(MISSION_BUSY);
         return;
       }
@@ -946,12 +1362,22 @@ export function Chat({
       setItems([]);
       setEarlier(0);
       setError(null);
+      openNow.current = to;
       setConversationId(to);
     }
     if (next.send && next.text) {
       touched.current = true;
       if (busyRef.current) changeQueue([...queueRef.current, next.text]);
-      else setNextUp((now) => ({ text: next.text, n: (now?.n ?? 0) + 1, as: "chat" }));
+      else {
+        // The Command page's line shows as typed, as `/sh` does.
+        const shown = shownText(next.text);
+        setNextUp((now) => ({
+          text: next.text,
+          n: (now?.n ?? 0) + 1,
+          as: "chat",
+          shown: shown === next.text ? undefined : shown,
+        }));
+      }
       return;
     }
     // Opening the chat that is already open brings no text: keep what is typed.
@@ -976,9 +1402,9 @@ export function Chat({
         else if (event.kind === "error") setSides((now) => now.map((s) => (s.id === id ? { ...s, failed: true } : s)));
         return;
       }
-      // A helper's question shows whether or not a reply runs.
+      // A helper's question or a report shows whether or not a reply runs.
       if (helper) {
-        if (id === conversationId) setItems((now) => withHelperAsk(now, event));
+        if (id === conversationId) setItems((now) => withHelperEvent(now, event));
         return;
       }
       // An event that lands after the turn ended must not reopen it.
@@ -986,9 +1412,13 @@ export function Chat({
       if (event.kind === "error") setError(event.message);
       else if (event.kind === "suggestions") setFollowed((n) => n + 1);
       else if (event.kind === "goal") setGoalAsk({ id: event.id, title: event.title });
-      else if (event.kind === "done") setItems(event.stop === HALTED_STOP ? settleHalted : settle);
+      else if (event.kind === "done") {
+        replyDone.current = true;
+        setError(stillBusy);
+        setItems(event.stop === HALTED_STOP ? settleHalted : settle);
+      }
       else if (event.kind === "text") {
-        voiceSession.feed(event.text);
+        voiceSession.feed(event.text, id);
         setItems((now) => applyEvent(now, event));
       }
       // Not a transition: one would hold the page's next updates while the
@@ -1016,15 +1446,120 @@ export function Chat({
     };
   }, [conversationId, voiceSession]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [items]);
+  // Find in this chat (Ctrl+F). `at` is the row of the match the person is
+  // on, so rows that stream in, load above or go away don't move it; a new
+  // query starts on the newest match, as the old app did. `seek` counts typed
+  // queries and steps, the only things that move the view onto the match.
+  const [find, setFind] = useState<{ query: string; at: Item | null; seek: number } | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const hits = find ? findRows(items.map(itemText), find.query) : [];
+  // A folded or opened thought is a new object with the same words.
+  const isAt = (item: Item) =>
+    item === find?.at || (item.kind === "thought" && find?.at?.kind === "thought" && item.text === find.at.text);
+  const atHit = find?.at ? hits.findIndex((row) => isAt(items[row])) : -1;
+  const pick = atHit >= 0 ? atHit : Math.max(hits.length - 1, 0);
+  const findOpen = find !== null;
+  const seek = find?.seek ?? 0;
 
-  function startOver() {
-    if (busy) return;
+  function findQuery(query: string) {
+    const rows = findRows(items.map(itemText), query);
+    setFind({ query, at: items[rows[rows.length - 1]] ?? null, seek: seek + 1 });
+  }
+
+  function findNext(forward: boolean) {
+    if (!find) return;
+    setFind({ query: find.query, at: items[hits[findStep(pick, hits.length, forward)]] ?? null, seek: seek + 1 });
+  }
+  // Another chat, or an emptied one, closes the bar.
+  const [findChat, setFindChat] = useState(conversationId);
+  if (findChat !== conversationId || (find && items.length === 0)) {
+    setFindChat(conversationId);
+    setFind(null);
+  }
+
+  function closeFind() {
+    setFind(null);
+    composerRef.current?.focus();
+  }
+
+  const onFindKey = useEffectEvent((event: globalThis.KeyboardEvent) => {
+    if (!isChatShortcut(event, "f", false)) return;
+    event.preventDefault();
+    // Holding the keys toggles once; a dialog over the chat keeps the keyboard.
+    if (event.repeat || dialogOpen()) return;
+    if (findOpen) closeFind();
+    else if (items.length > 0) setFind({ query: "", at: null, seek: 0 });
+  });
+  useEffect(() => {
+    if (!active || embedded) return;
+    const onKey = (event: globalThis.KeyboardEvent) => onFindKey(event);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, embedded]);
+
+  // Each row sits right after a hidden `data-row` marker, so a match is
+  // marked on the row's own element and each kind of row keeps its markup.
+  const hitRows = hits.join(",");
+  const current = hits[pick] ?? -1;
+  useEffect(() => {
+    const log = logRef.current;
+    if (!log) return;
+    for (const el of log.querySelectorAll("[data-find]")) el.removeAttribute("data-find");
+    if (!hitRows) return;
+    for (const i of hitRows.split(",").map(Number)) findRow(log, i)?.setAttribute("data-find", i === current ? "current" : "hit");
+  }, [hitRows, current, items]);
+  const centreMatch = useEffectEvent(() => {
+    const log = logRef.current;
+    if (log) findRow(log, current)?.scrollIntoView?.({ block: "center" });
+  });
+  useEffect(() => {
+    if (seek > 0) centreMatch();
+  }, [seek]);
+
+  // The log follows new rows to the end. Folding a thought adds nothing at
+  // the end, so the view stays on it; while find is open the log stays put,
+  // and closing find leaves the view on the match.
+  const scrolledFor = useRef<Item[]>([]);
+  // Whether the log was at its end when last looked at.
+  const logAtEnd = useRef(true);
+  const followEnd = useEffectEvent((before: Item[]) => {
+    if (!findOpen && !(items.length > 0 && onlyFoldsChanged(before, items))) {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    }
+    // New rows below a view that stayed put leave it short of the end.
+    if (logRef.current) logAtEnd.current = atLogEnd(logRef.current);
+  });
+  useEffect(() => {
+    const before = scrolledFor.current;
+    scrolledFor.current = items;
+    followEnd(before);
+  }, [items]);
+  // Voice mode's caption above the composer grows as they talk and makes
+  // the log shorter: a log that was at its end stays there. With find open
+  // a match that was in view stays in view instead; one they scrolled away
+  // from stays where they left it.
+  const logHeight = useRef(0);
+  const keepAtEnd = useEffectEvent(() => {
+    const log = logRef.current;
+    const shrunk = log ? logHeight.current - log.clientHeight : 0;
+    if (log) logHeight.current = log.clientHeight;
+    if (findOpen) {
+      const row = log && findRow(log, current);
+      if (row && log && wasInView(row, log, shrunk)) row.scrollIntoView?.({ block: "nearest" });
+    } else if (logAtEnd.current) {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    }
+  });
+  // What shows: a caption appears and goes with listening, too.
+  const shownCaption = voice.state === "listening" ? voice.caption : "";
+  useLayoutEffect(() => keepAtEnd(), [shownCaption]);
+
+  function startOver(scratch = false) {
+    if (busy) return false;
     // A browser's chat with no message sent is refused; the new chat starts anyway.
     closeChat(conversationId).catch(() => {});
-    startFresh();
+    startFresh(scratch);
+    return true;
   }
 
   /** Sends `text` and `files`. `as` (`/plan <text>`, a plan's follow-up chip)
@@ -1035,9 +1570,12 @@ export function Chat({
   async function deliver(
     text: string,
     files: typeof attach.files,
-    fromDraft: boolean,
+    /** The box held it: the box empties. `"files"`: only its files went. */
+    fromDraft: boolean | "files",
     as?: SessionMode,
     again = false,
+    /** The bubble's text when it isn't `text`. */
+    shown?: string,
   ) {
     if ((!text && files.length === 0) || busy) return;
     touched.current = true;
@@ -1047,15 +1585,17 @@ export function Chat({
       setError(`${unread.name}: ${unread.status}`);
       return;
     }
-    const said = [text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
-    if (!again) setItems((now) => [...now, { kind: "user", text: said }]);
+    const said = [shown ?? text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
+    if (!again) setItems((now) => [...now, shown ? { kind: "user", text: said, sent: text } : { kind: "user", text: said }]);
     if (fromDraft) {
-      setDraft("");
+      if (fromDraft === true) setDraft("");
       attach.clear();
     }
     setError(null);
     setAck(null);
     busyRef.current = true;
+    replyDone.current = false;
+    openAfter.current = null;
     setBusy(true);
     const from = conversationId;
     setRunIn(from);
@@ -1072,7 +1612,8 @@ export function Chat({
     busyRef.current = false;
     setBusy(false);
     setRunIn(undefined);
-    voiceSession.replyDone("");
+    setError(stillBusy);
+    voiceSession.replyDone("", from);
     // Another chat opened meanwhile: what waits now was typed there, so it
     // goes, and the lines on screen are that chat's, not this reply's.
     const moved = openNow.current !== from;
@@ -1080,6 +1621,11 @@ export function Chat({
     // The reply ended well: the next queued message goes. Halt, Stop or a
     // failure sends nothing more; what waited goes back in the box.
     const waiting = queueRef.current;
+    // A chat picked while this reply wrapped up opens now, unless a message
+    // waits to go here: that next reply wins and the pick is dropped.
+    const picked = openAfter.current;
+    openAfter.current = null;
+    if (picked && !moved && waiting.length === 0) setOpenNext((now) => ({ id: picked, n: (now?.n ?? 0) + 1 }));
     if (waiting.length === 0) return;
     if (moved || (stop && stop !== HALTED_STOP && stop !== "cancelled")) {
       changeQueue(waiting.slice(1));
@@ -1125,12 +1671,29 @@ export function Chat({
   // Voice mode: what it hears goes as a message, or waits behind a running
   // reply; what it has to say shows where errors do.
   const showVoiceNote = (note: string) => setError(note);
-  useEffect(() =>
+  useEffect(() => {
     voiceSession.handlers((words) => {
       if (busyRef.current) changeQueue([...queueRef.current, words]);
       else void deliver(words, [], false);
-    }, showVoiceNote),
-  );
+    }, showVoiceNote);
+    // The chat on screen picks where voice mode hears and speaks.
+    voiceSession.forChat(conversationId);
+  });
+  // Push to talk's line belongs to the chat it was heard for.
+  useEffect(() => setMicLine(""), [conversationId]);
+
+  /** A panel button sends its action as a turn, behind a running reply if
+   * there is one, so any step it leads to asks like any other. */
+  function panelAction(panelId: string, action: string) {
+    const text = panelActionText(panelId, action);
+    if (!text) return;
+    if (busyRef.current) changeQueue([...queueRef.current, text]);
+    else void deliver(text, [], false);
+  }
+
+  function dismissPanel(row: number) {
+    setItems((now) => now.map((item, i) => (i === row && item.kind === "panel" ? { ...item, dismissed: true } : item)));
+  }
 
   /** Stop: the reply ends, and the messages lined up behind it come back to
    * the box instead of sending. */
@@ -1211,6 +1774,9 @@ export function Chat({
         ),
       );
     mark(null, action);
+    // The app holds a secret typed here for this chat: scrub it from what
+    // the page already shows, as it is redacted from what comes next.
+    if (action === "accept" && item.secret) setItems((now) => scrubHeld(now, value));
     try {
       await answerElicit(conversationId, item.id, action, field ?? item.fieldName, value);
     } catch (err) {
@@ -1287,9 +1853,62 @@ export function Chat({
     changeQueue([...queueRef.current, text]);
   }
 
+  /** A checked shell line's message goes to the chat it was checked for,
+   * shown as typed. It never waits in the queue: a reply that started
+   * meanwhile puts the line back in the box, to be checked again. */
+  function sendShell(prompt: string, line: string, from: string) {
+    if (openNow.current !== from) return;
+    if (busyRef.current) {
+      setDraft((now) => (now.trim() ? now : `$ ${line}`));
+      setError(SLASH_WAITS);
+      return;
+    }
+    setNextUp((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, as: "chat", shown: `$ ${line}` }));
+  }
+
+  /** Run on a `/sh` card: the checks run again in this chat's folder. */
+  async function settleShell(item: Extract<Item, { kind: "shell" }>, yes: boolean) {
+    if (yes && busyRef.current) {
+      setError(SLASH_WAITS);
+      return;
+    }
+    setItems((now) => now.filter((it) => it !== item));
+    if (!yes) {
+      setItems((now) => [...now, { kind: "slash", command: "/sh", text: "Cancelled. Nothing ran." }]);
+      return;
+    }
+    const from = conversationId;
+    try {
+      sendShell(await commandBoxApprove(item.line, from), item.line, from);
+    } catch (err) {
+      if (openNow.current === from)
+        setItems((now) => [...now, { kind: "slash", command: "/sh", text: String(err) }]);
+    }
+  }
+
+  /** Send on a `/sync` or `/inhabit` card. The reply is not touched, so it
+   * does not wait for one. A chat opened meanwhile still says what happened,
+   * on the line under the box. */
+  async function settleHub(item: Extract<Item, { kind: "hub" }>, yes: boolean) {
+    setItems((now) => now.filter((it) => it !== item));
+    if (!yes) {
+      setItems((now) => [...now, { kind: "slash", command: item.command, text: "Cancelled. Nothing was sent." }]);
+      return;
+    }
+    const from = conversationId;
+    let text: string;
+    try {
+      text = await hubSendApprove(item.send);
+    } catch (err) {
+      text = String(err);
+    }
+    if (openNow.current === from) setItems((now) => [...now, { kind: "slash", command: item.command, text }]);
+    else setAck(`${item.command}: ${text}`);
+  }
+
   /** Runs a slash line and applies what it did. `box` is what the box held
-   * when the line was sent. */
-  async function slash(line: string, box = line) {
+   * when the line was sent, and `files` what was attached to it. */
+  async function slash(line: string, box = line, files: typeof attach.files = []) {
     if (slashing.current.has(line)) {
       setAck(SLASH_RUNNING);
       return;
@@ -1314,6 +1933,9 @@ export function Chat({
     switch (effect.kind) {
       case "newChat":
         startOver();
+        break;
+      case "newScratch":
+        if (startOver(true)) setItems([{ kind: "slash", command, text: SCRATCH_NOTE }]);
         break;
       case "mode": {
         const text = effect.text?.trim();
@@ -1372,7 +1994,12 @@ export function Chat({
         break;
       case "retry": {
         const last = [...items].reverse().find((it) => it.kind === "user");
-        if (last?.kind === "user") void deliver(last.text, [], false);
+        // A shell line goes again as it was sent; one from a reopened chat
+        // (shown as `$ <line>`) takes the checks again.
+        if (last?.kind === "user" && last.sent) void deliver(last.sent, [], false, undefined, false, last.text);
+        else if (last?.kind === "user" && isShellLine(last.text, remote))
+          setCheckAgain((now) => ({ line: last.text, n: (now?.n ?? 0) + 1 }));
+        else if (last?.kind === "user") void deliver(last.text, [], false);
         else setItems((now) => [...now, { kind: "slash", command, text: "Nothing to retry" }]);
         break;
       }
@@ -1404,7 +2031,7 @@ export function Chat({
         if (busyRef.current) changeQueue([...queueRef.current, effect.text]);
         // Sent from the next render: the reply may have ended while the line
         // was read, and this render's `deliver` still sees it running.
-        else setNextUp((now) => ({ text: effect.text, n: (now?.n ?? 0) + 1, as: "chat" }));
+        else setNextUp((now) => ({ text: effect.text, n: (now?.n ?? 0) + 1, as: "chat", files }));
         break;
       case "palette":
         onOpenPalette?.();
@@ -1430,6 +2057,23 @@ export function Chat({
         setItems((now) => [...now, { kind: "slash", command, text: effect.text }]);
         onOpenView?.(effect.view);
         break;
+      case "shell": {
+        const check = effect.check;
+        if (check.verdict === "queue") sendShell(check.prompt, check.command, conversationId);
+        else if (check.verdict === "confirm")
+          setItems((now) => [
+            ...now,
+            { kind: "shell", line: check.command, destructive: check.destructive, secret: check.secret },
+          ]);
+        else setItems((now) => [...now, { kind: "slash", command: "/sh", text: check.message }]);
+        break;
+      }
+      case "hubAsk":
+        setItems((now) => [
+          ...now,
+          { kind: "hub", command, send: effect.send, prompt: effect.prompt, note: effect.note },
+        ]);
+        break;
       default: {
         const _unhandled: never = effect;
         return _unhandled;
@@ -1439,6 +2083,14 @@ export function Chat({
 
   /** Yes runs the command's own `yes` line; Cancel drops the question. */
   function settleConfirm(item: Item, yes: boolean) {
+    if (item.kind === "shell") {
+      void settleShell(item, yes);
+      return;
+    }
+    if (item.kind === "hub") {
+      void settleHub(item, yes);
+      return;
+    }
     if (item.kind !== "confirm") return;
     setItems((now) => now.filter((it) => it !== item));
     if (yes) void slash(item.yes);
@@ -1479,7 +2131,7 @@ export function Chat({
         return;
       }
       if (!text) return;
-      if (isSlashCommand(text) && !/^\/(btw|side)\s+\S/i.test(text)) {
+      if (isSlashCommand(text, remote) && !/^\/(btw|side)\s+\S/i.test(text)) {
         setError(remote ? SLASH_WAITS_REMOTE : SLASH_WAITS);
         return;
       }
@@ -1501,13 +2153,16 @@ export function Chat({
     }
     if (!text && files.length === 0) return;
     touched.current = true;
-    if (isSlashCommand(text)) {
-      await slash(text);
+    if (isSlashCommand(text, remote)) {
+      // A line that becomes a message (/queue, /deep-research) takes the files.
+      await slash(text, text, files);
       return;
     }
     // "make the text bigger", "undo that": a setting, answered here.
     const said = files.length === 0 && !remote ? await settingAsk(text) : null;
     if (said) {
+      // "undo that" may have put back a setting this chat lays out by.
+      getSettings().then(setSettings, () => {});
       setDraft("");
       setItems((now) => [...now, { kind: "user", text }, { kind: "assistant", text: said, streaming: false }]);
       return;
@@ -1520,6 +2175,10 @@ export function Chat({
    * otherwise. A follow-up from a plan's reply plans again. */
   function tapChip(chip: QuickChip) {
     row.picked(chip);
+    if (chip.action === "note") {
+      if (chip.noteFor) setNoteFor(chip.noteFor);
+      return;
+    }
     if (chip.action === "go") {
       if (chip.view) onOpenView?.(chip.view as View);
       return;
@@ -1530,7 +2189,7 @@ export function Chat({
       return;
     }
     touched.current = true;
-    if (isSlashCommand(chip.value)) void slash(chip.value);
+    if (isSlashCommand(chip.value, remote)) void slash(chip.value);
     else void deliver(chip.value, [], false, as);
   }
 
@@ -1566,18 +2225,30 @@ export function Chat({
     } else if (event.key === "Tab" && !event.shiftKey && ghost) {
       event.preventDefault();
       setDraft(acceptSuggestion(draft, ghost));
-      setGhost("");
+      setGhostFor(null);
       ghostGen.current += 1;
       return;
     } else if (event.key === "Escape" && ghost) {
       event.preventDefault();
-      setGhost("");
+      setGhostFor(null);
       ghostGen.current += 1;
       return;
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void send();
+    }
+  }
+
+  const thoughtsFolded = startsCollapsed(Boolean(settings?.alwaysCollapseThoughts), foldedChat === conversationId);
+  /** Collapse folds every thought in this chat and keeps new ones folded;
+   * Expand opens only this one. */
+  function foldThought(at: number, fold: Fold) {
+    if (fold === "minimized") {
+      setFoldedChat(conversationId);
+      setItems(collapseAll);
+    } else {
+      setItems((now) => expandOne(now, at));
     }
   }
 
@@ -1598,11 +2269,18 @@ export function Chat({
     if (act.op === "remove") removeQueued(act.index);
     else void steerQueued(act.index);
   });
-  const sendNext = useEffectEvent((text: string, as?: SessionMode) => void deliver(text, [], false, as));
+  const sendNext = useEffectEvent(
+    (text: string, as?: SessionMode, files: typeof attach.files = [], shown?: string) =>
+      void deliver(text, files, files.length > 0 && "files", as, false, shown),
+  );
+  const runAgain = useEffectEvent((line: string) => void slash(line));
+  useEffect(() => {
+    if (checkAgain) runAgain(checkAgain.line);
+  }, [checkAgain]);
   useEffect(() => {
     if (!nextUp) return;
-    const { text, as } = nextUp;
-    const timer = window.setTimeout(() => sendNext(text, as), 0);
+    const { text, as, files, shown } = nextUp;
+    const timer = window.setTimeout(() => sendNext(text, as, files, shown), 0);
     return () => window.clearTimeout(timer);
   }, [nextUp]);
   useEffect(() => {
@@ -1613,34 +2291,31 @@ export function Chat({
     return () => window.clearTimeout(timer);
   }, [queueAct]);
 
-  return (
+  // Keyed so turning Objectives beside chat on or off moves the lane instead
+  // of mounting a new one: the draft, focus and scroll stay.
+  const lane = (
     <section
-      className={embedded ? "chat embedded" : nyx ? "chat has-nyx" : "chat"}
+      key="lane"
+      className={embedded ? "chat embedded" : "chat"}
       aria-label={embedded ? "Agent" : "Chat"}
       onDragOver={attach.onDragOver}
       onDrop={attach.onDrop}
     >
-      {nyx && !embedded && <NyxDock url={nyx.url} mood={nyx.mood} />}
       {!remote && !embedded && (
         <>
           <ChatTabs
             activeId={conversationId}
+            active={active}
+            busy={busy}
             draftEmpty={items.length === 0}
-            onSwitch={(id) => {
-              if (id === conversationId) return;
-              if (busyRef.current) {
-                setError(OPEN_BUSY);
-                return;
-              }
+            onSwitch={openChat}
+            onNew={() => startOver()}
+            onClear={async (id) => {
               touched.current = true;
-              closeChat(conversationId).catch(() => {});
-              loadChat(id).then(show, (err) => setError(String(err)));
-            }}
-            onNew={startOver}
-            onClear={() => {
-              const id = conversationId;
-              touched.current = true;
-              deleteChat(id).then(startFresh, (err) => setError(String(err)));
+              const fresh = await clearChat(id);
+              if (id !== conversationId) return;
+              if (fresh) showClearedMain(fresh);
+              else startFresh();
             }}
             onError={setError}
           />
@@ -1648,19 +2323,34 @@ export function Chat({
         </>
       )}
       <Inbox
-        onOpenChat={(id) => {
-          if (id === conversationId) return;
-          if (busyRef.current) {
-            setError(OPEN_BUSY);
-            return;
-          }
-          touched.current = true;
-          closeChat(conversationId).catch(() => {});
-          loadChat(id).then(show, (err) => setError(String(err)));
-        }}
+        onOpenChat={openChat}
       />
+      {find && (
+        <ChatFindBar
+          query={find.query}
+          label={findLabel(pick, hits.length, find.query)}
+          hasHits={hits.length > 0}
+          onQuery={findQuery}
+          onStep={findNext}
+          onClose={closeFind}
+        />
+      )}
+      {isScratchChat(conversationId) && (
+        <p className="scratch-mark" role="note">
+          {SCRATCH_MARK}
+        </p>
+      )}
       {/* Focusable so the keyboard can scroll a long conversation. */}
-      <div className="log" role="log" aria-live="polite" tabIndex={0}>
+      <div
+        ref={logRef}
+        className="log"
+        role="log"
+        aria-live="polite"
+        tabIndex={0}
+        onScroll={(e) => {
+          logAtEnd.current = atLogEnd(e.currentTarget);
+        }}
+      >
         {items.length === 0 && !busy && settings && !settings.hasApiKey && !settings.signedIn ? (
           <SignedOut remote={remote} grok={grokSignIn} onSignIn={onSignIn} />
         ) : (
@@ -1669,6 +2359,9 @@ export function Chat({
             <div className="nyx-empty">
               {nyx && <NyxFace url={nyx.url} size={96} />}
               <p className="empty">{embedded ? AGENT_EMPTY : CHAT_EMPTY}</p>
+              {!embedded && !remote && onOpenView && (
+                <DeviceGlanceRow active={active} onOpen={() => onOpenView("devices")} />
+              )}
             </div>
           )
         )}
@@ -1683,24 +2376,31 @@ export function Chat({
           </button>
         )}
         {items.map((item, i) => (
-          <LogItem
-            key={i}
-            item={item}
-            busy={busy}
-            onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
-            nyxUrl={nyx?.url}
-            onAnswer={answer}
-            onAnswerCard={answerCard}
-            editable={embedded && lead}
-            onConfirm={settleConfirm}
-            onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
-            onFix={(text) => setDraft(text)}
-            onChipPick={(key) => {
-              void Promise.resolve()
-                .then(() => replyPick(key))
-                .catch(() => {});
-            }}
-          />
+          <Fragment key={i}>
+            {/* Find's marker for row i (display: none takes no gap). */}
+            <span hidden data-row={i} />
+            <LogItem
+              item={item}
+              busy={busy}
+              thoughtsFolded={thoughtsFolded}
+              onFold={(fold) => foldThought(i, fold)}
+              onMenu={remote ? undefined : (x, y) => setMsgMenu({ i, at: { x, y } })}
+              nyxUrl={nyx?.url}
+              onAnswer={answer}
+              onAnswerCard={answerCard}
+              editable={embedded && lead}
+              onConfirm={settleConfirm}
+              onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
+              onFix={(text) => setDraft(text)}
+              onPanelAction={panelAction}
+              onPanelDismiss={() => dismissPanel(i)}
+              onChipPick={(key) => {
+                void Promise.resolve()
+                  .then(() => replyPick(key))
+                  .catch(() => {});
+              }}
+            />
+          </Fragment>
         ))}
         {busy && waiting && (
           <div className="bubble assistant streaming" data-role="assistant">
@@ -1762,7 +2462,9 @@ export function Chat({
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
-      <form className="composer slash-wrap" onSubmit={send}>
+      {!remote && <VoiceCaption text={voice.caption} state={voice.state} />}
+      {!remote && <VoiceLine text={voice.state === "off" ? micLine : voice.line} />}
+      <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu
             hits={slashRows}
@@ -1794,7 +2496,6 @@ export function Chat({
             onChange={(e) => {
               setDraft(e.target.value);
               setSlashAt(0);
-              setGhost("");
               ghostGen.current += 1;
             }}
             onKeyDown={onKeyDown}
@@ -1803,13 +2504,20 @@ export function Chat({
         </div>
         {!remote && (
           <>
-            <Mic onText={(words) => setDraft((now) => appendDraft(now, words))} onError={setError} busy={busy} active={active} />
+            <Mic
+              onText={(words) => setDraft((now) => appendDraft(now, words))}
+              onError={setError}
+              onHint={setMicLine}
+              conversationId={conversationId}
+              busy={busy}
+              active={active}
+            />
             <VoiceButton state={voice.state} session={voice.session} />
           </>
         )}
         {busyHere ? (
           <>
-            {draft.trim() && !isSlashCommand(draft.trim()) && (
+            {draft.trim() && !isSlashCommand(draft.trim(), remote) && (
               <button
                 type="submit"
                 className="quiet"
@@ -1823,11 +2531,11 @@ export function Chat({
             </button>
           </>
         ) : (
-          <button type="submit" disabled={!draft.trim() && (busy || attach.files.length === 0)}>
+          <button type="submit" className="cta" disabled={!draft.trim() && (busy || attach.files.length === 0)}>
             Send
           </button>
         )}
-        <button type="button" className="quiet" onClick={startOver} disabled={busy}>
+        <button type="button" className="quiet" onClick={() => startOver()} disabled={busy}>
           {embedded ? "New session" : "New chat"}
         </button>
       </form>
@@ -1836,6 +2544,47 @@ export function Chat({
       ) : null}
       {!remote && <BudgetCard busy={busy} onOpenSettings={onOpenSettings} />}
       <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
+      {noteSaved && (
+        <p className="note" role="status">
+          {noteSaved}
+        </p>
+      )}
+      {noteFor !== null && (
+        <GameNote
+          appId={noteFor}
+          onDone={(status) => {
+            setNoteFor(null);
+            setNoteSaved(status);
+          }}
+        />
+      )}
     </section>
+  );
+  if (embedded) return lane;
+  // Objectives beside chat (deck slide 10): the objective and recent chats on
+  // the left from 900px, a PC snapshot on the right from SIDE_MIN_WIDTH, and
+  // no companion dock. A paired browser keeps the dock layout.
+  if (!remote && settings?.chatObjectives && left !== undefined) {
+    return (
+      <div className="chat-frame chat-first">
+        {leftWide && left}
+        {lane}
+        {sideWide && snapshot}
+      </div>
+    );
+  }
+  // The right column: the docked companion from 900px, and the side cards
+  // under it from SIDE_MIN_WIDTH (slides 02 and 20).
+  const cards = side !== undefined && sideWide;
+  return (
+    <div className="chat-frame">
+      {lane}
+      {(nyx || cards) && (
+        <div className="chat-side">
+          {nyx && <NyxDock url={nyx.url} path={nyx.path} mood={nyx.mood} />}
+          {cards && side}
+        </div>
+      )}
+    </div>
   );
 }

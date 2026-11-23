@@ -73,6 +73,20 @@ impl Steer {
     }
 }
 
+/// A length ask, not a speed ask: alone it shortens the reply on any model,
+/// but it never swaps the on-device model for a faster one.
+const LENGTH_ONLY: &str = "keep it short";
+
+/// The text asks for a quick answer in words other than [`LENGTH_ONLY`]: the
+/// on-device router's Speed ask.
+pub fn asks_for_speed(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    QUICKER
+        .iter()
+        .filter(|p| **p != LENGTH_ONLY)
+        .any(|p| t.contains(p))
+}
+
 /// Keyword steer, unless care-first is on. Then the Brief's row picks effort.
 pub fn steer_for_turn(text: &str, care_first: bool) -> Steer {
     if care_first {

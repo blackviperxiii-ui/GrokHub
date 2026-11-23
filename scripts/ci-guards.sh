@@ -3,16 +3,18 @@
 # sourced in name order, so a new guard is a new file instead of an edit to a
 # shared one. A guard sets fail=1 to fail the job. Today's guards fail CI when:
 #   10) conflict markers are committed
+#   15) a scratch test file (`tests/zz_*`, `ui/src/zz_*`) is committed
+#   17) two tracked names in one folder, or two JS/TS import names, differ
+#       only by letter case, which Windows and macOS treat as the same name
 #   20) god-file line budgets are exceeded (ratchet; raise only when intentional)
 #   30) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies
 #       label, or a non-release PR touches version lockstep files
 #   40) VERSION copies disagree (cargo xtask bump --check)
+#   42) packaging/aur/.SRCINFO drifts from packaging/aur/PKGBUILD
 #   50) the linux or windows job in ci.yml could skip, and so pass as a
 #       required check, when the changes job fails
 #   70) a workflow or composite action uses an action by tag or branch instead
 #       of a full commit SHA, or no workflow file can be read
-#   75) a workflow step merges downloaded artifacts without a pattern, or with
-#       one that takes the unsigned Windows staging files
 #   76) release.yml's plan job could build a tag before
 #       scripts/release-tag-check.sh has passed it
 #   80) our code uses an API anti-cheats flag: memory reads, module lists,

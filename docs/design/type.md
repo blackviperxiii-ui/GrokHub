@@ -1,7 +1,22 @@
 # Type
 
 One type scale for both Loadout apps: the egui cabin (`theme::TYPE_*`, `LH_*`)
-and the Tauri shell (`--font-*`, `--lh-*`). Inter throughout.
+and the Tauri shell (`--font-*`, `--lh-*`). Inter for body text and prose.
+
+## Display face
+
+The Tauri shell sets a second family, `--font-family-display`: Chakra Petch (SIL Open
+Font License 1.1, latin subset as woff2 in `ui/public/fonts/`, loaded with
+`font-display: swap`). It covers only:
+
+- the wordmark in the top bar (uppercase, `--tracking-eyebrow` 0.14em),
+- page and section titles (`h1`, `h2`, not markdown headings in a reply),
+- tile eyebrows and the XP line (`--tracking-eyebrow` 0.14em),
+- tab labels and the amber CTA (plus Code's Run tests button in both states),
+  uppercase with `--tracking-label` 0.12em.
+
+Sizes stay on the scale below and weights stay 500 and 600, so only those two
+Chakra Petch weights ship. Inter stays for everything else.
 
 ## The scale
 

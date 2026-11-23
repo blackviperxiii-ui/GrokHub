@@ -92,6 +92,7 @@ fn the_desktop_settings_read_and_write_and_the_rest_are_not_here() {
     let cases = [
         (Key::TextSize, Value::Pct(130)),
         (Key::ReduceMotion, Value::Bool(true)),
+        (Key::ChatObjectives, Value::Bool(true)),
         (Key::Theme, Value::pick("light")),
         (Key::Theme, Value::pick("dark")),
         (Key::Theme, Value::pick("system")),
@@ -116,7 +117,6 @@ fn the_desktop_settings_read_and_write_and_the_rest_are_not_here() {
         Key::GameCompanion,
         Key::GameNudges,
         Key::ResumeCode,
-        Key::ChatObjectives,
         Key::DockPanels,
         Key::CollapseThoughts,
     ] {
@@ -128,6 +128,7 @@ fn the_desktop_settings_read_and_write_and_the_rest_are_not_here() {
     assert_eq!(t.get(Key::CloseToTray), None);
     assert!(!t.set(Key::CloseToTray, &Value::Bool(true)));
     assert_eq!(settings.text_size, 130);
+    assert!(settings.chat_objectives);
     assert_eq!(
         (
             settings.behavior.quiet_start.as_str(),

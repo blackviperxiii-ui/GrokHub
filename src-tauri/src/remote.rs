@@ -63,11 +63,18 @@ pub fn web_may_act(act: &crate::workboard::Act) -> bool {
     !matches!(act, crate::workboard::Act::Queue)
 }
 
+/// A Pulse change a browser may make. Add skill writes a skill on this
+/// computer, so like Create skill it stays here.
+pub fn web_may_pulse(act: &crate::pulse::Act) -> bool {
+    !matches!(act, crate::pulse::Act::AddSkill)
+}
+
 /// The web app's commands: chat with approvals, automations, memory,
 /// connectors, Pulse, Imagine, the Agents page and the workboard, reading the settings and the skills list, and which Nyx picture shows.
 /// Home and Objectives are read only, with only the browser's own chats.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
+    "get_profile",
     "send_chat",
     "answer_permission",
     "answer_elicit",
@@ -83,6 +90,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     "remove_attachment",
     "list_automations",
     "add_automation",
+    "list_suggested_automations",
+    "list_automation_blueprints",
+    "add_suggested_automation",
     "set_automation_enabled",
     "remove_automation",
     "edit_automation",
@@ -120,6 +130,13 @@ pub const WEB_COMMANDS: &[&str] = &[
     "pulse_act",
     "pulse_discuss",
     "pulse_offer",
+    "pulse_live_open",
+    "pulse_live_current",
+    "pulse_live_allow",
+    "pulse_live_deny",
+    "pulse_live_stop",
+    "pulse_live_undo",
+    "pulse_live_close",
     "pulse_remind",
     "pulse_why",
     "pulse_saved",
@@ -132,6 +149,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "imagine_generate",
     "imagine_cancel",
     "imagine_image",
+    "chat_picture",
     "get_skills",
     "nyx_look",
     "get_queue",
@@ -812,8 +830,9 @@ fn refuse(req: Request) {
 }
 
 /// The page may load only its own files and talk only to this desktop.
-/// `media-src data:` plays Imagine's videos, which come as data: URLs.
-const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+/// `media-src data:` plays Imagine's videos, which come as data: URLs; the
+/// GitHub origins stream Nyx's card clips from assets-nyx-anim-1.
+const PAGE_CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data: https://github.com https://objects.githubusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 /// The UI file a page path names. A path with an empty, `.` or `..` part, a
 /// backslash or a drive is no file of the UI and gets the app's page: a dev
@@ -1033,6 +1052,7 @@ mod tests {
             "answer_permission",
             "answer_elicit",
             "get_settings",
+            "get_profile",
             "list_automations",
             "add_automation",
             "edit_automation",
@@ -1050,6 +1070,13 @@ mod tests {
             "pulse_act",
             "pulse_discuss",
             "pulse_offer",
+            "pulse_live_open",
+            "pulse_live_current",
+            "pulse_live_allow",
+            "pulse_live_deny",
+            "pulse_live_stop",
+            "pulse_live_undo",
+            "pulse_live_close",
             "pulse_remind",
             "pulse_why",
             "pulse_saved",
@@ -1062,6 +1089,7 @@ mod tests {
             "imagine_generate",
             "imagine_cancel",
             "imagine_image",
+            "chat_picture",
             "get_skills",
             "nyx_look",
             "get_queue",
@@ -1076,10 +1104,20 @@ mod tests {
             assert!(web_command(name), "{name}");
         }
         for name in [
+            // The game companion's switches and its note dialog: desktop only.
+            "companion_note",
+            "get_game_companion",
+            "set_game_companion",
+            "set_game_companion_ping",
             // Export saves on the computer and Wipe can't be undone: desktop only.
             "export_personal",
+            "export_memory_wiki",
             "wipe_personal",
             "save_settings",
+            // The web rail shows the profile; changing it stays on the computer.
+            "set_profile_name",
+            "pick_profile_picture",
+            "clear_profile_picture",
             "set_theme",
             "auto_setup",
             "set_api_key",
@@ -1111,6 +1149,17 @@ mod tests {
             "journal_act",
             "journal_to_mission",
             "get_permissions",
+            // The GitHub token is sent with these.
+            "get_github",
+            "save_github_token",
+            "run_github",
+            // Local model suggestions read this PC's hardware and models.
+            "get_local_model_news",
+            "set_local_model_news",
+            "local_model_news_check_now",
+            // Trusting a folder lets its hooks run commands here.
+            "get_hooks",
+            "set_hooks_trust",
             "get_scopes",
             "allow_scope",
             "revoke_scope",
@@ -1120,6 +1169,10 @@ mod tests {
             "remove_permission_rule",
             "remember_grant",
             "forget_grant",
+            // Standing hub send grant: desktop only (needs this computer's hub).
+            "get_hub_send_grant",
+            "allow_hub_send_every_time",
+            "ask_hub_send_each_time",
             "get_personalities",
             "set_personality",
             "set_explicit_personalities",
@@ -1155,6 +1208,19 @@ mod tests {
             "pick_attachments",
             "get_autostart",
             "set_autostart",
+            "get_bot_desktop",
+            "set_bot_desktop",
+            "bot_desktop_frame",
+            "get_browser_attach",
+            "get_channels",
+            "connect_channel",
+            "disconnect_channel",
+            "approve_channel_code",
+            "unpair_channel_sender",
+            "set_channel_asks",
+            "add_channel_webhook",
+            "remove_channel_webhook",
+            "save_browser_attach",
             "set_summon_hotkey",
             "set_notifications",
             "nyx_tiles",
@@ -1193,6 +1259,10 @@ mod tests {
             "game_minecraft",
             "game_rl",
             "home_open_clip",
+            "home_pc_details",
+            "get_pc_snapshot",
+            "get_living_wall",
+            "set_living_wall",
             "library_friends",
             "library_steam_settings",
             "mods_games",
@@ -1210,6 +1280,8 @@ mod tests {
             "mods_confirm",
             "mods_cancel",
             "mods_installed",
+            "mods_requested",
+            "mods_drop_request",
             "home_run_playbook",
             "home_turn_on",
             "home_setup",
@@ -1227,13 +1299,26 @@ mod tests {
             "change_row_restore",
             "pulse_review_apply",
             "pulse_review_issue",
+            // Done for you changes an automation on this computer.
+            "pulse_pause_automation",
+            "pulse_done_undo",
+            "pulse_done_stop",
+            "set_pulse_auto_pause",
             // Provider keys, grants and spend limits stay on the computer.
             "get_ai_models",
             "add_ai_provider",
+            "start_openrouter_sign_in",
+            "wait_openrouter_sign_in",
+            "stop_openrouter_sign_in",
+            "openrouter_sign_in_status",
             "allow_ai_provider",
             "answer_ai_models_card",
             "remove_ai_provider",
             "save_ai_spend",
+            "bench_ai_model",
+            "unbench_ai_model",
+            "save_web_search",
+            "save_brave_key",
             "revoke_ai_premium",
         ] {
             assert!(!web_command(name), "{name}");
@@ -1285,16 +1370,18 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 88] = [
+        const REVIEWED: [&str; 100] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
+            "add_suggested_automation",
             "answer_elicit",
             "answer_inbox",
             "answer_permission",
             "apply_memory_raw_tidy",
             "approve_memory_row",
             "cancel_chat",
+            "chat_picture",
             "check_connectors",
             "chip_outcome",
             "close_chat",
@@ -1316,6 +1403,7 @@ mod tests {
             "get_memory_retention",
             "get_mission",
             "get_privacy",
+            "get_profile",
             "get_pulse",
             "get_queue",
             "get_settings",
@@ -1326,14 +1414,23 @@ mod tests {
             "imagine_cancel",
             "imagine_generate",
             "imagine_image",
+            "list_automation_blueprints",
             "list_automations",
             "list_connectors",
+            "list_suggested_automations",
             "nyx_look",
             "pause_memory_row",
             "pulse_act",
             "pulse_discuss",
             "pulse_fix",
             "pulse_image",
+            "pulse_live_allow",
+            "pulse_live_close",
+            "pulse_live_current",
+            "pulse_live_deny",
+            "pulse_live_open",
+            "pulse_live_stop",
+            "pulse_live_undo",
             "pulse_offer",
             "pulse_remind",
             "pulse_saved",
@@ -1445,6 +1542,10 @@ mod tests {
         assert!(web_may_act(&act(json!({"kind": "unqueue"}))));
         assert!(web_may_act(&act(json!({"kind": "archive"}))));
         assert!(web_may_act(&act(json!({"kind": "move", "to": "doing"}))));
+        let pulse = |v: Value| serde_json::from_value::<crate::pulse::Act>(v).unwrap();
+        assert!(!web_may_pulse(&pulse(json!("addSkill"))));
+        assert!(web_may_pulse(&pulse(json!("accept"))));
+        assert!(web_may_pulse(&pulse(json!("dismiss"))));
         // Playbooks live on the computer, so starting one stays there too.
         assert!(!web_command("workboard_playbook"));
         // The tidy setting stays on the computer, like the rest of Settings.
@@ -1732,12 +1833,16 @@ mod tests {
             head.contains("Content-Security-Policy: default-src 'self'"),
             "{head}"
         );
-        // Imagine's videos are data: URLs; without this the page refuses them.
-        assert!(head.contains("media-src 'self' data:;"), "{head}");
+        // Imagine's videos are data: URLs; Nyx's card clips stream from GitHub
+        // releases. Only media-src allows those origins.
+        let expected_media =
+            "media-src 'self' data: https://github.com https://objects.githubusercontent.com;";
+        assert!(head.contains(expected_media), "{head}");
         // The desktop window's own CSP lives in tauri.conf.json: same rule.
         let conf: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
-        assert!(shell.contains("media-src 'self' data:;"), "{shell}");
+        assert!(shell.contains(expected_media), "{shell}");
+        assert!(shell.contains("img-src 'self' data:;"), "{shell}");
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");

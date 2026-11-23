@@ -41,6 +41,9 @@ pub struct ChatRow {
     /// The id of the project (`projects.json`) whose folder the chat works
     /// in, so History lists it under that project like the cabin does.
     pub project: Option<String>,
+    /// The permanent Main chat: always pinned, and History offers no pin,
+    /// rename or delete for it.
+    pub main: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -50,6 +53,8 @@ pub enum Role {
     Assistant,
     /// Tool steps are not replayed as cards; one muted line names them.
     Tools,
+    /// The model's thinking, saved where it was shown above the reply.
+    Thought,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,7 +87,7 @@ fn shell_id(id: &str) -> Result<&str, String> {
 /// When the chat's file last changed, or its start time if that can't be read.
 /// Never before the start: the file system's coarse clock can stamp a file
 /// written in the same millisecond a few ms behind `now_ms`.
-fn updated_ms(info: &SessionInfo) -> u64 {
+pub(crate) fn updated_ms(info: &SessionInfo) -> u64 {
     grokhub_agent::session_file(&info.id)
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
@@ -99,6 +104,7 @@ fn row(info: &SessionInfo) -> ChatRow {
         updated: updated_ms(info),
         pinned: false,
         project: None,
+        main: false,
     }
 }
 
@@ -116,6 +122,7 @@ pub fn pinned_ids(config_dir: &Path) -> Vec<String> {
 /// pinned now. A chat with no file yet can't be pinned.
 pub fn toggle_pin(config_dir: &Path, id: &str) -> Result<bool, String> {
     let id = shell_id(id)?;
+    crate::chat_tabs::refuse_main(config_dir, id)?;
     {
         let _config = ConfigGuard::set(config_dir);
         grokhub_agent::load_session(id)?;
@@ -145,10 +152,12 @@ fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
         .collect();
     let config_dir = grokhub_agent::perm::config_dir();
     let pins = pinned_ids(&config_dir);
+    let main = crate::chat_tabs::main_id(&config_dir);
     let nodes = crate::projects::load(&config_dir).unwrap_or_default();
     let home = std::env::var("HOME").ok();
     for (row, info) in &mut found {
-        row.pinned = pins.contains(&row.id);
+        row.main = main.as_deref() == Some(row.id.as_str());
+        row.pinned = row.main || pins.contains(&row.id);
         row.project = project_of(&nodes, &info.cwd, home.as_deref());
     }
     found.sort_by(|(a, _), (b, _)| {
@@ -163,6 +172,14 @@ fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
 pub fn list(config_dir: &Path) -> Vec<ChatRow> {
     let _config = ConfigGuard::set(config_dir);
     shell_sessions().into_iter().map(|(row, _)| row).collect()
+}
+
+/// Every chat as saved, newest activity first, pins left out of the order.
+pub fn all_saved(config_dir: &Path) -> Vec<SessionInfo> {
+    let _config = ConfigGuard::set(config_dir);
+    let mut found = shell_sessions();
+    found.sort_by(|(a, _), (b, _)| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
+    found.into_iter().map(|(_, info)| info).collect()
 }
 
 /// Chats whose title or transcript holds `query`, ignoring case. A blank
@@ -184,8 +201,9 @@ pub fn search(config_dir: &Path, query: &str) -> Vec<ChatRow> {
         .collect()
 }
 
-/// The transcript's lines: user and assistant messages as they were shown,
-/// and each run of tool steps folded into one `Tools` line naming them.
+/// The transcript's lines: user and assistant messages and the model's
+/// thoughts as they were shown, and each run of tool steps folded into one
+/// `Tools` line naming them.
 pub fn lines(info: &SessionInfo) -> Vec<Line> {
     // `transcript_pairs` writes a tool call as "Tool {name}\n{arguments}" and
     // its output as "Tool result\n{output}"; the names come from the input.
@@ -198,7 +216,14 @@ pub fn lines(info: &SessionInfo) -> Vec<Line> {
         })
         .collect();
     let mut out: Vec<Line> = Vec::new();
-    for (role, text) in grokhub_agent::transcript_pairs(info) {
+    for (role, text) in grokhub_agent::shown_pairs(info) {
+        if role == "thought" {
+            out.push(Line {
+                role: Role::Thought,
+                text,
+            });
+            continue;
+        }
         let assistant = role == "assistant";
         let call = tools
             .iter()
@@ -259,6 +284,7 @@ pub fn load(config_dir: &Path, id: &str, limit: usize) -> Result<Transcript, Str
 /// Renames a saved chat. A chat with no file yet can't be renamed.
 pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
     let id = shell_id(id)?;
+    crate::chat_tabs::refuse_main(config_dir, id)?;
     if title.trim().is_empty() {
         return Err(NO_NAME.into());
     }
@@ -268,9 +294,10 @@ pub fn rename(config_dir: &Path, id: &str, title: &str) -> Result<(), String> {
 }
 
 /// Deletes the chat's file and its files; a turn still running is not
-/// written back. `/bg` and scheduled forks of it go with it.
+/// written back. Any sessions forked from it go with it.
 pub fn delete(config_dir: &Path, id: &str) -> Result<(), String> {
     let id = shell_id(id)?;
+    crate::chat_tabs::refuse_main(config_dir, id)?;
     match delete_chats(config_dir, &[id.to_string()]).failed {
         Some(why) => Err(why),
         None => Ok(()),
@@ -308,6 +335,10 @@ fn delete_chats(config_dir: &Path, ids: &[String]) -> Deleted {
         }
     }
     grokhub_agent::delete_forks_of(&gone);
+    for id in &gone {
+        crate::chat_zoom::forget(config_dir, id);
+    }
+    crate::claude_chat::forget_chats(config_dir, &gone);
     let pins = pinned_ids(config_dir);
     let kept: Vec<&String> = pins.iter().filter(|p| !gone.contains(p)).collect();
     if kept.len() != pins.len() {
@@ -460,7 +491,13 @@ fn delete_all_with(
     // Only the click is decided under the lock: the listing before it and
     // the deleting after it read and write the disk, and Cancel (a
     // main-thread command) takes the same lock.
-    let listed: Vec<String> = list(config_dir).into_iter().map(|r| r.id).collect();
+    // Main always stays, so Delete all never names it.
+    let main = crate::chat_tabs::main_id(config_dir);
+    let listed: Vec<String> = list(config_dir)
+        .into_iter()
+        .map(|r| r.id)
+        .filter(|id| Some(id) != main.as_ref())
+        .collect();
     let named = {
         let mut arm = arm.lock().unwrap_or_else(|e| e.into_inner());
         match arm.click(now) {
@@ -526,8 +563,8 @@ enum Source {
 ///
 /// Cabin chats list read-only while both apps ship: a session file has one
 /// writer, so the shell never resumes, renames or deletes them. Once the cabin
-/// is retired this is where they become the shell's own. Forks (`/bg` and
-/// scheduled runs) and the shell's own chats stay off this list.
+/// is retired this is where they become the shell's own. Forked sessions and
+/// the shell's own chats stay off this list.
 pub fn read_only(config_dir: &Path, cli_home: Option<&Path>, query: &str) -> Vec<ReadOnlyRow> {
     read_only_sources(config_dir, cli_home, query)
         .into_iter()
@@ -794,6 +831,8 @@ mod tests {
     struct Model {
         reply: &'static str,
         tool: bool,
+        /// Thinking streamed before the reply's text.
+        thought: Option<&'static str>,
         requests: Mutex<Vec<ResponsesRequest>>,
     }
 
@@ -802,6 +841,16 @@ mod tests {
             Arc::new(Self {
                 reply,
                 tool,
+                thought: None,
+                requests: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn thinking(reply: &'static str, thought: &'static str) -> Arc<Self> {
+            Arc::new(Self {
+                reply,
+                tool: true,
+                thought: Some(thought),
                 requests: Mutex::new(Vec::new()),
             })
         }
@@ -853,6 +902,9 @@ mod tests {
                     ..TurnOutput::default()
                 });
             }
+            if let Some(thought) = self.thought {
+                sink(StreamEvent::ReasoningDelta(thought.into()));
+            }
             sink(StreamEvent::TextDelta(self.reply.into()));
             Ok(TurnOutput {
                 text: self.reply.into(),
@@ -887,6 +939,52 @@ mod tests {
             role,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn a_reopened_chat_shows_its_thought_above_the_reply_and_exports_leave_it_out() {
+        let (config, workspace) = (temp_dir("thought-cfg"), temp_dir("thought-ws"));
+        std::fs::write(workspace.join("a.txt"), "a typo here").expect("a.txt");
+        let id = "shell-history-thought";
+        let model = Model::thinking("It says: a typo here.", "The text is on line 1.");
+        turn(
+            id,
+            &config,
+            &workspace,
+            Arc::clone(&model),
+            "what does a.txt say?",
+        );
+        let shown = load(&config, id, LOAD_CAP).expect("load");
+        assert_eq!(
+            shown.lines,
+            vec![
+                line(Role::User, "what does a.txt say?"),
+                line(Role::Tools, "read_file"),
+                line(Role::Thought, "The text is on line 1."),
+                line(Role::Assistant, "It says: a typo here."),
+            ]
+        );
+        let tail = load(&config, id, 2).expect("Show earlier counts the thought");
+        assert_eq!(tail.earlier, 2);
+        let md = crate::export::markdown(&shown);
+        assert!(md.contains("It says: a typo here."), "{md}");
+        assert!(!md.contains("line 1"), "{md}");
+        let saved = saved(&config, id).expect("saved");
+        let sent: Vec<String> = saved
+            .input()
+            .into_iter()
+            .filter_map(|item| match item {
+                InputItem::Message { content, .. } => content.into_iter().find_map(|p| match p {
+                    ContentPart::InputText(t) => Some(t),
+                    ContentPart::InputImage(_) => None,
+                }),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            sent.iter().all(|t| !t.contains("line 1")),
+            "the thought never goes back to the model: {sent:?}"
+        );
     }
 
     #[test]
@@ -1222,7 +1320,7 @@ mod tests {
         assert!(!file.exists());
         assert!(
             !fork_file.exists(),
-            "a /bg fork holds a copy of the chat, so it goes too"
+            "a forked session holds a copy of the chat, so it goes too"
         );
         assert_eq!(list(&config), Vec::<ChatRow>::new());
         assert!(load(&config, id, LOAD_CAP).is_err());
@@ -1466,6 +1564,8 @@ mod tests {
             path: path.into(),
             parent: parent.map(str::to_string),
             open: true,
+            remote_url: None,
+            preferred_branch: None,
         }
     }
 

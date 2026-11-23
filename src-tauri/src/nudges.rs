@@ -353,8 +353,15 @@ pub fn tick_with(
     save_ledger(config_dir, &ledger)?;
     let mut posted = Vec::new();
     for card in out.cards {
-        if crate::pulse::add_post(config_dir, card.clone())? {
-            posted.push(card);
+        match crate::pulse::add_post(config_dir, card.clone()) {
+            Ok(true) => posted.push(card),
+            Ok(false) => {}
+            // Cards already on the page still go back, so their looks run.
+            Err(e) if posted.is_empty() => return Err(e),
+            Err(e) => {
+                eprintln!("nudges: {e}");
+                break;
+            }
         }
     }
     Ok(posted)

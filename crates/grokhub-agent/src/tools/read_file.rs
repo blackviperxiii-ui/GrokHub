@@ -324,6 +324,7 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\nfour\n").unwrap();
         let text = execute(
             &dir,
+            "shell-a-b",
             "read_file",
             r#"{"target_file":"a.txt","offset":2,"limit":2}"#,
         );
@@ -337,7 +338,12 @@ mod tests {
             .write_image(&[1, 2, 3], 1, 1, image::ExtendedColorType::Rgb8)
             .unwrap();
         std::fs::write(dir.join("dot.png"), &png).unwrap();
-        let img = execute(&dir, "read_file", r#"{"target_file":"dot.png"}"#);
+        let img = execute(
+            &dir,
+            "shell-a-b",
+            "read_file",
+            r#"{"target_file":"dot.png"}"#,
+        );
         assert!(!img.failed, "{}", img.text);
         assert_eq!(
             img.text,

@@ -100,6 +100,42 @@ pub struct LaunchArgs {
     pub cpu_only: bool,
     /// How the engine shares the machine (poll, priority, batch size).
     pub run: super::local_flags::RunFlags,
+    /// The vision projector loaded beside the model, for a chat whose newest
+    /// message carries a picture (see [`vision_launch_with`]).
+    pub projector: Option<Box<ProjectorArgs>>,
+}
+
+/// The vision projector half of one launch (`--mmproj`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectorArgs {
+    pub file: PathBuf,
+    /// What it takes: its file plus the picture encoder's compute buffer
+    /// ([`projector_mb`]).
+    pub mb: u64,
+    /// The engine lists `--no-mmproj-offload`, which keeps it in RAM.
+    pub off_gpu_flag: bool,
+}
+
+impl ProjectorArgs {
+    /// `--mmproj <file>`, kept off the GPU (`--no-mmproj-offload`) when the
+    /// model is (`on_cpu`): `--device none` alone doesn't keep it there,
+    /// since the picture encoder starts the GPU backend on its own.
+    pub fn to_args(&self, on_cpu: bool) -> Vec<String> {
+        let mut a = vec!["--mmproj".to_string(), self.file.display().to_string()];
+        if on_cpu && self.off_gpu_flag {
+            a.push("--no-mmproj-offload".into());
+        }
+        a
+    }
+}
+
+/// Share added on top of a projector's file for its compute buffer.
+pub const PROJECTOR_BUFFER_PCT: u64 = 15;
+
+/// MB a projector file of `bytes` takes once loaded.
+pub fn projector_mb(bytes: u64) -> u64 {
+    let file = bytes.div_ceil(1024 * 1024);
+    file + file * PROJECTOR_BUFFER_PCT / 100
 }
 
 impl LaunchArgs {
@@ -136,6 +172,9 @@ impl LaunchArgs {
         a.extend(self.run.to_args());
         if let Some(d) = &self.draft {
             a.extend(d.to_args());
+        }
+        if let Some(v) = &self.projector {
+            a.extend(v.to_args(self.cpu_only || self.ngl == 0));
         }
         if self.cpu_only {
             // `-ngl 0` alone still lets the GPU take big matmuls; this keeps
@@ -196,15 +235,20 @@ pub fn fits_beside(now: FreeNow, need: (u64, u64)) -> bool {
     room(now.vram_free_mb, need.0, 0) && room(now.ram_free_mb, need.1, BESIDE_RAM_RESERVE_MB)
 }
 
-/// `prev` with every GPU left out: no layers or experts on a GPU, no split,
-/// no drafter (it would run on the GPU too).
+/// `prev` with every GPU left out: no layers or experts on a GPU, no split.
+/// A drafter stays with its model, in RAM too.
 pub fn on_cpu(prev: &LaunchArgs) -> LaunchArgs {
     LaunchArgs {
         backend: Backend::Cpu,
         ngl: 0,
         n_cpu_moe: None,
         tensor_split: None,
-        draft: None,
+        draft: prev.draft.as_ref().map(|d| {
+            Box::new(DraftArgs {
+                on_gpu: false,
+                ..(**d).clone()
+            })
+        }),
         cpu_only: true,
         run: run_with_slots(1),
         ..prev.clone()
@@ -239,7 +283,7 @@ const CTX_STEPS: [u32; 6] = [131_072, 65_536, 32_768, 16_384, 8_192, 4_096];
 /// The smallest context worth keeping q8 KV for; below it q4 buys room.
 const Q8_FLOOR_CTX: u32 = 8_192;
 /// Share of MoE weights that are experts (and may stay in RAM).
-const EXPERT_SHARE_PCT: u64 = 80;
+pub(crate) const EXPERT_SHARE_PCT: u64 = 80;
 /// RAM left to the OS when nothing better is known.
 const RAM_RESERVE_MB: u64 = 4_096;
 
@@ -319,9 +363,42 @@ fn ctx_steps(
     CTX_STEPS.into_iter().filter(move |c| *c <= cap.max(4_096))
 }
 
-/// Whether the model and its KV fit `total_mb`, at the slots `slots(ctx)` gives.
-fn fits(meta: &GgufMeta, ctx: u32, kv: KvType, total_mb: u64, slots: &dyn Fn(u32) -> u32) -> bool {
-    meta.file_mb + kv_mb_for(meta, ctx, kv, slots(ctx)) + overhead_mb(ctx) <= total_mb
+/// MB one model (or drafter) takes at `ctx`: its file, KV cache and buffers.
+fn need_mb(meta: &GgufMeta, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+    meta.file_mb + kv_mb_for(meta, ctx, kv, seqs) + overhead_mb(ctx)
+}
+
+/// MB the drafter in `reserve` takes beside the model at `ctx`.
+fn reserve_mb(reserve: Option<&GgufMeta>, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+    reserve.map_or(0, |d| need_mb(d, ctx, kv, seqs))
+}
+
+/// What a launch loads beside the model: the drafter it must load with, and
+/// the MB of a vision projector (0 without one).
+#[derive(Clone, Copy, Default)]
+struct Beside<'a> {
+    drafter: Option<&'a GgufMeta>,
+    projector_mb: u64,
+}
+
+impl Beside<'_> {
+    fn mb(&self, ctx: u32, kv: KvType, seqs: u32) -> u64 {
+        reserve_mb(self.drafter, ctx, kv, seqs) + self.projector_mb
+    }
+}
+
+/// Whether the model, its KV and what loads beside it fit `total_mb`, at
+/// the slots `slots(ctx)` gives.
+fn fits(
+    meta: &GgufMeta,
+    beside: Beside<'_>,
+    ctx: u32,
+    kv: KvType,
+    total_mb: u64,
+    slots: &dyn Fn(u32) -> u32,
+) -> bool {
+    let seqs = slots(ctx);
+    need_mb(meta, ctx, kv, seqs) + beside.mb(ctx, kv, seqs) <= total_mb
 }
 
 /// Context past this splits KV across GPU and RAM badly; partial offload stops here.
@@ -333,6 +410,7 @@ const CPU_CTX_CAP: u32 = 8_192;
 /// only q4 reaches the floor context.
 fn pick_ctx(
     meta: &GgufMeta,
+    beside: Beside<'_>,
     steps: &[u32],
     limit: u64,
     floor: u32,
@@ -343,7 +421,7 @@ fn pick_ctx(
         steps
             .iter()
             .copied()
-            .find(|c| fits(meta, *c, kv, limit, slots))
+            .find(|c| fits(meta, beside, *c, kv, limit, slots))
     };
     if let Some(kv) = kv {
         return largest(kv).map(|c| (c, kv));
@@ -358,13 +436,41 @@ fn pick_ctx(
 
 /// The launch for this machine, model and state. The whole model on the GPU
 /// wins over a longer context; past that, the longest context that fits.
+/// `reserve` is the drafter the model must load with: its file, KV and
+/// buffers come out of the room first, so the context shrinks before the
+/// drafter is left out.
 pub fn autoconfig(
     p: &LocalProfile,
     meta: &GgufMeta,
     backend: Backend,
     state: GovState,
     o: &Overrides,
+    reserve: Option<&GgufMeta>,
 ) -> LaunchArgs {
+    autoconfig_beside(
+        p,
+        meta,
+        backend,
+        state,
+        o,
+        Beside {
+            drafter: reserve,
+            projector_mb: 0,
+        },
+    )
+}
+
+/// [`autoconfig`] with what loads beside the model: a vision projector
+/// comes out of the room like the drafter, on the GPU beside a whole model.
+fn autoconfig_beside(
+    p: &LocalProfile,
+    meta: &GgufMeta,
+    backend: Backend,
+    state: GovState,
+    o: &Overrides,
+    beside: Beside<'_>,
+) -> LaunchArgs {
+    let reserve = beside.drafter;
     let (gpu_mb, ram_mb) = budgets(p, backend, state);
     let steps: Vec<u32> = ctx_steps(meta, state, o.ctx).collect();
     let floor = Q8_FLOOR_CTX
@@ -373,9 +479,11 @@ pub fn autoconfig(
     let on_cpu = gpu_mb == 0;
     let slots = |ctx: u32| super::local_flags::slot_count(state, ctx, on_cpu);
     let full = (gpu_mb > 0)
-        .then(|| pick_ctx(meta, &steps, gpu_mb, floor, o.kv, &slots))
+        .then(|| pick_ctx(meta, beside, &steps, gpu_mb, floor, o.kv, &slots))
         .flatten()
-        .filter(|(c, _)| *c >= floor);
+        // A model split across GPU and RAM can't run its drafter, so a pair
+        // takes a shorter context to stay whole on the GPU.
+        .filter(|(c, _)| *c >= floor || reserve.is_some());
     let cap = if gpu_mb > 0 {
         PARTIAL_CTX_CAP
     } else {
@@ -383,11 +491,14 @@ pub fn autoconfig(
     };
     let capped: Vec<u32> = steps.iter().copied().filter(|c| *c <= cap).collect();
     let (ctx, kv) = full
-        .or_else(|| pick_ctx(meta, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
+        .or_else(|| pick_ctx(meta, beside, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
         .unwrap_or((4_096, o.kv.unwrap_or(KvType::Q4)));
     let all_layers = meta.block_count + 1;
     let seqs = slots(ctx);
-    let (ngl, n_cpu_moe) = offload(meta, gpu_mb, ctx, kv, seqs);
+    // The drafter (and a projector) sit on the GPU beside a whole model, so
+    // the layers get what they leave.
+    let gpu_left = gpu_mb.saturating_sub(beside.mb(ctx, kv, seqs));
+    let (ngl, n_cpu_moe) = offload(meta, gpu_left, ctx, kv, seqs);
     let ngl = o.ngl.map_or(ngl, |n| n.min(all_layers));
     let p_cores = p.cpu.p_cores.max(1);
     let threads = match state {
@@ -415,6 +526,7 @@ pub fn autoconfig(
         draft: None,
         cpu_only: false,
         run: run_with_slots(seqs),
+        projector: None,
     }
 }
 
@@ -482,18 +594,14 @@ pub enum Retry {
     SmallerModel,
 }
 
-/// After the `attempt`th out-of-memory failure: first the drafter goes,
-/// then 10% fewer GPU layers (for MoE, 10% more layers' experts in RAM), up
-/// to [`MAX_OOM_RETRIES`] times, then the next smaller model.
+/// After the `attempt`th out-of-memory failure: 10% fewer GPU layers (for
+/// MoE, 10% more layers' experts in RAM), up to [`MAX_OOM_RETRIES`] times,
+/// then the next smaller model. A model with a drafter goes straight to a
+/// smaller model: the pair never splits, and fewer layers leave no room for
+/// the drafter anyway.
 pub fn after_oom(prev: &LaunchArgs, attempt: u8) -> Retry {
-    if attempt > MAX_OOM_RETRIES {
+    if attempt > MAX_OOM_RETRIES || prev.draft.is_some() {
         return Retry::SmallerModel;
-    }
-    if prev.draft.is_some() {
-        return Retry::Again(LaunchArgs {
-            draft: None,
-            ..prev.clone()
-        });
     }
     if prev.ngl == 0 {
         return Retry::SmallerModel;
@@ -841,6 +949,15 @@ pub fn set_profile(p: LocalProfile, tune_dir: PathBuf) {
     }
 }
 
+/// Tests: forget the hardware read.
+#[cfg(test)]
+pub(crate) fn forget_profile() {
+    if let Ok(mut l) = live().lock() {
+        l.profile = None;
+        l.tune_dir = None;
+    }
+}
+
 /// The cabin's hardware read, once it has one.
 pub fn profile() -> Option<LocalProfile> {
     live().lock().ok()?.profile.clone()
@@ -852,8 +969,8 @@ pub fn set_state(s: GovState) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn state() -> GovState {
+/// The governor state launches plan in.
+pub fn state() -> GovState {
     live().lock().map(|l| l.state).unwrap_or_default()
 }
 
@@ -876,10 +993,32 @@ fn engine_files(binary: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// How a launch refused because the model and its drafter don't fit
+/// together begins. The caller tries a smaller model.
+pub const PAIR_NO_ROOM: &str = "there isn't room for the model and its draft model together";
+
+/// Why a pair was refused when the Settings GPU layers override is the cause.
+pub const PAIR_OVERRIDE: &str = "the GPU layers override keeps part of the model off the GPU";
+
+/// The refusal for a pair planned as `a`: it names the GPU layers override
+/// (`override_ngl`) when that keeps part of a launch that puts the pair on
+/// the GPU (`on_gpu`) off it, since a pair only runs whole there.
+pub fn pair_refusal(override_ngl: Option<u32>, a: &LaunchArgs, on_gpu: bool) -> String {
+    if on_gpu && override_ngl.is_some_and(|n| n < a.all_layers) {
+        format!("{PAIR_NO_ROOM}, because {PAIR_OVERRIDE}")
+    } else {
+        PAIR_NO_ROOM.to_string()
+    }
+}
+
+/// A planned launch, its `autotune.json` key and folder.
+pub type Planned = (LaunchArgs, String, PathBuf);
+
 /// The planned launch for `model` once the cabin has read the hardware;
-/// `None` (the one-shot `local_perf` defaults) before that or when the GGUF
-/// header can't be read. Also returns the `autotune.json` key and folder.
-pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
+/// `Ok(None)` (the one-shot `local_perf` defaults) before that or when the
+/// GGUF header can't be read. Also returns the `autotune.json` key and
+/// folder. `Err` ([`PAIR_NO_ROOM`]) when the model and its drafter don't fit.
+pub fn launch_for(binary: &Path, model: &Path) -> Result<Option<Planned>, String> {
     launch_with(binary, model, None)
 }
 
@@ -888,37 +1027,126 @@ pub fn launch_with(
     binary: &Path,
     model: &Path,
     free: Option<FreeNow>,
-) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model, free).map(|(args, plan, key, dir)| {
-        local_spec::launched(&plan, &dir);
-        (args, key, dir)
-    })
+) -> Result<Option<Planned>, String> {
+    let Some(Planning {
+        args,
+        plan,
+        key,
+        dir,
+        refusal,
+        ..
+    }) = planned(binary, model, free)
+    else {
+        return Ok(None);
+    };
+    if let Some(r) = refusal {
+        if let Ok(mut last) = LAST_REFUSAL.lock() {
+            *last = Some((model.to_path_buf(), r));
+        }
+        let o = live().lock().map_or(None, |l| l.overrides.ngl);
+        return Err(pair_refusal(o, &args, r.on_gpu));
+    }
+    local_spec::launched(&plan, &dir);
+    Ok(Some((args, key, dir)))
+}
+
+/// Where a launch sized a pair it refused (see [`local_spec::fits`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pool {
+    Vram,
+    Ram,
+}
+
+/// A pair a launch refused, for the hold that keeps the planner from
+/// reloading into the same refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairRefusal {
+    /// VRAM when the launch planned the pair on a GPU, else RAM.
+    pub pool: Pool,
+    /// What that pool had free at the refusal (the launch's own live read,
+    /// taken after the previous server stopped); `None` without a reading.
+    pub free_mb: Option<u64>,
+    /// The governor state the launch planned in.
+    pub state: GovState,
+    /// The launch planned the pair on a GPU (an iGPU too).
+    pub on_gpu: bool,
+}
+
+/// The refusal of a pair launched as `a` on `p` (its free memory already
+/// `now`) in `state`.
+fn refusal_of(p: &LocalProfile, a: &LaunchArgs, state: GovState, now: FreeNow) -> PairRefusal {
+    let on_gpu = budgets(p, a.backend, state).0 > 0;
+    // A GPU launch with no VRAM reading was sized from a fixed figure that
+    // more free RAM doesn't change: no baseline, so it holds until unload.
+    let (pool, free_mb) = if on_gpu {
+        (Pool::Vram, now.vram_free_mb)
+    } else {
+        (Pool::Ram, now.ram_free_mb)
+    };
+    PairRefusal {
+        pool,
+        free_mb,
+        state,
+        on_gpu,
+    }
+}
+
+/// The last pair refusal [`launch_with`] gave, and for which model.
+static LAST_REFUSAL: Mutex<Option<(PathBuf, PairRefusal)>> = Mutex::new(None);
+
+/// The refusal [`launch_with`] last gave `model`, taken.
+pub fn take_refusal(model: &Path) -> Option<PairRefusal> {
+    let mut last = LAST_REFUSAL.lock().ok()?;
+    match last.take() {
+        Some((m, r)) if m == model => Some(r),
+        other => {
+            *last = other;
+            None
+        }
+    }
 }
 
 /// The draft half of [`launch_for`], for the speed test.
 pub fn draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
-    planned(binary, model, None).map(|(_, plan, _, _)| plan)
+    draft_plan_with(binary, model, None)
+}
+
+/// [`draft_plan`] planned against `free` instead of the probe's reading.
+pub fn draft_plan_with(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+) -> Option<local_spec::Plan> {
+    planned(binary, model, free).map(|p| p.plan)
 }
 
 /// What a fresh start of the running model would see free now: the probe's
 /// reading with the model's own memory added back.
 pub fn replan_free() -> FreeNow {
-    let own = live().lock().map(|l| l.own).unwrap_or_default();
-    with_own(free_now(), own)
+    with_own(free_now(), own_use())
+}
+
+/// What the running model itself takes, as measured once it was resident.
+pub fn own_use() -> FreeNow {
+    live().lock().map(|l| l.own).unwrap_or_default()
 }
 
 /// [`launch_for`] as a fresh start of the running model would plan it (see
 /// [`replan_free`]), leaving the drafter's record alone. `None` before the
-/// profile is read or when the header can't be.
-pub fn replan_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
-    planned(binary, model, Some(replan_free())).map(|(args, _, key, dir)| (args, key, dir))
+/// profile is read, when the header can't be, or when the model and its
+/// drafter no longer fit (the reload then picks a smaller model).
+pub fn replan_for(binary: &Path, model: &Path) -> Option<Planned> {
+    planned(binary, model, Some(replan_free()))
+        .filter(|p| p.refusal.is_none())
+        .map(|p| (p.args, p.key, p.dir))
 }
 
 /// The second server of a warm relaunch, planned as `next`, fits beside the
-/// running one in what is free now. Never with a drafter (its memory isn't
-/// counted) or when the header or a reading is missing.
+/// running one in what is free now. Never with a drafter or a vision
+/// projector (their memory isn't counted) or when the header or a reading is
+/// missing.
 pub fn warm_fits(model: &Path, next: &LaunchArgs) -> bool {
-    if next.draft.is_some() {
+    if next.draft.is_some() || next.projector.is_some() {
         return false;
     }
     let Ok(meta) = gguf::read_meta(model) else {
@@ -932,26 +1160,158 @@ pub fn tune_dir() -> Option<PathBuf> {
     live().lock().ok()?.tune_dir.clone()
 }
 
-fn planned(
+/// One planned launch: its args and draft plan, its `autotune.json` key and
+/// folder, and the refusal when its pair doesn't fit.
+struct Planning {
+    args: LaunchArgs,
+    plan: local_spec::Plan,
+    key: String,
+    dir: PathBuf,
+    refusal: Option<PairRefusal>,
+    /// Planned with a vision projector: whether the model, its drafter and
+    /// the projector all fit. `true` without one.
+    projector_fits: bool,
+    /// Where a vision launch that doesn't fit was sized, for the hold that
+    /// keeps a picture turn from tearing down the running model for it again.
+    projector_refusal: Option<PairRefusal>,
+}
+
+fn planned(binary: &Path, model: &Path, free: Option<FreeNow>) -> Option<Planning> {
+    planned_as(binary, model, free, false, None)
+}
+
+/// Why a launch with a vision projector didn't plan; the caller loads the
+/// model without one, or a smaller model that has one.
+pub const NO_PROJECTOR: &str = "no vision projector for this model is on disk";
+/// A vision launch that doesn't fit: the walk tries a smaller model.
+pub const PROJECTOR_NO_ROOM: &str =
+    "there isn't room for the model, its draft model and its vision projector together";
+
+/// The vision projector a launch of `model` loads: the catalog's projector
+/// file beside the model, when this engine lists `--mmproj` and has never
+/// refused it with this model ([`super::local_vision::refused`]).
+pub fn projector_args(binary: &Path, model: &Path) -> Option<ProjectorArgs> {
+    let file = super::local_vision::projector_file(model)?;
+    let options = super::local_flags::engine_options(binary);
+    if !options.contains("--mmproj") || super::local_vision::refused(binary, model) {
+        return None;
+    }
+    let bytes = std::fs::metadata(&file).ok()?.len();
+    Some(ProjectorArgs {
+        file,
+        mb: projector_mb(bytes),
+        off_gpu_flag: options.contains("--no-mmproj-offload"),
+    })
+}
+
+/// [`launch_with`] with `model`'s vision projector beside it and its
+/// drafter. A pair that doesn't fit with the projector is refused
+/// ([`PROJECTOR_NO_ROOM`]) without the record [`take_refusal`] reads: the
+/// pair itself may well fit, and the walk tries a smaller model.
+pub fn vision_launch_with(
     binary: &Path,
     model: &Path,
     free: Option<FreeNow>,
-) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
-    planned_as(binary, model, free, false)
+) -> Result<Option<Planned>, String> {
+    let projector = projector_args(binary, model).ok_or(NO_PROJECTOR)?;
+    let Some(p) = planned_as(binary, model, free, false, Some(&projector)) else {
+        return Ok(None);
+    };
+    if !p.projector_fits {
+        return Err(PROJECTOR_NO_ROOM.into());
+    }
+    local_spec::launched(&p.plan, &p.dir);
+    Ok(Some((p.args, p.key, p.dir)))
+}
+
+/// Whether a vision launch of `model` fits as a fresh start would see
+/// memory (`free`), planned as [`vision_launch_with`] would but launching
+/// nothing. `Ok` also before the hardware read (the start decides then);
+/// `Err` says where it was sized, or `None` without a projector to load.
+pub fn vision_fit(
+    binary: &Path,
+    model: &Path,
+    free: Option<FreeNow>,
+) -> Result<(), Option<PairRefusal>> {
+    let projector = projector_args(binary, model).ok_or(None)?;
+    match planned_as(binary, model, free, false, Some(&projector)) {
+        Some(p) if !p.projector_fits => Err(p.projector_refusal),
+        _ => Ok(()),
+    }
+}
+
+/// [`replan_for`] keeping the running launch's vision projector, so a
+/// governor restart with the same plan keeps it loaded. `None` when it no
+/// longer fits.
+pub fn replan_vision_for(binary: &Path, model: &Path) -> Option<Planned> {
+    let projector = projector_args(binary, model)?;
+    planned_as(binary, model, Some(replan_free()), false, Some(&projector))
+        .filter(|p| p.projector_fits)
+        .map(|p| (p.args, p.key, p.dir))
+}
+
+/// The ids of the models in `on_disk` that can load a vision projector on
+/// this engine ([`projector_args`]), for the swap planner.
+pub fn vision_view(binary: &Path, on_disk: &[(&'static LocalModel, PathBuf)]) -> Vec<&'static str> {
+    on_disk
+        .iter()
+        .filter(|(_, path)| projector_args(binary, path).is_some())
+        .map(|(m, _)| m.id)
+        .collect()
+}
+
+/// The backend a launch of `binary` uses on `p`.
+fn backend_for(p: &LocalProfile, binary: &Path) -> Backend {
+    let files = engine_files(binary);
+    let files: Vec<&str> = files.iter().map(String::as_str).collect();
+    let available = local_profile::engine_backends(&files);
+    // The speed test gates backends once card 5.3 caches it; until then the engine decides.
+    local_profile::choose_backend(p, &available, &|_| true)
+}
+
+/// The hardware read, and where `autotune.json` lives.
+fn hardware_read() -> Option<(LocalProfile, PathBuf)> {
+    let l = live().lock().ok()?;
+    Some((l.profile.clone()?, l.tune_dir.clone()?))
+}
+
+/// The ids of the models in `on_disk` that launch with a separate drafter
+/// file on this device and engine (see [`local_spec::pairing`]), so the swap
+/// planner sizes them as a pair. Empty before the hardware read, when a
+/// launch runs the one-shot defaults alone.
+pub fn pair_view(binary: &Path, on_disk: &[(&'static LocalModel, PathBuf)]) -> Vec<&'static str> {
+    let Some((p, dir)) = hardware_read() else {
+        return Vec::new();
+    };
+    let device = device_label(&p, backend_for(&p, binary));
+    let flags = local_spec::help_flags(binary);
+    on_disk
+        .iter()
+        .filter(|(_, path)| {
+            local_spec::header(path).is_some_and(|meta| {
+                local_spec::pairing(&flags, path, &meta, &dir, &device)
+                    .reserve()
+                    .is_some()
+            })
+        })
+        .map(|(m, _)| m.id)
+        .collect()
 }
 
 /// [`draft_plan`] for `model` in the gaming setup, whether a game runs or not.
 pub fn gaming_draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
-    planned_as(binary, model, None, true).map(|(_, plan, _, _)| plan)
+    planned_as(binary, model, None, true, None).map(|p| p.plan)
 }
 
-/// [`planned`]; `gaming` plans the gaming setup even with no game running.
+/// [`planned`]; `gaming` plans the gaming setup even with no game running,
+/// and `projector` plans the vision projector beside the model.
 fn planned_as(
     binary: &Path,
     model: &Path,
     free: Option<FreeNow>,
     gaming: bool,
-) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
+    projector: Option<&ProjectorArgs>,
+) -> Option<Planning> {
     let (p, dir, state, o, probe) = {
         let l = live().lock().ok()?;
         (
@@ -966,49 +1326,78 @@ fn planned_as(
     let now = free.unwrap_or_else(|| probe.as_ref().map(|f| f()).unwrap_or_default());
     let p = with_free_now(p, now);
     let meta = gguf::read_meta(model).ok()?;
-    let files = engine_files(binary);
-    let files: Vec<&str> = files.iter().map(String::as_str).collect();
-    let available = local_profile::engine_backends(&files);
-    // The speed test gates backends once card 5.3 caches it; until then the engine decides.
-    let backend = local_profile::choose_backend(&p, &available, &|_| true);
+    let backend = backend_for(&p, binary);
     let bytes = std::fs::metadata(model).map(|m| m.len()).unwrap_or(0);
     let key = tune_key(model, bytes, &p, backend);
-    let args = autoconfig(&p, &meta, backend, state, &o);
+    let flags = local_spec::help_flags(binary);
+    let device = device_label(&p, backend);
+    // A paired model is sized with room for its drafter, and for the vision
+    // projector when it loads one.
+    let pairing = local_spec::pairing(&flags, model, &meta, &dir, &device);
+    let projector_mb = projector.map_or(0, |v| v.mb);
+    let beside = Beside {
+        drafter: pairing.reserve(),
+        projector_mb,
+    };
+    let args = autoconfig_beside(&p, &meta, backend, state, &o, beside);
     let mut args = match load_tuned(&dir).get(&key) {
+        // A pair never splits, so a layer cap from an older back-off would
+        // refuse it on every launch: only its context and KV caps count.
+        Some(t) if pairing.reserve().is_some() => apply_tuned(
+            args,
+            &Tuned {
+                ngl: u32::MAX,
+                n_cpu_moe: None,
+                ..t.clone()
+            },
+        ),
         Some(t) => apply_tuned(args, t),
         None => args,
     };
-    let flags = local_spec::help_flags(binary);
-    let device = device_label(&p, backend);
-    let mut plan = local_spec::plan(&local_spec::Launch {
-        flags: &flags,
-        model,
-        meta: &meta,
-        profile: &p,
-        state,
-        args: &args,
-        tune_dir: &dir,
-        device: &device,
-        gaming: false,
-    });
+    // The drafter's room check counts the projector too.
+    args.projector = projector.cloned().map(Box::new);
+    let launch = |args: &LaunchArgs, device: &str, pairing: local_spec::Pairing| {
+        local_spec::plan_with(
+            &local_spec::Launch {
+                flags: &flags,
+                model,
+                meta: &meta,
+                profile: &p,
+                state,
+                args,
+                tune_dir: &dir,
+                device,
+            },
+            pairing,
+        )
+    };
+    let mut plan = launch(&args, &device, pairing);
     args.draft = plan.draft.clone().map(Box::new);
     // Gaming mode: a game holds the GPU, so the model runs on the CPU with
     // half the threads and the game keeps its frame rate. Its drafter joins
-    // on the CPU too, only when the gaming setup's own speed test kept it
-    // and both fit in RAM; otherwise the model runs alone.
+    // on the CPU too, with its own speed test there; when both don't fit in
+    // RAM the launch is refused and a smaller model runs.
     if gaming || gaming_test() || super::local_scale::gaming_reason(super::local_gov::reason()) {
+        let pairing = local_spec::pairing(&flags, model, &meta, &dir, local_spec::GAMING_DEVICE);
+        // The pair moves to RAM: size the context for the RAM budget with
+        // the drafter in it, so the context shrinks before the tier does.
+        if let Some(d) = pairing.reserve() {
+            let q4 = (args.kv == KvType::Q4).then_some(KvType::Q4);
+            let capped = Overrides {
+                ctx: Some(args.ctx),
+                kv: o.kv.or(q4),
+                ..o.clone()
+            };
+            let beside = Beside {
+                drafter: Some(d),
+                projector_mb,
+            };
+            let ram = autoconfig_beside(&p, &meta, Backend::Cpu, state, &capped, beside);
+            args.ctx = ram.ctx;
+            args.kv = ram.kv;
+        }
         args = gaming_launch(&args);
-        plan = local_spec::plan(&local_spec::Launch {
-            flags: &flags,
-            model,
-            meta: &meta,
-            profile: &p,
-            state,
-            args: &args,
-            tune_dir: &dir,
-            device: local_spec::GAMING_DEVICE,
-            gaming: true,
-        });
+        plan = launch(&args, local_spec::GAMING_DEVICE, pairing);
         args.draft = plan.draft.clone().map(Box::new);
     }
     let options = super::local_flags::engine_options(binary);
@@ -1031,24 +1420,39 @@ fn planned_as(
     };
     args.run.slots = slots;
     if !shared {
-        tune(
-            &mut args,
-            &mut plan,
-            &options,
-            &dir,
-            &key,
-            state,
-            p.free_ram_mb,
-        );
+        tune(&mut args, &options, &dir, &key, state, p.free_ram_mb);
     }
-    Some((args, plan, key, dir))
+    let no_room = plan.decision == grokhub_core::local_draft::Decision::NoRoom;
+    let refusal = no_room.then(|| refusal_of(&p, &args, state, now));
+    // With a projector, the whole launch must fit what the state allows. A
+    // pair with a drafter file passed its own room check above, the
+    // projector counted; a model alone (or with its own heads) is checked
+    // here.
+    let projector_fits = projector.is_none()
+        || (!no_room && {
+            let drafted = args.draft.as_ref().is_some_and(|d| d.model.is_some());
+            drafted || {
+                let (gpu, ram) = budgets(&p, args.backend, state);
+                let seqs = args.run.seqs();
+                need_mb(&meta, args.ctx, args.kv, seqs) + projector_mb <= gpu + ram
+            }
+        });
+    let projector_refusal = (!projector_fits).then(|| refusal_of(&p, &args, state, now));
+    Some(Planning {
+        args,
+        plan,
+        key,
+        dir,
+        refusal,
+        projector_fits,
+        projector_refusal,
+    })
 }
 
 /// Runs the auto-tune arm for this device × model × mode on `args` (see
 /// [`super::local_tune`]); Throttle launches are never tuned.
 fn tune(
     args: &mut LaunchArgs,
-    plan: &mut local_spec::Plan,
     options: &std::collections::BTreeSet<String>,
     dir: &Path,
     key: &str,
@@ -1066,10 +1470,6 @@ fn tune(
     let arm = t::current(dir, &key, &cands, base);
     if arm.slots != base.slots {
         args.run.slots = super::local_flags::slots(options, arm.slots, ram_free_mb);
-    }
-    if !arm.draft {
-        args.draft = None;
-        plan.draft = None;
     }
     if arm.ubatch != base.ubatch {
         args.run.ubatch = Some(arm.ubatch);

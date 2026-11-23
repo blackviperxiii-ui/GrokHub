@@ -49,7 +49,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         }
     };
     let v = match module {
-        "pc_loadout" => pc_only(&|| pc_view(&machine(src.config_dir), &pc_extras())),
+        "pc_loadout" => pc_tile(src.config_dir),
         "speeds" => speeds_view(&grokhub_core::net_log::load(src.config_dir), now),
         "frame_rate" => frame_rate(),
         "storage" => pc_only(&|| storage_view(&drives())),
@@ -69,6 +69,7 @@ pub fn view(module: &str, src: &Sources<'_>) -> Option<TileView> {
         "local_ai" => local_ai_view(
             &local_ai::load(src.config_dir),
             grokhub_agent::route::local::installed(),
+            crate::local_use::is_on(src.config_dir),
             grokhub_agent::route::local::available(),
         ),
         "now_playing" => library_or(src, |games| {
@@ -230,19 +231,17 @@ fn played(games: &[library::Game]) -> Vec<tiles::PlayedGame> {
 }
 
 /// Achievements, Deals and Patch Notes: the cards their Pulse source posted
-/// on this computer. Achievements and Deals turn on right here (the Steam
-/// account signed in on this PC) and their checks run in this app; the game
-/// companion's switch still lives in the desktop app's settings.
+/// on this computer. All three turn on and off right here: Achievements and
+/// Deals with the Steam account signed in on this PC, Patch Notes with the
+/// game companion's own switch (an old desktop app's switch carries over to
+/// it once).
 fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
-    // Patch Notes counts as on when either app's companion is on; only this
-    // app's own switch can be turned off here.
-    let (on, ours) = match module {
-        "achievements" => (grokhub_core::steam_achievements::load(config_dir).on, true),
-        "deals" => (grokhub_core::steam_wishlist::load(config_dir).on, true),
+    let on = match module {
+        "achievements" => grokhub_core::steam_achievements::load(config_dir).on,
+        "deals" => grokhub_core::steam_wishlist::load(config_dir).on,
         _ => {
-            let ours = crate::game_companion::is_on(config_dir);
-            // app.json keeps its keys in camelCase.
-            (ours || desktop_flag(config_dir, "gameCompanion"), ours)
+            let _ = crate::game_companion::migrate_legacy(config_dir);
+            crate::game_companion::is_on(config_dir)
         }
     };
     let cards = match pulse::cards(config_dir) {
@@ -251,14 +250,12 @@ fn feed(module: &str, config_dir: &Path, now: u64) -> TileView {
     };
     let view = tiles::feed_view(module, on, &tiles::feed_items(&cards, module), now);
     let note = crate::steam_checks::note(module);
-    feed_turn(module, view, note, ours)
+    feed_turn(module, view, note)
 }
 
 /// The feed tile's switch: Turn on in place (with what the last try or check
-/// said, for the Steam checks), and Turn off once on, when it was this app
-/// that turned it on (`ours`). Patch Notes turned on in the desktop app stays
-/// that app's to turn off.
-pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>, ours: bool) -> TileView {
+/// said, for the Steam checks), and Turn off once on.
+pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>) -> TileView {
     if let Some(note) = note.filter(|_| matches!(module, "achievements" | "deals")) {
         view.text.detail = Some(note);
     }
@@ -272,24 +269,7 @@ pub fn feed_turn(module: &str, mut view: TileView, note: Option<String>, ours: b
             .on_tap(TileAction::setup(module, false))
             .primary("Turn on", TileAction::setup(module, false));
     }
-    if ours {
-        return view.button("Turn off", TileAction::setup(module, true));
-    }
-    view
-}
-
-/// One on/off setting from the desktop app's own settings file, read only.
-/// Missing, unreadable or oversized reads as off.
-fn desktop_flag(config_dir: &Path, key: &str) -> bool {
-    let path = config_dir.join("app.json");
-    if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 1024 * 1024) {
-        return false;
-    }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get(key).and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
+    view.button("Turn off", TileAction::setup(module, true))
 }
 
 /// Tiles that scan the disk or ask the OS (the Steam library, drives, audio
@@ -360,6 +340,18 @@ fn library_or(src: &Sources<'_>, build: impl Fn(&[library::Game]) -> TileView) -
 fn drives() -> Vec<grokhub_core::disk::DiskUse> {
     use grokhub_agent::indexers::{paths::PlatformDirs, system_state};
     system_state::local_drives(&system_state::OsProbe, &PlatformDirs::from_env())
+}
+
+/// The PC Loadout tile on its own, for Chat's side column as well as Home.
+/// It shares Home's caches: the hardware read is redone at most every ten
+/// minutes (the first call after launch does it), temps every 30 seconds and
+/// startup apps every ten minutes. A phone has no PC to show.
+pub fn pc_tile(config_dir: &Path) -> TileView {
+    if cfg!(mobile) {
+        TileView::unsupported(&on_pc())
+    } else {
+        pc_view(&machine(config_dir), &pc_extras())
+    }
 }
 
 /// This computer's GPUs and RAM, read at most every ten minutes.
@@ -490,7 +482,28 @@ pub fn pc_view(m: &local_ai::Machine, extras: &PcExtras) -> TileView {
     TileView::ready(TileText::new(big, caption, Tone::Normal))
         .rows(rows)
         .primary("Tune-up", TileAction::ask(TUNE_UP_ASK))
-        .on_tap(TileAction::ask(TUNE_UP_ASK))
+        .button("Details", TileAction::details("pc_loadout"))
+        .on_tap(TileAction::details("pc_loadout"))
+}
+
+/// PC Loadout → Details: the launch hardware read as rows, with free RAM,
+/// power and (on Linux) heat read again now, since those go stale. None
+/// until the launch read lands. Never runs the slow full read.
+#[cfg(desktop)]
+pub fn pc_details() -> Option<Vec<TileRow>> {
+    use grokhub_agent::device;
+    let mut p = grokhub_agent::route::local_autoconfig::profile()?;
+    if let Some(free) = device::free_ram_now() {
+        p.free_ram_mb = Some(free);
+    }
+    if let Some(power) = device::power_quick() {
+        p.power = power;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        p.thermal = device::thermal_now();
+    }
+    Some(tt::pc_sheet_rows(&p))
 }
 
 pub fn speeds_view(log: &grokhub_core::net_log::NetLog, now: u64) -> TileView {
@@ -726,7 +739,14 @@ pub fn usage_from(week_usd: f64, cache_pct: Option<u8>, floor: u8) -> TileView {
         .on_tap(TileAction::settings("defaults"))
 }
 
-pub fn local_ai_view(cfg: &local_ai::LocalAiConfig, installed: bool, ready: bool) -> TileView {
+/// `on` is the Use Local AI switch; `ready` is the router's view (on, set up
+/// and not paused for a game or low power).
+pub fn local_ai_view(
+    cfg: &local_ai::LocalAiConfig,
+    installed: bool,
+    on: bool,
+    ready: bool,
+) -> TileView {
     if !installed {
         return TileView::empty(
             "Set up an on-device model to keep chats going offline",
@@ -734,21 +754,17 @@ pub fn local_ai_view(cfg: &local_ai::LocalAiConfig, installed: bool, ready: bool
             TileAction::settings("localAi"),
         );
     }
-    let model = if cfg.local_model.selected.trim().is_empty() {
-        "Picked for this PC".to_string()
-    } else {
-        let s = cfg.local_model.selected.trim();
-        Path::new(s)
-            .file_name()
-            .map_or_else(|| s.to_string(), |f| f.to_string_lossy().into_owned())
-    };
-    let (big, tone) = if ready {
+    // Auto picks the model; there is no pick of the user's to show.
+    let model = "Picked for this PC".to_string();
+    let (big, tone) = if !on {
+        ("Off", Tone::Quiet)
+    } else if ready {
         ("Ready", Tone::Normal)
     } else {
         ("Paused", Tone::Warn)
     };
     let mut text = TileText::new(big, model, tone);
-    if cfg.pause_for_games {
+    if on && cfg.pause_for_games {
         text = text.detail("Steps aside while you play");
     }
     TileView::ready(text)
@@ -937,14 +953,20 @@ pub fn daily_drop_view(page: &pulse::Page) -> TileView {
             TileAction::nav("pulse"),
         );
     };
-    TileView::ready(TileText::new(
+    let view = TileView::ready(TileText::new(
         idea.title.clone(),
         "Today's pick",
         Tone::Normal,
-    ))
-    .primary("Let's do it", TileAction::ask(&idea.action))
-    .button("Open Pulse", TileAction::nav("pulse"))
-    .on_tap(TileAction::nav("pulse"))
+    ));
+    // A skill idea is added from Pulse, not asked about in a chat.
+    if idea.skill {
+        return view
+            .primary("Open Pulse", TileAction::nav("pulse"))
+            .on_tap(TileAction::nav("pulse"));
+    }
+    view.primary("Let's do it", TileAction::ask(&idea.action))
+        .button("Open Pulse", TileAction::nav("pulse"))
+        .on_tap(TileAction::nav("pulse"))
 }
 
 #[cfg(test)]

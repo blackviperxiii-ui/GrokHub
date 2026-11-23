@@ -259,8 +259,10 @@ impl AutoAct {
 }
 
 /// Auto-acts left today: none in quiet hours or while busy.
-/// Stand-in for the auto slice of Spike-6a's `ProactiveBudget`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Stand-in for the auto slice of Spike-6a's `ProactiveBudget`. Saved to
+/// disk so a relaunch does not reset the day's count.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AutoBudget {
     day: String,
     used: u32,
@@ -302,6 +304,21 @@ impl AutoBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_day_budget_survives_a_save_and_load() {
+        let mut b = AutoBudget::default();
+        b.spend("2026-11-13", Undo::OneClick);
+        b.spend("2026-11-13", Undo::OneClick);
+        let saved = serde_json::to_string(&b).expect("serialize");
+        assert_eq!(saved, r#"{"day":"2026-11-13","used":2,"restores":0}"#);
+        let back: AutoBudget = serde_json::from_str(&saved).expect("load");
+        assert_eq!(back.left("2026-11-13", false, false), 3);
+        assert_eq!(back.left("2026-11-14", false, false), 5);
+        // A file from before a field existed still loads.
+        let partial: AutoBudget = serde_json::from_str(r#"{"day":"2026-11-13"}"#).expect("load");
+        assert_eq!(partial.left("2026-11-13", false, false), 5);
+    }
 
     fn soft() -> AutoCandidate {
         AutoCandidate {

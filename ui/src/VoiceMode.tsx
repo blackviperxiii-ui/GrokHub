@@ -4,9 +4,16 @@
 
 import { useEffect, useState } from "react";
 import * as api from "./api";
-import type { LiveEvent, Spoken } from "./api";
+import type { LibraryStatus, LiveEvent, Spoken } from "./api";
+import type { DesktopNyxTalk } from "./desktopNyxApi";
+import { envelopeOf } from "./lipsync";
 import { CANT_RECORD, MIC_DENIED, NO_MIC, tap } from "./Mic";
 import { Downsampler, toBase64, WAV_RATE } from "./wav";
+
+const VOICE_LIBRARY_NAMES: Record<string, string> = {
+  "parakeet-tdt-0.6b-v3-int8": "speech-to-text model",
+  "kokoro-82m-multi-lang-v1_0": "on-device voice",
+};
 
 export type VoiceState = "off" | "listening" | "thinking" | "speaking";
 
@@ -63,15 +70,29 @@ export interface Playing {
   stop: () => void;
 }
 
+/** Hears a spoken piece's loudness and start, or `null` once it stops. */
+export type Talk = (talk: DesktopNyxTalk | null) => void;
+
 export interface VoiceDeps {
   /** Opens the mic; samples at `rate` go to `take`. Resolves to its closer. */
   openMic: (take: (samples: Float32Array, rate: number) => void) => Promise<() => void>;
-  play: (spoken: Spoken) => Playing;
+  /** Plays a piece; `talk` hears its loudness while it plays (her desk). */
+  play: (spoken: Spoken, talk?: Talk) => Playing;
+  talk?: Talk;
   /** Sends the heard words as the person's message. */
   send: (words: string) => void;
   onState: (state: VoiceState) => void;
   onNote: (note: string) => void;
+  /** Everything heard so far in this turn, or "" once the turn is over. */
+  onCaption?: (text: string) => void;
+  /** Which voice heard or spoke last and why, or "" once voice mode is off.
+   * Only set on this computer, or for xAI in a chat that runs here. */
+  onLine?: (line: string) => void;
 }
+
+/** The one session voice mode is on in. The backend keeps one open mic, so
+ * voice mode starting in another chat turns it off here first. */
+let live: VoiceSession | null = null;
 
 /** One voice-mode session: mic in, turns out, reply spoken. */
 export class VoiceSession {
@@ -79,6 +100,11 @@ export class VoiceSession {
   /** Someone is mid-turn. */
   talking = false;
   private closeMic: (() => void) | null = null;
+  private unlistenLibrary: (() => void) | null = null;
+  private libraryDropped = false;
+  private activeVoiceDownloads = new Set<string>();
+  private reportedLibraryErrors = new Map<string, string>();
+  private lastLibraryMessage: string | null = null;
   private pending = new Float32Array(0);
   private pushes: Promise<unknown> = Promise.resolve();
   private reply: Promise<unknown> = Promise.resolve();
@@ -86,6 +112,12 @@ export class VoiceSession {
   private player: Playing | null = null;
   private spoke = false;
   private finished = false;
+  /** The caption the page shows now. */
+  private shown = "";
+  /** The voice line the page shows now. */
+  private lineShown = "";
+  /** The chat voice mode hears and speaks for: it picks the engines. */
+  private chat: string | null = null;
   /** A piece failed to speak: the rest of this reply stays quiet. */
   private noVoice = false;
   /** The failure was shown once this session. */
@@ -104,9 +136,27 @@ export class VoiceSession {
     this.deps = { ...this.deps, send, onNote };
   }
 
+  /** Where the spoken reply's loudness goes from now on (her talk hop). */
+  talkTo(talk: Talk) {
+    this.deps = { ...this.deps, talk };
+  }
+
+  /** The chat on screen. Voice mode on follows it: a chat that runs on this
+   * computer hears and speaks here, and its mic never streams to xAI. */
+  forChat(id: string | null) {
+    if (id === this.chat) return;
+    this.chat = id;
+    // The last chat's line says nothing true about this one.
+    this.line("");
+    if (this.state !== "off") void api.voiceLiveChat(id).catch(() => {});
+  }
+
   private go(event: VoiceEvent) {
     const next = voiceStep(this.state, event);
     if (next === this.state) return;
+    // A caption shows only while it listens: one left behind would come
+    // back, stale, the next time it listens.
+    if (next !== "listening") this.caption("");
     this.state = next;
     this.deps.onState(next);
   }
@@ -115,12 +165,63 @@ export class VoiceSession {
     this.deps.onNote(err instanceof Error ? err.message : String(err));
   }
 
+  private handleLibraryStatus(status: LibraryStatus) {
+    if (this.state === "off") return;
+    if (status.job && status.job.id in VOICE_LIBRARY_NAMES) {
+      if (!this.activeVoiceDownloads.has(status.job.id)) {
+        this.activeVoiceDownloads.add(status.job.id);
+        this.deps.onNote(
+          status.job.line || `Downloading ${VOICE_LIBRARY_NAMES[status.job.id]}…`,
+        );
+      }
+    }
+    for (const [id, err] of Object.entries(status.errors)) {
+      if (!(id in VOICE_LIBRARY_NAMES)) continue;
+      if (this.reportedLibraryErrors.get(id) !== err.message) {
+        this.reportedLibraryErrors.set(id, err.message);
+        this.activeVoiceDownloads.delete(id);
+        this.deps.onNote(err.message);
+      }
+    }
+    if (this.activeVoiceDownloads.size > 0 && !status.job && !status.running) {
+      this.activeVoiceDownloads.clear();
+      if (status.message && status.message !== this.lastLibraryMessage) {
+        this.lastLibraryMessage = status.message;
+        this.deps.onNote(status.message);
+      } else if (!status.message && this.reportedLibraryErrors.size === 0) {
+        this.deps.onNote("On-device voice model is ready.");
+      }
+    }
+  }
+
+  private watchLibrary() {
+    if (typeof api.onModelLibraryEvent !== "function") return;
+    this.libraryDropped = false;
+    void api
+      .onModelLibraryEvent((status) => this.handleLibraryStatus(status))
+      .then((unlisten) => {
+        if (this.libraryDropped || this.state === "off") unlisten();
+        else this.unlistenLibrary = unlisten;
+      })
+      .catch(() => {});
+  }
+
   async start() {
     if (this.state !== "off") return;
     this.noVoice = false;
     this.warned = false;
-    await api.voiceLiveStart();
+    this.activeVoiceDownloads.clear();
+    this.reportedLibraryErrors.clear();
+    this.lastLibraryMessage = null;
+    if (live && live !== this) await live.stop();
+    live = this;
+    this.line("");
+    const asked = this.chat;
+    await api.voiceLiveStart(asked);
     this.go("start");
+    // Another chat opened while it started: the backend still has the first.
+    if (this.chat !== asked) void api.voiceLiveChat(this.chat).catch(() => {});
+    this.watchLibrary();
     try {
       this.closeMic = await this.deps.openMic((s, rate) => this.take(s, rate));
     } catch (err) {
@@ -131,7 +232,14 @@ export class VoiceSession {
   }
 
   async stop(note?: string) {
+    if (live === this) live = null;
     const wasOn = this.state !== "off";
+    this.libraryDropped = true;
+    this.unlistenLibrary?.();
+    this.unlistenLibrary = null;
+    this.activeVoiceDownloads.clear();
+    this.reportedLibraryErrors.clear();
+    this.lastLibraryMessage = null;
     this.go("stop");
     this.closeMic?.();
     this.closeMic = null;
@@ -139,6 +247,8 @@ export class VoiceSession {
     this.talking = false;
     this.pending = new Float32Array(0);
     this.down = null;
+    this.caption("");
+    this.line("");
     if (note) this.deps.onNote(note);
     if (wasOn) await api.voiceLiveStop().catch(() => {});
   }
@@ -179,10 +289,12 @@ export class VoiceSession {
           break;
         case "turn":
           this.talking = false;
+          this.caption("");
           await this.hear();
           break;
         case "nothing":
           this.talking = false;
+          this.caption("");
           await api.voiceLiveListen(this.state === "speaking");
           break;
         case "check_in":
@@ -191,20 +303,42 @@ export class VoiceSession {
         case "pause":
           await this.stop(PAUSED_NOTE);
           break;
+        case "caption":
+          // One still on its way when a reply started belongs to the turn
+          // that reply took over: it would come back, stale, on the next
+          // listen.
+          if (this.state === "listening") this.caption(ev.text);
+          break;
       }
     }
   }
 
   private async hear() {
     this.go("turn");
-    const words = (await api.voiceLiveHear().catch((e) => (this.note(e), ""))).trim();
+    const chat = this.chat;
+    const heard = await api.voiceLiveHear(chat).catch((e) => (this.note(e), null));
+    const words = (heard?.words ?? "").trim();
     if (this.state !== "thinking") return;
+    // Each turn heard says which voice heard it: none for a plain cloud chat.
+    if (words && chat === this.chat) this.line(heard?.line ?? "");
     if (!words) {
       this.go("empty");
       await api.voiceLiveListen(false);
       return;
     }
     this.deps.send(words);
+  }
+
+  private caption(text: string) {
+    if (text === this.shown) return;
+    this.shown = text;
+    this.deps.onCaption?.(text);
+  }
+
+  private line(text: string) {
+    if (text === this.lineShown) return;
+    this.lineShown = text;
+    this.deps.onLine?.(text);
   }
 
   /** Stop speaking and listen for them. */
@@ -221,38 +355,48 @@ export class VoiceSession {
     this.player = null;
   }
 
-  /** More of the reply as it streams. */
-  feed(delta: string) {
+  /** More of the reply as it streams. `chat` is the chat the reply is for:
+   * its pieces are spoken with that chat's voice, even once another opens. */
+  feed(delta: string, chat: string | null = this.chat) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFeed(delta))
-      .then((pieces) => this.enqueue(pieces))
+      // Off by now (voice mode moved to another chat): nothing reaches the
+      // backend's next session.
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFeed(delta)))
+      .then((pieces) => this.enqueue(pieces, chat))
       .catch((e) => this.note(e));
   }
 
-  /** The reply is complete; `whole` is spoken if nothing streamed. */
-  replyDone(whole: string) {
+  /** The reply for `chat` is complete; `whole` is spoken if nothing streamed. */
+  replyDone(whole: string, chat: string | null = this.chat) {
     if (this.state === "off") return;
     this.reply = this.reply
-      .then(() => api.voiceReplyFinish(whole))
+      .then(() => (this.state === "off" ? [] : api.voiceReplyFinish(whole)))
       .then((pieces) => {
-        this.enqueue(pieces);
+        this.enqueue(pieces, chat);
         this.finished = true;
         return this.drained();
       })
       .catch((e) => this.note(e));
   }
 
-  private enqueue(pieces: string[]) {
-    if (this.noVoice) return;
+  private enqueue(pieces: string[], chat: string | null) {
+    if (this.noVoice || this.state === "off") return;
     for (const piece of pieces) {
       this.queue.push(
-        api.voiceSpeak(piece).catch((e) => {
-          if (!this.warned) this.note(e);
-          this.warned = true;
-          this.noVoice = true;
-          return null;
-        }),
+        api.voiceSpeak(piece, chat).then(
+          (spoken) => {
+            // Each piece says which voice spoke it: none for a plain cloud chat.
+            if (this.state !== "off" && chat === this.chat) this.line(spoken.line ?? "");
+            return spoken;
+          },
+          (e) => {
+            if (!this.warned) this.note(e);
+            this.warned = true;
+            this.noVoice = true;
+            return null;
+          },
+        ),
       );
     }
     void this.pump();
@@ -272,7 +416,7 @@ export class VoiceSession {
         // Listen over the reply so they can talk over it.
         await api.voiceLiveListen(true).catch((e) => this.note(e));
       }
-      const playing = this.deps.play(spoken);
+      const playing = this.deps.play(spoken, this.deps.talk);
       this.player = playing;
       await playing.done.catch(() => {});
       if (this.player !== playing) return;
@@ -324,8 +468,10 @@ export async function openBrowserMic(take: (samples: Float32Array, rate: number)
   };
 }
 
-/** Plays one piece through an audio element. */
-export function playSpoken(spoken: Spoken): Playing {
+/** Plays one piece through an audio element. `talk` hears its loudness
+ * and when it began each time it starts or resumes, and `null` when it
+ * pauses or ends (her desk hops with it). */
+export function playSpoken(spoken: Spoken, talk?: Talk): Playing {
   const audio = new Audio(`data:${spoken.mime};base64,${spoken.audio}`);
   let end = () => {};
   const done = new Promise<void>((resolve) => {
@@ -333,6 +479,28 @@ export function playSpoken(spoken: Spoken): Playing {
     audio.onended = () => resolve();
     audio.onerror = () => resolve();
   });
+  if (talk) {
+    let levels: Promise<number[] | null> | null = null;
+    let over = false;
+    let told = false;
+    const quiet = () => {
+      if (told) talk(null);
+      told = false;
+    };
+    audio.onplaying = () => {
+      levels ??= envelopeOf(spoken);
+      void levels.then((l) => {
+        if (over || !l || audio.paused) return;
+        told = true;
+        talk({ levels: l, startedAt: Date.now() - audio.currentTime * 1000 });
+      });
+    };
+    audio.onpause = quiet;
+    void done.then(() => {
+      over = true;
+      quiet();
+    });
+  }
   audio.play().catch(() => end());
   return {
     done,
@@ -361,6 +529,8 @@ const HINT: Record<VoiceState, string> = {
  * heard words and notes go with `session.handlers`. */
 export function useVoiceMode() {
   const [state, setState] = useState<VoiceState>("off");
+  const [caption, setCaption] = useState("");
+  const [line, setLine] = useState("");
   const [session] = useState(
     () =>
       new VoiceSession({
@@ -369,6 +539,8 @@ export function useVoiceMode() {
         send: () => {},
         onState: setState,
         onNote: () => {},
+        onCaption: setCaption,
+        onLine: setLine,
       }),
   );
   useEffect(
@@ -377,7 +549,40 @@ export function useVoiceMode() {
     },
     [session],
   );
-  return { state, session };
+  return { state, session, caption, line };
+}
+
+/** How long a live caption may run: its end shows, the start is cut. */
+const CAPTION_CHARS = 80;
+
+/** A live caption as it shows: its last 80 characters, in quotes. */
+export function captionLine(text: string): string {
+  const chars = Array.from(text.trim());
+  const end = chars.length > CAPTION_CHARS ? `…${chars.slice(-CAPTION_CHARS).join("")}` : chars.join("");
+  return `“${end}”`;
+}
+
+/** What voice mode hears so far, while it listens. Not announced: the
+ * words arrive as the sent message. */
+export function VoiceCaption({ text, state }: { text: string; state: VoiceState }) {
+  if (state !== "listening" || !text.trim()) return null;
+  return (
+    <p className="voice-caption" aria-live="off">
+      {captionLine(text)}
+    </p>
+  );
+}
+
+/** Which voice heard or spoke last and why: on this computer, or xAI in a
+ * chat that runs here. Its own line, apart from the caption and the error
+ * line, so it stays while voice mode thinks and speaks. */
+export function VoiceLine({ text }: { text: string }) {
+  if (!text.trim()) return null;
+  return (
+    <p className="voice-line" aria-live="polite">
+      {text}
+    </p>
+  );
 }
 
 export function VoiceButton({

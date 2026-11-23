@@ -18,15 +18,17 @@ for arg in "$@"; do
   esac
 done
 
-if [[ ! -x "$PREFIX/bin/grokhub" ]]; then
-  echo "error: $PREFIX/bin/grokhub missing — run ./scripts/install.sh --user" >&2
+if [[ ! -x "$PREFIX/bin/grokhub-shell" ]]; then
+  echo "error: $PREFIX/bin/grokhub-shell missing — run ./scripts/install.sh --user" >&2
   exit 1
 fi
 
-sed -e "s|^Exec=grokhub\$|Exec=$PREFIX/bin/grokhub|" \
-    -e "s|^TryExec=grokhub\$|TryExec=$PREFIX/bin/grokhub|" \
-    "$ROOT/packaging/grokhub.desktop" \
-  | install -Dm644 /dev/stdin "$PREFIX/share/applications/grokhub.desktop"
+sed -e "s|^Exec=grokhub-shell\$|Exec=$PREFIX/bin/grokhub-shell|" \
+    -e "s|^TryExec=grokhub-shell\$|TryExec=$PREFIX/bin/grokhub-shell|" \
+    "$ROOT/packaging/grokhub-shell.desktop" \
+  | install -Dm644 /dev/stdin "$PREFIX/share/applications/grokhub-shell.desktop"
+# Drop the retired cabin menu entry if a prior sync left it behind.
+rm -f "$PREFIX/share/applications/grokhub.desktop"
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
 fi
@@ -42,4 +44,4 @@ if [[ "$AGENT" -eq 1 ]]; then
   fi
 fi
 
-echo "desktop entry: $PREFIX/share/applications/grokhub.desktop"
+echo "desktop entry: $PREFIX/share/applications/grokhub-shell.desktop"

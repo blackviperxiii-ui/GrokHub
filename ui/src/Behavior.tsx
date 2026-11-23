@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
-import { getBehavior, saveBehavior, type Behavior as Shape, type BehaviorPage } from "./api";
+import { getBehavior, saveBehavior, type Behavior as Shape, type BehaviorPage, type Lane } from "./api";
 import { PRODUCT_NAME } from "./brand";
 import { ChangeRows } from "./ChangeRows";
 import { SelfImprove } from "./SelfImprove";
@@ -7,11 +7,21 @@ import { Toggle } from "./Toggle";
 
 export const AUTOCOMPLETE_NOTE =
   "Muted ghost text finishes your line in the composer; Tab accepts. Off by default.";
+export const COMPOSER_GLOW_NOTE = "Soft light around the composer while a reply comes in. Off by default.";
 export const SUGGESTIONS_NOTE =
   "A few next steps to tap, under the box, on Home and after replies. They learn from what you pick.";
+export const LANE_NOTE =
+  "When two suggestions in a chat are close, the one on this side goes first. A much stronger one still leads.";
+const LANES: { value: Lane; label: string }[] = [
+  { value: "coding", label: "Coding" },
+  { value: "life", label: "Life" },
+];
+const laneLabel = (lane: Lane) => LANES.find((l) => l.value === lane)?.label ?? "Coding";
 export const QUIET_NOTE = "Leave both empty for no quiet hours.";
-export const SCHEDULE_NOTE = `Quiet hours and the budget are saved for scheduled work in this app. Automations here run only when you choose Run now, so nothing waits on them yet. The ${PRODUCT_NAME} cabin keeps its own quiet hours and budget.`;
-export const PAUSE_NOTE = "Scheduled work waits until tomorrow once today is over budget. Chat still sends.";
+export const SCHEDULE_NOTE = `Automations run on their schedule while ${PRODUCT_NAME} is open or in the tray. Quiet hours hold back Pulse digests and suggestions. PC alerts, such as low disk, and scheduled automations still go ahead, and the daily budget doesn't hold an automation back yet.`;
+export const PAUSE_NOTE = "Saved for later: scheduled work doesn't wait on the budget yet. Chat still sends.";
+export const DOCK_NOTE =
+  "Main pages become rearrangeable tabs in side-by-side panes: drag a tab to move it, drop it on a pane's edge to split, drag the divider to resize. Off keeps today's fixed layout. The layout is kept in shell.json.";
 
 function quietLabel(b: Shape) {
   return b.quietStart ? `${b.quietStart}–${b.quietEnd}` : "None";
@@ -23,12 +33,15 @@ export function Behavior({
   tray,
   readOnly = false,
   onCloseToTray,
+  dock,
 }: {
   /** This platform has a tray. */
   tray: boolean;
   readOnly?: boolean;
   /** Settings keeps its own copy of the tray choice for General's save. */
   onCloseToTray?: (on: boolean) => void;
+  /** Dockable panels, on the desktop shell only; absent anywhere else. */
+  dock?: { on: boolean; onToggle: (on: boolean) => void } | null;
 }) {
   const [page, setPage] = useState<BehaviorPage | null>(null);
   const [start, setStart] = useState("");
@@ -59,7 +72,6 @@ export function Behavior({
   if (!page) return <p className="note">{note ?? "Loading…"}</p>;
   const loaded = page;
   const b = loaded.behavior;
-  const budgetLabel = loaded.budgets.find((c) => c.value === b.dailyTokenBudget)?.label ?? "Off";
 
   if (readOnly) {
     return (
@@ -72,18 +84,18 @@ export function Behavior({
         )}
         <dt>Suggestions</dt>
         <dd>{b.suggestions ? "On" : "Off"}</dd>
-        <dt>Sentence autocomplete</dt>
-        <dd>{b.autocomplete ? "On" : "Off"}</dd>
-        <dt>Quiet hours</dt>
-        <dd>{quietLabel(b)}</dd>
-        <dt>Daily token budget</dt>
-        <dd>{budgetLabel}</dd>
-        {b.dailyTokenBudget > 0 && (
+        {b.suggestions && (
           <>
-            <dt>Pause scheduled work over budget</dt>
-            <dd>{b.pauseOverBudget ? "On" : "Off"}</dd>
+            <dt>Suggestions lean toward</dt>
+            <dd>{laneLabel(b.lane)}</dd>
           </>
         )}
+        <dt>Sentence autocomplete</dt>
+        <dd>{b.autocomplete ? "On" : "Off"}</dd>
+        <dt>Composer glow</dt>
+        <dd>{b.composerGlow ? "On" : "Off"}</dd>
+        <dt>Quiet hours</dt>
+        <dd>{quietLabel(b)}</dd>
       </dl>
     );
   }
@@ -123,10 +135,38 @@ export function Behavior({
         Suggestions
       </Toggle>
       <p className="note">{SUGGESTIONS_NOTE}</p>
+      {b.suggestions && (
+        <>
+          <label>
+            Suggestions lean toward
+            <select value={b.lane} onChange={(e) => change({ lane: e.target.value as Lane })}>
+              {LANES.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="note">{LANE_NOTE}</p>
+        </>
+      )}
       <Toggle checked={b.autocomplete} onChange={(on) => change({ autocomplete: on })}>
         Sentence autocomplete
       </Toggle>
       <p className="note">{AUTOCOMPLETE_NOTE}</p>
+      <Toggle checked={b.composerGlow} onChange={(on) => change({ composerGlow: on })}>
+        Composer glow
+      </Toggle>
+      <p className="note">{COMPOSER_GLOW_NOTE}</p>
+      {dock && (
+        <>
+          <h2>Pages</h2>
+          <Toggle checked={dock.on} onChange={dock.onToggle}>
+            Dockable panels
+          </Toggle>
+          <p className="note">{DOCK_NOTE}</p>
+        </>
+      )}
       <h2>Automations &amp; limits</h2>
       <form onSubmit={saveQuiet}>
         <label>
@@ -140,27 +180,6 @@ export function Behavior({
         <p className="note">{QUIET_NOTE}</p>
         <button type="submit">Save quiet hours</button>
       </form>
-      <label>
-        Daily token budget
-        <select
-          value={b.dailyTokenBudget}
-          onChange={(e) => change({ dailyTokenBudget: Number(e.target.value) })}
-        >
-          {loaded.budgets.map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {b.dailyTokenBudget > 0 && (
-        <>
-          <Toggle checked={b.pauseOverBudget} onChange={(on) => change({ pauseOverBudget: on })}>
-            Pause scheduled work over budget
-          </Toggle>
-          <p className="note">{PAUSE_NOTE}</p>
-        </>
-      )}
       <p className="note">{SCHEDULE_NOTE}</p>
       <SelfImprove />
       <ChangeRows />

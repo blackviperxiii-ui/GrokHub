@@ -5,7 +5,7 @@
 - the retired cabin's mission_ui.rs: cabin seed gather + Work-tree paint (paint_mission_header).
 ## Quick commands
 - `cargo test -p grokhub-core mission --locked -- --test-threads=1`
-- `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app mission_ui -- --test-threads=1`
+- `GROKHUB_CONFIG=$(mktemp -d) cargo test --manifest-path src-tauri/Cargo.toml mission -- --test-threads=1`
 ## Key files
 - `crates/grokhub-core/src/mission.rs`: `MissionView::project`, `mission_worthy_intent`, checklist status map.
 - `crates/grokhub-agent/src/episode/kernel.rs` (episode state the view reads) and `crates/grokhub-core/src/journal.rs` (`promote_to_mission`).

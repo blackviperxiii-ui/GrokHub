@@ -145,6 +145,13 @@ fn home(config_dir: &Path, settings: &ShellSettings) -> Personality {
     personality::gated(p, settings.adults_on())
 }
 
+/// Whether the voice every chat speaks in is 18+ (its prompt carries the
+/// adults-only mark), from the saved settings: such a chat's voice stays on
+/// this computer from launch, before any step of it ran.
+pub fn speaks_18_plus(config_dir: &Path, settings: &ShellSettings) -> bool {
+    home(config_dir, settings).explicit
+}
+
 /// The xAI voice spoken replies use: the stored default's voice hint when it
 /// names a voice xAI has, else the default voice (as the cabin picks it).
 pub fn speech_voice(config_dir: &Path, settings: &ShellSettings) -> &'static str {

@@ -5,6 +5,8 @@
 
 mod apps;
 #[cfg(target_os = "linux")]
+pub mod bot_desktop;
+#[cfg(target_os = "linux")]
 mod broker;
 #[cfg(target_os = "linux")]
 mod capture;
@@ -94,6 +96,9 @@ pub fn run_cua_stdio() -> i32 {
     let child_dir = dir.clone();
     let mut proxy: hx::CuaProxy<hx::StdioChild> =
         hx::CuaProxy::new(Box::new(move || start_cua_child(&child_dir)));
+    // The child works where the desktop tools do: on the Bot Desktop while
+    // it runs. When it starts or stops, the next call gets a new child there.
+    let mut on = bot_screen_env(&dir);
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {
@@ -108,6 +113,11 @@ pub fn run_cua_stdio() -> i32 {
         };
         if line.trim().is_empty() {
             continue;
+        }
+        let now = bot_screen_env(&dir);
+        if now != on {
+            proxy.restart();
+            on = now;
         }
         let cfg = crate::host::settings();
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
@@ -163,20 +173,35 @@ fn guard_refusal_line(line: &str, guard: game_guard::GameGuard) -> Option<String
     Some(harness_gate::refusal_reply(&call.id, &msg))
 }
 
-/// Linux only, the pinned release only, from `cuaDriverPath` or PATH.
+/// Linux and macOS only, the pinned release only, from `cuaDriverPath` or PATH.
 fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::StdioChild, String> {
     use grokhub_agent::harness as hx;
-    if !cfg!(target_os = "linux") {
-        return Err((*hx::CUA_LINUX_ONLY_MSG).into());
-    }
+    hx::cua_platform(std::env::consts::OS, std::env::consts::ARCH)?;
     let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
     hx::verify_cua_driver(&bin)?;
-    hx::spawn_cua_child(&bin, dir)
+    hx::spawn_cua_child(&bin, dir, &bot_screen_env(dir))
+}
+
+/// The shared Bot Desktop's folder under the config folder.
+pub const BOT_DESKTOP_DIR: &str = "bot-desktop";
+
+/// The environment that puts a program on the app's Bot Desktop while it
+/// runs (another process started it); empty keeps the user's screen.
+fn bot_screen_env(config_dir: &std::path::Path) -> Vec<(&'static str, Option<String>)> {
+    #[cfg(target_os = "linux")]
+    {
+        bot_desktop::current_env(&config_dir.join(BOT_DESKTOP_DIR)).unwrap_or_default()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = config_dir;
+        Vec::new()
+    }
 }
 
 /// The Cua proxy is registered only while desktop control and the `cuaDriver`
-/// flag are both on (and only on Linux).
+/// flag are both on (and only where Cua runs: Linux and macOS).
 pub fn cua_wanted(desktop_control: bool, cua_flag: bool) -> bool {
     grokhub_agent::harness::ComputerUseBackend::selected(cua_flag, desktop_control)
         == grokhub_agent::harness::ComputerUseBackend::CuaDriver
@@ -512,7 +537,15 @@ struct LiveBackend {
     inner: Option<Box<dyn DesktopBackend>>,
     error: Option<String>,
     tried: bool,
+    /// Set when the tools drive the Bot Desktop instead of the user's screen.
+    #[cfg(target_os = "linux")]
+    bot: Option<std::sync::Arc<bot_desktop::BotDesktop>>,
 }
+
+/// What the window tools say on the Bot Desktop, which has no window list.
+#[cfg(target_os = "linux")]
+const BOT_NO_WINDOWS: &str =
+    "The Bot Desktop has no window list yet; take a screenshot to see what is open.";
 
 impl LiveBackend {
     fn new() -> Self {
@@ -520,13 +553,35 @@ impl LiveBackend {
             inner: None,
             error: None,
             tried: false,
+            #[cfg(target_os = "linux")]
+            bot: None,
         }
+    }
+
+    /// Whether the tools drive the Bot Desktop.
+    fn on_bot(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.bot.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
+    fn connect(&self) -> Result<Box<dyn DesktopBackend>, String> {
+        #[cfg(target_os = "linux")]
+        if let Some(bot) = &self.bot {
+            return bot.backend().map(|b| b as Box<dyn DesktopBackend>);
+        }
+        connect_backend()
     }
 
     fn ensure(&mut self) -> Result<&mut dyn DesktopBackend, String> {
         if self.inner.is_none() && !self.tried {
             self.tried = true;
-            match connect_backend() {
+            match self.connect() {
                 Ok(backend) => self.inner = Some(backend),
                 Err(e) => {
                     eprintln!("desktop-mcp: {e}");
@@ -605,12 +660,24 @@ impl DesktopBackend for LiveBackend {
     // Open, focus, list, and trash go straight to the OS, not the input
     // backend, so they work on every session the input route supports.
     fn open_app(&mut self, app: &str) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let Some(bot) = &self.bot {
+            return bot.launch(app);
+        }
         apps::open_app(app)
     }
     fn focus_window(&mut self, title: &str) -> Result<String, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         apps::focus_window(title)
     }
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         // Reading every window's title sends each app (the game too) a message.
         if let Some(msg) = game_guard::current().blocks(game_guard::Guarded::WindowCheck) {
             return Err(msg);
@@ -621,6 +688,10 @@ impl DesktopBackend for LiveBackend {
         &mut self,
         title: &str,
     ) -> Result<grokhub_core::desktop_mcp::WindowGeom, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         apps::window_geometry(title)
     }
     fn set_window_geometry(
@@ -628,6 +699,10 @@ impl DesktopBackend for LiveBackend {
         title: &str,
         geom: &grokhub_core::desktop_mcp::WindowGeom,
     ) -> Result<String, String> {
+        #[cfg(target_os = "linux")]
+        if self.on_bot() {
+            return Err(BOT_NO_WINDOWS.into());
+        }
         apps::set_window_geometry(title, geom)
     }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
@@ -636,6 +711,10 @@ impl DesktopBackend for LiveBackend {
     // Spike-2b: AT-SPI on Linux, UI Automation on Windows. Both capped at 300 ms.
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+        // AT-SPI reads the user's session, not the Bot Desktop.
+        if self.on_bot() {
+            return None;
+        }
         crate::host::target_at(x, y)
     }
     #[cfg(windows)]
@@ -643,6 +722,10 @@ impl DesktopBackend for LiveBackend {
         crate::uia::target_at(x, y)
     }
     fn game_guard(&mut self) -> game_guard::GameGuard {
+        // The Bot Desktop is its own screen: nothing there reaches a game.
+        if self.on_bot() {
+            return game_guard::GameGuard::default();
+        }
         game_guard::current()
     }
 }
@@ -659,6 +742,99 @@ impl NativeDesktop {
                 LiveBackend::new(),
             )),
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl NativeDesktop {
+    /// The same tools, driving `desk` instead of the user's screen: the
+    /// pointer, keys and screenshots stay on the Bot Desktop, apps open
+    /// there, and a fullscreen game doesn't pause them.
+    pub fn on_bot_desktop(desk: std::sync::Arc<bot_desktop::BotDesktop>) -> Self {
+        let mut backend = LiveBackend::new();
+        backend.bot = Some(desk);
+        Self {
+            inner: Mutex::new(DesktopServer::new(env!("CARGO_PKG_VERSION"), backend)),
+        }
+    }
+}
+
+/// The desktop tools the app's chats get: the user's screen, or the shared
+/// Bot Desktop while it runs ([`bot_desktop::start_shared`]). Each call
+/// checks, so switching the Bot Desktop on or off takes effect at the next
+/// step of a running chat.
+pub struct AppDesktop {
+    user: NativeDesktop,
+    #[cfg(target_os = "linux")]
+    bot: std::cell::RefCell<Option<BotTools>>,
+}
+
+#[cfg(target_os = "linux")]
+type BotTools = (
+    std::sync::Arc<bot_desktop::BotDesktop>,
+    std::rc::Rc<NativeDesktop>,
+);
+
+impl AppDesktop {
+    pub fn new() -> Self {
+        Self {
+            user: NativeDesktop::new(),
+            #[cfg(target_os = "linux")]
+            bot: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Runs `f` on the tools for the screen in use now.
+    fn with<T>(&self, f: impl FnOnce(&NativeDesktop) -> T) -> T {
+        #[cfg(target_os = "linux")]
+        if let Some(tools) = self.bot_tools() {
+            return f(&tools);
+        }
+        f(&self.user)
+    }
+
+    /// The Bot Desktop's tools, built once per screen it starts.
+    #[cfg(target_os = "linux")]
+    fn bot_tools(&self) -> Option<std::rc::Rc<NativeDesktop>> {
+        let desk = bot_desktop::shared();
+        let mut slot = self.bot.borrow_mut();
+        let Some(desk) = desk else {
+            *slot = None;
+            return None;
+        };
+        if let Some((built_for, tools)) = slot.as_ref()
+            && std::sync::Arc::ptr_eq(built_for, &desk)
+        {
+            return Some(tools.clone());
+        }
+        let tools = std::rc::Rc::new(NativeDesktop::on_bot_desktop(desk.clone()));
+        *slot = Some((desk, tools.clone()));
+        Some(tools)
+    }
+}
+
+impl Default for AppDesktop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl grokhub_agent::DesktopOps for AppDesktop {
+    fn halted(&self) -> bool {
+        // Halt is one stamp for every screen.
+        self.user.halted()
+    }
+
+    fn locked(&self) -> bool {
+        self.with(|tools| tools.locked())
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> grokhub_agent::ToolOutput {
+        self.with(|tools| tools.call(name, args))
+    }
+
+    fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        self.with(|tools| tools.hint(name, args))
     }
 }
 
@@ -875,6 +1051,33 @@ pub(crate) fn test_root(label: &str) -> std::path::PathBuf {
 mod tests {
     use super::*;
 
+    /// The Cua child's screen comes from the config folder: the user's own
+    /// while no Bot Desktop runs, and the Bot Desktop's while one does.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_cua_child_follows_the_bot_desktop() {
+        let config = test_root("cua-screen");
+        assert_eq!(bot_screen_env(&config), Vec::new());
+        if resolve_bin("Xvfb").is_none() {
+            eprintln!("skipped: no Xvfb");
+            return;
+        }
+        let desk = bot_desktop::start_shared(&config.join(BOT_DESKTOP_DIR)).expect("starts");
+        assert_eq!(
+            bot_screen_env(&config),
+            vec![
+                ("DISPLAY", Some(desk.display_name())),
+                ("XAUTHORITY", Some(desk.xauthority().display().to_string())),
+                ("WAYLAND_DISPLAY", None),
+                ("XDG_SESSION_TYPE", Some("x11".to_string())),
+            ]
+        );
+        drop(desk);
+        assert!(bot_desktop::stop_shared());
+        assert_eq!(bot_screen_env(&config), Vec::new());
+        let _ = std::fs::remove_dir_all(&config);
+    }
+
     #[test]
     fn a_volume_without_a_usable_recycle_bin_moves_nothing() {
         let paths = vec![
@@ -984,10 +1187,10 @@ mod tests {
 
     #[test]
     fn desktop_entry_allows_kwin_screenshot2() {
-        let text = include_str!("../../../packaging/grokhub.desktop");
+        let text = include_str!("../../../packaging/grokhub-shell.desktop");
         assert!(text.lines().any(|line| line == "Version=1.5"));
-        assert!(text.lines().any(|line| line == "Name=Loadout"));
-        assert!(text.lines().any(|line| line == "Exec=grokhub"));
+        assert!(text.lines().any(|line| line == "Name=GrokHub Shell"));
+        assert!(text.lines().any(|line| line == "Exec=grokhub-shell"));
         assert!(text
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));

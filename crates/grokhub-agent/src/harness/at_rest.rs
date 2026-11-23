@@ -1,7 +1,8 @@
 //! Spike-4b: the learned tier at rest (harness design §12 P4).
 //!
-//! What is sealed: `consent.jsonl`, `egress.jsonl` (and its roll), and AMR
-//! nodes marked `personal` or `sensitive` (`amr/nodes/<id>.sealed`). The
+//! What is sealed: `consent.jsonl`, `egress.jsonl` (and its roll), AMR
+//! nodes marked `personal` or `sensitive` (`amr/nodes/<id>.sealed`), and
+//! each routine grant's seal in `routines/consent.json`. The
 //! curated plain tier (SOUL / USER / MEMORY, `plain` AMR nodes) stays
 //! `cat`-able. Each sealed line is ChaCha20-Poly1305 (`ring`) with a fresh
 //! random 96-bit nonce and a per-file associated-data label, so a line cannot
@@ -159,19 +160,21 @@ pub trait KeyStore: Send + Sync {
 /// The OS keyring through `keyring` 4 (v1 mode).
 pub struct OsKeyring;
 
+fn os_keyring_message(err: keyring::Error) -> String {
+    err.to_string()
+}
+
+fn os_keyring_backend() -> crate::keyring_blob::OsBackend {
+    crate::keyring_blob::OsBackend::new(KEY_SERVICE, os_keyring_message)
+}
+
 impl KeyStore for OsKeyring {
     fn load(&self) -> Result<Option<Zeroizing<String>>, String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, KEY_ACCOUNT).map_err(|e| e.to_string())?;
-        match entry.get_password() {
-            Ok(text) => Ok(Some(Zeroizing::new(text))),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(crate::keyring_blob::get(&os_keyring_backend(), KEY_ACCOUNT)?.map(Zeroizing::new))
     }
 
     fn create(&self, key_b64: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEY_SERVICE, KEY_ACCOUNT).map_err(|e| e.to_string())?;
-        entry.set_password(key_b64).map_err(|e| e.to_string())
+        crate::keyring_blob::set(&os_keyring_backend(), KEY_ACCOUNT, key_b64)
     }
 }
 

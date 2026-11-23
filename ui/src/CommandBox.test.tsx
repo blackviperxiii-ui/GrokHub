@@ -49,7 +49,7 @@ describe("CommandBox", () => {
   });
 
   it("a first run asks and shows the exact command; Run it approves and sends", async () => {
-    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "cargo build", destructive: false });
+    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "cargo build", destructive: false, secret: false });
     api.commandBoxApprove.mockResolvedValue("Run this shell command in the project folder: cargo build");
     const onRun = vi.fn();
     render(<CommandBox onRun={onRun} />);
@@ -68,7 +68,7 @@ describe("CommandBox", () => {
   });
 
   it("the first-run ask says a line with a key or token in it is never remembered", async () => {
-    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "make", destructive: false });
+    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "make", destructive: false, secret: false });
     render(<CommandBox onRun={() => {}} />);
     await userEvent.type(screen.getByLabelText("Command"), "make{Enter}");
     const ask = await screen.findByRole("group", { name: COMMAND_FIRST });
@@ -78,7 +78,7 @@ describe("CommandBox", () => {
   });
 
   it("Cancel on the ask sends nothing", async () => {
-    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "make", destructive: false });
+    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "make", destructive: false, secret: false });
     const onRun = vi.fn();
     render(<CommandBox onRun={onRun} />);
     await userEvent.type(screen.getByLabelText("Command"), "make{Enter}");
@@ -89,7 +89,7 @@ describe("CommandBox", () => {
   });
 
   it("a destructive line says it asks every time", async () => {
-    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "rm -r target", destructive: true });
+    api.commandBoxCheck.mockResolvedValue({ verdict: "confirm", command: "rm -r target", destructive: true, secret: false });
     render(<CommandBox onRun={() => {}} />);
     await userEvent.type(screen.getByLabelText("Command"), "rm -r target{Enter}");
     const ask = await screen.findByRole("group", { name: COMMAND_FIRST });

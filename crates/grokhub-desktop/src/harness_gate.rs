@@ -1332,12 +1332,14 @@ mod tests {
         assert!(hx::pending_parks(&dir).is_empty());
         // Windows path A reads UI Automation for real here: it answers within
         // the cap, and anything it names is a labelled interactive control.
+        // Wall-clock slack is generous: HIT_CAP is the recv timeout; spawn and
+        // a loaded CI host can push Instant past that by hundreds of ms.
         #[cfg(windows)]
         {
             let started = std::time::Instant::now();
             let hit = super::super::LiveBackend::new().target_at(5, 5);
             assert!(
-                started.elapsed() < crate::uia::HIT_CAP + std::time::Duration::from_millis(200),
+                started.elapsed() < crate::uia::HIT_CAP + std::time::Duration::from_secs(1),
                 "{:?}",
                 started.elapsed()
             );

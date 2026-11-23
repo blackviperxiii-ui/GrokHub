@@ -6,14 +6,14 @@ import {
   commandBoxView,
   type CommandBoxView,
 } from "./api";
+import { COMMAND_DESTRUCTIVE, COMMAND_FIRST } from "./commandText";
 
 export const COMMAND_TITLE = "Command line";
 export const COMMAND_ABOUT =
   "One shell line in the project folder. It goes to Chat, where the agent runs it through the same approvals as anything else it does.";
-export const COMMAND_FIRST = "Run this command for the first time?";
+export { COMMAND_DESTRUCTIVE, COMMAND_FIRST } from "./commandText";
 export const COMMAND_FIRST_NOTE =
   "After a yes it's remembered for this project. Changed text asks again. A line with a key or token in it is never remembered; it asks every time.";
-export const COMMAND_DESTRUCTIVE = "This can delete or overwrite files, so it asks every time.";
 export const COMMAND_SENT = "Sent to Chat.";
 export const COMMAND_NONE_YET = "Nothing run yet. Type a command above; it runs in the project folder.";
 /** The most past lines the page keeps for the up arrow and the list. */
@@ -24,7 +24,7 @@ const HISTORY_SHOWN = 6;
 /** The cabin's Command page in the desktop app: a `$` box bound to the
  * project folder, the lines run so far, and the lines remembered for this
  * project. Run hands the agent's message to `onRun`, which sends it in Chat,
- * the way the cabin queues `/sh`. */
+ * as `/sh` in Chat does. */
 export function CommandBox({ onRun }: { onRun: (prompt: string) => void }) {
   const [view, setView] = useState<CommandBoxView | null>(null);
   const [line, setLine] = useState("");

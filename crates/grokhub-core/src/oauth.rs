@@ -250,14 +250,17 @@ pub fn chat_bearer(api_key: &str, access_token: &str, oauth_usable: bool) -> Opt
     None
 }
 
-/// Duplex Voice (`wss://api.x.ai/v1/realtime`) is console-key only. OAuth does not grant it.
-pub fn realtime_bearer(api_key: &str, _access_token: &str) -> Option<String> {
-    let key = api_key.trim();
-    if key.is_empty() {
-        None
-    } else {
-        Some(key.to_string())
-    }
+/// Grok Voice 3 / realtime accepts Grok OAuth sign-in, with an optional API key override.
+pub fn realtime_bearer(api_key: &str, access_token: &str) -> Option<String> {
+    realtime_bearer_with(api_key, access_token, true)
+}
+
+pub fn realtime_bearer_with(
+    api_key: &str,
+    access_token: &str,
+    oauth_usable: bool,
+) -> Option<String> {
+    chat_bearer(api_key, access_token, oauth_usable)
 }
 
 /// Expired access with no refresh token is dead — do not prefer it over a console key.
@@ -594,8 +597,14 @@ mod tests {
             "dead OAuth must not beat a console key"
         );
         assert_eq!(chat_bearer("", "expired-tok", false), None);
-        assert_eq!(realtime_bearer("xai-k", "tok").as_deref(), Some("xai-k"));
-        assert_eq!(realtime_bearer("", "tok"), None);
+        assert_eq!(realtime_bearer("xai-k", "tok").as_deref(), Some("tok"));
+        assert_eq!(realtime_bearer("", "tok").as_deref(), Some("tok"));
+        assert_eq!(realtime_bearer("xai-k", "").as_deref(), Some("xai-k"));
+        assert_eq!(
+            realtime_bearer_with("xai-k", "expired-tok", false).as_deref(),
+            Some("xai-k")
+        );
+        assert_eq!(realtime_bearer_with("", "expired-tok", false), None);
         assert_eq!(realtime_bearer("", ""), None);
     }
 

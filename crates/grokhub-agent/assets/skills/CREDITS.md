@@ -1,6 +1,9 @@
-# Built-in vstack skills — credit and license
+# Built-in vstack skills: credit and license
 
-Bundled from [blackviperxiii-ui/vstack](https://github.com/blackviperxiii-ui/vstack) (`beta`, commit `7b190a35`).
+Bundled from [vstack](https://github.com/blackviperxiii-ui/vstack) release
+[`v1.4.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.4.0) (commit `11cca98b4a55da3118f51e749ac62faefbc21b3b`).
+`.github/scripts/vstack_sync.py` writes this file, the skill folders and
+`../../src/builtin_skills.rs` from `vstack.json`; edit that list, not these files.
 
 The method and several playbooks are adapted from the pstack plugin
 (https://github.com/cursor/plugins/tree/main/pstack). Branding and naming in
@@ -11,10 +14,69 @@ License: MIT. The upstream copyright and permission notice ships unchanged in
 
 Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
-- qa-walkthrough
+- architect
 - av-qa-walkthrough
+- bag-and-tag
+- benchmark-checklist
+- blast-radius
+- chrome-extensions
+- correct
+- create-formal-verification-skill
 - create-verification-skill
-- maintain-verification-skill
+- elevate
+- figure-it-out
 - follow-through
+- how
+- in-your-own-words
+- interrogate
+- ketchup
+- ketchup-video
+- land-it
+- maintain-formal-verification-skill
+- maintain-verification-skill
+- modern-web-guidance
+- optimize
+- principle-attack-the-premise
+- principle-boundary-discipline
+- principle-build-the-lever
+- principle-experience-first
+- principle-explain-the-number
+- principle-fix-root-causes
+- principle-foundational-thinking
+- principle-make-operations-idempotent
+- principle-minimize-reader-load
+- principle-model-the-domain
+- principle-never-block-on-the-human
+- principle-outcome-oriented-execution
+- principle-prove-it-works
+- principle-redesign-from-first-principles
+- principle-separate-before-serializing-shared-state
+- principle-sequence-verifiable-units
+- principle-subtract-before-you-add
+- principle-test-behavior-not-implementation
+- principle-type-system-discipline
+- qa-walkthrough
+- recall
+- reflect
+- setup-vstack
+- sharpen
+- show-me-your-work
+- stageshow
+- statechart
+- swarm
+- tdd
+- teach
+- technical-writing
+- typescript-best-practices
+- unslop
+- updater
+- viper-mode
+- why
+
+Left out:
+
+
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
+
+Bundle SHA-256: `db2aff9fa228ccc8385b52397dde7fef6b74a8243cee0fb3dfc5a23b438420ef`

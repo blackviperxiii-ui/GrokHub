@@ -9,7 +9,7 @@ Agent accountability for assigned work—not verify skills or ship gates (**crea
 
 ## 1. Ledger
 
-One entry per task: id/title, owner, status (todo, doing, blocked, done), started, last progress, next check. Host todo/board if present; else `follow-through-ledger.md` at repo root or `.cursor/` (name path once). One **doing** task per agent.
+One entry per task: id/title, owner, status (todo, doing, blocked, done), started, last progress, next check. Host todo/board if present; else `follow-through-ledger.md` at repo root or `.cursor/` (name path once). One **doing** task per agent. Project preference for one card/thread: honor it; do not launch a second worker on shared files (CHANGELOG, README, tokens) while another PR is open—queue or wait.
 
 ## 2. Check-ins
 
@@ -25,8 +25,8 @@ Unprompted at milestones, stalls/blockers, completion: **done / doing / blocked 
 
 ## 5. Done means proven
 
-**done** only with evidence. Use **create-verification-skill**, **qa-walkthrough**, or **av-qa-walkthrough** for proof when they fit; this skill tracks ownership, not their checks.
+**done** only with evidence. Someone else merged your PR? Read the merge commit body and the head's checks first; a trailer, PII or unfinished check is a finding. Announce merges and green CI in a new message, never a silent edit. Use **create-verification-skill**, **qa-walkthrough**, or **av-qa-walkthrough** for proof when they fit; this skill tracks ownership, not their checks.
 
 ## 6. Handoff and closeout
 
-Before yield or session end: each open task is **done**, handed off with owner, or **blocked** with next step. Nothing unowned.
+Before yield or session end: each open task is **done**, handed off with owner, or **blocked** with next step. Nothing unowned. Run `python3 <this skill>/scripts/closeout.py` on every PR the run opened; it refuses **done** unless each is merged or named `--pending` with its blocker.

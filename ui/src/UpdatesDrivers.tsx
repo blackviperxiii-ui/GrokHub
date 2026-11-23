@@ -85,7 +85,7 @@ export function UpdatesDrivers() {
             <div className="card-buttons">
               <button
                 type="button"
-                className="primary"
+                className="cta"
                 disabled={busy !== null || g.offer.held !== null}
                 onClick={() => void take(g)}
               >

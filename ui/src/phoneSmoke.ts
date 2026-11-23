@@ -22,7 +22,7 @@ async function waitFor<T>(what: string, fn: () => T | null | undefined, ms = 600
 }
 
 function tabs(): string[] {
-  return [...document.querySelectorAll("nav.tabs button")].map((b) => b.textContent ?? "");
+  return [...document.querySelectorAll("nav[aria-label='Views'] button")].map((b) => b.textContent ?? "");
 }
 
 /** What the chat shows, for a failed run's report. */

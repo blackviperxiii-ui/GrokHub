@@ -9,6 +9,7 @@ import { call, inShell } from "./transport";
 export type Key =
   | "textSize"
   | "reduceMotion"
+  | "chatObjectives"
   | "theme"
   | "closeToTray"
   | "quietHours"
@@ -57,6 +58,8 @@ export interface AutoReply {
   firstRun: boolean;
   textSize: number;
   reduceMotion: boolean;
+  /** Settings → Appearance → Objectives beside chat. */
+  chatObjectives: boolean;
   theme: Theme;
   question: Question | null;
   summary: boolean;

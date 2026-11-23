@@ -1,0 +1,132 @@
+name: vstack-sync
+# Daily: when vstack has a release newer than the one the built-in skills are
+# pinned to (crates/grokhub-agent/assets/skills/vstack.json), sync the skills
+# to it and open a PR to beta titled "vstack sync: vX.Y.Z". No secrets needed.
+# Schedules fire from the default branch, so the job checks out beta itself.
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "vstack tag to sync to, like v1.3.0 (blank: the newest release)"
+        required: false
+        default: ""
+permissions: {}
+concurrency:
+  group: vstack-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: beta
+      - name: Sync self-test
+        run: python3 .github/scripts/test_vstack_sync.py
+      - name: Pick the tag
+        id: tag
+        env:
+          WANT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${WANT:-$(python3 .github/scripts/vstack_sync.py newer)}"
+          if [[ -z "$tag" ]]; then
+            echo "The built-in skills are on the newest vstack release."
+          elif [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$tag is not a vX.Y.Z tag"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Sync and open a PR to beta
+        if: steps.tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="bot/vstack-sync-$TAG"
+          # A PR opened with the workflow token starts no workflows by itself,
+          # so this starts the checks beta requires.
+          start_checks() {
+            gh workflow run ci.yml --ref "$branch"
+            gh workflow run pii-guard.yml --ref "$branch"
+          }
+          # One PR per tag. A closed one was closed on purpose. An open one whose
+          # head has no checks yet (a run that stopped after opening it) gets them.
+          state=$(gh pr list --head "$branch" --state all --json state --jq '.[0].state // ""')
+          if [[ "$state" == "OPEN" ]]; then
+            sha=$(gh pr view "$branch" --json headRefOid --jq .headRefOid)
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs" --jq .total_count)
+            if [[ "$runs" == "0" ]]; then start_checks; fi
+            echo "The PR for $branch is open."; exit 0
+          elif [[ -n "$state" ]]; then
+            echo "The PR for $branch was closed; not opening it again."; exit 0
+          fi
+          base=$(git rev-parse --short HEAD)
+          python3 .github/scripts/vstack_sync.py sync --tag "$TAG" --summary body.md
+          python3 .github/scripts/vstack_sync.py check
+          if [[ -z "$(git status --porcelain -- crates/grokhub-agent)" ]]; then
+            echo "Nothing changed."; exit 0
+          fi
+          printf -- '- Built-in skills: the bundled vstack skills now come from vstack %s.\n' "$TAG" \
+            > "changelog.d/vstack-sync-${TAG//./-}.md"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A crates/grokhub-agent changelog.d
+          git commit -m "vstack sync: $TAG"
+          # After the commit, so new upstream files and the commit are scanned.
+          python3 scripts/pii-guard/pii_guard.py HEAD~1
+          # A branch left by a run that stopped before its PR is stale: drop it
+          # and push this run's commit, which is on today's beta.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git push origin --delete "$branch"
+          fi
+          git push -u origin "$branch"
+          new_skills=yes
+          grep -qx -- '- New upstream, now bundled: none.' body.md && new_skills=no
+          {
+            echo
+            echo "Base: \`beta\` at \`$base\`."
+            echo
+            echo "Proof: the sync job ran \`test_vstack_sync.py\`, \`vstack_sync.py check\` and \`pii_guard.py\` on the commit. CI runs the Rust tests that load every bundled skill."
+            echo
+            if [[ "$new_skills" == yes ]]; then
+              echo "**Waiting for a person:** this release adds skills, so the PR is a draft. Read them, move any that don't fit the app to \`exclude\` in \`vstack.json\` (then run \`vstack_sync.py sync --tag $TAG\`), and mark the PR ready to merge it."
+            else
+              echo "Auto-merge is on: this PR merges when CI is green."
+            fi
+            echo
+            echo "Skipped / not verified: no person has read the changed skill text."
+          } >> body.md
+          if [[ "$new_skills" == yes ]]; then
+            # auto-merge.yml leaves a draft alone until a person marks it ready.
+            gh pr create --draft --base beta --head "$branch" --title "vstack sync: $TAG" --body-file body.md
+            start_checks
+          else
+            gh pr create --base beta --head "$branch" --title "vstack sync: $TAG" --body-file body.md
+            start_checks
+            gh pr merge "$branch" --auto --squash \
+              || echo "::warning::could not turn on auto-merge for $branch"
+          fi
+          # Close older-tag sync PRs that only the bot touched: this PR carries
+          # their changes. Leave newer ones and any a person pushed to.
+          gh pr list --state open --base beta --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("bot/vstack-sync-v")) | "\(.number) \(.headRefName)"' |
+            while read -r old ref; do
+              old_tag=${ref#bot/vstack-sync-}
+              [[ "$old_tag" != "$TAG" ]] || continue
+              [[ "$(printf '%s\n%s\n' "$old_tag" "$TAG" | sort -V | head -n1)" == "$old_tag" ]] || continue
+              commits=$(gh pr view "$old" --json commits --jq '.commits | length') || continue
+              if [[ "$commits" != "1" ]]; then
+                echo "Leaving #$old open: someone else pushed to it."; continue
+              fi
+              gh pr close "$old" --delete-branch --comment "Replaced by vstack sync: $TAG." \
+                || echo "::warning::could not close #$old"
+            done

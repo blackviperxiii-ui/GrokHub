@@ -225,7 +225,7 @@ fn web_page(url: &str) -> String {
     }
 }
 
-fn mod_row(m: &ModSummary) -> ModRow {
+pub fn mod_row(m: &ModSummary) -> ModRow {
     ModRow {
         id: m.id.clone(),
         name: m.name.clone(),

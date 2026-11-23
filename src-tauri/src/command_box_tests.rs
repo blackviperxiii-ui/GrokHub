@@ -44,6 +44,7 @@ fn an_unremembered_command_asks_and_shows_the_command() {
         Verdict::Confirm {
             command: "cargo build".into(),
             destructive: false,
+            secret: false,
         }
     );
 }
@@ -69,6 +70,7 @@ fn changed_text_asks_again() {
         Verdict::Confirm {
             command: "cargo build --release".into(),
             destructive: false,
+            secret: false,
         }
     );
 }
@@ -80,6 +82,7 @@ fn a_destructive_line_asks_even_when_remembered() {
         Verdict::Confirm {
             command: "rm -r target".into(),
             destructive: true,
+            secret: false,
         }
     );
 }
@@ -122,6 +125,7 @@ fn a_push_of_a_feature_branch_asks_first() {
         Verdict::Confirm {
             command: "git push -u origin feature/x".into(),
             destructive: false,
+            secret: false,
         }
     );
 }
@@ -182,6 +186,7 @@ fn a_path_outside_the_project_is_refused() {
         Verdict::Confirm {
             command: "ls src/app".into(),
             destructive: false,
+            secret: false,
         }
     );
 }
@@ -271,6 +276,7 @@ fn approve_remembers_and_returns_the_agents_message() {
         Verdict::Confirm {
             command: "ls".into(),
             destructive: false,
+            secret: false,
         }
     );
     let _ = std::fs::remove_dir_all(&config);
@@ -300,6 +306,7 @@ fn a_line_with_a_key_in_it_is_never_stored_and_asks_every_time() {
         Verdict::Confirm {
             command: line.clone(),
             destructive: false,
+            secret: true,
         }
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -327,6 +334,7 @@ fn a_keyed_line_an_older_version_stored_is_not_listed_or_queued_and_leaves_the_f
         Verdict::Confirm {
             command: line.clone(),
             destructive: false,
+            secret: true,
         }
     );
     remember(&config, &key, "ls").expect("remember");
@@ -411,6 +419,7 @@ fn a_line_with_any_secret_the_debug_bundle_hides_is_never_stored_and_asks_every_
             Verdict::Confirm {
                 command: line.clone(),
                 destructive: false,
+                secret: true,
             },
             "{line}"
         );

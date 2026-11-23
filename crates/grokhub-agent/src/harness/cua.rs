@@ -1,4 +1,7 @@
-//! Spike-2a: Cua Driver as an optional second pair of hands on Linux.
+//! Spike-2a: Cua Driver as an optional second pair of hands on Linux and
+//! macOS ([`cua_platform`]). Windows stays off: the pinned Driver can't tie
+//! a Windows window to a manifest app in `bounded` mode, so every scoped
+//! call would be refused.
 //!
 //! `grokhub --mcp-cua` is a cabin MCP server that Grok Build registers as
 //! `grokhub-cua` (the cabin Grok home only). It starts the pinned MIT
@@ -29,10 +32,60 @@ use crate::harness::span::{append_span, read_turn_context};
 /// newest one at build time and the first with the six cursor motions.
 pub const CUA_DRIVER_VERSION: &str = "0.34.0";
 pub const CUA_DRIVER_TAG: &str = "cua-driver-rs-v0.34.0";
-/// The Linux x86_64 release asset and its sha256 from the release's `SHA256SUMS`.
-pub const CUA_LINUX_ASSET: &str = "cua-driver-rs-0.34.0-linux-x86_64.tar.gz";
-pub const CUA_LINUX_SHA256: &str =
-    "8851c028e5d88a3b779ad2a8d49ed6f4b92aa94de2edf5c2851cee63bcc274c5";
+/// A release asset the cabin runs, with its sha256 from the release's `SHA256SUMS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CuaAsset {
+    /// `std::env::consts::OS`.
+    pub os: &'static str,
+    /// `std::env::consts::ARCH`.
+    pub arch: &'static str,
+    pub asset: &'static str,
+    pub sha256: &'static str,
+}
+
+/// The pinned release's assets for the computers Cua runs on.
+pub const CUA_ASSETS: &[CuaAsset] = &[
+    CuaAsset {
+        os: "linux",
+        arch: "x86_64",
+        asset: "cua-driver-rs-0.34.0-linux-x86_64.tar.gz",
+        sha256: "8851c028e5d88a3b779ad2a8d49ed6f4b92aa94de2edf5c2851cee63bcc274c5",
+    },
+    CuaAsset {
+        os: "linux",
+        arch: "aarch64",
+        asset: "cua-driver-rs-0.34.0-linux-arm64.tar.gz",
+        sha256: "0f72702c2e720286a282bfe9e917ba4d5262d0b5a46e12f6c69d58a4878bc2eb",
+    },
+    CuaAsset {
+        os: "macos",
+        arch: "aarch64",
+        asset: "cua-driver-rs-0.34.0-darwin-arm64.tar.gz",
+        sha256: "329bcc140c4840a5877e2cfc9f756351eb4a70c2c2d6acf4954751918122c60a",
+    },
+    CuaAsset {
+        os: "macos",
+        arch: "x86_64",
+        asset: "cua-driver-rs-0.34.0-darwin-x86_64.tar.gz",
+        sha256: "9f362ad3af021c2d092c89172a02663e5c7d8788f8f7643a0b5f4eb568279b27",
+    },
+];
+
+/// The pinned asset for `os`/`arch`, or why Cua doesn't run there.
+pub fn cua_platform(os: &str, arch: &str) -> Result<&'static CuaAsset, String> {
+    if os == "windows" {
+        return Err((*CUA_WINDOWS_MSG).into());
+    }
+    CUA_ASSETS
+        .iter()
+        .find(|a| a.os == os && a.arch == arch)
+        .ok_or_else(|| format!("{} ({os} {arch})", *CUA_UNSUPPORTED_MSG))
+}
+
+/// Cua can run on this computer.
+pub fn cua_here() -> bool {
+    cua_platform(std::env::consts::OS, std::env::consts::ARCH).is_ok()
+}
 /// The Driver is MIT. The AGPL `cua-perception` extension is never used.
 pub const CUA_DRIVER_LICENSE: &str = "MIT";
 /// Executable name looked up on PATH when `app.json` names no path.
@@ -74,6 +127,7 @@ pub const CUA_DENY_TOOLS: &[&str] = &[
     "browser_set_input_files",
 ];
 /// App scope for this spike: a disposable text editor (the measured task).
+/// Linux desktop ids here; macOS bundle ids in [`CUA_MAC_APPS`].
 pub const CUA_APPS: &[&str] = &[
     "org.gnome.TextEditor",
     "org.gnome.gedit",
@@ -81,6 +135,17 @@ pub const CUA_APPS: &[&str] = &[
     "org.kde.kwrite",
     "org.xfce.mousepad",
 ];
+/// The same scope on macOS: TextEdit.
+pub const CUA_MAC_APPS: &[&str] = &["com.apple.TextEdit"];
+
+/// The editors the manifest allows on `os`.
+pub fn cua_apps(os: &str) -> &'static [&'static str] {
+    if os == "macos" {
+        CUA_MAC_APPS
+    } else {
+        CUA_APPS
+    }
+}
 
 /// Typed placeholder for a credential. The model sees only this.
 pub const PASSWORD_SLOT: &str = "%password%";
@@ -90,8 +155,16 @@ pub static CUA_OFF_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock:
         "Cua Driver is off. {product} only uses it while the cuaDriver spike flag is on.",
     )
 });
-pub static CUA_LINUX_ONLY_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    grokhub_core::brand::filled("Cua Driver runs on Linux only in this {product} build.")
+pub static CUA_UNSUPPORTED_MSG: std::sync::LazyLock<&'static str> =
+    std::sync::LazyLock::new(|| {
+        grokhub_core::brand::filled(
+            "Cua Driver runs on Linux and macOS in this {product} build, not on this computer",
+        )
+    });
+pub static CUA_WINDOWS_MSG: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
+    grokhub_core::brand::filled(
+        "Cua Driver stays off on Windows in this {product} build: the pinned Driver can't match a Windows app to its manifest, so it would refuse every step. {product}'s own desktop tools still work.",
+    )
 });
 pub const CUA_MISSING_MSG: &str =
     "Cua Driver is not installed. Install cua-driver-rs 0.34.0, or set cuaDriverPath in app.json.";
@@ -129,11 +202,17 @@ fn yaml_list(indent: &str, items: &[&str]) -> String {
     items.iter().map(|i| format!("{indent}- {i}\n")).collect()
 }
 
-/// The bounded capability manifest: only the tools and apps this spike needs.
+/// The bounded capability manifest for this computer.
 pub fn cua_manifest() -> String {
+    cua_manifest_for(std::env::consts::OS)
+}
+
+/// The bounded capability manifest on `os`: only the tools and apps this
+/// spike needs.
+pub fn cua_manifest_for(os: &str) -> String {
     format!(
         "version: 1\nmode: bounded\nresources:\n  applications:\n{}allow:\n  tools:\n{}deny:\n  tools:\n{}",
-        CUA_APPS.iter().map(|a| format!("    - bundle_id: {a}\n")).collect::<String>(),
+        cua_apps(os).iter().map(|a| format!("    - bundle_id: {a}\n")).collect::<String>(),
         yaml_list("    ", CUA_TOOLS),
         yaml_list("    ", CUA_DENY_TOOLS),
     )
@@ -336,8 +415,14 @@ pub struct StdioChild {
     rx: mpsc::Receiver<String>,
 }
 
-/// Write the manifest and start `cua-driver mcp` with the bounded env.
-pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, String> {
+/// Write the manifest and start `cua-driver mcp` with the bounded env, on
+/// the screen `screen` names (the Bot Desktop's `DISPLAY` and the like; a
+/// `None` value is removed). Empty keeps the app's own screen.
+pub fn spawn_cua_child(
+    bin: &Path,
+    config_dir: &Path,
+    screen: &[(&str, Option<String>)],
+) -> Result<StdioChild, String> {
     let dir = cua_dir(config_dir);
     std::fs::create_dir_all(&dir).map_err(|e| {
         format!(
@@ -366,6 +451,12 @@ pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, Stri
         .stderr(Stdio::inherit());
     for k in CUA_ENV_REMOVE {
         cmd.env_remove(k);
+    }
+    for (key, value) in screen {
+        match value {
+            Some(v) => cmd.env(key, v),
+            None => cmd.env_remove(key),
+        };
     }
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| {
@@ -460,6 +551,18 @@ impl<C: CuaChild> CuaProxy<C> {
     /// Halted in this process: no call reaches a child again.
     pub fn is_halted(&self) -> bool {
         self.halted
+    }
+
+    /// The screen the child works on changed (the Bot Desktop started or
+    /// stopped): a running child stops, and the next call starts one on the
+    /// new screen, with the handshake it never saw. A start that failed is
+    /// tried again there.
+    pub fn restart(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            c.kill();
+            self.answered_init = true;
+        }
+        self.start_err = None;
     }
 
     fn child(&mut self) -> Result<&mut C, String> {
@@ -1083,6 +1186,55 @@ mod tests {
     }
 
     #[test]
+    fn a_new_screen_starts_a_new_child_that_gets_the_handshake_first() {
+        let dir = test_dir("cua-restart");
+        turn(&dir);
+        let fake = Fake::default();
+        let starts = Rc::new(RefCell::new(0));
+        let mut p = proxy(&fake, starts.clone());
+        let click = call("click", json!({"pid":42,"window_id":7,"x":10,"y":20}));
+        let init = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#;
+        // The client's own handshake went to the first child.
+        p.handle_line(init, ON, &dir, &mut || false).unwrap();
+        assert_eq!(*starts.borrow(), 1);
+        // Nothing running yet on the old screen: a restart leaves no child
+        // to kill and starts none.
+        let idle = Fake::default();
+        let idle_starts = Rc::new(RefCell::new(0));
+        let mut q = proxy(&idle, idle_starts.clone());
+        q.restart();
+        assert_eq!((*idle_starts.borrow(), *idle.killed.borrow()), (0, false));
+
+        // The Bot Desktop started: the child stops, and the next call starts
+        // one there that is told hello before its first call.
+        p.restart();
+        assert!(*fake.killed.borrow());
+        fake.got.borrow_mut().clear();
+        let out = p.handle_line(&click, ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "click done");
+        assert_eq!(*starts.borrow(), 2);
+        let methods: Vec<String> = fake
+            .got
+            .borrow()
+            .iter()
+            .map(|m| m["method"].as_str().unwrap_or("").to_string())
+            .collect();
+        // The click and its before and after looks follow the hello.
+        assert_eq!(
+            &methods[..3],
+            &["initialize", "notifications/initialized", "tools/call"]
+        );
+        let tools: Vec<String> = fake
+            .got
+            .borrow()
+            .iter()
+            .filter_map(|m| m["params"]["name"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(tools, ["get_window_state", "click", "get_window_state"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn soft_click_is_forwarded_once_with_a_cua_span_and_ui_changed() {
         let dir = test_dir("cua-click");
         turn(&dir);
@@ -1565,8 +1717,15 @@ mod tests {
                 sock.display().to_string()
             ]
         );
-        let m = cua_manifest();
+        let m = cua_manifest_for("linux");
         assert!(m.starts_with("version: 1\nmode: bounded\nresources:\n  applications:\n    - bundle_id: org.gnome.TextEditor\n"), "{m}");
+        let mac = cua_manifest_for("macos");
+        assert!(
+            mac.starts_with("version: 1\nmode: bounded\nresources:\n  applications:\n    - bundle_id: com.apple.TextEdit\nallow:\n"),
+            "{mac}"
+        );
+        assert!(!mac.contains("org.gnome"), "{mac}");
+        assert_eq!(mac.split("allow:").nth(1), m.split("allow:").nth(1));
         assert!(m.contains("allow:\n  tools:\n    - start_session\n"), "{m}");
         assert!(m.ends_with("deny:\n  tools:\n    - shell_execute\n    - page\n    - browser_download\n    - browser_set_input_files\n"), "{m}");
     }
@@ -1590,8 +1749,28 @@ mod tests {
             check_cua_version("hello"),
             Err("Loadout could not read the Cua Driver version, so it did not start it.".into())
         );
-        assert_eq!(CUA_LINUX_SHA256.len(), 64);
-        assert_eq!(CUA_LINUX_ASSET, "cua-driver-rs-0.34.0-linux-x86_64.tar.gz");
+        assert_eq!(
+            cua_platform("linux", "x86_64").map(|a| (a.asset, a.sha256)),
+            Ok((
+                "cua-driver-rs-0.34.0-linux-x86_64.tar.gz",
+                "8851c028e5d88a3b779ad2a8d49ed6f4b92aa94de2edf5c2851cee63bcc274c5"
+            ))
+        );
+        assert_eq!(
+            cua_platform("macos", "aarch64").map(|a| a.asset),
+            Ok("cua-driver-rs-0.34.0-darwin-arm64.tar.gz")
+        );
+        assert!(CUA_ASSETS.iter().all(|a| a.sha256.len() == 64
+            && a.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+            && a.asset.starts_with("cua-driver-rs-0.34.0-")));
+        assert_eq!(
+            cua_platform("windows", "x86_64"),
+            Err("Cua Driver stays off on Windows in this Loadout build: the pinned Driver can't match a Windows app to its manifest, so it would refuse every step. Loadout's own desktop tools still work.".into())
+        );
+        assert_eq!(
+            cua_platform("freebsd", "x86_64"),
+            Err("Cua Driver runs on Linux and macOS in this Loadout build, not on this computer (freebsd x86_64)".into())
+        );
         assert_eq!(
             find_cua_driver(
                 &Path::new("no-such-dir")

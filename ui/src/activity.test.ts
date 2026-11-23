@@ -50,6 +50,19 @@ describe("chatActivity", () => {
     expect(done?.steps).toBe(1);
   });
 
+  it("a panel leaves the chat's row and its step count as they are", () => {
+    const panel: ChatEvent = {
+      kind: "panel",
+      id: "call-3",
+      spec: { title: "Linux CI", elements: [{ type: "text", text: "ok" }] },
+    };
+    const before = fold([tool("completed"), tool("completed"), tool("in_progress", "show_panel")]);
+    expect(before?.steps).toBe(2);
+    const after = fold([panel], before);
+    expect(after).toBe(before);
+    expect(fold([tool("completed", "show_panel")], after)?.steps).toBe(3);
+  });
+
   it("more reply text leaves a running item as it is, so the dock skips a render", () => {
     const running = fold([{ kind: "text", text: "Looking" }, tool("in_progress")]);
     const more = chatActivity(running, { conversationId: "shell-1", event: { kind: "text", text: " more" } }, 9000);
@@ -63,6 +76,21 @@ describe("chatActivity", () => {
     });
     // The first text of a turn still makes the item.
     expect(fold([{ kind: "text", text: "Hi" }])).toMatchObject({ status: "running", detail: "Thinking…" });
+  });
+
+  it("thinking keeps the chat's row running, with its steps", () => {
+    const running = fold([tool("completed")]);
+    const thinking = chatActivity(running, { conversationId: "shell-1", event: { kind: "thought", text: "hmm" } }, 9000);
+    expect(thinking).toBe(running);
+    expect(thinking?.steps).toBe(1);
+    // Thinking first makes the row; after a finished turn it starts it again.
+    expect(fold([{ kind: "thought", text: "hmm" }])).toMatchObject({ status: "running", detail: "Thinking…", steps: 0 });
+    const done = fold([{ kind: "done", stop: "end_turn" }], running);
+    expect(fold([{ kind: "thought", text: "again" }], done)).toMatchObject({
+      status: "running",
+      detail: "Thinking…",
+      steps: 0,
+    });
   });
 
   it("a turn Halt stopped says so", () => {

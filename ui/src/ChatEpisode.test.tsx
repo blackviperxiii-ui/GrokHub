@@ -51,7 +51,7 @@ vi.mock("./api", async () => {
   closeChat: vi.fn(() => Promise.resolve()),
   deleteChat: vi.fn(),
   forgetMessage: vi.fn(),
-  getLastChat: vi.fn(() => Promise.resolve(null)),
+  getStartChat: vi.fn(() => Promise.resolve(null)),
   loadChat: vi.fn(),
   slashHits: vi.fn(() => Promise.resolve([])),
   runSlash: vi.fn(),
@@ -65,7 +65,7 @@ vi.mock("./api", async () => {
   onChatEvent: (_handler: (envelope: ChatEnvelope) => void) => Promise.resolve(() => {}),
   helperQuestions: () => Promise.resolve([]),
   onEventGap: () => Promise.resolve(() => {}),
-  transcribe: vi.fn(),
+  transcribe: vi.fn(async () => ({ words: "", line: null })),
   onFileDrop: () => Promise.resolve(() => {}),
   stageAttachment: vi.fn(),
   stageAttachmentPaths: vi.fn(),
@@ -87,6 +87,8 @@ const SETTINGS: Settings = {
   version: "3.1.0",
   summonHotkey: false,
   notifications: true,
+  dockPanels: false,
+  dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
 };
 
 function panel(conversationId: string, over: Partial<EpisodePanel> & { resume?: boolean } = {}): EpisodePanel {

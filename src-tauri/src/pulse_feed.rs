@@ -12,11 +12,13 @@
 //! person's open journal questions, interest topics, recent chats and feed
 //! posts.
 
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use grokhub_agent::harness as hx;
 use grokhub_agent::{CancelToken, ContentPart, InputItem, ModelClient, ResponsesRequest};
@@ -33,6 +35,19 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 const REDIRECTS_MAX: usize = 4;
 const PAGE_CAP: u64 = 2 * 1024 * 1024;
 const SOURCE_CAP: u64 = 4 * 1024 * 1024;
+/// Longest side a cached image keeps; larger JPEG and PNG files are resized.
+const THUMB_MAX_PX: u32 = 1280;
+const THUMB_JPEG_QUALITY: u8 = 82;
+/// Decode limits for a downloaded image: wider or taller files, or ones that
+/// need more memory than this to decode, are refused.
+const DECODE_MAX_PX: u32 = 8192;
+const DECODE_MAX_ALLOC: u64 = 128 * 1024 * 1024;
+/// The image cache is cleaned at most this often.
+const PRUNE_EVERY_MS: u64 = 24 * 3_600_000;
+/// Most images [`fill_images`] downloads in one tick.
+const FILL_PER_TICK: usize = 6;
+/// Only cards posted this recently get their images downloaded later.
+const FILL_WINDOW_MS: u64 = 24 * 3_600_000;
 
 /// Points the writer's network at a local mock (the shell smoke test). Only a
 /// plain-http loopback URL is accepted, so it can never move real traffic.
@@ -50,6 +65,12 @@ static IDEAS: Mutex<()> = Mutex::new(());
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Wakes the clock early (a saved prompt owes a post now).
 static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// When this process last cleaned the image cache (0: not yet).
+static LAST_PRUNE_MS: AtomicU64 = AtomicU64::new(0);
+/// Makes each image temp file name unique within this process.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Held while [`fit_image`] decodes, so at most one full-size image is live.
+static DECODE: Mutex<()> = Mutex::new(());
 
 fn state_lock() -> MutexGuard<'static, ()> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
@@ -61,6 +82,132 @@ fn state_path(config_dir: &Path) -> PathBuf {
 
 pub fn images_dir(config_dir: &Path) -> PathBuf {
     config_dir.join(IMAGES_DIR)
+}
+
+/// Save a downloaded image into the cache under `pc::image_cache_name(url)`.
+/// Only a whole JPEG, PNG or WebP (`pc::image_is_whole`) of at most
+/// `pc::IMAGE_MAX_BYTES` is kept. A JPEG or PNG must decode within the
+/// decode limits, and one longer than
+/// [`THUMB_MAX_PX`] on a side is stored resized; WebP (which this build can't
+/// decode) and smaller images keep their original bytes. The file appears
+/// through a temp file and a rename, so a reader never sees half of it.
+pub(crate) fn store_image(config_dir: &Path, url: &str, bytes: &[u8]) -> bool {
+    let Some(mime) = pc::image_mime(bytes) else {
+        return false;
+    };
+    if bytes.len() > pc::IMAGE_MAX_BYTES || !pc::image_is_whole(bytes) {
+        return false;
+    }
+    let kept = match mime {
+        "image/jpeg" => fit_image(bytes, image::ImageFormat::Jpeg),
+        "image/png" => fit_image(bytes, image::ImageFormat::Png),
+        _ => Some(Cow::Borrowed(bytes)),
+    };
+    let Some(kept) = kept else {
+        return false;
+    };
+    let dir = images_dir(config_dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let name = pc::image_cache_name(url);
+    let tmp = dir.join(format!(
+        "{name}.{}-{}.tmp",
+        std::process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&tmp, &kept).is_err() || std::fs::rename(&tmp, dir.join(&name)).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    true
+}
+
+/// Decode a JPEG or PNG within the limits. `None` when it doesn't decode or
+/// its pixels would need more than [`DECODE_MAX_ALLOC`]; the original bytes
+/// when it already fits; otherwise the upright image shrunk to fit
+/// [`THUMB_MAX_PX`] and encoded in its own format with its colour profile.
+/// One decode runs at a time, so the Pulse tick and the printer poll never
+/// hold two full-size images at once.
+fn fit_image(bytes: &[u8], format: image::ImageFormat) -> Option<Cow<'_, [u8]>> {
+    use image::{ImageDecoder as _, ImageEncoder as _};
+    let _one = DECODE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(DECODE_MAX_PX);
+    limits.max_image_height = Some(DECODE_MAX_PX);
+    limits.max_alloc = Some(DECODE_MAX_ALLOC);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
+    // The JPEG decoder checks only the side limits, so the pixel budget is
+    // checked here, before anything is allocated.
+    if decoder.total_bytes() > DECODE_MAX_ALLOC {
+        return None;
+    }
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = decoder.icc_profile().ok().flatten();
+    let img = image::DynamicImage::from_decoder(decoder).ok()?;
+    if img.width().max(img.height()) <= THUMB_MAX_PX {
+        return Some(Cow::Borrowed(bytes));
+    }
+    // Shrink first, then turn: the fit box is square, so the result is the
+    // same, and only the small image is copied. `thumbnail` averages areas
+    // without a full-size float buffer.
+    let mut img = img.thumbnail(THUMB_MAX_PX, THUMB_MAX_PX);
+    img.apply_orientation(orientation);
+    let mut out = Vec::new();
+    let written = if format == image::ImageFormat::Jpeg {
+        let mut encoder =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, THUMB_JPEG_QUALITY);
+        if let Some(icc) = icc {
+            encoder.set_icc_profile(icc).ok()?;
+        }
+        img.to_rgb8().write_with_encoder(encoder)
+    } else {
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut out);
+        if let Some(icc) = icc {
+            encoder.set_icc_profile(icc).ok()?;
+        }
+        img.write_with_encoder(encoder)
+    };
+    written.ok().map(|()| Cow::Owned(out))
+}
+
+/// Delete cache files no card references any more (see `pc::prune_plan`).
+/// A store that is missing, blank or can't be read deletes nothing. Returns
+/// how many went.
+pub(crate) fn prune_images(config_dir: &Path, now_ms: u64) -> usize {
+    let Ok(cards) = crate::pulse::stored_cards(config_dir) else {
+        return 0;
+    };
+    // A referenced URL keeps its file and its failure marker.
+    let keep: HashSet<String> = cards
+        .iter()
+        .flat_map(|card| card.pulse.image_urls.iter())
+        .flat_map(|url| [pc::image_cache_name(url), pc::image_miss_name(url)])
+        .collect();
+    let dir = images_dir(config_dir);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    let files: Vec<pc::CachedFile> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok().filter(|m| m.is_file())?;
+            let since_epoch = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+            Some(pc::CachedFile {
+                name: entry.file_name().into_string().ok()?,
+                modified_ms: u64::try_from(since_epoch.as_millis()).ok()?,
+            })
+        })
+        .collect();
+    pc::prune_plan(&files, &keep, now_ms)
+        .into_iter()
+        // A file another program holds open stays until the next prune.
+        .filter(|name| std::fs::remove_file(dir.join(name)).is_ok())
+        .count()
 }
 
 /// Read, change and write the writer state under its lock.
@@ -114,11 +261,110 @@ pub fn wake() {
     cv.notify_all();
 }
 
+/// Download the remote images of recent cards that don't have them cached
+/// yet: release radar, wishlist and achievement capsules, daily drop
+/// thumbnails, and any other card that names an `image_urls` entry.
+///
+/// - Nothing at all while Offline only is on.
+/// - Live cards from the last [`FILL_WINDOW_MS`], newest first, and at most
+///   [`FILL_PER_TICK`] downloads. Only public http(s) URLs; a printer
+///   snapshot on the local network is never asked.
+/// - Every download goes through `net` (the guarded [`LiveNet`]) and is kept
+///   only through [`store_image`].
+/// - A failure leaves a `.miss` marker (`pc::ImageMiss`), so a URL that
+///   answered for good is never asked again and a passing failure is retried
+///   at most twice, later. Cards are never edited.
+///
+/// The store lock is held only while the cards are read. Returns how many
+/// downloads it asked for.
+pub(crate) fn fill_images(config_dir: &Path, net: &dyn Net, now_ms: u64) -> usize {
+    if grokhub_core::offline::enabled() {
+        return 0;
+    }
+    let Ok(mut cards) = crate::pulse::cards(config_dir) else {
+        return 0;
+    };
+    cards.retain(|c| {
+        c.status != grokhub_core::UpdateStatus::Dismissed
+            && now_ms.saturating_sub(c.created_at) <= FILL_WINDOW_MS
+    });
+    cards.sort_by_key(|c| std::cmp::Reverse(c.created_at));
+    let dir = images_dir(config_dir);
+    let mut seen = HashSet::new();
+    let mut asked = 0;
+    for url in cards.iter().flat_map(|c| c.pulse.image_urls.iter()) {
+        if asked >= FILL_PER_TICK {
+            break;
+        }
+        if !seen.insert(url.as_str())
+            || !grokhub_core::public_http_url(url)
+            || dir.join(pc::image_cache_name(url)).is_file()
+        {
+            continue;
+        }
+        let marker = dir.join(pc::image_miss_name(url));
+        let prev = std::fs::read_to_string(&marker)
+            .ok()
+            .map(|text| pc::ImageMiss::parse(&text));
+        if prev.is_some_and(|miss| !miss.due(now_ms)) {
+            continue;
+        }
+        asked += 1;
+        let gone = match net.image(url) {
+            Ok(bytes) if pc::image_bytes_ok(&bytes) && store_image(config_dir, url, &bytes) => {
+                let _ = std::fs::remove_file(&marker);
+                continue;
+            }
+            // Not an image, a tracking pixel, too big, or it won't decode.
+            Ok(_) | Err(FetchErr::Gone(_)) => true,
+            Err(FetchErr::Later(_)) => false,
+        };
+        let miss = pc::ImageMiss::after_failure(prev, gone, now_ms);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(&marker, miss.render());
+        }
+    }
+    asked
+}
+
+/// Why a fetch failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchErr {
+    /// Asking again gets the same answer: an HTTP 4xx, an address that
+    /// isn't public, a redirect with no target, or too many redirects.
+    Gone(String),
+    /// Worth asking again later: the network, a timeout, a server error, a
+    /// rate limit, or the egress guard.
+    Later(String),
+}
+
+impl From<FetchErr> for String {
+    fn from(err: FetchErr) -> Self {
+        match err {
+            FetchErr::Gone(why) | FetchErr::Later(why) => why,
+        }
+    }
+}
+
+impl From<http::Error> for FetchErr {
+    fn from(err: http::Error) -> Self {
+        match err {
+            http::Error::Status { code, .. }
+                if (400..500).contains(&code) && code != 408 && code != 429 =>
+            {
+                Self::Gone(format!("HTTP {code}"))
+            }
+            http::Error::Status { code, .. } => Self::Later(format!("HTTP {code}")),
+            http::Error::Transport { .. } => Self::Later("network error".into()),
+        }
+    }
+}
+
 /// The network a run uses. The live one fetches public pages only.
 pub trait Net {
     fn source(&self, req: &SourceReq, have: Option<&CacheEntry>) -> Fetched;
     fn page(&self, url: &str) -> Result<String, String>;
-    fn image(&self, url: &str) -> Result<Vec<u8>, String>;
+    fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,7 +577,8 @@ fn write_post(
         ps::save_cache(&cache_path, &cache)?;
         return Ok(Outcome::Nothing(BUDGET_USED.into()));
     }
-    let research = pw::research_from(&picks);
+    let mut research = pw::research_from(&picks);
+    let pages = read_pages(net, &mut research);
     let recent = pw::recent_titles(&cards);
     let messages = pw::writer_messages(&pw::WriterInput {
         prompt: state.prompt_or_default(),
@@ -356,8 +603,8 @@ fn write_post(
             return Ok(Outcome::Nothing(why));
         }
     };
-    let mut card = pw::post_card(&written, &research, now_ms);
-    card.pulse.image_urls = cache_gallery(config_dir, net, &written.cites);
+    let mut card = pw::post_card(&written, &research, now_ms, state.utc_offset_min);
+    card.pulse.image_urls = cache_gallery(config_dir, net, &written.cites, &research, &pages);
     let id = card.id.clone();
     crate::pulse::add_post(config_dir, card)?;
     let used: Vec<ps::Ranked> = picks
@@ -375,28 +622,92 @@ fn write_post(
     Ok(Outcome::Posted(id))
 }
 
-/// The first cited page's gallery, downloaded once into the local cache.
-/// Returns the image URLs that are cached; the page shows those files and
-/// never loads the image from its site.
-fn cache_gallery(config_dir: &Path, net: &dyn Net, cites: &[String]) -> Vec<String> {
+/// One page read before writing: its URL and the gallery images it names.
+/// A read that failed is kept with no images, so it is not asked again.
+type PageRead = (String, Vec<String>);
+
+/// Read the top [`pw::PAGE_READS`] items' own pages before writing, so the
+/// writer has the article's text and not only the feed's line. Each page's
+/// text goes into its item; a page that fails or says nothing leaves its
+/// item as it was. Nothing is read while Offline only is on.
+fn read_pages(net: &dyn Net, research: &mut [pw::Research]) -> Vec<PageRead> {
+    if grokhub_core::offline::enabled() {
+        return Vec::new();
+    }
+    let mut read = Vec::new();
+    for item in research.iter_mut().take(pw::PAGE_READS) {
+        let url = item.url.clone();
+        let gallery = match net.page(&url) {
+            Ok(html) => {
+                pw::add_page(item, &pc::page_context(&html, pw::PAGE_TEXT_CHARS));
+                pc::gallery_images(&html, &url)
+            }
+            Err(_) => Vec::new(),
+        };
+        read.push((url, gallery));
+    }
+    read
+}
+
+/// A post's images, downloaded once into the local cache: first the cited
+/// items' own feed images (a video thumbnail, a feed's media, a Reddit
+/// preview), then the first cited page's gallery, without repeats and at
+/// most `pc::GALLERY_MAX`. A page read before writing is not read again; a
+/// first cite outside those pages is read here. Returns the image URLs that
+/// are cached; the page shows those files and never loads the image from its
+/// site.
+fn cache_gallery(
+    config_dir: &Path,
+    net: &dyn Net,
+    cites: &[String],
+    research: &[pw::Research],
+    pages: &[PageRead],
+) -> Vec<String> {
     let Some(page_url) = cites.first() else {
         return Vec::new();
     };
-    let Ok(html) = net.page(page_url) else {
-        return Vec::new();
-    };
+    let mut wanted: Vec<String> = cites
+        .iter()
+        .flat_map(|cite| {
+            research
+                .iter()
+                .filter(|r| ps::canonical_url(&r.url) == ps::canonical_url(cite))
+                .flat_map(|r| r.images.iter().cloned())
+        })
+        .collect();
+    match pages
+        .iter()
+        .find(|(url, _)| ps::canonical_url(url) == ps::canonical_url(page_url))
+    {
+        Some((_, gallery)) => wanted.extend(gallery.iter().cloned()),
+        None if grokhub_core::offline::enabled() => {}
+        None => {
+            if let Ok(html) = net.page(page_url) {
+                wanted.extend(pc::gallery_images(&html, page_url));
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    wanted.retain(|url| seen.insert(url.clone()));
     let dir = images_dir(config_dir);
     let mut kept = Vec::new();
-    for url in pc::gallery_images(&html, page_url) {
+    for url in wanted {
+        if kept.len() >= pc::GALLERY_MAX {
+            break;
+        }
         let file = dir.join(pc::image_cache_name(&url));
-        if !file.is_file() {
+        if file.is_file() {
+            // Fresh again, so a prune before the post lands keeps it.
+            let _ = std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .and_then(|f| f.set_modified(SystemTime::now()));
+        } else {
             let Ok(bytes) = net.image(&url) else {
                 continue;
             };
-            if !pc::image_bytes_ok(&bytes)
-                || std::fs::create_dir_all(&dir).is_err()
-                || std::fs::write(&file, &bytes).is_err()
-            {
+            // The minimum size skips tracking pixels and spacers.
+            if !pc::image_bytes_ok(&bytes) || !store_image(config_dir, &url, &bytes) {
                 continue;
             }
         }
@@ -411,6 +722,16 @@ fn ask(
     model: &str,
     messages: &[(String, String)],
 ) -> Result<String, String> {
+    ask_as(client, model, "pulse-writer", messages)
+}
+
+/// [`ask`] under another conversation id, for other background writers.
+pub(crate) fn ask_as(
+    client: &dyn ModelClient,
+    model: &str,
+    conversation_id: &str,
+    messages: &[(String, String)],
+) -> Result<String, String> {
     let req = ResponsesRequest {
         text_format: None,
         model: model.to_string(),
@@ -422,7 +743,7 @@ fn ask(
                 content: vec![ContentPart::InputText(text.clone())],
             })
             .collect(),
-        conversation_id: "pulse-writer".into(),
+        conversation_id: conversation_id.into(),
         tools: Vec::new(),
         hosted_search: false,
         call_timeout: Some(Duration::from_secs(120)),
@@ -467,6 +788,11 @@ fn tick(
         return;
     }
     let now = grokhub_core::now_ms();
+    if now.saturating_sub(LAST_PRUNE_MS.load(Ordering::Relaxed)) >= PRUNE_EVERY_MS {
+        LAST_PRUNE_MS.store(now, Ordering::Relaxed);
+        prune_images(config_dir, now);
+    }
+    fill_images(config_dir, net().as_ref(), now);
     let state = state(config_dir);
     let quiet = quiet_now(config_dir, &state, now);
     if !pw::writer_due(&state, now, just_opened, quiet) {
@@ -526,20 +852,19 @@ impl LoopbackNet {
         })
     }
 
-    fn get(&self, kind: &str, url: &str) -> Result<Vec<u8>, String> {
+    fn get(&self, kind: &str, url: &str) -> Result<Vec<u8>, FetchErr> {
         let at = format!("{}/pulse/{kind}?url={}", self.base, ps::query_value(url));
         let resp = http::agent(http::Opts {
             overall: Some(FETCH_TIMEOUT),
             ..Default::default()
         })
         .get(&at)
-        .call()
-        .map_err(|e| e.to_string())?;
+        .call()?;
         let mut buf = Vec::new();
         resp.into_reader()
             .take(SOURCE_CAP)
             .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| FetchErr::Later(e.to_string()))?;
         Ok(buf)
     }
 }
@@ -552,16 +877,17 @@ impl Net for LoopbackNet {
                 etag: None,
                 last_modified: None,
             },
-            Err(why) => Fetched::Failed(why),
+            Err(why) => Fetched::Failed(why.into()),
         }
     }
 
     fn page(&self, url: &str) -> Result<String, String> {
         self.get("page", url)
             .map(|body| String::from_utf8_lossy(&body).into_owned())
+            .map_err(String::from)
     }
 
-    fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+    fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
         self.get("image", url)
     }
 }
@@ -572,6 +898,27 @@ struct Got {
     body: Vec<u8>,
     etag: Option<String>,
     last_modified: Option<String>,
+}
+
+/// Whether a page answer is a web page worth reading: a 2xx status and, when
+/// the site names one, an HTML content type. An image, a PDF or an error
+/// page is not, so its bytes are never read as an article.
+fn page_answer_ok(status: u16, content_type: Option<&str>) -> Result<(), String> {
+    if !(200..300).contains(&status) {
+        return Err(format!("HTTP {status}"));
+    }
+    match content_type.map(|t| {
+        t.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    }) {
+        Some(t) if !t.is_empty() && t != "text/html" && t != "application/xhtml+xml" => {
+            Err("not a web page".into())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Public pages over plain HTTP(S): every hop is checked as a public URL and
@@ -588,22 +935,26 @@ impl LiveNet {
         })
     }
 
+    /// `html_only` refuses a page answer that is not a web page before its
+    /// body is read ([`page_answer_ok`]).
     fn get(
         url: &str,
         accept: &str,
         data: &[hx::DataClass],
         have: Option<&CacheEntry>,
         cap: u64,
-    ) -> Result<Got, String> {
+        html_only: bool,
+    ) -> Result<Got, FetchErr> {
         let mut url = url.to_string();
         for hop in 0..=REDIRECTS_MAX {
             if !grokhub_core::public_http_url(&url) {
-                return Err("not a public address".into());
+                return Err(FetchErr::Gone("not a public address".into()));
             }
             hx::guard_quiet(
                 &grokhub_agent::perm::config_dir(),
                 &hx::EgressReq::new(&url, data),
-            )?;
+            )
+            .map_err(FetchErr::Later)?;
             let mut call = Self::agent()
                 .get(&url)
                 .header("user-agent", grokhub_agent::USER_AGENT)
@@ -618,11 +969,7 @@ impl LiveNet {
                     }
                 }
             }
-            let resp = match call.call() {
-                Ok(resp) => resp,
-                Err(http::Error::Status { code, .. }) => return Err(format!("HTTP {code}")),
-                Err(http::Error::Transport { .. }) => return Err("network error".into()),
-            };
+            let resp = call.call()?;
             let status = resp.status();
             if (300..400).contains(&status) && status != 304 {
                 match resp.header("location") {
@@ -630,8 +977,11 @@ impl LiveNet {
                         url = redirect_target(&url, loc);
                         continue;
                     }
-                    None => return Err(format!("HTTP {status}")),
+                    None => return Err(FetchErr::Gone(format!("HTTP {status}"))),
                 }
+            }
+            if html_only {
+                page_answer_ok(status, resp.header("content-type")).map_err(FetchErr::Gone)?;
             }
             let etag = resp.header("etag").map(str::to_string);
             let modified = resp.header("last-modified").map(str::to_string);
@@ -639,7 +989,7 @@ impl LiveNet {
             resp.into_reader()
                 .take(cap)
                 .read_to_end(&mut buf)
-                .map_err(|_| "timed out or dropped".to_string())?;
+                .map_err(|_| FetchErr::Later("timed out or dropped".into()))?;
             return Ok(Got {
                 status,
                 body: buf,
@@ -647,7 +997,7 @@ impl LiveNet {
                 last_modified: modified,
             });
         }
-        Err("too many redirects".into())
+        Err(FetchErr::Gone("too many redirects".into()))
     }
 }
 
@@ -673,25 +1023,33 @@ impl Net for LiveNet {
             &[]
         };
         let accept = "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.5";
-        match Self::get(&req.url, accept, data, have, SOURCE_CAP) {
+        match Self::get(&req.url, accept, data, have, SOURCE_CAP, false) {
             Ok(got) if got.status == 304 => Fetched::NotModified,
             Ok(got) => Fetched::Body {
                 body: String::from_utf8_lossy(&got.body).into_owned(),
                 etag: got.etag,
                 last_modified: got.last_modified,
             },
-            Err(why) => Fetched::Failed(why),
+            Err(why) => Fetched::Failed(why.into()),
         }
     }
 
     fn page(&self, url: &str) -> Result<String, String> {
-        let got = Self::get(url, "text/html", &[], None, PAGE_CAP)?;
+        let got = Self::get(url, "text/html", &[], None, PAGE_CAP, true)?;
         Ok(String::from_utf8_lossy(&got.body).into_owned())
     }
 
-    fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+    fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
         let cap = pc::IMAGE_MAX_BYTES as u64 + 1;
-        Ok(Self::get(url, "image/webp,image/png,image/jpeg", &[], None, cap)?.body)
+        Ok(Self::get(
+            url,
+            "image/webp,image/png,image/jpeg",
+            &[],
+            None,
+            cap,
+            false,
+        )?
+        .body)
     }
 }
 
@@ -743,6 +1101,32 @@ mod tests {
 
     const HN: &str = r#"{"hits":[{"title":"Rust 1.99 ships async closures","url":"https://blog.rust-lang.org/2026/10/20/Rust-1.99.html","points":420,"created_at_i":1799990000,"objectID":"1"}]}"#;
 
+    /// An RGB JPEG drawn by `px`.
+    fn jpeg(w: u32, h: u32, quality: u8, px: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb(px(x, y)));
+        let mut out = Vec::new();
+        img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut out, quality,
+        ))
+        .expect("jpeg");
+        out
+    }
+
+    /// The page's hero image: a real 256×256 JPEG of noise, well over
+    /// `pc::IMAGE_MIN_BYTES` and small enough to be cached as is.
+    static FIXTURE: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(|| {
+        let noise = |x: u32, y: u32, c: u32| {
+            let mut v = (x * 7919 + y * 104_729 + c * 1_299_709) ^ 0x9E37_79B9;
+            v ^= v << 13;
+            v ^= v >> 17;
+            v ^= v << 5;
+            v.to_le_bytes()[0]
+        };
+        jpeg(256, 256, 90, |x, y| {
+            [noise(x, y, 0), noise(x, y, 1), noise(x, y, 2)]
+        })
+    });
+
     struct FakeNet;
 
     impl Net for FakeNet {
@@ -762,11 +1146,9 @@ mod tests {
             Ok(r#"<meta property="og:image" content="https://blog.rust-lang.org/hero.jpg"><img src="/logo.png" width="900">"#.into())
         }
 
-        fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
             assert_eq!(url, "https://blog.rust-lang.org/hero.jpg");
-            let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0];
-            jpg.resize(pc::IMAGE_MIN_BYTES * 2, 7);
-            Ok(jpg)
+            Ok(FIXTURE.clone())
         }
     }
 
@@ -857,7 +1239,7 @@ mod tests {
             images_dir(&d.config).join(pc::image_cache_name("https://blog.rust-lang.org/hero.jpg"));
         assert_eq!(
             std::fs::metadata(&cached).expect("cached").len(),
-            (pc::IMAGE_MIN_BYTES * 2) as u64
+            FIXTURE.len() as u64
         );
 
         let s = state(&d.config);
@@ -995,7 +1377,7 @@ mod tests {
             FakeNet.page(url)
         }
 
-        fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
             FakeNet.image(url)
         }
     }
@@ -1026,6 +1408,210 @@ mod tests {
                 || u.contains("youtube")),
             "a source turned off was asked: {urls:?}"
         );
+    }
+
+    /// Five Rust stories on Hacker News, most points first.
+    const HN5: &str = r#"{"hits":[
+{"title":"Rust 1.99 ships async closures","url":"https://one.example/rust","points":500,"num_comments":50,"created_at_i":1799990000,"objectID":"1"},
+{"title":"Rust in the Linux kernel grows","url":"https://two.example/rust","points":400,"num_comments":40,"created_at_i":1799990000,"objectID":"2"},
+{"title":"A Rust game engine reaches 1.0","url":"https://three.example/rust","points":300,"num_comments":30,"created_at_i":1799990000,"objectID":"3"},
+{"title":"Rust compile times halved in nightly","url":"https://four.example/rust","points":200,"num_comments":20,"created_at_i":1799990000,"objectID":"4"},
+{"title":"Embedded Rust on a tiny chip","url":"https://five.example/rust","points":100,"num_comments":10,"created_at_i":1799990000,"objectID":"5"}]}"#;
+
+    /// Three Rust threads on Reddit, each in its own subreddit.
+    const REDDIT3: &str = r#"{"data":{"children":[
+{"data":{"title":"Rust 2027 edition plans are out","url":"https://six.example/rust","permalink":"/r/rust/comments/6/","subreddit":"rust","score":900,"created_utc":1799990000}},
+{"data":{"title":"Why our team moved to Rust","url":"https://seven.example/rust","permalink":"/r/programming/comments/7/","subreddit":"programming","score":800,"created_utc":1799990000}},
+{"data":{"title":"Rust for game servers","url":"https://eight.example/rust","permalink":"/r/gamedev/comments/8/","subreddit":"gamedev","score":700,"created_utc":1799990000}}]}}"#;
+
+    /// A net with five picks (two from Hacker News, three from Reddit) whose
+    /// pages log each read. A page answers
+    /// with its own article text and hero image, or fails when `fail` is set.
+    #[derive(Default)]
+    struct PageLog {
+        pages: Mutex<Vec<String>>,
+        images: Mutex<Vec<String>>,
+        fail: bool,
+    }
+
+    impl Net for PageLog {
+        fn source(&self, req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+            let body = if req.url.contains("hn.algolia.com") {
+                HN5
+            } else if req.url.contains("reddit.com") {
+                REDDIT3
+            } else {
+                ""
+            };
+            if !body.is_empty() {
+                Fetched::Body {
+                    body: body.into(),
+                    etag: None,
+                    last_modified: None,
+                }
+            } else {
+                Fetched::Failed("offline".into())
+            }
+        }
+
+        fn page(&self, url: &str) -> Result<String, String> {
+            self.pages.lock().unwrap().push(url.to_string());
+            if self.fail {
+                return Err("HTTP 403".into());
+            }
+            let host = url.split('/').nth(2).unwrap_or("");
+            Ok(format!(
+                r#"<meta property="og:image" content="https://{host}/hero.jpg"><meta name="author" content="Ada"><article><p>The article on {host} explains the whole story in plain words for readers.</p></article>"#
+            ))
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
+            self.images.lock().unwrap().push(url.to_string());
+            Ok(FIXTURE.clone())
+        }
+    }
+
+    fn citing(url: &str) -> String {
+        format!(
+            r#"{{"title":"A Rust story worth a look","snippet":"Read [the story]({url}).","details":["The article explains the whole story."],"icon":"🦀","why":"You follow Rust."}}"#
+        )
+    }
+
+    #[test]
+    fn a_run_reads_at_most_two_pages_before_writing() {
+        let d = dirs("two-pages");
+        let reply = citing("https://four.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog::default();
+        let Outcome::Posted(id) =
+            run_once(&d.config, "grok-test", &client, &net, NOW).expect("run")
+        else {
+            panic!("no post");
+        };
+        assert_eq!(
+            *net.pages.lock().unwrap(),
+            vec![
+                "https://four.example/rust".to_string(),
+                "https://one.example/rust".to_string()
+            ],
+            "two pages, read before writing, and the cited one is not read again"
+        );
+        let seen = client.seen.lock().unwrap();
+        assert!(
+            seen[0].contains("The article on four.example explains the whole story"),
+            "{}",
+            seen[0]
+        );
+        assert!(seen[0].contains("The article on one.example explains"));
+        assert!(seen[0].contains("https://eight.example/rust"));
+        assert!(!seen[0].contains("eight.example explains"));
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(
+            card.pulse.image_urls,
+            vec!["https://four.example/hero.jpg".to_string()]
+        );
+        assert_eq!(
+            grokhub_core::card_report::report_more(card).as_deref(),
+            Some("- The article explains the whole story.\n\n200 points, 20 comments on Hacker News. · By Ada · Published Jan 15, 2027")
+        );
+    }
+
+    #[test]
+    fn a_cite_outside_the_read_pages_is_read_once_for_its_gallery() {
+        let d = dirs("cite-outside");
+        let reply = citing("https://eight.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog::default();
+        let Outcome::Posted(id) =
+            run_once(&d.config, "grok-test", &client, &net, NOW).expect("run")
+        else {
+            panic!("no post");
+        };
+        assert_eq!(
+            *net.pages.lock().unwrap(),
+            vec![
+                "https://four.example/rust".to_string(),
+                "https://one.example/rust".to_string(),
+                "https://eight.example/rust".to_string()
+            ]
+        );
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(
+            card.pulse.image_urls,
+            vec!["https://eight.example/hero.jpg".to_string()]
+        );
+        // Its page was read only for the gallery, after writing, so its
+        // author never became a fact.
+        assert_eq!(
+            grokhub_core::card_report::report_more(card).as_deref(),
+            Some("- The article explains the whole story.\n\nScore 700 on r/gamedev · Published Jan 15, 2027")
+        );
+    }
+
+    #[test]
+    fn a_run_whose_page_reads_fail_still_posts_from_the_feed() {
+        let d = dirs("pages-fail");
+        let reply = citing("https://four.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog {
+            fail: true,
+            ..Default::default()
+        };
+        let Outcome::Posted(id) =
+            run_once(&d.config, "grok-test", &client, &net, NOW).expect("run")
+        else {
+            panic!("no post");
+        };
+        assert_eq!(
+            net.pages.lock().unwrap().len(),
+            2,
+            "a failed page is not asked again"
+        );
+        let seen = client.seen.lock().unwrap();
+        assert!(seen[0].contains("200 points, 20 comments on Hacker News."));
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(card.pulse.image_urls, Vec::<String>::new());
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Read [the story](https://four.example/rust).")
+        );
+    }
+
+    #[test]
+    fn a_run_reads_no_page_while_offline_only_is_on() {
+        let d = dirs("pages-offline");
+        let reply = citing("https://four.example/rust");
+        let client = Script::new(&[&reply]);
+        let net = PageLog::default();
+        let _off = grokhub_core::offline::force_for_thread(true);
+        run_once(&d.config, "grok-test", &client, &net, NOW).expect("run");
+        assert_eq!(*net.pages.lock().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_page_answer_must_be_a_web_page() {
+        assert_eq!(
+            page_answer_ok(200, Some("text/html; charset=utf-8")),
+            Ok(())
+        );
+        assert_eq!(page_answer_ok(200, Some("application/xhtml+xml")), Ok(()));
+        assert_eq!(page_answer_ok(200, None), Ok(()));
+        assert_eq!(
+            page_answer_ok(200, Some("image/jpeg")),
+            Err("not a web page".to_string())
+        );
+        assert_eq!(
+            page_answer_ok(200, Some("application/pdf")),
+            Err("not a web page".to_string())
+        );
+        assert_eq!(
+            page_answer_ok(404, Some("text/html")),
+            Err("HTTP 404".to_string())
+        );
+        assert_eq!(page_answer_ok(503, None), Err("HTTP 503".to_string()));
     }
 
     #[test]
@@ -1158,6 +1744,514 @@ mod tests {
         assert_eq!(
             redirect_target("https://a.example.com/x", "https://b.example.com/"),
             "https://b.example.com/"
+        );
+    }
+
+    const HERO: &str = "https://example.com/hero.jpg";
+
+    fn decoded_size(bytes: &[u8]) -> (u32, u32) {
+        let img = image::load_from_memory(bytes).expect("decodes");
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn store_image_shrinks_a_large_jpeg() {
+        let d = dirs("store-large");
+        let big = jpeg(2560, 1440, 90, |x, y| [(x / 10) as u8, (y / 6) as u8, 128]);
+        assert!(store_image(&d.config, HERO, &big));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(decoded_size(&stored), (1280, 720));
+        assert_eq!(pc::image_mime(&stored), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn store_image_keeps_a_small_jpeg_byte_for_byte() {
+        let d = dirs("store-small");
+        let small = jpeg(480, 320, 90, |x, y| [(x / 2) as u8, (y / 2) as u8, 64]);
+        assert!(store_image(&d.config, HERO, &small));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(stored, small);
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_with_a_broken_header() {
+        let d = dirs("store-broken");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut broken = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        broken.resize(4 + 16 * 1024, 7);
+        broken.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(
+            pc::image_is_whole(&broken),
+            "only the decoder can refuse it"
+        );
+        assert!(!store_image(&d.config, HERO, &broken));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_cut_off_mid_download() {
+        let d = dirs("store-cut");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let big = jpeg(2560, 1440, 90, |x, y| [(x / 10) as u8, (y / 6) as u8, 128]);
+        let small = jpeg(480, 320, 90, |x, y| [(x / 2) as u8, (y / 2) as u8, 64]);
+        assert!(!store_image(&d.config, HERO, &big[..big.len() / 2]));
+        assert!(!store_image(&d.config, HERO, &small[..small.len() / 2]));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    /// A small JPEG whose header claims `w`×`h`: a decompression bomb.
+    fn jpeg_claiming(w: u16, h: u16) -> Vec<u8> {
+        let mut bytes = jpeg(64, 64, 90, |_, _| [90, 90, 90]);
+        let sof = bytes
+            .windows(2)
+            .position(|m| m == [0xFF, 0xC0])
+            .expect("baseline frame header");
+        bytes[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn store_image_refuses_a_jpeg_too_big_to_decode() {
+        let d = dirs("store-bomb");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        // 8192 x 6000 x 3 bytes is 140.6 MiB, over the 128 MiB budget, though
+        // each side is within DECODE_MAX_PX.
+        let bomb = jpeg_claiming(8192, 6000);
+        assert_eq!(decoded_header(&bomb), (8192, 6000));
+        assert!(!store_image(&d.config, HERO, &bomb));
+        assert_eq!(std::fs::read_dir(&dir).expect("dir").count(), 0);
+    }
+
+    fn decoded_header(bytes: &[u8]) -> (u32, u32) {
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg)
+            .into_dimensions()
+            .expect("header")
+    }
+
+    #[test]
+    fn store_image_keeps_the_colour_profile_of_a_resized_jpeg() {
+        use image::{ImageDecoder as _, ImageEncoder as _};
+        let d = dirs("store-icc");
+        let profile: Vec<u8> = (0..=255u8).cycle().take(600).collect();
+        let img = image::RgbImage::from_fn(2560, 1440, |x, y| {
+            image::Rgb([(x / 10) as u8, (y / 6) as u8, 128])
+        });
+        let mut src = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut src, 90);
+        encoder.set_icc_profile(profile.clone()).expect("icc");
+        img.write_with_encoder(encoder).expect("jpeg");
+
+        assert!(store_image(&d.config, HERO, &src));
+        let stored =
+            std::fs::read(images_dir(&d.config).join(pc::image_cache_name(HERO))).expect("stored");
+        assert_eq!(decoded_size(&stored), (1280, 720));
+        let mut decoder =
+            image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&stored)).expect("jpeg");
+        assert_eq!(decoder.icc_profile().expect("read"), Some(profile));
+    }
+
+    #[test]
+    fn store_image_refuses_a_too_wide_png() {
+        let d = dirs("store-wide");
+        let img = image::RgbImage::from_pixel(9000, 10, image::Rgb([200, 30, 30]));
+        let mut png = Vec::new();
+        img.write_with_encoder(image::codecs::png::PngEncoder::new(&mut png))
+            .expect("png");
+        assert_eq!(pc::image_mime(&png), Some("image/png"));
+        assert!(!store_image(
+            &d.config,
+            "https://example.com/wide.png",
+            &png
+        ));
+        assert!(!images_dir(&d.config)
+            .join(pc::image_cache_name("https://example.com/wide.png"))
+            .exists());
+    }
+
+    #[test]
+    fn prune_images_keeps_everything_when_the_store_is_damaged() {
+        let d = dirs("prune-damaged");
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let stray = dir.join("0123456789abcdef.jpg");
+        std::fs::write(&stray, &*FIXTURE).expect("img");
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&stray)
+            .and_then(|f| f.set_modified(two_hours_ago))
+            .expect("mtime");
+        let now = grokhub_core::now_ms();
+
+        assert!(!d.config.join("updates.json").exists());
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a missing store deletes nothing");
+
+        std::fs::write(d.config.join("updates.json"), " \n").expect("store");
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a blank store deletes nothing");
+
+        std::fs::write(d.config.join("updates.json"), "{").expect("store");
+        assert_eq!(prune_images(&d.config, now), 0);
+        assert!(stray.is_file(), "a damaged store deletes nothing");
+
+        // The same file goes once the store reads and no card names it.
+        std::fs::write(d.config.join("updates.json"), "[]").expect("store");
+        assert_eq!(prune_images(&d.config, now), 1);
+        assert!(!stray.exists());
+    }
+
+    const YT: &str = r#"<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <title>Rust Tours</title>
+ <entry><title>Rust 1.99 in ten minutes</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=abc"/>
+  <published>2027-01-15T06:00:00+00:00</published>
+  <media:group><media:title>Rust 1.99</media:title>
+   <media:thumbnail url="https://i.ytimg.com/vi/abc/hqdefault.jpg" width="480" height="360"/>
+   <media:description>A quick tour of Rust 1.99.</media:description></media:group>
+ </entry></feed>"#;
+
+    /// One YouTube channel and the page FakeNet serves; records image asks.
+    #[derive(Default)]
+    struct VideoNet(Mutex<Vec<String>>);
+
+    impl Net for VideoNet {
+        fn source(&self, req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+            if req.url.contains("youtube.com/feeds") {
+                Fetched::Body {
+                    body: YT.into(),
+                    etag: None,
+                    last_modified: None,
+                }
+            } else {
+                Fetched::Failed("offline".into())
+            }
+        }
+
+        fn page(&self, url: &str) -> Result<String, String> {
+            FakeNet.page(url)
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
+            self.0.lock().unwrap().push(url.to_string());
+            Ok(FIXTURE.clone())
+        }
+    }
+
+    #[test]
+    fn a_written_video_post_caches_its_thumbnail_then_the_page_image() {
+        let d = dirs("video");
+        std::fs::write(
+            d.config.join("app.json"),
+            r#"{"pulseSources":{"hackerNews":false,"webSearch":false,"reddit":false,"github":false,"rss":false,"channels":["UCabc"]}}"#,
+        )
+        .expect("app.json");
+        let client = Script::new(&[
+            r#"{"title":"Rust 1.99 in ten minutes","snippet":"A [quick tour](https://www.youtube.com/watch?v=abc) of Rust 1.99.","icon":"🦀","why":"You follow Rust."}"#,
+        ]);
+        let net = VideoNet::default();
+        let out = run_once(&d.config, "grok-test", &client, &net, NOW).expect("run");
+        let Outcome::Posted(id) = out else {
+            panic!("{out:?}");
+        };
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        let card = cards.iter().find(|c| c.id == id).expect("posted");
+        assert_eq!(
+            card.pulse.image_urls,
+            vec![
+                "https://i.ytimg.com/vi/abc/hqdefault.jpg".to_string(),
+                "https://blog.rust-lang.org/hero.jpg".to_string()
+            ]
+        );
+        assert_eq!(
+            *net.0.lock().unwrap(),
+            vec![
+                "https://i.ytimg.com/vi/abc/hqdefault.jpg".to_string(),
+                "https://blog.rust-lang.org/hero.jpg".to_string()
+            ]
+        );
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        assert_eq!(
+            page.feed[0].images,
+            vec![
+                pc::image_cache_name("https://i.ytimg.com/vi/abc/hqdefault.jpg"),
+                pc::image_cache_name("https://blog.rust-lang.org/hero.jpg")
+            ]
+        );
+    }
+
+    const CAPSULE_620: &str = "https://cdn.akamai.steamstatic.com/steam/apps/620/header.jpg";
+
+    /// A release radar post for `app_id`, posted at `at`.
+    fn capsule_card(app_id: u32, at: u64) -> grokhub_core::UpdateCard {
+        let reminder = grokhub_core::release_radar::Reminder {
+            name: format!("Game {app_id}"),
+            date_ms: at,
+        };
+        grokhub_core::release_radar::out_today_card(app_id, &reminder, at)
+    }
+
+    fn store(config: &Path, cards: &[grokhub_core::UpdateCard]) {
+        std::fs::write(
+            config.join("updates.json"),
+            serde_json::to_string(cards).expect("json"),
+        )
+        .expect("updates.json");
+    }
+
+    /// Answers every image ask with `answer` (the fixture JPEG by default)
+    /// and writes the ask down.
+    #[derive(Default)]
+    struct Images {
+        asked: Mutex<Vec<String>>,
+        answer: Mutex<Option<Result<Vec<u8>, FetchErr>>>,
+    }
+
+    impl Images {
+        fn answering(answer: Result<Vec<u8>, FetchErr>) -> Self {
+            Self {
+                asked: Mutex::new(Vec::new()),
+                answer: Mutex::new(Some(answer)),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl Net for Images {
+        fn source(&self, _req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+            Fetched::Failed("no sources here".into())
+        }
+
+        fn page(&self, _url: &str) -> Result<String, String> {
+            Err("no pages here".into())
+        }
+
+        fn image(&self, url: &str) -> Result<Vec<u8>, FetchErr> {
+            self.asked.lock().unwrap().push(url.to_string());
+            self.answer
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| Ok(FIXTURE.clone()))
+        }
+    }
+
+    fn marker(config: &Path, url: &str) -> Option<String> {
+        std::fs::read_to_string(images_dir(config).join(pc::image_miss_name(url))).ok()
+    }
+
+    #[test]
+    fn fill_images_caches_a_release_radar_capsule() {
+        let d = dirs("fill-capsule");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::default();
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(net.asked(), vec![CAPSULE_620.to_string()]);
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        assert_eq!(page.feed[0].images, vec![pc::image_cache_name(CAPSULE_620)]);
+        // Cached: the next tick asks nothing.
+        assert_eq!(fill_images(&d.config, &net, NOW + 60_000), 0);
+        assert_eq!(net.asked().len(), 1);
+    }
+
+    #[test]
+    fn fill_images_never_asks_again_for_a_url_that_answers_html() {
+        let d = dirs("fill-html");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let mut html = b"<!doctype html><title>Not found</title>".to_vec();
+        html.resize(pc::IMAGE_MIN_BYTES * 2, b' ');
+        let net = Images::answering(Ok(html));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+        assert_eq!(fill_images(&d.config, &net, NOW + 3_600_000), 0);
+        assert_eq!(net.asked(), vec![CAPSULE_620.to_string()]);
+        // The card itself is never edited, and it shows no image.
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        assert_eq!(cards[0].pulse.image_urls, vec![CAPSULE_620.to_string()]);
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        assert_eq!(page.feed[0].images, Vec::<String>::new());
+    }
+
+    #[test]
+    fn fill_images_never_asks_again_after_a_404_or_a_tracking_pixel() {
+        let d = dirs("fill-404");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::answering(Err(FetchErr::Gone("HTTP 404".into())));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(fill_images(&d.config, &net, NOW + 3_600_000), 0);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+
+        let d = dirs("fill-pixel");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        // A whole 1×1 JPEG: an image, but far under the size floor.
+        let pixel = jpeg(1, 1, 90, |_, _| [0, 0, 0]);
+        let net = Images::answering(Ok(pixel));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+        assert!(!images_dir(&d.config)
+            .join(pc::image_cache_name(CAPSULE_620))
+            .exists());
+    }
+
+    #[test]
+    fn fill_images_keeps_a_url_on_network_error_and_retries_it_twice_later() {
+        let d = dirs("fill-later");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::answering(Err(FetchErr::Later("network error".into())));
+        let min = 60_000;
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        assert_eq!(
+            marker(&d.config, CAPSULE_620).as_deref(),
+            Some("later 1 1800000900000\n")
+        );
+        assert_eq!(fill_images(&d.config, &net, NOW + min), 0, "waits 15 min");
+        assert_eq!(fill_images(&d.config, &net, NOW + 15 * min), 1);
+        assert_eq!(fill_images(&d.config, &net, NOW + 44 * min), 0, "then 30");
+        assert_eq!(fill_images(&d.config, &net, NOW + 45 * min), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620).as_deref(), Some("gone\n"));
+        assert_eq!(fill_images(&d.config, &net, NOW + 600 * min), 0);
+        assert_eq!(net.asked().len(), 3);
+        let cards = crate::pulse::cards(&d.config).expect("cards");
+        assert_eq!(cards[0].pulse.image_urls.len(), 1);
+    }
+
+    #[test]
+    fn a_retry_that_works_caches_the_image_and_clears_its_marker() {
+        let d = dirs("fill-recover");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::answering(Err(FetchErr::Later("HTTP 503".into())));
+        assert_eq!(fill_images(&d.config, &net, NOW), 1);
+        *net.answer.lock().unwrap() = None;
+        assert_eq!(fill_images(&d.config, &net, NOW + 15 * 60_000), 1);
+        assert_eq!(marker(&d.config, CAPSULE_620), None);
+        assert!(images_dir(&d.config)
+            .join(pc::image_cache_name(CAPSULE_620))
+            .is_file());
+    }
+
+    #[test]
+    fn fill_images_stops_at_six_per_tick_newest_first() {
+        let d = dirs("fill-six");
+        let cards: Vec<_> = (1..=8)
+            .map(|app| capsule_card(app, NOW - 3_600_000 + u64::from(app)))
+            .collect();
+        store(&d.config, &cards);
+        let net = Images::default();
+        let capsule =
+            |app: u32| format!("https://cdn.akamai.steamstatic.com/steam/apps/{app}/header.jpg");
+        assert_eq!(fill_images(&d.config, &net, NOW), 6);
+        assert_eq!(net.asked(), (3..=8).rev().map(capsule).collect::<Vec<_>>());
+        assert_eq!(fill_images(&d.config, &net, NOW + 60_000), 2);
+        assert_eq!(net.asked()[6..], [capsule(2), capsule(1)]);
+    }
+
+    #[test]
+    fn fill_images_never_asks_a_lan_url_an_old_card_or_a_dismissed_one() {
+        let d = dirs("fill-lan");
+        let mut printer = capsule_card(1, NOW - 60_000);
+        printer.pulse.image_urls = vec![
+            "http://192.168.1.20/webcam/?action=snapshot".into(),
+            "http://localhost:8080/snap.jpg".into(),
+            "model-thumb:benchy.stl:1".into(),
+        ];
+        let old = capsule_card(2, NOW - FILL_WINDOW_MS - 1);
+        let mut dismissed = capsule_card(3, NOW - 60_000);
+        dismissed.status = grokhub_core::UpdateStatus::Dismissed;
+        store(&d.config, &[printer, old, dismissed]);
+        let net = Images::default();
+        assert_eq!(fill_images(&d.config, &net, NOW), 0);
+        assert_eq!(net.asked(), Vec::<String>::new());
+        assert!(!images_dir(&d.config).exists(), "no marker either");
+    }
+
+    #[test]
+    fn fill_images_does_nothing_offline() {
+        let d = dirs("fill-offline");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let net = Images::default();
+        {
+            let _off = grokhub_core::offline::force_for_thread(true);
+            assert_eq!(fill_images(&d.config, &net, NOW), 0);
+        }
+        assert_eq!(net.asked(), Vec::<String>::new());
+        assert_eq!(marker(&d.config, CAPSULE_620), None);
+        assert_eq!(
+            fill_images(&d.config, &net, NOW),
+            1,
+            "and runs once it's off"
+        );
+    }
+
+    #[test]
+    fn prune_images_keeps_the_marker_of_a_url_a_card_still_names() {
+        let d = dirs("prune-miss");
+        store(&d.config, &[capsule_card(620, NOW - 3_600_000)]);
+        let dir = images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let named = dir.join(pc::image_miss_name(CAPSULE_620));
+        let stray = dir.join(pc::image_miss_name("https://img.test/gone.jpg"));
+        let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 3600);
+        for path in [&named, &stray] {
+            std::fs::write(path, "gone\n").expect("marker");
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .and_then(|f| f.set_modified(two_hours_ago))
+                .expect("mtime");
+        }
+        assert_eq!(prune_images(&d.config, grokhub_core::now_ms()), 1);
+        assert!(named.is_file());
+        assert!(!stray.exists());
+    }
+
+    #[test]
+    fn a_4xx_is_gone_and_a_5xx_or_rate_limit_is_later() {
+        let status = |code| http::Error::Status {
+            code,
+            body: String::new(),
+            retry_after: None,
+            message: format!("status code {code}"),
+        };
+        assert_eq!(
+            FetchErr::from(status(404)),
+            FetchErr::Gone("HTTP 404".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(410)),
+            FetchErr::Gone("HTTP 410".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(429)),
+            FetchErr::Later("HTTP 429".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(408)),
+            FetchErr::Later("HTTP 408".into())
+        );
+        assert_eq!(
+            FetchErr::from(status(503)),
+            FetchErr::Later("HTTP 503".into())
+        );
+        let transport = http::Error::Transport {
+            kind: http::TransportKind::Connect,
+            message: "refused".into(),
+        };
+        assert_eq!(
+            FetchErr::from(transport),
+            FetchErr::Later("network error".into())
+        );
+        assert_eq!(
+            LiveNet.image("http://192.168.1.20/webcam/?action=snapshot"),
+            Err(FetchErr::Gone("not a public address".into()))
         );
     }
 }

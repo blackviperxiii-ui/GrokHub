@@ -4,6 +4,7 @@
 #   grokhub-shell-vX.Y.Z-linux-amd64.deb / .AppImage
 #   GrokHub-Shell-Setup-X.Y.Z.exe
 #   grokhub-shell-vX.Y.Z-macos-arm64.dmg
+#   grokhub-shell-vX.Y.Z-macos-arm64.app.tar.gz (the .app, for the updater)
 # Fails unless exactly one bundle of each kind exists for the VERSION.
 #
 #   scripts/name-shell-bundles.sh Linux|Windows|macOS
@@ -40,6 +41,17 @@ case "$os" in
     ;;
   macOS)
     copy dmg aarch64.dmg "grokhub-shell-v$ver-macos-arm64.dmg"
+    # The updater swaps the .app for this archive, whose top folder is the
+    # .app itself.
+    shopt -s nullglob
+    apps=("$bundle/macos/"*.app)
+    shopt -u nullglob
+    if [ "${#apps[@]}" -ne 1 ]; then
+      echo "name-shell-bundles: want one $bundle/macos/*.app, found ${#apps[@]}" >&2
+      exit 1
+    fi
+    tar -czf "$out/grokhub-shell-v$ver-macos-arm64.app.tar.gz" -C "$bundle/macos" "$(basename "${apps[0]}")"
+    echo "name-shell-bundles: grokhub-shell-v$ver-macos-arm64.app.tar.gz"
     ;;
   *)
     echo "name-shell-bundles: unknown OS $os" >&2

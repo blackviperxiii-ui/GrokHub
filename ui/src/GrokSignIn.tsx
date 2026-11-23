@@ -15,8 +15,10 @@ import { StatusLine, useNote } from "./ui";
 export const SIGN_IN_NOTE =
   "Use your Grok subscription instead of API credits. Your sign-in is kept in this device's keychain.";
 
-/** Who is signed in, in a few words. */
-export function signedInAs(who: SignedIn): string {
+/** Who is signed in, in a few words. Missing account → a safe fallback (a
+ * ready poll that omitted `signedIn` must not throw). */
+export function signedInAs(who: SignedIn | null | undefined): string {
+  if (!who) return "your Grok account";
   if (who.name && who.email) return `${who.name} (${who.email})`;
   return who.name ?? who.email ?? "your Grok account";
 }

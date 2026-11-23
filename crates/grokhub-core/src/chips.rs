@@ -321,6 +321,16 @@ const INTENT_CATALOG: &[(&str, &[&str])] = &[
     ("explain", &["explain", "what does", "how does"]),
 ];
 
+/// The catalog intent of a row chip, or none. A live-state chip's label
+/// names a game, a release or an app ("Note for Crash Bandicoot"), so a word
+/// in that name is no intent.
+pub fn quick_chip_intent(chip: &QuickChip) -> Option<&'static str> {
+    if live_state_id(&chip.id) {
+        return None;
+    }
+    chip_intent(&chip.label, &chip.value)
+}
+
 /// The catalog intent of a chip or typed ask, or none.
 pub fn chip_intent(label: &str, value: &str) -> Option<&'static str> {
     let hay = format!(" {} {} ", label, value).to_ascii_lowercase();
@@ -370,8 +380,7 @@ pub fn remember_intent(
 /// Lift for a chip whose intent you use at this hour (or the next) and on
 /// this weekday. A habit at 9pm does nothing at 2pm.
 fn intent_boost(memory: &ChipMemory, chip: &QuickChip, hour: u8, weekday: u8) -> f32 {
-    let Some(hit) = chip_intent(&chip.label, &chip.value).and_then(|k| memory.intents.get(k))
-    else {
+    let Some(hit) = quick_chip_intent(chip).and_then(|k| memory.intents.get(k)) else {
         return 0.0;
     };
     let at = |hours: &[u32], i: usize| hours.get(i).copied().unwrap_or(0);
@@ -405,7 +414,9 @@ pub struct ChipThread {
 pub struct ChipInput<'a> {
     pub chat: &'a [(String, String)],
     pub draft: &'a str,
-    pub grok_connected: bool,
+    /// Some AI source can answer: a Grok sign-in, an allowed provider key,
+    /// or a model on this PC. Without one the row leads with "Set up AI".
+    pub ai_ready: bool,
     pub mode: &'a str,
     pub thread_title: &'a str,
     pub usage_messages: u32,
@@ -869,6 +880,11 @@ fn guide_dismisses(memory: &ChipMemory) -> u32 {
 }
 
 fn chip_family(id: &str, value: &str, label: &str) -> &'static str {
+    // A live-state chip's text names a game, a release or an app, so a word
+    // in that name ("Hollow Knight") says nothing about its kind.
+    if live_state_id(id) {
+        return "";
+    }
     let blob = format!("{id} {value} {label}").to_ascii_lowercase();
     if blob.contains("guide-") || blob.contains("start here") || blob.contains("what you can do") {
         return "guide";
@@ -945,16 +961,20 @@ fn seed_chips(stage: ChipStage) -> Vec<QuickChip> {
         .collect()
 }
 
+/// The hint on "Set up AI": every way to get an answer, none first.
+const NO_AI_HINT: &str =
+    "Nothing can answer yet: sign in with Grok, add a provider key, or get a model for this PC";
+
 fn guide_chips(connected: bool) -> Vec<QuickChip> {
     let mut out = Vec::new();
     if !connected {
         out.push(chip(
             "guide-connect",
-            "Connect",
+            "Set up AI",
             "__nav:settings",
             ChipKind::Nav,
             130.0,
-            "Sign in first",
+            NO_AI_HINT,
         ));
     }
     out.push(chip(
@@ -1746,6 +1766,12 @@ const LIVE_STATE_CHIP_IDS: &[&str] = &[
     "sig-attach",
 ];
 
+/// True for a live-state chip's id, or for its memory key (`id:<id>`).
+fn live_state_id(id: &str) -> bool {
+    let id = id.strip_prefix("id:").unwrap_or(id);
+    LIVE_STATE_CHIP_IDS.iter().any(|p| id.starts_with(p))
+}
+
 /// Chips offered unasked: the PC's and the day's signals, other threads and
 /// the app's feature offers. They wait while the person is gaming.
 const NUDGE_CHIP_IDS: &[&str] = &[
@@ -2144,7 +2170,8 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     let slash = home_slash_cmd(input.last_slash).unwrap_or("");
     let surface = input.last_surface.trim().to_ascii_lowercase();
     let session = input.session_mode.trim().to_ascii_lowercase();
-    for c in chips.iter_mut() {
+    // A live-state chip's label names a game or an app ("Imagine Earth").
+    for c in chips.iter_mut().filter(|c| !live_state_id(&c.id)) {
         let id = c.id.to_ascii_lowercase();
         let label = c.label.to_ascii_lowercase();
         let val = c.value.to_ascii_lowercase();
@@ -2308,7 +2335,8 @@ fn apply_intent_boost(chips: &mut [QuickChip], intents: &BTreeMap<PredictedInten
     let mut top: Vec<_> = intents.iter().collect();
     top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal));
     top.truncate(4);
-    for c in chips.iter_mut() {
+    // A live-state chip's label names a game or an app, not an intent.
+    for c in chips.iter_mut().filter(|c| !live_state_id(&c.id)) {
         let hay = format!("{} {} {} {}", c.id, c.label, c.value, c.hint).to_ascii_lowercase();
         let mut boost = 0.0;
         let mut matched = None;
@@ -2616,6 +2644,10 @@ fn is_desk_takeover_chip(c: &QuickChip) -> bool {
 /// Old empty-home chips (Take over / Scan the desk / Check the machine) plus
 /// HOST_CMD habits stored in chips.json. Grok Build already has computer-use.
 fn retired_host_copy(id: &str, label: &str, value: &str) -> bool {
+    // A live-state chip's label names a game or an app ("Desktop Dungeons").
+    if live_state_id(id) {
+        return false;
+    }
     let hay = format!("{id} {label} {value}").to_ascii_lowercase();
     hay.contains("take over")
         || hay.contains("this desktop")
@@ -2802,7 +2834,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         // A feature offer is about what the PC is doing now, so it shows
         // even while the first-run guide holds the row.
         let mut chips: Vec<QuickChip> = input.extra.to_vec();
-        chips.extend(guide_chips(input.grok_connected));
+        chips.extend(guide_chips(input.ai_ready));
         chips.retain(|c| {
             let id = c.id.to_ascii_lowercase();
             let val = c.value.trim().to_ascii_lowercase();
@@ -2843,14 +2875,14 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         }
     }
 
-    if !input.grok_connected {
+    if !input.ai_ready {
         chips.push(chip(
             "ctx-connect",
-            "Connect Grok",
+            "Set up AI",
             "__nav:settings",
             ChipKind::Nav,
             120.0,
-            "You're not connected — this is the best next step",
+            NO_AI_HINT,
         ));
     }
     // Feature offers come first so a plain chip with the same text yields.
@@ -3021,7 +3053,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             && !(input.signals.anticheat && touches_the_game(c))
             && !(input.signals.gaming && waits_while_gaming(c))
     });
-    if input.grok_connected {
+    if input.ai_ready {
         chips.retain(|c| !is_stale_connect_chip(c));
     }
     let draft = input.draft.trim().to_ascii_lowercase();
@@ -3131,7 +3163,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 }
 
 /// Score that puts a reply's follow-ups at the front of the row, under only
-/// "Connect Grok".
+/// "Set up AI".
 const FOLLOW_UP_SCORE: f32 = 112.0;
 
 /// Right after a reply, its one-tap follow-ups ([`reply_suggestions`]) lead
@@ -3317,7 +3349,7 @@ mod tests {
         ChipInput {
             chat,
             draft,
-            grok_connected: true,
+            ai_ready: true,
             mode: "auto",
             thread_title: "Chat",
             usage_messages: 1,
@@ -3577,14 +3609,19 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_surfaces_connect_grok() {
+    fn with_no_ai_source_the_row_leads_with_set_up_ai() {
         let mem = ChipMemory::default();
         let mut inp = input(&[], "", &mem, &[], &[]);
-        inp.grok_connected = false;
+        inp.ai_ready = false;
         // A brand-new empty home is the guide, which has its own connect chip.
         inp.usage_messages = 12;
         let chips = build_quick_chips(inp);
         assert_eq!(chips[0].id, "ctx-connect");
+        assert_eq!(chips[0].label, "Set up AI");
+        assert_eq!(
+            chips[0].hint,
+            "Nothing can answer yet: sign in with Grok, add a provider key, or get a model for this PC"
+        );
         assert_eq!(chips[0].value, "__nav:settings");
         assert_eq!(nav_from_chip_value(&chips[0].value), Some("settings"));
     }
@@ -3614,7 +3651,7 @@ mod tests {
             primary: true,
         }];
         let mut inp = input(&[], "", &mem, &[], &llm);
-        inp.grok_connected = true;
+        inp.ai_ready = true;
         let chips = build_quick_chips(inp);
         assert!(
             chips
@@ -4326,6 +4363,97 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_night_chip_quiets_its_family_but_not_a_game_named_for_the_night() {
+        let night = QuickChip {
+            id: "empty-night".into(),
+            label: "Set a night job".into(),
+            value: "Set a night job".into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        let mut mem = ChipMemory::default();
+        remember_chip_dismiss(&mut mem, &night, 5, 22);
+        assert!(family_quiet_this_hour(
+            &mem,
+            "night-backup",
+            "Back up tonight",
+            "Back up tonight",
+            22
+        ));
+        assert!(!family_quiet_this_hour(
+            &mem,
+            "night-backup",
+            "Back up tonight",
+            "Back up tonight",
+            9
+        ));
+        let knight = crate::steam::SteamGame {
+            app_id: 367520,
+            name: "Hollow Knight".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        for ended in [false, true] {
+            for chip in crate::game_companion::chips(&knight, ended) {
+                assert!(
+                    !family_quiet_this_hour(&mem, &chip.id, &chip.value, &chip.label, 22),
+                    "{}",
+                    chip.label
+                );
+            }
+        }
+        // Nor does hiding a chip that names the game put the night family
+        // to sleep: its stored key still holds the name.
+        let mut mem = ChipMemory::default();
+        let focus = QuickChip {
+            id: "focus:gaming:hollow knight".into(),
+            label: "Help with Hollow Knight".into(),
+            value: "Help with Hollow Knight".into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        remember_chip_dismiss(&mut mem, &focus, 5, 22);
+        assert_eq!(mem.hits.len(), 1);
+        assert_eq!(mem.hits[0].key, "id:focus:gaming:hollow knight");
+        assert!(!family_quiet_this_hour(
+            &mem,
+            "empty-night",
+            "Set a night job",
+            "Set a night job",
+            22
+        ));
+    }
+
+    #[test]
+    fn a_game_name_on_a_note_chip_is_no_intent() {
+        let crash = crate::steam::SteamGame {
+            app_id: 1,
+            name: "Crash Bandicoot".into(),
+            last_played: 0,
+            playtime_min: 0,
+        };
+        for ended in [false, true] {
+            let note = crate::game_companion::chips(&crash, ended).pop().unwrap();
+            assert_eq!(chip_intent(&note.label, &note.value), Some("code.fix"));
+            assert_eq!(quick_chip_intent(&note), None, "{}", note.label);
+        }
+        let fix = QuickChip {
+            id: "seed-fix".into(),
+            label: "Why is it failing".into(),
+            value: "Why is it failing".into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        };
+        assert_eq!(quick_chip_intent(&fix), Some("code.fix"));
+    }
+
+    #[test]
     fn a_dismissed_chip_stays_gone_without_the_session_list() {
         let mut mem = ChipMemory::default();
         let first = build_quick_chips(input(&[], "", &mem, &[], &[]));
@@ -4695,7 +4823,7 @@ mod tests {
             chips.iter().find(|c| c.value == "/plan").map(|c| c.score)
                 > chips
                     .iter()
-                    .find(|c| c.label == "Cabin brief")
+                    .find(|c| c.label == "Quick brief")
                     .map(|c| c.score),
             "slash outranks generic empty-home: {shown:?}"
         );
@@ -5195,6 +5323,53 @@ mod tests {
         i.usage_messages = 25;
         i.max = CHIP_HARD_MAX;
         i
+    }
+
+    #[test]
+    fn a_game_name_never_reads_as_a_note_chips_meaning_in_the_row() {
+        // A habit and a chat that point at fixing, and Imagine as the last
+        // surface: each would lift or drop a chip whose words say so.
+        let mut memory = ChipMemory::default();
+        for at in [1_000, 2_000, 3_000] {
+            remember_intent(&mut memory, "Why is it failing", "", at, 21, 0);
+        }
+        let chat = vec![
+            msg("user", "the build has an error and a bug"),
+            msg("assistant", "Let's look."),
+        ];
+        for name in [
+            "Desktop Dungeons",
+            "Bugsnax",
+            "Crash Bandicoot",
+            "Imagine Earth",
+        ] {
+            let game = crate::steam::SteamGame {
+                app_id: 9,
+                name: name.into(),
+                last_played: 0,
+                playtime_min: 0,
+            };
+            let extra: Vec<QuickChip> = crate::game_companion::chips(&game, true)
+                .into_iter()
+                .map(|mut c| {
+                    c.score = 100.0;
+                    c
+                })
+                .collect();
+            let mut i = with_pace(&chat, &memory);
+            i.last_surface = "imagine";
+            i.extra = &extra;
+            let row = build_quick_chips(i);
+            let note = row
+                .iter()
+                .find(|c| c.id == "game:note:after:9")
+                .unwrap_or_else(|| panic!("{name}: {:?}", ids(&row)));
+            assert_eq!(note.score, 100.0, "{name}");
+            assert_eq!(
+                note.hint, "Shown on the card the next time you launch it",
+                "{name}"
+            );
+        }
     }
 
     #[test]

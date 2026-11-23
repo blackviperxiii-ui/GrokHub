@@ -76,6 +76,10 @@ export function chatActivity(
         at: now,
       };
     }
+    // Thinking, like more reply text, leaves a running item as it is.
+    case "thought":
+      if (prev?.status === "running") return prev;
+      return { ...restart, status: "running", detail: "Thinking…", at: now };
     case "plan":
       return { ...restart, status: "running", detail: "Making a plan…", at: now };
     case "permission":
@@ -98,8 +102,10 @@ export function chatActivity(
         : undefined;
     case "error":
       return { ...restart, status: "failed", detail: clip(event.message), at: now };
+    // A panel comes with its tool row, which already counts the step.
     case "suggestions":
     case "goal":
+    case "panel":
       return prev;
   }
 }

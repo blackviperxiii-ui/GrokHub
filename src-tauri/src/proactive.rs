@@ -63,20 +63,28 @@ fn save_budget(config_dir: &Path, budget: &ProactiveBudget) -> Result<(), String
     std::fs::rename(&tmp, budget_path(config_dir)).map_err(|e| e.to_string())
 }
 
-/// Open board cards as the engine sees them: blocked, or a report not opened.
+/// Open board cards as the engine sees them: blocked, a report not opened, or
+/// a card with a due time (Pulse reminders and "due within a day" offers).
 pub fn work_items(config_dir: &Path) -> Vec<pro::WorkItem> {
     let cards = grokhub_core::work_file::read_board(&crate::workboard::path(config_dir))
         .unwrap_or_default();
     cards
         .iter()
         .filter_map(|c| {
+            if matches!(
+                c.status,
+                grokhub_core::BoardStatus::Done | grokhub_core::BoardStatus::Dismissed
+            ) {
+                return None;
+            }
             let blocked = c.status == grokhub_core::BoardStatus::Blocked;
             let fresh_report = c.status == grokhub_core::BoardStatus::FollowUp && c.fresh;
-            (blocked || fresh_report).then(|| pro::WorkItem {
+            let due_at = c.due_at;
+            (blocked || fresh_report || due_at.is_some()).then(|| pro::WorkItem {
                 title: c.title.clone(),
                 blocked,
                 fresh_report,
-                due_at: None,
+                due_at,
             })
         })
         .collect()
@@ -160,6 +168,8 @@ fn gather(
     let health: Vec<grokhub_core::AutomationAlert> = crate::automations::load(config_dir)
         .unwrap_or_default()
         .iter()
+        // A paused job is not failing anyone: no health card for it.
+        .filter(|a| a.enabled)
         .filter_map(grokhub_core::automation_alert)
         .collect();
     let watch = pro::Watch {
@@ -254,7 +264,12 @@ fn look(
     // Before the error goes back: a card that could not be saved cost nothing.
     refund(config_dir, now_ms, surfaced.len() - posted.len());
     match failed {
-        Some(e) => Err(e),
+        // Cards already on the page still go back, so their reminders go out.
+        Some(e) if posted.is_empty() => Err(e),
+        Some(e) => {
+            eprintln!("proactive: {e}");
+            Ok(posted)
+        }
         None => Ok(posted),
     }
 }
@@ -330,9 +345,19 @@ pub fn is_quiet(behavior: &crate::settings::Behavior, hour: u32, minute: u32) ->
 
 /// The background thread: one look shortly after launch, then every 15
 /// minutes. It waits for the window's clock like the scheduler does.
+/// A posted card due within the hour goes to `remind` when reminder
+/// notifications are on; a crash card whose look is switched on gets it now.
+/// Before the cards, Done for you may pause one failing automation (the
+/// cabin's order); `busy` and `route_ok` are its "a chat is running or a
+/// decision waits" and "chat has a model route" reads.
 /// Desktop only: the scheduler clock it reads is not built on phones.
 #[cfg(desktop)]
-pub fn start(config_dir: PathBuf) {
+pub fn start(
+    config_dir: PathBuf,
+    remind: impl Fn(&str) + Send + 'static,
+    busy: impl Fn() -> bool + Send + 'static,
+    route_ok: impl Fn() -> bool + Send + 'static,
+) {
     std::thread::spawn(move || {
         std::thread::sleep(FIRST_LOOK);
         loop {
@@ -343,9 +368,32 @@ pub fn start(config_dir: PathBuf) {
                 let quiet = is_quiet(&behavior, clock.hour, clock.minute);
                 // A game running counts as busy: nothing proactive goes up mid-game.
                 if !grokhub_desktop::game_guard::peek().gaming {
-                    let _ = tick(&config_dir, std::process::id(), now, quiet, clock.hour);
+                    // Read busy and the route only when the switch is on.
+                    if crate::done_for_you::on(&config_dir) {
+                        crate::done_for_you::tick_one(
+                            &config_dir,
+                            std::process::id(),
+                            now,
+                            offset,
+                            quiet,
+                            busy(),
+                            route_ok(),
+                        );
+                    }
+                    let posted = tick(&config_dir, std::process::id(), now, quiet, clock.hour)
+                        .unwrap_or_default();
+                    let on = crate::auto_fixes::reminders_on(&config_dir);
+                    for card in &posted {
+                        if let Some(title) = crate::auto_fixes::reminder(card, now, on) {
+                            remind(&title);
+                        }
+                    }
                 }
-                let _ = crate::nudges::tick(&config_dir, std::process::id(), now, offset);
+                let crashes = crate::nudges::tick(&config_dir, std::process::id(), now, offset)
+                    .unwrap_or_default();
+                crate::auto_fixes::after_post(&config_dir, &crashes, now, &|name| {
+                    crate::auto_fixes::crash_look(&config_dir, name)
+                });
             }
             std::thread::sleep(EVERY);
         }
@@ -442,6 +490,31 @@ mod tests {
         let on_page = crate::pulse::cards(&dir).expect("cards");
         assert_eq!(on_page.len(), 1);
         assert_eq!(load_budget(&dir).shown, vec![NOW]);
+    }
+
+    #[test]
+    fn a_workboard_due_time_lands_on_the_proactive_card() {
+        let dir = temp_dir("due");
+        let due = NOW + 30 * MIN;
+        let mut card = BoardCard::new("Ship notes", "", "");
+        card.id = "due-1".into();
+        card.status = BoardStatus::Todo;
+        card.due_at = Some(due);
+        grokhub_core::work_file::write_board(&crate::workboard::path(&dir), &[card])
+            .expect("write board");
+        let items = work_items(&dir);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Ship notes");
+        assert_eq!(items[0].due_at, Some(due));
+        assert!(!items[0].blocked);
+        let posted = tick(&dir, PID, NOW, false, 8).expect("tick");
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0].title, "I can get \"Ship notes\" ready");
+        assert_eq!(posted[0].pulse.due_at, Some(due));
+        assert_eq!(
+            crate::auto_fixes::reminder(&posted[0], NOW, true),
+            Some("I can get \"Ship notes\" ready".into())
+        );
     }
 
     #[test]

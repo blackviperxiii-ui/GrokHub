@@ -246,6 +246,7 @@ fn the_pickup_finds_the_browser_download() {
     std::fs::write(base.join("better-crops.zip"), b"zipbytes").unwrap();
     std::fs::write(base.join("unrelated.zip"), b"zipbytes").unwrap();
     let p = Pickup {
+        game: "stardew".into(),
         key: "nexus:2100".into(),
         file_name: "better-crops.zip".into(),
         size: 8,
@@ -337,15 +338,25 @@ fn the_drawer_lists_files_with_their_line_and_what_the_main_file_needs() {
     );
     f.size = 4_200_000;
     let p = Pickup {
+        game: "stardew".into(),
         key: "nexus:2100".into(),
         file_name: "better-crops.zip".into(),
         size: 0,
         since: SystemTime::now(),
     };
-    let (rows, needs) = drawer_rows(&[f], "nexus:2100", &[], false, Some(&p));
+    let (rows, needs) = drawer_rows(
+        &[f.clone()],
+        ("stardew", "nexus:2100"),
+        &[],
+        false,
+        Some(&p),
+    );
     assert_eq!(rows[0].name, "Main file 1.1.0");
     assert_eq!(rows[0].line, "1.1.0 · 4.2 MB · download on the site");
     assert!(rows[0].waiting);
+    // The same Nexus id in another game is another mod: it isn't waiting.
+    let (other, _) = drawer_rows(&[f], ("skyrimse", "nexus:2100"), &[], false, Some(&p));
+    assert!(!other[0].waiting);
     assert_eq!(needs, vec!["SMAPI".to_string()]);
     assert_eq!(size_label(880_000), "880 KB");
 }

@@ -27,7 +27,7 @@ export interface Cut {
 
 /** The log kinds a reply is made of. Run notices and slash results are the
  * app's own and stay. */
-const REPLY_KINDS = new Set(["assistant", "tools", "tool", "permission", "elicit"]);
+const REPLY_KINDS = new Set(["assistant", "thought", "tools", "tool", "permission", "elicit"]);
 
 type LogLine = { kind: string; text?: string };
 

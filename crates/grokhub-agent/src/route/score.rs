@@ -126,18 +126,8 @@ fn bar(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> Option<&'static str> {
     }
     match route {
         Route::OpenRouterFree => {
-            if !ctx.quota.openrouter.permits(true)
-                || ctx.quota.openrouter_free_remaining() == Some(0)
-            {
+            if !ctx.quota.openrouter.permits(true) {
                 return Some("score:quota:openrouter");
-            }
-            if ctx.helper
-                && ctx
-                    .quota
-                    .openrouter_free_remaining()
-                    .is_some_and(|left| left < HELPER_FREE_FLOOR)
-            {
-                return Some("score:quota:helper-free");
             }
         }
         Route::OpenRouterPaid => {
@@ -358,16 +348,9 @@ fn risk(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> f64 {
     if card.probation {
         risk += 0.45;
     }
-    if rec.route() == Route::OpenRouterFree {
-        if let (Some(rem), Some(limit)) = (
-            ctx.quota.openrouter_free_remaining(),
-            ctx.quota.openrouter.free_daily_limit,
-        ) {
-            if limit > 0 && rem * 10 < limit {
-                risk += 0.3;
-            }
-        }
-    }
+    // No app-side remaining-quota threshold steers away from OpenRouterFree;
+    // server responses govern limits.
+    let _ = &ctx.quota;
     if let Some(expires) = card.expires.as_deref() {
         if expires <= utc_day_key(ctx.now_ms + EXPIRY_RISK_DAYS * DAY_MS).as_str() {
             risk += 0.2;
@@ -690,7 +673,7 @@ mod tests {
         let quota = QuotaLedger::default();
         let c = ctx(&quota, Some(TaskSize::Short));
         assert_eq!(bar(&free, &c), None);
-        // A spent free day bars free models even on a paid account.
+        // On a Paid account, no internal counter blocks free models; let the server decide.
         let quota = QuotaLedger {
             openrouter: OpenRouterQuota {
                 state: OpenRouterState::Paid,
@@ -700,11 +683,11 @@ mod tests {
             ..QuotaLedger::default()
         };
         let c = ctx(&quota, Some(TaskSize::Short));
-        assert_eq!(bar(&free, &c), Some("score:quota:openrouter"));
+        assert_eq!(bar(&free, &c), None);
     }
 
     #[test]
-    fn a_helper_stays_off_a_free_day_that_is_nearly_spent() {
+    fn a_helper_is_not_blocked_by_app_side_free_floor() {
         let free = rec(
             "openrouter/nvidia/nemotron-3.5-super-vl:free",
             &[SourceKind::OpenAiCompatible],
@@ -717,15 +700,15 @@ mod tests {
             },
             ..QuotaLedger::default()
         };
-        assert_eq!(HELPER_FREE_FLOOR, 80);
-        let quota = left(79);
+        let _ = HELPER_FREE_FLOOR;
+        let quota = left(1);
         let chat = ctx(&quota, Some(TaskSize::Short));
-        assert_eq!(bar(&free, &chat), None, "the chat itself may still use it");
+        assert_eq!(bar(&free, &chat), None);
         let helper = ScoreCtx {
             helper: true,
             ..ctx(&quota, Some(TaskSize::Short))
         };
-        assert_eq!(bar(&free, &helper), Some("score:quota:helper-free"));
+        assert_eq!(bar(&free, &helper), None);
         let quota = left(80);
         let helper = ScoreCtx {
             helper: true,
@@ -737,11 +720,7 @@ mod tests {
             helper: true,
             ..ctx(&quota, Some(TaskSize::Short))
         };
-        assert_eq!(
-            bar(&free, &helper),
-            None,
-            "an unread day is not a spent one"
-        );
+        assert_eq!(bar(&free, &helper), None);
     }
 
     #[test]

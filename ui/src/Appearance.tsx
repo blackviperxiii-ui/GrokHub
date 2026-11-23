@@ -4,7 +4,7 @@ import { LookRows } from "./AutoSetup";
 import { PRODUCT_NAME } from "./brand";
 import { applyTheme } from "./theme";
 
-export const APPEARANCE_NOTE = `System follows your computer. Ops Dark, OLED Black and Soft Charcoal match the ${PRODUCT_NAME} cabin.`;
+export const APPEARANCE_NOTE = `System follows your computer. Ops Dark, OLED Black and Soft Charcoal are the ${PRODUCT_NAME} dark themes (red primary, amber for the one call-to-action).`;
 
 const CHOICES: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
@@ -25,7 +25,7 @@ export function Appearance({
   onSaved,
 }: {
   theme: Theme;
-  /** Text size and reduce motion (auto setup's), on a desktop. */
+  /** Text size, reduce motion and Objectives beside chat (auto setup's), on a desktop. */
   textSize?: boolean;
   onSaved: (theme: Theme) => void;
 }) {
@@ -56,6 +56,10 @@ export function Appearance({
             aria-pressed={shown === c.value}
             onClick={() => void choose(c.value)}
           >
+            <span className="theme-swatch" data-swatch={c.value} aria-hidden="true">
+              <i />
+              <i />
+            </span>
             {c.label}
           </button>
         ))}

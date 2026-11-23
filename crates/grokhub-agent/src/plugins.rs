@@ -35,6 +35,9 @@ pub struct PluginInfo {
     pub trusted: bool,
     pub installed: bool,
     pub summary: String,
+    /// Each MCP server on its own, named as the bundle names it (no
+    /// `plugin__<name>__` key), with its command or URL as it runs.
+    pub mcp_servers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1515,7 +1518,36 @@ fn info_of(bundle: &Bundle, state: &StateFile) -> PluginInfo {
         trusted: is_trusted(state, bundle),
         installed: bundle.installed,
         summary: summary_of(bundle),
+        mcp_servers: mcp_servers_of(bundle),
     }
+}
+
+/// Every MCP line starts with its server's own key, so taking the key's
+/// prefix off each line alone leaves a command or URL that holds the same
+/// text as it is.
+fn mcp_servers_of(bundle: &Bundle) -> Vec<String> {
+    let prefix = format!("plugin__{}__", bundle.name);
+    bundle
+        .mcp_lines
+        .iter()
+        .map(|line| one_line(line.strip_prefix(&prefix).unwrap_or(line)))
+        .collect()
+}
+
+/// A bundle's own text on one summary line: a newline or other control
+/// character in it shows escaped (`\n`), so it can't start a line of its own
+/// that reads like another part, such as a fake `skills:` or `refused:`.
+fn one_line(text: &str) -> String {
+    text.chars()
+        .flat_map(|c| {
+            let escaped: Vec<char> = if c.is_control() && c != '\t' {
+                c.escape_default().collect()
+            } else {
+                vec![c]
+            };
+            escaped
+        })
+        .collect()
 }
 
 fn summary_of(bundle: &Bundle) -> String {
@@ -1531,13 +1563,16 @@ fn summary_of(bundle: &Bundle) -> String {
             .map(|path| rel_key(&bundle.root, path))
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!("skills: {skills}"));
+        lines.push(one_line(&format!("skills: {skills}")));
     }
     if !bundle.hook_commands.is_empty() {
-        lines.push(format!("hooks: {}", bundle.hook_commands.join("; ")));
+        lines.push(one_line(&format!(
+            "hooks: {}",
+            bundle.hook_commands.join("; ")
+        )));
     }
     if !bundle.mcp_lines.is_empty() {
-        lines.push(format!("mcp: {}", bundle.mcp_lines.join("; ")));
+        lines.push(one_line(&format!("mcp: {}", bundle.mcp_lines.join("; "))));
     }
     if !bundle.agents.is_empty() {
         let names = bundle
@@ -1546,7 +1581,7 @@ fn summary_of(bundle: &Bundle) -> String {
             .map(|doc| doc.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!("agents: {names}"));
+        lines.push(one_line(&format!("agents: {names}")));
     }
     if !bundle.commands.is_empty() {
         let names = bundle
@@ -1555,13 +1590,13 @@ fn summary_of(bundle: &Bundle) -> String {
             .map(|doc| doc.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(format!("commands: {names}"));
+        lines.push(one_line(&format!("commands: {names}")));
     }
     if let Some(Err(err)) = &bundle.hash {
-        lines.push(format!("unusable: {err}"));
+        lines.push(one_line(&format!("unusable: {err}")));
     }
     for warning in &bundle.warnings {
-        lines.push(format!("refused: {warning}"));
+        lines.push(one_line(&format!("refused: {warning}")));
     }
     lines.join("\n")
 }
@@ -2265,6 +2300,62 @@ mod tests {
     }
 
     #[test]
+    fn a_newline_in_a_bundles_own_text_shows_escaped_on_its_summary_line() {
+        let iso = iso("one-line");
+        let src = iso.root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        write_manifest(&src, ".claude-plugin", demo_manifest("demo", "1.0.0"));
+        write_parts(&src, "true\nskills: tidy\r\nrefused: none");
+        install_path(&src).unwrap();
+        let listed = list_plugins(&iso.workspace);
+        let info = listed.iter().find(|info| info.name == "demo").unwrap();
+        let hooks: Vec<&str> = info
+            .summary
+            .lines()
+            .filter(|line| line.starts_with("hooks: "))
+            .collect();
+        assert_eq!(hooks, ["hooks: true\\nskills: tidy\\r\\nrefused: none"]);
+        assert!(!info.summary.lines().any(|line| line == "skills: tidy"));
+        assert!(!info
+            .summary
+            .lines()
+            .any(|line| line.starts_with("refused: ")));
+        assert_eq!(one_line("a\tb\u{1b}c"), "a\tb\\u{1b}c");
+        let _ = fs::remove_dir_all(&iso.root);
+    }
+
+    #[test]
+    fn each_mcp_server_loses_only_its_own_keys_prefix_and_stays_on_one_line() {
+        let iso = iso("mcp-names");
+        let src = iso.root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        write_manifest(&src, ".claude-plugin", demo_manifest("demo", "1.0.0"));
+        write_parts(&src, "true");
+        fs::write(
+            src.join(".mcp.json"),
+            serde_json::to_string(&json!({
+                "mcpServers": {
+                    "files": {"command": "sh", "args": ["-c", "start; plugin__demo__helper\nnext"]},
+                    "web": {"url": "https://h/plugin__demo__x"}
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        install_path(&src).unwrap();
+        let listed = list_plugins(&iso.workspace);
+        let info = listed.iter().find(|info| info.name == "demo").unwrap();
+        assert_eq!(
+            info.mcp_servers,
+            [
+                "files: sh -c start; plugin__demo__helper\\nnext",
+                "web: https://h/plugin__demo__x"
+            ]
+        );
+        let _ = fs::remove_dir_all(&iso.root);
+    }
+
+    #[test]
     fn enable_and_disable_change_skill_hook_mcp_and_persona_discovery() {
         let iso = iso("toggle");
         let src = iso.root.join("src");
@@ -2278,6 +2369,7 @@ mod tests {
         assert!(info.trusted && !info.enabled);
         assert!(info.summary.contains("echo plugin-hook"));
         assert!(info.summary.contains("plugin-mcp"));
+        assert_eq!(info.mcp_servers, ["files: plugin-mcp --stdio"]);
         enable_plugin(&iso.workspace, "demo").unwrap();
         assert_eq!(contributes(&iso), (true, true, true, true));
         let prompt = crate::system_prompt("", &iso.workspace);

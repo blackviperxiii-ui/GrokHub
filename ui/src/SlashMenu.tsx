@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { slashHits, type SlashHit } from "./api";
 
+/** Rust's whitespace is JS `\s` without U+FEFF and with U+0085. */
+const RUST_SHELL_LINE = /^(?:(?!\uFEFF)\s|\u0085)*\$ (?:\uFEFF|(?!\u0085)\S)/;
+
 /** A draft the composer runs instead of sending: `/word` and maybe text.
  * `/usr/bin is slow` and `/ hi` are messages. */
-export function isSlashCommand(draft: string): boolean {
-  return /^\s*\/[A-Za-z0-9_-]+(\s|$)/.test(draft);
+export function isSlashCommand(draft: string, remote = false): boolean {
+  return /^\s*\/[A-Za-z0-9_-]+(\s|$)/.test(draft) || isShellLine(draft, remote);
+}
+
+/** `$ <line>` on this computer is `/sh <line>`; `$5` and `$  ls` are
+ * messages, and so is any `$ ` line in a browser. The whitespace is Rust's
+ * (`char::is_whitespace`), so this agrees with `slash::dollar_line`. */
+export function isShellLine(draft: string, remote = false): boolean {
+  return !remote && RUST_SHELL_LINE.test(draft);
 }
 
 /** The command list for a draft that is still a bare `/word`. `rows` is the

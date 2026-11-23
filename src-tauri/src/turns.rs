@@ -13,8 +13,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{agent, ShellState, CHAT_EVENT};
 
-/// A side answer runs under `<chat>~side-<n>`.
-pub const SIDE_MARK: &str = "~side-";
+/// A side answer runs under `<chat>~side-<n>`. The on-device router reads
+/// the same mark, so a side answer never asks for a tier.
+pub const SIDE_MARK: &str = grokhub_agent::route::local_scale::SIDE_MARK;
 
 /// Each chat's last read message and the route it took, so "no, just
 /// answer" or "make a plan first" right after it can fix it.
@@ -41,7 +42,8 @@ pub fn pick_mode(state: &ShellState, conversation_id: &str, text: &str) -> agent
     let mut reads = state.turn_reads.0.lock().unwrap_or_else(|e| e.into_inner());
     let fix = intent::correction_of_previous(text);
     if let (Some(fix), Some((prev, was))) = (fix, reads.remove(conversation_id)) {
-        if fix != was {
+        // A scratch chat teaches the reader nothing.
+        if fix != was && !grokhub_agent::scratch::is_scratch(conversation_id) {
             intent::note_correction(&state.config_dir, &prev, false, fix);
         }
     }
@@ -138,6 +140,11 @@ pub async fn side_chat(
     if question.trim().is_empty() {
         return Err("Type a message first.".into());
     }
+    // A side answer would run on the app's own models, not the plan the
+    // person picked for this chat.
+    if crate::claude_chat::is_on(&state.config_dir, &conversation_id) {
+        return Err(crate::claude_chat::NO_SIDE.into());
+    }
     // Retired before it runs: the engine saves nothing under this id.
     let _ = grokhub_agent::delete_session(&side_id);
     let session = {
@@ -208,7 +215,9 @@ pub fn tell_main(
     question: String,
     answer: String,
 ) -> Told {
-    intent::note_correction(&state.config_dir, &question, true, TurnRoute::Steer);
+    if !grokhub_agent::scratch::is_scratch(&conversation_id) {
+        intent::note_correction(&state.config_dir, &question, true, TurnRoute::Steer);
+    }
     let text = intent::tell_main_text(&question, &answer);
     let steered = state
         .chats

@@ -86,6 +86,46 @@ pub fn fullscreen() -> Option<bool> {
     }
 }
 
+/// Whether another app's fullscreen window owns the screen, where this PC can
+/// tell. Unlike [`fullscreen`] this counts borderless fullscreen ("busy") too,
+/// unless the window in front is this app's own: a maximized window of this
+/// app also reports busy. Windows only for now.
+pub fn fullscreen_other_app() -> Option<bool> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::SHQueryUserNotificationState;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
+        let mut state = 0;
+        // SAFETY: an out-pointer to a local i32.
+        if unsafe { SHQueryUserNotificationState(&mut state) } < 0 {
+            return None;
+        }
+        // SAFETY: out-pointer to a local u32; hwnd null-check before use.
+        let front = unsafe {
+            let hwnd = GetForegroundWindow();
+            let mut pid = 0u32;
+            if !hwnd.is_null() {
+                GetWindowThreadProcessId(hwnd, &mut pid);
+            }
+            pid
+        };
+        Some(other_app_fullscreen(state, front, std::process::id()))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Busy (2), Direct3D fullscreen (3) or presentation mode (4), with a known
+/// window in front that isn't ours.
+#[cfg(any(windows, test))]
+fn other_app_fullscreen(state: i32, front_pid: u32, own_pid: u32) -> bool {
+    matches!(state, 2..=4) && front_pid != 0 && front_pid != own_pid
+}
+
 /// GPU busy by other processes, where this PC can tell. `own_pid` is left out
 /// of the total when the reader can split per process.
 pub fn external_gpu_pct(own_pid: Option<u32>) -> Option<u8> {
@@ -322,6 +362,26 @@ fn win_idle_secs() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_another_apps_fullscreen_window_counts() {
+        // Busy, Direct3D and presentation mode with another app in front.
+        assert!(other_app_fullscreen(2, 4242, 7));
+        assert!(other_app_fullscreen(3, 4242, 7));
+        assert!(other_app_fullscreen(4, 4242, 7));
+        // This app's own maximized window reports busy too.
+        assert!(!other_app_fullscreen(2, 7, 7));
+        // No window in front, or the shell accepting notifications (5).
+        assert!(!other_app_fullscreen(2, 0, 7));
+        assert!(!other_app_fullscreen(5, 4242, 7));
+        assert!(!other_app_fullscreen(1, 4242, 7));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn fullscreen_of_other_apps_is_unknown_off_windows() {
+        assert_eq!(fullscreen_other_app(), None);
+    }
 
     #[test]
     fn the_idle_reply_parses_from_gdbus_and_xprintidle() {
