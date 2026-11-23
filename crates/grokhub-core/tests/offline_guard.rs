@@ -77,6 +77,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
     ("crates/grokhub-core/src/net_log.rs", 1, "net log resolver connect probe (shared by the app and the shell): offline::refuse first; its speed test goes through connectivity's facade agent above"),
     // Web tools, Pulse, GitHub, plugins.
+    ("crates/grokhub-core/src/at_context.rs", 1, "@url: fetch: offline::check_url + public_http_url, then http::agent public_only"),
+    ("crates/grokhub-core/src/home_assistant.rs", 1, "Home Assistant REST: saved_host dialer (offline::check_host on the configured server; LAN/loopback stay while Offline only is on)"),
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
     ("crates/grokhub-agent/src/tools/web_search.rs", 2, "Brave: egress guard; a SearXNG server on your network: egress guard + the saved-server resolver (offline::check_host, local addresses only while on); DDG / public SearXNG go through web_fetch"),
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
