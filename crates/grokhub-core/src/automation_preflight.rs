@@ -280,11 +280,13 @@ mod tests {
                 no_agent,
                 ..CheckGate::default()
             },
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(1),
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         }
     }
 

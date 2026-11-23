@@ -508,11 +508,13 @@ pub(crate) fn write_automation(
         heartbeat_every_min: mins,
         check_command: String::new(),
         gate: Default::default(),
+        wait: Default::default(),
         enabled: true,
         last_run: if fire { None } else { Some(now.now_ms) },
         next_run: None,
         run_count: 0,
         health: grokhub_core::AutoHealth::default(),
+        lifecycle: Default::default(),
     };
     row = ensure_automation_schedule(row, now);
     if fire {

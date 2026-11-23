@@ -3,14 +3,16 @@
 //! the cabin is not running: the cabin beats `scheduler-lease.json` from its
 //! pulse, and the shell defers while that beat is fresh.
 //!
-//! A due job gated by a check command runs that command first; only a passing
-//! check is claimed and fired, and the model gets what it printed
-//! ([`grokhub_core::automation_check`]). Under "only when it changes" an
-//! unchanged output waits with no model call, and a "without AI" job's run is
-//! the output alone. Other due jobs are claimed first (last run,
-//! count and next run saved), then run unattended under your Approvals, as
-//! Run now does: Ask stays read-only, and anything that would need an answer
-//! is skipped.
+//! A due job with a condition or event-stream wait
+//! ([`grokhub_core::automation_wait`]) is evaluated before a claim; a
+//! non-match polls again soon with no model call. A due job gated by a check
+//! command runs that command first; only a passing check is claimed and fired,
+//! and the model gets what it printed ([`grokhub_core::automation_check`]).
+//! Under "only when it changes" an unchanged output waits with no model call,
+//! and a "without AI" job's run is the output alone. Other due jobs are
+//! claimed first (last run, count and next run saved), then run unattended
+//! under your Approvals, as Run now does: Ask stays read-only, and anything
+//! that would need an answer is skipped.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use std::time::Duration;
 use grokhub_agent::check_decide::Decision;
 use grokhub_agent::ModelClient;
 use grokhub_core::automation_check::{check_step, CheckStep};
+use grokhub_core::automation_wait::{wait_prompt, wait_step, WaitStep};
 use grokhub_core::scheduler_lease::{
     headless_may_fire, read_lease, shell_may_fire, write_lease, LeaseOwner, SchedulerLease,
 };
@@ -161,11 +164,26 @@ pub fn tick_as(
             beat_ms: now.now_ms,
         };
         write_lease(config_dir, &beat)?;
-        // Check-gated jobs: run the gate before claiming a run. A failed or
-        // empty check, or an unchanged one under "only when it changes",
-        // waits with no model call.
+        // Condition / event-stream waits, then check-gated jobs: evaluate
+        // before claiming a run. A non-match polls again with no model call.
         let mut step = None;
+        // id, new_cursor, context
+        let mut wait_ready: Option<(String, String, String)> = None;
         if let Some(pending) = automations::next_due(config_dir, now, &seen)? {
+            match wait_step(&pending.wait, config_dir) {
+                WaitStep::Wait => {
+                    automations::settle_wait(config_dir, &pending.id, now)?;
+                    seen.insert(pending.id);
+                    continue;
+                }
+                WaitStep::Ready {
+                    context,
+                    new_cursor,
+                } => {
+                    wait_ready = Some((pending.id.clone(), new_cursor, context));
+                }
+                WaitStep::None => {}
+            }
             if let Some(cmd) = grokhub_core::night_check_command(&pending.check_command) {
                 let next = check_step(&pending.gate, &check(cmd));
                 if next.waits() {
@@ -199,6 +217,10 @@ pub fn tick_as(
         };
         seen.insert(job.id.clone());
         let step = step.filter(|(id, _)| *id == job.id).map(|(_, s)| s);
+        let (wait_cursor, wait_context) = match wait_ready {
+            Some((id, cursor, context)) if id == job.id => (Some(cursor), Some(context)),
+            _ => (None, None),
+        };
         let result = match automations::Running::claim(&job.id) {
             Ok(_held) => match &step {
                 Some(CheckStep::ScriptOnly { output }) => RunResult {
@@ -225,19 +247,32 @@ pub fn tick_as(
                             } else {
                                 picked.as_str()
                             };
+                            let mut instructions = grokhub_core::automation_check::check_prompt(
+                                &job.instructions,
+                                &job.check_command,
+                                shown,
+                                job.gate.on_change,
+                            );
+                            if let Some(ctx) = &wait_context {
+                                instructions = wait_prompt(&instructions, ctx);
+                            }
                             run(&Automation {
-                                instructions: grokhub_core::automation_check::check_prompt(
-                                    &job.instructions,
-                                    &job.check_command,
-                                    shown,
-                                    job.gate.on_change,
-                                ),
+                                instructions,
                                 ..job.clone()
                             })
                         }
                     }
                 }
-                _ => run(&job),
+                _ => {
+                    if let Some(ctx) = &wait_context {
+                        run(&Automation {
+                            instructions: wait_prompt(&job.instructions, ctx),
+                            ..job.clone()
+                        })
+                    } else {
+                        run(&job)
+                    }
+                }
             },
             // A Run now of it started after the claim; that run counts.
             Err(_) => continue,
@@ -247,6 +282,11 @@ pub fn tick_as(
         if let Some(CheckStep::ScriptOnly { output } | CheckStep::Ask { output, .. }) = &step {
             if !result.failed() {
                 let _ = automations::remember_check(config_dir, &job.id, output);
+            }
+        }
+        if let Some(cursor) = wait_cursor {
+            if !result.failed() {
+                let _ = automations::remember_wait_cursor(config_dir, &job.id, &cursor);
             }
         }
         // The job may have been removed while it ran.
@@ -665,6 +705,113 @@ mod tests {
         assert_eq!(fired[0].result.text, "cleaned");
         let row = &automations::load(&dir).expect("reload")[0];
         assert_eq!(row.run_count, 1);
+    }
+
+    #[test]
+    fn a_condition_wait_skips_without_firing_until_true() {
+        let dir = temp_dir("wait-cond");
+        let nine = FRI_8AM + HOUR;
+        let marker = dir.join("ready.flag");
+        let source = format!("file:{}", marker.display());
+        let seed = serde_json::json!([{
+            "id": "auto-wait",
+            "name": "when ready",
+            "schedule": "daily",
+            "time": "09:00",
+            "instructions": "go",
+            "enabled": true,
+            "nextRun": nine,
+            "wait": { "kind": "condition", "source": source },
+        }]);
+        std::fs::write(automations::path(&dir), seed.to_string()).expect("seed");
+        let mut runs = 0;
+        let fired = tick(&dir, &at(nine), PID, &mut |_| {
+            runs += 1;
+            ok("should not")
+        })
+        .expect("tick");
+        assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 0);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 0);
+        assert_eq!(
+            row.next_run,
+            Some(nine + grokhub_core::WAIT_POLL_MS),
+            "wait polls again soon"
+        );
+
+        std::fs::write(&marker, b"1").expect("marker");
+        let later = nine + grokhub_core::WAIT_POLL_MS;
+        let fired = tick(&dir, &at(later), PID, &mut |job| {
+            runs += 1;
+            assert!(
+                job.instructions.contains("Saved condition"),
+                "{}",
+                job.instructions
+            );
+            ok("ran")
+        })
+        .expect("tick ready");
+        assert_eq!(runs, 1);
+        assert_eq!(fired.len(), 1);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 1);
+        assert_eq!(row.lifecycle.run, grokhub_core::LifePhase::Ok);
+        assert_eq!(row.lifecycle.delivery, grokhub_core::LifePhase::Ok);
+        assert_eq!(row.lifecycle.completion, grokhub_core::LifePhase::Ok);
+    }
+
+    #[test]
+    fn an_event_stream_wait_fires_on_new_match_and_advances_cursor() {
+        let dir = temp_dir("wait-stream");
+        let nine = FRI_8AM + HOUR;
+        std::fs::write(
+            automations::path(&dir),
+            format!(
+                r#"[{{"id":"auto-stream","name":"disk watch","schedule":"daily","time":"09:00","instructions":"alert me","enabled":true,"nextRun":{nine},"wait":{{"kind":"event_stream","source":"disk","matchText":"alert"}}}}]"#
+            ),
+        )
+        .expect("seed");
+        let mut runs = 0;
+        let fired = tick(&dir, &at(nine), PID, &mut |_| {
+            runs += 1;
+            ok("no")
+        })
+        .expect("empty stream");
+        assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 0);
+
+        grokhub_core::append_stream_event(&dir, "disk", "e1", "disk alert now").expect("event");
+        let later = nine + grokhub_core::WAIT_POLL_MS;
+        let fired = tick(&dir, &at(later), PID, &mut |job| {
+            runs += 1;
+            assert!(job.instructions.contains("disk alert now"));
+            ok("noted")
+        })
+        .expect("match");
+        assert_eq!(runs, 1);
+        assert_eq!(fired.len(), 1);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.wait.cursor, "e1");
+        assert_eq!(row.run_count, 1);
+
+        // Same event must not fire again.
+        let again = later + grokhub_core::WAIT_POLL_MS;
+        // Make it due again via the on-disk row (cursor already e1).
+        let mut list = automations::load(&dir).expect("load");
+        list[0].next_run = Some(again);
+        std::fs::write(
+            automations::path(&dir),
+            serde_json::to_string(&list).expect("json"),
+        )
+        .expect("rewrite");
+        let fired = tick(&dir, &at(again), PID, &mut |_| {
+            runs += 1;
+            ok("again")
+        })
+        .expect("no rematch");
+        assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 1);
     }
 
     #[test]

@@ -1038,6 +1038,10 @@ export interface AutomationRow {
   /** The job's check command; empty when it has none. */
   checkCommand: string;
   gate: AutomationGate;
+  /** Condition / event-stream wait summary; empty when none. */
+  wait: string;
+  /** Delivery · run · completion line; empty while clear. */
+  lifecycle: string;
 }
 
 export interface RunResult {

@@ -58,6 +58,10 @@ pub struct Row {
     pub check_command: String,
     /// `gate.onChange` / `gate.noAgent` from automations.json.
     pub gate: RowGate,
+    /// Condition / event-stream wait summary; empty when none.
+    pub wait: String,
+    /// Delivery · run · completion line; empty while clear.
+    pub lifecycle: String,
 }
 
 /// The check gate the Automations page shows on a row.
@@ -83,6 +87,8 @@ pub fn rows(list: &[Automation], clock: LocalClock) -> Vec<Row> {
                 on_change: a.gate.on_change,
                 no_agent: a.gate.no_agent,
             },
+            wait: grokhub_core::wait_line(&a.wait).unwrap_or_default(),
+            lifecycle: grokhub_core::lifecycle_line(&a.lifecycle).unwrap_or_default(),
         })
         .collect()
 }
@@ -261,10 +267,12 @@ pub fn edit(
             enabled: old.enabled,
             check_command,
             gate,
+            wait: old.wait.clone(),
             last_run: old.last_run,
             next_run: None,
             run_count: old.run_count,
             health: old.health.clone(),
+            lifecycle: old.lifecycle.clone(),
             ..parsed
         };
         list[at] = grokhub_core::ensure_automation_schedule(next, clock);
@@ -538,6 +546,25 @@ pub fn next_due(
 pub fn settle_skip(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
     change(config_dir, id, |list, at| {
         list[at] = grokhub_core::mark_automation_skipped(list[at].clone(), clock.now_ms, clock);
+    })
+    .map(drop)
+}
+
+/// A condition / event-stream wait is not ready: poll again soon, no run count.
+pub fn settle_wait(config_dir: &Path, id: &str, clock: LocalClock) -> Result<(), String> {
+    change(config_dir, id, |list, at| {
+        list[at] = grokhub_core::mark_automation_waiting(list[at].clone(), clock.now_ms);
+    })
+    .map(drop)
+}
+
+/// Persist a stream cursor after a matching wait fired.
+pub fn remember_wait_cursor(config_dir: &Path, id: &str, cursor: &str) -> Result<(), String> {
+    if cursor.trim().is_empty() {
+        return Ok(());
+    }
+    change(config_dir, id, |list, at| {
+        list[at].wait = list[at].wait.remember_cursor(cursor);
     })
     .map(drop)
 }
