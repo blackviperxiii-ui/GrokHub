@@ -443,6 +443,12 @@ fn run_compact_pass(
         )
     };
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
+    crate::outbound_hooks::emit_turn(
+        &crate::perm::config_dir(),
+        "PostCompact",
+        input.conversation_id,
+        serde_json::json!({}),
+    );
     match compact_result {
         Ok(done) => {
             crate::prefix_guard::note_compaction(&crate::prefix_guard::run_key(
@@ -891,6 +897,34 @@ fn run_turn(
                 });
             }
         }
+        match crate::hooks::on_pre_llm_call(input.conversation_id, input.workspace, input.model) {
+            crate::hooks::PromptHook::Block { reason } => {
+                return finish(
+                    input,
+                    StopReason::Error(format!("Model call blocked by hook: {reason}")),
+                    usage,
+                    compacted_once,
+                    true,
+                );
+            }
+            crate::hooks::PromptHook::Continue { context } if !context.is_empty() => {
+                if let Some(InputItem::Message { content, .. }) = history.last_mut() {
+                    if let Some(ContentPart::InputText(text)) = content.first_mut() {
+                        text.push('\n');
+                        text.push_str(&context);
+                    }
+                }
+            }
+            crate::hooks::PromptHook::Continue { .. } => {}
+        }
+        let hold_stream =
+            crate::hooks::on_hold_stream(input.conversation_id, input.workspace);
+        crate::outbound_hooks::emit_turn(
+            &crate::perm::config_dir(),
+            "PreLlmCall",
+            input.conversation_id,
+            serde_json::json!({"model": input.model}),
+        );
         let sent_len = history.len();
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
@@ -929,6 +963,7 @@ fn run_turn(
         }
         // What the chat showed of this reply, kept if the reply fails partway.
         let mut shown = String::new();
+        let mut held_text = String::new();
         let mut thoughts =
             casual.then(|| grokhub_core::conversation::CasualThoughts::new(user_text));
         let streamed = crate::route::live::stream_routed(
@@ -939,7 +974,11 @@ fn run_turn(
                 StreamEvent::TextDelta(text) => {
                     flush_thoughts(&mut thoughts, &mut *on_event);
                     shown.push_str(&text);
-                    on_event(LoopEvent::Text(text))
+                    if hold_stream {
+                        held_text.push_str(&text);
+                    } else {
+                        on_event(LoopEvent::Text(text))
+                    }
                 }
                 StreamEvent::ReasoningDelta(text) => match thoughts.as_mut() {
                     Some(t) => {
@@ -955,6 +994,9 @@ fn run_turn(
             class,
         );
         flush_thoughts(&mut thoughts, &mut *on_event);
+        if hold_stream && !held_text.is_empty() {
+            on_event(LoopEvent::Text(std::mem::take(&mut held_text)));
+        }
         // The stored request this reply came from, for its calls' safety events.
         let turn_request = crate::harness::replay::last_request();
         // A fork of this chat starts from exactly what went out. The request
@@ -2370,6 +2412,20 @@ fn finish_tool_output(
         id,
         output.failed,
         &output.text,
+    );
+    crate::outbound_hooks::emit_tool(
+        &crate::perm::config_dir(),
+        if output.failed {
+            "PostToolUseFailure"
+        } else {
+            "PostToolUse"
+        },
+        input.conversation_id,
+        serde_json::json!({
+            "tool": call.name,
+            "toolUseId": id,
+            "failed": output.failed,
+        }),
     );
     if !extra.is_empty() {
         if !output.text.is_empty() && !output.text.ends_with('\n') {
