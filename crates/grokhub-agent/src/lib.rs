@@ -43,6 +43,7 @@ mod memory_embed;
 mod models;
 pub mod mods_net;
 pub mod onboard;
+pub mod outbound_hooks;
 mod pace;
 pub mod package_age;
 pub mod perm;

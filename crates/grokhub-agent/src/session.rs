@@ -766,9 +766,29 @@ pub fn rename_session(id: &str, title: &str) -> Result<(), String> {
 /// Cancel any run bound to this id, then remove the file.
 pub fn delete_session(id: &str) -> Result<(), String> {
     let id = safe_id(id)?.to_string();
+    let path = session_file(&id)?;
+    let workspace = read_head(&path, &id)
+        .map(|head| {
+            let cwd = head.cwd.trim();
+            if cwd.is_empty() {
+                PathBuf::from(".")
+            } else {
+                PathBuf::from(cwd)
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+    // SessionEnd / on_session_delete hooks need the session attached once.
+    let _hooks = crate::hooks::attach(&id, &workspace, false);
+    crate::hooks::on_session_delete(&id, &workspace);
+    crate::outbound_hooks::emit_session(
+        &crate::perm::config_dir(),
+        "SessionEnd",
+        &id,
+        json!({"reason": "delete"}),
+    );
+    drop(_hooks);
     tombstone(&id);
     stop_run(&id);
-    let path = session_file(&id)?;
     if path.is_file() {
         fs::remove_file(&path).map_err(|err| err.to_string())?;
     }

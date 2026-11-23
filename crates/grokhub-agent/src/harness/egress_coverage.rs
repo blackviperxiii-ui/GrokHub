@@ -79,7 +79,9 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/mods_net.rs", 1, "ModsNet::once (both shells): guard_quiet (chat when a search carries text) to the mod source's own hosts, redirects checked by hand, public IPs only"),
     ("grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok get_json / post_form (desktop app and grokhub-hub --oauth): guard_quiet (codes and tokens only) before every call; the test override is loopback only"),
     ("grokhub-agent/src/channels_net.rs", 3, "messaging channels: TelegramLink's agent (guard_quiet before every getUpdates / getMe, no user data, and sendMessage: no data for the pairing text, chat for an answer; the guard target leaves the token out), DiscordLink's REST agent (guard_quiet before each message send, same classes) and its Gateway socket (guard_quiet before each connect, no user data; only Discord's own hosts are dialed again)"),
+    ("grokhub-agent/src/outbound_hooks.rs", 1, "outbound signed lifecycle webhooks: offline::refuse + guard_quiet + public_only before each POST"),
     ("grokhub-agent/src/vstack_sync.rs", 1, "runtime upstream vstack skills sync: offline::refuse + github host allowlist + guard_quiet (no user data) on every hop"),
+    ("grokhub-core/src/home_assistant.rs", 1, "Home Assistant local control: offline::check_url / LAN host check before each http::agent call (Order 973)"),
 ];
 
 /// The part of a source file that ships: CRLF normalized, `#[cfg(test)] mod …` cut off.

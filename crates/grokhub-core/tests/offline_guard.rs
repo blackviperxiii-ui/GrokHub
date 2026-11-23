@@ -92,6 +92,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/stt_stream.rs", 2, "voice mode speech stream (TCP connect, then the WebSocket upgrade): guard_quiet (chat data) before the socket, and Offline only is checked again before each audio block; the test override is plain-ws loopback only"),
     ("crates/grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok (desktop app and grokhub-hub --oauth) to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("crates/grokhub-agent/src/channels_net.rs", 4, "messaging channels: Telegram's agent and Discord's REST agent (guard_quiet before every poll and send; the guard target leaves the token out), and Discord's Gateway (TCP connect, then the TLS WebSocket upgrade; guard_quiet before each connect, only Discord's own hosts)"),
+    ("crates/grokhub-agent/src/outbound_hooks.rs", 1, "outbound signed lifecycle webhooks: offline::refuse + guard_quiet + public_only before each POST"),
+    ("crates/grokhub-core/src/home_assistant.rs", 1, "Home Assistant local control: offline::check_url / LAN host check before each call (Order 973)"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-agent/src/mods_net.rs", 1, "mod sources (both shells): offline::refuse + guard_quiet on every hop"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
