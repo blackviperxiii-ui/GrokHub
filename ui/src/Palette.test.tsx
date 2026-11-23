@@ -217,6 +217,13 @@ describe("paletteRows", () => {
     ]);
   });
 
+  it("finds Appearance for dark, theme or text size, and Account for api", () => {
+    expect(labels(DESKTOP, "dark")).toEqual(["Settings: Appearance", "Ask Loadout: dark"]);
+    expect(labels(DESKTOP, "Theme")).toEqual(["Settings: Appearance", "Ask Loadout: Theme"]);
+    expect(labels(DESKTOP, "text size")).toEqual(["Settings: Appearance", "Ask Loadout: text size"]);
+    expect(labels(DESKTOP, "api")).toEqual(["Settings: Account", "Ask Loadout: api"]);
+  });
+
   it("filters by the typed text and ends with Ask Loadout", () => {
     expect(labels(DESKTOP, "  ACCO ")).toEqual(["Settings: Account", "Ask Loadout: ACCO"]);
     expect(paletteRows(DESKTOP, "zzz")).toEqual([

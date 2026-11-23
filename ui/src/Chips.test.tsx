@@ -156,6 +156,20 @@ describe("useChipRow", () => {
     expect(session.heard).toHaveLength(1);
   });
 
+  it("keeps the row in place with its chips off while a reply runs, and asks nothing", async () => {
+    const Busy = ({ busy }: { busy: boolean }) => {
+      const row = useChipRow({ surface: "composer", conversationId: "shell-1", busy });
+      return <ChipRow chips={row.chips} busy={busy} onTap={row.picked} onHide={row.hide} />;
+    };
+    const { rerender } = render(<Busy busy={false} />);
+    expect(await screen.findByRole("button", { name: "One" })).toBeEnabled();
+    rerender(<Busy busy />);
+    expect(screen.getByRole("group", { name: "Suggestions" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "One" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Two" })).toBeDisabled();
+    expect(api.quickChips).toHaveBeenCalledTimes(1);
+  });
+
   it("shows nothing and asks nothing while busy", async () => {
     render(<Harness busy />);
     await act(async () => {});

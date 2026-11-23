@@ -38,7 +38,6 @@ export function WakeWordSettings() {
   const [profile, setProfile] = useState("");
 
   useEffect(() => {
-    if (typeof getWakeWord !== "function") return;
     let cancelled = false;
     void getWakeWord()
       .then((next) => {

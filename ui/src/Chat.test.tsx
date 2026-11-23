@@ -2872,6 +2872,26 @@ describe("Chat queue", () => {
     expect(onConversation.mock.calls[1][0]).not.toBe(first);
   });
 
+  it("the agent window leaves out the game and life starter chips; the chat keeps them", async () => {
+    api.quickChips.mockResolvedValue([
+      chip("seed-stutter", "Fix my stutter", "Fix my stutter"),
+      chip("pred-1", "Run the tests", "Run the tests."),
+    ]);
+    const view = render(<Chat onOpenSettings={() => {}} embedded />);
+    const row = await screen.findByRole("group", { name: "Suggestions" });
+    const labels = () =>
+      within(screen.getByRole("group", { name: "Suggestions" }))
+        .getAllByRole("button")
+        .filter((b) => !b.getAttribute("aria-label")?.startsWith("Hide"))
+        .map((b) => b.textContent);
+    expect(row).toBeInTheDocument();
+    expect(labels()).toEqual(["Run the tests"]);
+    view.unmount();
+    render(<Chat onOpenSettings={() => {}} />);
+    await screen.findByRole("group", { name: "Suggestions" });
+    expect(labels()).toEqual(["Fix my stutter", "Run the tests"]);
+  });
+
   it("in the agent window a queued message is sent with no mode when the reply ends", async () => {
     const ends = turns();
     render(<Chat onOpenSettings={() => {}} embedded />);
