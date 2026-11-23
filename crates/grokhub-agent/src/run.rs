@@ -163,7 +163,7 @@ fn stop_with_note(history: &mut Vec<InputItem>, on_event: &mut dyn FnMut(LoopEve
     });
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LoopEvent {
     Text(String),
     Thought(String),
@@ -212,6 +212,11 @@ pub enum LoopEvent {
     Panel {
         id: String,
         spec: serde_json::Value,
+    },
+    /// An MCP App view to host in a sandboxed iframe. `id` is the tool call's.
+    McpApp {
+        id: String,
+        app: crate::mcp::McpAppView,
     },
 }
 
@@ -2216,7 +2221,28 @@ pub(crate) fn emit_tool(
     detail: &str,
     image: Option<String>,
 ) {
+    emit_tool_with_app(on_event, id, call, status, detail, image, None);
+}
+
+/// Like [`emit_tool`], and emits an MCP App host card when `app` is set.
+pub(crate) fn emit_tool_with_app(
+    on_event: &mut dyn FnMut(LoopEvent),
+    id: &str,
+    call: &FunctionCall,
+    status: &str,
+    detail: &str,
+    image: Option<String>,
+    app: Option<crate::mcp::McpAppView>,
+) {
     emit_panel(on_event, id, call, status);
+    if status == "completed" {
+        if let Some(app) = app {
+            on_event(LoopEvent::McpApp {
+                id: id.to_string(),
+                app,
+            });
+        }
+    }
     // The row shows what the tool said, not the untrusted fence around it.
     let detail = crate::tools::fence::display_text(detail);
     on_event(LoopEvent::Tool {
@@ -2292,13 +2318,14 @@ fn note_tool(
         usage,
     );
     let status = if output.failed { "failed" } else { "completed" };
-    emit_tool(
+    emit_tool_with_app(
         on_event,
         id,
         call,
         status,
         &output.text,
         output.image_data_url.clone(),
+        output.mcp_app.clone(),
     );
     (output, usage)
 }
@@ -4572,6 +4599,7 @@ mod tests {
                     text: "geom".into(),
                     image_data_url: Some("data:image/png;base64,YQ==".into()),
                     failed: false,
+                    mcp_app: None,
                 }
             } else {
                 ToolOutput::ok("ok")

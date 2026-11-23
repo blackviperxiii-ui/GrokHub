@@ -200,6 +200,20 @@ export type ChatEvent =
   /** A panel the agent drew with show_panel (generative UI), keyed by the
    * call that made it. The shell sends only specs the core rules allow. */
   | { kind: "panel"; id: string; spec: PanelSpec }
+  /** An MCP App view for the sandboxed in-chat host. */
+  | {
+      kind: "mcpApp";
+      id: string;
+      app: {
+        server: string;
+        tool: string;
+        resourceUri: string;
+        html: string;
+        prefersBorder?: boolean;
+        toolInput: unknown;
+        toolResult: unknown;
+      };
+    }
   /** A report_findings card: one pill per fix; a pill fills the composer. */
   | {
       kind: "findings";

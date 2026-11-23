@@ -199,6 +199,7 @@ impl DesktopOps for Desk {
             text: "windows: Settings".into(),
             image_data_url: self.image.clone(),
             failed: self.failed,
+            mcp_app: None,
         }
     }
 }

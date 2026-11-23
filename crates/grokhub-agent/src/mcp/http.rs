@@ -153,7 +153,7 @@ impl HttpConn {
         timeout: Duration,
         stop: &dyn Fn() -> bool,
         retry_safe: bool,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Value), String> {
         // Tool args are chat, or personal when they carry a recall-pack line.
         // A hard Send waits on the cabin's card; Deny sends nothing.
         let data = crate::harness::model_text_classes(&args.to_string());
@@ -174,10 +174,10 @@ impl HttpConn {
         args: &Value,
         key: Option<&str>,
         timeout: Duration,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Value), String> {
         if self.stateless {
             let server = self.server.clone();
-            return rpc::call_tool(&server, name, args, &mut |params| {
+            return rpc::call_tool_raw(&server, name, args, &mut |params| {
                 self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
             });
         }
@@ -186,7 +186,17 @@ impl HttpConn {
             rpc::with_key(json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
-        Ok(rpc::tool_output(&result))
+        let (text, failed) = rpc::tool_output(&result);
+        Ok((text, failed, result))
+    }
+
+    /// `resources/read` for one URI (MCP Apps `ui://` HTML, and other resources).
+    pub(crate) fn read_resource(
+        &mut self,
+        uri: &str,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        self.roundtrip("resources/read", json!({ "uri": uri }), timeout)
     }
 
     /// `ping` in the session era; the stateless era dropped it, so `server/discover`.
@@ -1103,7 +1113,7 @@ pub(crate) mod tests {
         assert_eq!(hx::read_egress(&dir).len(), 1, "no line for a denied send");
 
         let approve = hx::answer_next_park(dir.clone(), true);
-        let (text, failed) = c
+        let (text, failed, _) = c
             .call(
                 "echo",
                 &args,
@@ -1285,7 +1295,7 @@ pub(crate) mod tests {
         let server = Counting::start();
         let mut c = conn(&server);
         let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
-        let (text, _) = c
+        let (text, _, _) = c
             .call(
                 "echo",
                 &args,
@@ -1451,7 +1461,9 @@ pub(crate) mod tests {
             (out, server.calls.load(Ordering::SeqCst))
         };
         let (out, calls) = call(true);
-        assert_eq!(out.unwrap(), ("counted".to_string(), false));
+        let (text, failed, _) = out.unwrap();
+        assert_eq!(text, "counted");
+        assert!(!failed);
         assert_eq!(calls, 2, "a read-only or idempotent tool is sent once more");
         let (out, calls) = call(false);
         assert!(out.is_err(), "{out:?}");
@@ -1466,7 +1478,7 @@ pub(crate) mod tests {
         let (mut c, tools) = connect_to(&server).unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!((c.protocol, c.stateless), (Some("2026-07-28"), true));
-        let (text, failed) = c
+        let (text, failed, _) = c
             .call(
                 "echo",
                 &json!({"q": 1}),
@@ -1514,7 +1526,14 @@ pub(crate) mod tests {
         let meta = &seen[2].body["params"]["_meta"];
         assert_eq!(
             meta["io.modelcontextprotocol/clientCapabilities"],
-            json!({"elicitation": {"form": {}, "url": {}}})
+            json!({
+                "elicitation": {"form": {}, "url": {}},
+                "extensions": {
+                    "io.modelcontextprotocol/ui": {
+                        "mimeTypes": ["text/html;profile=mcp-app"]
+                    }
+                }
+            })
         );
         assert_eq!(
             meta["io.modelcontextprotocol/clientInfo"]["name"],
@@ -1611,7 +1630,7 @@ pub(crate) mod tests {
         let server = Counting::with(Mode::Stateless);
         let (mut c, _) = connect_to(&server).unwrap();
         // No elicit card on this thread: the question is declined, as unattended.
-        let (text, _) = c
+        let (text, _, _) = c
             .call(
                 "echo",
                 &json!({"ask": true}),

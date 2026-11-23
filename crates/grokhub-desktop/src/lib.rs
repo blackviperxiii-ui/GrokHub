@@ -916,6 +916,7 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
         text,
         image_data_url: image,
         failed,
+        mcp_app: None,
     }
 }
 

@@ -56,6 +56,7 @@ fn main() {
             "tools/list" => respond(&id, tools_page(msg.get("params"))),
             "tools/call" if flag("FAKE_MCP_RPC_ERROR") => fail(&id, -32602, "bad args"),
             "tools/call" => respond(&id, call_tool(&mut reader, msg.get("params"))),
+            "resources/read" => respond(&id, read_resource(msg.get("params"))),
             "ping" => respond(&id, json!({})),
             _ => send(&json!({
                 "jsonrpc": "2.0",
@@ -112,6 +113,7 @@ fn stateless(id: &Value, method: &str, msg: &Value) {
             page
         }
         "tools/call" => stateless_call(msg.get("params")),
+        "resources/read" => read_resource(msg.get("params")),
         _ => return fail(id, -32601, "Method not found"),
     };
     if result.get("resultType").is_none() {
@@ -221,7 +223,69 @@ fn tool_list() -> Vec<Value> {
     if std::env::var("FAKE_MCP_PAGE_URL").is_ok() {
         return vec![tool("browser_tabs", "Tabs")];
     }
+    if flag("FAKE_MCP_APP") {
+        return vec![
+            app_tool(
+                "show_inventory",
+                "Show stock",
+                "ui://inventory/dashboard",
+                &["model", "app"],
+            ),
+            app_tool("restock_item", "Restock one SKU", "ui://inventory/dashboard", &["app"]),
+            tool("echo", "Echo arguments"),
+        ];
+    }
     vec![tool("echo", "Echo arguments")]
+}
+
+fn app_tool(name: &str, description: &str, uri: &str, visibility: &[&str]) -> Value {
+    let mut item = tool(name, description);
+    item["_meta"] = json!({
+        "ui": {
+            "resourceUri": uri,
+            "visibility": visibility
+        }
+    });
+    item
+}
+
+fn read_resource(params: Option<&Value>) -> Value {
+    let uri = params
+        .and_then(|p| p.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if uri != "ui://inventory/dashboard" {
+        return json!({ "contents": [] });
+    }
+    let html = r#"<!DOCTYPE html><html><head><title>inventory</title></head><body>
+<script>
+(function(){
+  function send(msg){ parent.postMessage(msg,"*"); }
+  var next=1, pending={};
+  window.addEventListener("message", function(ev){
+    var msg=ev.data; if(!msg||msg.jsonrpc!=="2.0") return;
+    if(msg.id!=null && pending[msg.id]){ pending[msg.id](msg); delete pending[msg.id]; }
+  });
+  function request(method, params){
+    return new Promise(function(resolve){
+      var id=next++; pending[id]=resolve;
+      send({jsonrpc:"2.0",id:id,method:method,params:params||{}});
+    });
+  }
+  request("ui/initialize",{appInfo:{name:"inventory",version:"0"},appCapabilities:{availableDisplayModes:["inline"]},protocolVersion:"2026-01-26"})
+    .then(function(){ send({jsonrpc:"2.0",method:"ui/notifications/initialized",params:{}}); });
+})();
+</script>
+<p id="status">inventory app</p>
+</body></html>"#;
+    json!({
+        "contents": [{
+            "uri": uri,
+            "mimeType": "text/html;profile=mcp-app",
+            "text": html,
+            "_meta": { "ui": { "prefersBorder": true } }
+        }]
+    })
 }
 
 fn tool(name: &str, description: &str) -> Value {
@@ -246,10 +310,39 @@ fn rich() -> bool {
 }
 
 fn call_tool(reader: &mut impl BufRead, params: Option<&Value>) -> Value {
+    let name = params
+        .and_then(|item| item.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let args = params
         .and_then(|item| item.get("arguments"))
         .cloned()
         .unwrap_or_else(|| json!({}));
+    if flag("FAKE_MCP_APP") && name == "show_inventory" {
+        let warehouse = args
+            .get("warehouse")
+            .and_then(Value::as_str)
+            .unwrap_or("berlin");
+        return json!({
+            "content": [{
+                "type": "text",
+                "text": format!("{warehouse} has 3 items. Below reorder level: MS-02, HD-07.")
+            }],
+            "structuredContent": {
+                "warehouse": warehouse,
+                "items": [
+                    {"sku": "MS-02", "stock": 8, "reorderAt": 20},
+                    {"sku": "HD-07", "stock": 3, "reorderAt": 10},
+                    {"sku": "KB-01", "stock": 42, "reorderAt": 5}
+                ]
+            },
+            "isError": false
+        });
+    }
+    if flag("FAKE_MCP_APP") && name == "restock_item" {
+        let sku = args.get("sku").and_then(Value::as_str).unwrap_or("?");
+        return text_result(&format!("{sku} stock is 58."));
+    }
     if let Ok(dies) = std::env::var("FAKE_MCP_BROWSER_DIES") {
         if dies == "always" || !std::env::args().any(|arg| arg == "--isolated") {
             let mut out = text_result(

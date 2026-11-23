@@ -904,12 +904,13 @@ impl Run<'_, '_> {
                     if out.failed {
                         crate::route::ladder::note_tool_error();
                     }
-                    emit(
+                    emit_app(
                         on_event,
                         &call,
                         if out.failed { "failed" } else { "completed" },
                         &out.text,
                         out.image_data_url.clone(),
+                        out.mcp_app.clone(),
                     );
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
@@ -1135,12 +1136,13 @@ impl Run<'_, '_> {
         if out.failed {
             crate::route::ladder::note_tool_error();
         }
-        emit(
+        emit_app(
             on_event,
             call,
             if out.failed { "failed" } else { "completed" },
             &out.text,
             out.image_data_url.clone(),
+            out.mcp_app.clone(),
         );
         self.record(
             &shape("allow", ui, result_text(&out)),
@@ -1418,6 +1420,17 @@ fn emit(
     detail: &str,
     image: Option<String>,
 ) {
+    emit_app(on_event, call, status, detail, image, None);
+}
+
+fn emit_app(
+    on_event: &mut dyn FnMut(LoopEvent),
+    call: &FunctionCall,
+    status: &str,
+    detail: &str,
+    image: Option<String>,
+    app: Option<crate::mcp::McpAppView>,
+) {
     let id = if call.call_id.is_empty() {
         format!("tool-{}", call.name)
     } else {
@@ -1427,6 +1440,14 @@ fn emit(
     // never parks; only a call that ran draws its panel.
     if detail != PARKED {
         crate::run::emit_panel(on_event, &id, call, status);
+    }
+    if status == "completed" {
+        if let Some(app) = app {
+            on_event(LoopEvent::McpApp {
+                id: id.clone(),
+                app,
+            });
+        }
     }
     on_event(LoopEvent::Tool {
         id,

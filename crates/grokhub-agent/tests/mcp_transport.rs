@@ -999,3 +999,101 @@ fn the_cabin_cua_gate_is_a_native_server_only_while_the_cabin_sets_it() {
     mcp::set_cabin_cua(None);
     assert!(mcp::doctor().iter().all(|row| row.name != "grokhub-cua"));
 }
+
+#[test]
+fn mcp_apps_host_loads_ui_resource_and_hides_app_only_tools() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("mcp-apps");
+    import_bin(bin, &[("FAKE_MCP_APP", "1")]);
+    let rows = mcp::doctor();
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].tool_count),
+        ("connected", 3),
+        "{rows:?}"
+    );
+    let listed: Vec<String> = mcp::tool_list()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert!(listed.contains(&"show_inventory".into()), "{listed:?}");
+    assert!(listed.contains(&"restock_item".into()), "{listed:?}");
+    assert!(listed.contains(&"echo".into()), "{listed:?}");
+
+    let client = Once {
+        name: "box__show_inventory".into(),
+        turn: AtomicUsize::new(0),
+    };
+    let cancel = CancelToken::new();
+    let steer = SteerQueue::new();
+    let halt = NoHalt;
+    let permits = ClosedPermits;
+    let input = LoopIn {
+        client: &client,
+        workspace: &dir,
+        model: "grok-4.7",
+        effort: None,
+        system: "",
+        conversation_id: "apps",
+        max_turns: 3,
+        usage_base: Usage::default(),
+        cancel: &cancel,
+        steer: &steer,
+        halt: &halt,
+        gate: Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        },
+        desktop: None,
+        permits: &permits,
+        perms: None,
+        context_length: 0,
+        tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
+    };
+    let mut history = Vec::new();
+    let mut apps = Vec::new();
+    let _ = run_loop(&input, &mut history, "show stock", None, &mut |ev| {
+        if let LoopEvent::McpApp { id, app } = ev {
+            apps.push((id, app));
+        }
+    });
+    assert_eq!(apps.len(), 1, "{apps:?}");
+    let (id, app) = &apps[0];
+    assert_eq!(id, "c1");
+    assert_eq!(app.server, "box");
+    assert_eq!(app.tool, "show_inventory");
+    assert_eq!(app.resource_uri, "ui://inventory/dashboard");
+    assert!(app.html.contains("inventory app"), "{}", app.html);
+    assert!(app.prefers_border);
+    assert!(
+        app.tool_result
+            .pointer("/structuredContent/warehouse")
+            .and_then(Value::as_str)
+            == Some("berlin")
+            || app
+                .tool_result
+                .to_string()
+                .contains("berlin"),
+        "{}",
+        app.tool_result
+    );
+
+    // App-visible call works; model-only echo from app path is refused when
+    // visibility is app-only. restock is app-visible.
+    let restock = mcp::app_call_tool("box", "restock_item", &json!({"sku": "MS-02"})).unwrap();
+    assert!(
+        restock.to_string().contains("MS-02"),
+        "{restock}"
+    );
+    let denied = mcp::app_call_tool("box", "echo", &json!({})).unwrap_err();
+    assert!(
+        denied.contains("not available to apps"),
+        "{denied}"
+    );
+}

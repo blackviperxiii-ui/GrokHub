@@ -66,11 +66,13 @@ pub use crate::gate::{is_readonly, READ_ONLY_PHASE};
 use crate::gate::{self, DeskFlags, Gate};
 use crate::tasks::TaskHub;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutput {
     pub text: String,
     pub image_data_url: Option<String>,
     pub failed: bool,
+    /// An MCP App view to host in chat when this MCP tool named a `ui://` resource.
+    pub mcp_app: Option<crate::mcp::McpAppView>,
 }
 
 impl ToolOutput {
@@ -79,6 +81,7 @@ impl ToolOutput {
             text: text.into(),
             image_data_url: None,
             failed: false,
+            mcp_app: None,
         }
     }
 
@@ -87,6 +90,7 @@ impl ToolOutput {
             text: text.into(),
             image_data_url: None,
             failed: true,
+            mcp_app: None,
         }
     }
 }

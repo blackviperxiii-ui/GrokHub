@@ -20,6 +20,8 @@ export function itemText(item: Item): string {
       return `${item.title}\n${item.action}`;
     case "panel":
       return item.dismissed ? "" : panelText(item.id, item.spec);
+    case "mcpApp":
+      return `${item.app.tool}\n${item.app.server}`;
     default:
       return "";
   }

@@ -149,6 +149,7 @@ fn encode_image(bytes: &[u8], mime: &str) -> ToolOutput {
             text: image_note(mime, decoded.width(), decoded.height(), bytes.len()),
             image_data_url: Some(format!("data:{mime};base64,{b64}")),
             failed: false,
+            mcp_app: None,
         };
     }
     let scaled = if within_pixels {
@@ -163,6 +164,7 @@ fn encode_image(bytes: &[u8], mime: &str) -> ToolOutput {
                 text: image_note("image/jpeg", scaled.width(), scaled.height(), jpg.len()),
                 image_data_url: Some(format!("data:image/jpeg;base64,{b64}")),
                 failed: false,
+                mcp_app: None,
             }
         }
         Err(e) => ToolOutput::err(e),
