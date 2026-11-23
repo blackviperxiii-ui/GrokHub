@@ -1158,6 +1158,10 @@ mod tests {
             "journal_to_mission",
             "get_meetings",
             "meetings_act",
+            // Wake word mic opt-in and on-device feed stay on this computer.
+            "get_wake_word",
+            "wake_word_act",
+            "wake_word_feed_local",
             "get_permissions",
             // The GitHub token is sent with these.
             "get_github",
