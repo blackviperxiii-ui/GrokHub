@@ -430,7 +430,7 @@ mod tests {
         let index = |tools: &[Value]| {
             tools
                 .iter()
-                .find(|t| t["name"] == "load_tool_schema")
+                .find(|t| t["name"] == "tool_search")
                 .and_then(|t| t["description"].as_str())
                 .unwrap_or_default()
                 .to_string()

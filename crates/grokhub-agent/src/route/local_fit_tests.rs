@@ -465,19 +465,21 @@ fn tool_names(req: &ResponsesRequest) -> Vec<&str> {
 fn a_4k_window_keeps_load_tool_schema_so_deferred_tools_stay_reachable() {
     let req = real_request(vec![text("user", "hey")]);
     assert!(tool_names(&req).contains(&"load_tool_schema"));
+    assert!(tool_names(&req).contains(&"tool_search"));
     let (out, done) = fit(&req, 4_096);
     assert!(done.tools_cut);
     assert!(fits(&out, 4_096), "{} tokens", request_tokens(&out));
     let names = tool_names(&out);
     assert!(names.contains(&"load_tool_schema"), "{names:?}");
+    assert!(names.contains(&"tool_search"), "{names:?}");
     assert!(names.contains(&"web_search"), "{names:?}");
-    // Its index is cut to the names, and still names web_fetch.
-    let load = out
+    // tool_search's index is cut to the names, and still names web_fetch.
+    let search = out
         .tools
         .iter()
-        .find(|t| t["name"] == "load_tool_schema")
+        .find(|t| t["name"] == "tool_search")
         .unwrap();
-    let desc = load["description"].as_str().unwrap();
+    let desc = search["description"].as_str().unwrap();
     let listed = desc.split_once("Deferred tools: ").unwrap().1;
     assert!(listed.split(", ").any(|n| n == "web_fetch"), "{desc}");
     assert!(!desc.contains(" — "), "{desc}");
@@ -518,6 +520,7 @@ fn a_small_window_keeps_the_picture_tool_when_this_computer_can_draw() {
         } else {
             assert!(names.contains(&"image_generate"), "{ask}: {names:?}");
             assert!(names.contains(&"load_tool_schema"), "{ask}: {names:?}");
+            assert!(names.contains(&"tool_search"), "{ask}: {names:?}");
         }
         let image = sent
             .tools

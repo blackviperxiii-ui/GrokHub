@@ -1,9 +1,10 @@
 //! Tool registry (Reason harness R4): optional deferred native schemas.
 //!
 //! On by default; `enabled = false` in `{config_dir}/deferred_tools.toml` turns it off. When enabled, rarely used
-//! native tools are listed in a compact index; the model calls `load_tool_schema`
-//! to pull a full schema into the volatile tail of the tools list so the stable
-//! prefix stays byte-identical across turns when only loaded tools change.
+//! native tools are listed in a compact index; the model calls [`TOOL_SEARCH`] to find
+//! them by query or toolset, then `load_tool_schema` to pull a full schema into the
+//! volatile tail of the tools list so the stable prefix stays byte-identical across
+//! turns when only loaded tools change.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -22,6 +23,22 @@ const CONFIG_NAME: &str = "deferred_tools.toml";
 
 pub const LOAD_TOOL_SCHEMA: &str = "load_tool_schema";
 
+/// Search the deferred native catalog (Hermes-shaped discovery; clean-room).
+pub const TOOL_SEARCH: &str = "tool_search";
+
+/// Rare toolset tags for deferred discovery. Empty means untagged deferred.
+pub fn toolset_for(name: &str) -> Option<&'static str> {
+    match name {
+        "scheduler_list" | "scheduler_create" | "scheduler_delete" | "run_routine"
+        | "save_routine" => Some("cron"),
+        "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
+            Some("image")
+        }
+        "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => Some("desktop"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Settings {
     pub enabled: bool,
@@ -29,6 +46,7 @@ pub struct Settings {
 
 thread_local! {
     static SESSION: RefCell<Option<String>> = const { RefCell::new(None) };
+    static LAST_INDEX: RefCell<String> = const { RefCell::new(String::new()) };
     static TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
@@ -107,6 +125,16 @@ pub fn begin_turn(session: &str) {
 
 fn current_session() -> Option<String> {
     SESSION.with(|cell| cell.borrow().clone())
+}
+
+fn remember_index(index: &str) {
+    LAST_INDEX.with(|cell| {
+        *cell.borrow_mut() = index.to_string();
+    });
+}
+
+fn current_index() -> String {
+    LAST_INDEX.with(|cell| cell.borrow().clone())
 }
 
 fn loaded_names(session: &str) -> Vec<String> {
@@ -222,9 +250,10 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
     };
     // Self-manage reads (`*_list`) stay eager; its writes are deferred like the rest.
     stable.extend(selfs.iter().filter(|r| r.read).map(|r| r.schema.clone()));
-    stable.push(load_tool_schema_schema(index_lines(
-        &rows, &selfs, &indexed,
-    )));
+    let index = index_lines(&rows, &selfs, &indexed);
+    remember_index(&index);
+    stable.push(tool_search_schema(&index));
+    stable.push(load_tool_schema_schema(&index));
     let volatile = loaded_names(&session)
         .iter()
         .filter_map(|name| {
@@ -327,43 +356,166 @@ fn self_rows() -> Vec<SelfRow> {
         .collect()
 }
 
-/// One `name — blurb` line per deferred tool the gate shows, sorted by name so the
-/// index (and the stable prefix it sits in) is byte-identical from build to build.
+/// One `name — blurb` or `name — blurb [toolset]` line per deferred tool the gate
+/// shows, sorted by name so the index (and the stable prefix it sits in) is
+/// byte-identical from build to build.
 fn index_lines(rows: &[&ToolDef], selfs: &[SelfRow], indexed: &dyn Fn(&ToolDef) -> bool) -> String {
     let native = rows
         .iter()
         .filter(|def| indexed(def))
-        .map(|def| format!("{} — {}", def.name, def.blurb));
+        .map(|def| index_line(def.name, def.blurb));
     let own = selfs
         .iter()
         .filter(|r| !r.read)
-        .map(|r| format!("{} — {}", r.name, r.blurb));
+        .map(|r| index_line(&r.name, &r.blurb));
     let mut lines: Vec<String> = native.chain(own).collect();
     lines.sort();
     lines.join("\n")
 }
 
-fn load_tool_schema_schema(index: String) -> Value {
+fn index_line(name: &str, blurb: &str) -> String {
+    match toolset_for(name) {
+        Some(set) => format!("{name} — {blurb} [{set}]"),
+        None => format!("{name} — {blurb}"),
+    }
+}
+
+/// Toolset names present in the deferred index, for empty-query discovery.
+fn toolset_summary(index: &str) -> String {
+    let mut sets: Vec<&str> = index
+        .lines()
+        .filter_map(|line| {
+            let start = line.rfind('[')?;
+            let end = line.rfind(']')?;
+            if end > start + 1 {
+                Some(&line[start + 1..end])
+            } else {
+                None
+            }
+        })
+        .collect();
+    sets.sort_unstable();
+    sets.dedup();
+    if sets.is_empty() {
+        "none tagged".into()
+    } else {
+        sets.join(", ")
+    }
+}
+
+fn tool_search_schema(index: &str) -> Value {
+    let sets = toolset_summary(index);
+    json!({
+        "type": "function",
+        "name": TOOL_SEARCH,
+        "description": format!(
+            "Search deferred native tools by name, blurb, or rare toolset \
+             (cron, image, desktop). Returns matching index lines; then call \
+             {LOAD_TOOL_SCHEMA} with a name to load its full schema. Empty query \
+             lists rare toolsets ({sets}). Full deferred index:\n{index}"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Substring match against name, blurb, or toolset (e.g. cron, image, desktop)."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max hits to return (default 20, max 50)."
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn load_tool_schema_schema(index: &str) -> Value {
+    let sets = toolset_summary(index);
     json!({
         "type": "function",
         "name": LOAD_TOOL_SCHEMA,
         "description": format!(
-            "Load the full JSON schema for a deferred native tool by name. \
-             Loaded schemas are added to the volatile tail of the tools list for this chat turn. \
-             Deferred tools (index):\n{index}"
+            "Load the full JSON schema for a deferred native tool by name from \
+             {TOOL_SEARCH}. Rare toolsets stay unloaded until loaded here \
+             ({sets}). Loaded schemas join this chat's volatile tools tail."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Native tool name from the index."
+                    "description": "Native tool name from tool_search."
                 }
             },
             "required": ["name"],
             "additionalProperties": false
         }
     })
+}
+
+/// Search the deferred index the chat was last offered. Empty query lists rare toolsets.
+pub fn run_tool_search(args: &Value) -> ToolOutput {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20)
+        .clamp(1, 50) as usize;
+    let cfg = settings(&crate::perm::config_dir());
+    if !cfg.enabled {
+        return ToolOutput::err(
+            "tool_search needs deferred tools; set enabled = true in deferred_tools.toml",
+        );
+    }
+    let mut index = current_index();
+    if index.is_empty() {
+        // Tests (and a first call before schemas_for) rebuild a desktop-on index.
+        let gate = crate::gate::Gate {
+            mode: crate::gate::PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: true,
+        };
+        let session = current_session().unwrap_or_default();
+        let talk = talk_shaped(&session, cfg);
+        let ws = workspace_plan(&session);
+        let indexed = |def: &ToolDef| {
+            (def.defer && !ws.promotes(def.name))
+                || (talk && talk::is_demoted(def.name))
+                || ws.demotes(def.name)
+        };
+        let rows = offered_defs(&gate);
+        let selfs = self_rows();
+        index = index_lines(&rows, &selfs, &indexed);
+        remember_index(&index);
+    }
+    if query.is_empty() {
+        return ToolOutput::ok(format!(
+            "Rare toolsets: {}. Pass a query (toolset or keyword), then {LOAD_TOOL_SCHEMA} with a name.",
+            toolset_summary(&index)
+        ));
+    }
+    let mut hits: Vec<&str> = index
+        .lines()
+        .filter(|line| line.to_ascii_lowercase().contains(&query))
+        .collect();
+    hits.truncate(limit);
+    if hits.is_empty() {
+        ToolOutput::ok(format!(
+            "No deferred tools matched `{query}`. Rare toolsets: {}.",
+            toolset_summary(&index)
+        ))
+    } else {
+        ToolOutput::ok(hits.join("\n"))
+    }
 }
 
 pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
@@ -583,7 +735,7 @@ mod tests {
         let index = index_of(&stable);
         assert!(!index.contains("skill_list —"), "{index}");
         assert!(
-            index.contains("automation_create — Create a Loadout automation\n"),
+            index.contains("automation_create — Create a Loadout automation"),
             "{index}"
         );
         let out = run_load_tool_schema(&json!({"name": "skill_list"}));
@@ -604,7 +756,7 @@ mod tests {
     fn index_of(stable: &[Value]) -> String {
         stable
             .iter()
-            .find(|t| t["name"] == LOAD_TOOL_SCHEMA)
+            .find(|t| t["name"] == TOOL_SEARCH)
             .and_then(|t| t["description"].as_str())
             .unwrap_or("")
             .to_string()
@@ -639,43 +791,10 @@ mod tests {
         tools.iter().filter_map(|t| t["name"].as_str()).collect()
     }
 
-    /// Schema byte budget per profile with deferred tools on. These are the sizes
-    /// after the lean eager set (before it: Chat/Agent 13736, Plan/Ask 6900,
-    /// background 6954). To raise one, add the tool to the right list in
-    /// `defs.rs`, rerun this test, and put the new size and the reason in the PR.
-    /// The deferred `local_ai_status` / `local_ai_selftest` index lines added
-    /// 143 bytes to Chat/Agent and background, and 74 to Plan/Ask. The deferred
-    /// `pulse_steam` index line added 53 to Chat/Agent and background, and the
-    /// eager read `know_me_tags` (the agent's only view of Know me) 184.
-    /// Eager `web_search` (OpenRouter / local always see the schema) added 472
-    /// to Chat/Agent (10_503 → 10_975) and background (9_323 → 9_795).
-    /// Grep's `-i` and `output_mode` args (R2-30: ask for paths or counts
-    /// instead of 200 lines) added 143 to Chat/Agent and background, 146 to Plan/Ask.
-    /// The deferred `models_check` index line (the live key test) added 48 to
-    /// Chat/Agent and background, and 50 to Plan/Ask.
-    /// The deferred `module_setup` index line (Home's one-tap Frame Rate setup)
-    /// added 36 to Chat/Agent and background.
-    /// Eager `look_at_screen` (one way to see the screen on every desktop, so the
-    /// agent stops trying shell screenshot tools) added 334 to Chat/Agent
-    /// (11_352 → 11_686); unattended and read-only runs don't get it.
-    /// The deferred `merge_subagent_work` index line (the lead's request to
-    /// merge a worktree helper's work) added 57 to Chat/Agent (11_686 → 11_743)
-    /// and background (10_172 → 10_229). The index is not cut to a job's tool
-    /// set, so a background job reads the line; the call is refused there.
-    /// `spawn_subagent`'s `redo` argument (a new worktree helper redoes work
-    /// that conflicted) and its words in the description added 49 to
-    /// Chat/Agent (11_743 → 11_792, and 11_798 measured with eager look_at_screen beside them), Plan/Ask (7_526 → 7_575) and background
-    /// (10_229 → 10_278).
-    /// `spawn_subagent`'s `review` type (a read-only helper that checks the
-    /// session's change against the approved plan), named in the description,
-    /// added 39 to Chat/Agent (11_798 → 11_837), Plan/Ask (7_575 → 7_614) and
-    /// background (10_278 → 10_317).
-    /// Adding the deferred `run_tool_script` PTC runner index line added 68 to
-    /// Chat/Agent (11_837 → 11_905), Plan/Ask (7_614 → 7_682) and background
-    /// (10_317 → 10_385).
-    /// The deferred `session_search` index line (no-model search over past
-    /// chats) added 75 to Chat/Agent (11_905 → 11_980) and background
-    /// (10_385 → 10_460), and 73 to Plan/Ask (7_682 → 7_755).
+    /// Schema byte budget per profile with deferred tools + tool_search on.
+    /// Order 979 measured chat/agent 12_726, plan/ask 8_376, background 8_683
+    /// (prior lean eager ~12_030 before the tool_search bridge). To raise a
+    /// budget, rerun this test and name the delta in the PR.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -685,32 +804,25 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                // +150 for the shell's outside_sandbox arg (HX-11), +143 for grep's modes,
-                // +334 for eager look_at_screen,
-                // +57 for the merge_subagent_work index line, +49 for spawn_subagent's redo,
-                // +39 for its review type, +68 for the deferred run_tool_script index line,
-                // +75 for the deferred session_search index line,
-                // +50 for the deferred save_routine index line.
-                12_030,
+                12_800,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                12_030,
+                12_800,
             ),
             (
                 "plan/ask",
                 profile(PermMode::Ask, true, true),
                 full,
-                // +506 for web_search: a read-only session can still look things up (LO-51).
-                7_755,
+                8_500,
             ),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                10_460,
+                8_800,
             ),
         ];
         for (label, gate, set, budget) in cases {
@@ -722,6 +834,69 @@ mod tests {
                 "{label}: {bytes} schema bytes > budget {budget}"
             );
         }
+    }
+
+    /// Order 979: legacy (every schema eager) vs deferred + tool_search on a
+    /// typical attended desktop chat. Measured 29_349 → 13_059 schema bytes
+    /// (~55% smaller). Rare toolsets stay out of the stable list.
+    #[test]
+    fn typical_turn_schema_shrinks_when_rare_toolsets_defer() {
+        let gate = chat(false, true);
+        begin_turn("conv-979-measure");
+        let legacy = serde_json::to_string(&schemas_for_settings(&gate, OFF)).unwrap();
+        let deferred = serde_json::to_string(&schemas_for_settings(&gate, ON)).unwrap();
+        let before = legacy.len();
+        let after = deferred.len();
+        assert!(
+            after < before,
+            "deferred+search should shrink typical-turn schemas: before={before} after={after}"
+        );
+        // Floor: at least a quarter smaller once media/desktop/cron schemas
+        // leave the stable list (measured ~55%).
+        assert!(
+            after * 4 < before * 3,
+            "expected ≥25% smaller: before={before} after={after}"
+        );
+        let stable = stable_schemas(&gate, ON);
+        for rare in [
+            "scheduler_create",
+            "image_generate",
+            "screenshot",
+            "click",
+        ] {
+            assert!(
+                !stable.iter().any(|t| t["name"] == rare),
+                "{rare} must stay unloaded until tool_search / load_tool_schema"
+            );
+        }
+        assert!(stable.iter().any(|t| t["name"] == TOOL_SEARCH));
+        assert!(stable.iter().any(|t| t["name"] == "read_file"));
+        assert!(stable.iter().any(|t| t["name"] == "web_search"));
+    }
+
+    #[test]
+    fn tool_search_finds_rare_toolsets_then_load_brings_schema() {
+        let gate = chat(false, true);
+        begin_turn("conv-979-search");
+        let _ = schemas_for_settings(&gate, ON);
+        let cron = run_tool_search(&json!({"query": "cron"}));
+        assert!(!cron.failed, "{}", cron.text);
+        assert!(cron.text.contains("scheduler_list"), "{}", cron.text);
+        assert!(cron.text.contains("[cron]"), "{}", cron.text);
+        let image = run_tool_search(&json!({"query": "image"}));
+        assert!(image.text.contains("image_generate"), "{}", image.text);
+        assert!(image.text.contains("[image]"), "{}", image.text);
+        let desk = run_tool_search(&json!({"query": "desktop"}));
+        assert!(desk.text.contains("screenshot"), "{}", desk.text);
+        assert!(desk.text.contains("[desktop]"), "{}", desk.text);
+        let empty = run_tool_search(&json!({"query": ""}));
+        assert!(empty.text.contains("cron"), "{}", empty.text);
+        assert!(empty.text.contains("image"), "{}", empty.text);
+        assert!(empty.text.contains("desktop"), "{}", empty.text);
+        assert!(!run_load_tool_schema(&json!({"name": "image_generate"})).failed);
+        assert!(volatile_schemas(&gate, ON)
+            .iter()
+            .any(|t| t["name"] == "image_generate"));
     }
 
     #[test]
@@ -755,6 +930,7 @@ mod tests {
                 "connection_list",
                 "automation_list",
                 "know_me_tags",
+                TOOL_SEARCH,
                 LOAD_TOOL_SCHEMA,
             ]
         );
@@ -773,7 +949,7 @@ mod tests {
         let second = index_of(&stable_schemas(&gate, ON));
         assert_eq!(first, second);
         let lines: Vec<&str> = first
-            .split_once("Deferred tools (index):\n")
+            .split_once("Full deferred index:\n")
             .map(|(_, list)| list)
             .unwrap_or("")
             .lines()
@@ -785,8 +961,9 @@ mod tests {
             lines.first(),
             Some(&"automation_create — Create a Loadout automation")
         );
-        assert!(lines.contains(&"scheduler_list — List scheduled automations"));
-        assert!(lines.contains(&"screenshot — Capture the desktop screen"));
+        assert!(lines.contains(&"scheduler_list — List scheduled automations [cron]"));
+        assert!(lines.contains(&"screenshot — Capture the desktop screen [desktop]"));
+        assert!(lines.contains(&"image_generate — Generate an image with Imagine [image]"));
         assert!(lines.contains(
             &"connection_add — Add a connection (MCP server) to the app's own MCP config"
         ));

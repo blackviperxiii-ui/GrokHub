@@ -116,11 +116,15 @@ pub fn can_draw_here() -> bool {
 }
 
 /// The gate offers the picture tool this turn: in the list, or in the
-/// deferred index (`name — blurb` lines) of `load_tool_schema`.
+/// deferred index (`name — blurb` lines) of `tool_search`.
 fn offered(tools: &[Value]) -> bool {
     let index_line = format!("\n{TOOL} — ");
     tools.iter().any(|t| {
         t["name"].as_str() == Some(TOOL)
+            || (t["name"].as_str() == Some(crate::tools::registry::TOOL_SEARCH)
+                && t["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains(&index_line)))
             || (t["name"].as_str() == Some(crate::tools::registry::LOAD_TOOL_SCHEMA)
                 && t["description"]
                     .as_str()
