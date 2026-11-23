@@ -2160,6 +2160,80 @@ export function meetingsAct(act: MeetingsAct, query = ""): Promise<MeetingsPage>
   return invoke<MeetingsPage>("meetings_act", { act, query });
 }
 
+/** Sessions board (src-tauri/src/sessions_board.rs): conversations by rules/pins. */
+export type SessionsFilter = "everyone" | "involvingMe";
+
+export interface SessionsPrLink {
+  url: string;
+  state: string;
+}
+
+export interface SessionsTile {
+  id: string;
+  title: string;
+  preview: string;
+  run: "waiting" | "failed" | "running" | "idle" | string;
+  prs: SessionsPrLink[];
+  updatedMs: number;
+  pinned: boolean;
+  columnId: string;
+}
+
+export interface SessionsColumn {
+  id: string;
+  label: string;
+  rule: string;
+  fallback: boolean;
+  tiles: SessionsTile[];
+}
+
+export interface SessionsBoardPage {
+  name: string;
+  columns: SessionsColumn[];
+  filter: SessionsFilter;
+  query: string;
+  stamp: number;
+  total: number;
+  shown: number;
+}
+
+export interface SessionsReshapeResult {
+  note: string;
+  page: SessionsBoardPage;
+}
+
+export function getSessionsBoard(
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsBoardPage> {
+  return invoke<SessionsBoardPage>("get_sessions_board", { filter, query });
+}
+
+export function sessionsBoardStamp(): Promise<number> {
+  return invoke<number>("sessions_board_stamp");
+}
+
+export function sessionsBoardPin(
+  id: string,
+  columnId: string,
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsBoardPage> {
+  return invoke<SessionsBoardPage>("sessions_board_pin", { id, columnId, filter, query });
+}
+
+export function sessionsBoardReshape(
+  instruction: string,
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsReshapeResult> {
+  return invoke<SessionsReshapeResult>("sessions_board_reshape", {
+    instruction,
+    filter,
+    query,
+  });
+}
+
 /** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
 export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
 

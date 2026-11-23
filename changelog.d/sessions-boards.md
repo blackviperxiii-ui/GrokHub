@@ -1,0 +1,1 @@
+- Sessions boards: place conversations in columns by rules and pins, with personal filters, a Board agent reshape path, run-status tiles, and PR links — beside the existing Cards workboard.

@@ -816,6 +816,10 @@ export function App() {
               openCard={openCard}
               onCards={setCardChats}
               onSwept={noteSweep}
+              onOpenChat={(id) => {
+                openSaved(id);
+                setView("chat");
+              }}
               onResume={({ prompt, conversationId }) => {
                 // The resume block goes once, as the resume turn's input.
                 setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));

@@ -36,6 +36,10 @@ const api = vi.hoisted(() => ({
     vi.fn<(id: string, playbook: string, name: string) => Promise<BoardWork>>(),
   workboardRecur: vi.fn<(id: string, choice: number) => Promise<BoardPage>>(),
   getPlaybooks: vi.fn<() => Promise<PlaybookPage>>(),
+  getSessionsBoard: vi.fn(),
+  sessionsBoardStamp: vi.fn(),
+  sessionsBoardPin: vi.fn(),
+  sessionsBoardReshape: vi.fn(),
   RECUR_CHOICES: [
     "Every day at 9 AM",
     "Every weekday at 9 AM",
@@ -48,6 +52,9 @@ vi.mock("./Chat", () => ({ newConversationId: () => "shell-new" }));
 vi.mock("./WorkboardChat", async (actual) => ({
   ...(await actual<typeof import("./WorkboardChat")>()),
   CardChat: () => null,
+}));
+vi.mock("./SessionsBoard", () => ({
+  SessionsBoard: () => <div aria-label="Sessions board">Sessions stub</div>,
 }));
 
 import {
@@ -159,6 +166,21 @@ describe("Workboard", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("defaults to Cards and can open the Sessions tab without losing Cards", async () => {
+    api.getWorkboard.mockResolvedValue(board({}));
+    render(<Workboard onWork={() => {}} />);
+    expect(await screen.findByRole("tab", { name: "Cards" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Add card" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Sessions" }));
+    expect(screen.getByLabelText("Sessions board")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add card" })).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: "Cards" }));
+    expect(await screen.findByRole("button", { name: "Add card" })).toBeInTheDocument();
   });
 
   it("says what to do on an empty board, and adds a card to Todo", async () => {

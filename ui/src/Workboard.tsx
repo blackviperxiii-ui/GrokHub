@@ -29,8 +29,11 @@ import {
 import { cardsByChat } from "./activity";
 import { newConversationId } from "./Chat";
 import { StatusTracker, statusFromLane } from "./Progress";
+import { SessionsBoard } from "./SessionsBoard";
 import { CardChat, ownChat } from "./WorkboardChat";
 import { CardTriage, dueLocalValue, priorityChip } from "./WorkboardTriage";
+
+export type WorkboardKind = "cards" | "sessions";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
 export const BOARD_HELP =
@@ -105,6 +108,7 @@ export function Workboard({
   onCards,
   onSwept,
   openCard,
+  onOpenChat,
 }: {
   onWork: (prompt: string) => void;
   onResume?: (resume: { conversationId: string; prompt: string }) => void;
@@ -117,7 +121,10 @@ export function Workboard({
   onSwept?: (swept: BoardSwept | null) => void;
   /** Opens this card, as the Activity dock asks. `n` repeats a request. */
   openCard?: { id: string; n: number };
+  /** Opens a Sessions tile's conversation in Chat. */
+  onOpenChat?: (id: string) => void;
 }) {
+  const [kind, setKind] = useState<WorkboardKind>("cards");
   const [page, setPage] = useState<BoardPage | null>(null);
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
@@ -271,6 +278,34 @@ export function Workboard({
 
   return (
     <section className="workboard" aria-label="Workboard">
+      <div className="workboard-kinds" role="tablist" aria-label="Board kind">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={kind === "cards"}
+          className={kind === "cards" ? "active" : undefined}
+          onClick={() => setKind("cards")}
+        >
+          Cards
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={kind === "sessions"}
+          className={kind === "sessions" ? "active" : undefined}
+          onClick={() => setKind("sessions")}
+        >
+          Sessions
+        </button>
+      </div>
+      {kind === "sessions" ? (
+        <SessionsBoard
+          onOpenChat={(id) => {
+            onOpenChat?.(id);
+          }}
+        />
+      ) : (
+        <>
       <form className="workboard-add" onSubmit={(e) => void add(e)}>
         <input
           aria-label="Card title"
@@ -411,6 +446,8 @@ export function Workboard({
             </>
           )}
         </div>
+      )}
+        </>
       )}
     </section>
   );
