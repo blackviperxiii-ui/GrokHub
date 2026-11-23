@@ -229,6 +229,9 @@ pub fn remove_outbound(config_dir: &Path, name: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The URL, headers and body of one signed POST.
+pub type PreparedPost = (String, Vec<(String, String)>, Vec<u8>);
+
 /// Build the signed POST parts for one hook. Does not send.
 pub fn prepare_post(
     hook: &OutboundHook,
@@ -237,7 +240,7 @@ pub fn prepare_post(
     session: &str,
     detail: &Value,
     now_ms: u64,
-) -> Result<(String, Vec<(String, String)>, Vec<u8>), String> {
+) -> Result<PreparedPost, String> {
     let body = event_body(kind, event, session, detail, now_ms);
     let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     let (signature, timestamp) = signed_headers(hook.secret.as_bytes(), &bytes, now_ms)?;

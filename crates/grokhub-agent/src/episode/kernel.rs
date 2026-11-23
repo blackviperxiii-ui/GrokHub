@@ -910,7 +910,7 @@ impl Run<'_, '_> {
                         if out.failed { "failed" } else { "completed" },
                         &out.text,
                         out.image_data_url.clone(),
-                        out.mcp_app.clone(),
+                        out.mcp_app.as_deref().cloned(),
                     );
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
@@ -1142,7 +1142,7 @@ impl Run<'_, '_> {
             if out.failed { "failed" } else { "completed" },
             &out.text,
             out.image_data_url.clone(),
-            out.mcp_app.clone(),
+            out.mcp_app.as_deref().cloned(),
         );
         self.record(
             &shape("allow", ui, result_text(&out)),

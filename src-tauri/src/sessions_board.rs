@@ -806,8 +806,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gh-sessions-board-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut spec = BoardSpec::default();
-        spec.name = "Ops".into();
+        let mut spec = BoardSpec {
+            name: "Ops".into(),
+            ..Default::default()
+        };
         spec.pins.insert("shell-z".into(), "working".into());
         save(&dir, &spec).unwrap();
         let got = load(&dir);

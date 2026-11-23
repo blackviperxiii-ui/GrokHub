@@ -1150,7 +1150,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
                     if let Ok((html, prefers_border)) =
                         apps::decode_resource(&ui.resource_uri, &resource)
                     {
-                        out.mcp_app = Some(McpAppView {
+                        out.mcp_app = Some(Box::new(McpAppView {
                             server: rec.server.clone(),
                             tool: rec.raw.clone(),
                             resource_uri: ui.resource_uri.clone(),
@@ -1158,7 +1158,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
                             prefers_border,
                             tool_input: args.clone(),
                             tool_result: raw,
-                        });
+                        }));
                     }
                 }
             }

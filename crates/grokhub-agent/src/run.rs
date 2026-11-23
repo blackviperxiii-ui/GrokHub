@@ -2366,7 +2366,7 @@ fn note_tool(
         status,
         &output.text,
         output.image_data_url.clone(),
-        output.mcp_app.clone(),
+        output.mcp_app.as_deref().cloned(),
     );
     (output, usage)
 }
