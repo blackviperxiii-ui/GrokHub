@@ -187,6 +187,7 @@ mod update_rollback;
 pub mod voice;
 mod voice_live;
 mod vstack_sync;
+pub mod sessions_board;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -4450,6 +4451,162 @@ fn start_card_queue(app: AppHandle) {
     });
 }
 
+/// Sessions board facts from live chats, inbox waits, and transcript PR links.
+fn sessions_board_facts(state: &ShellState) -> Vec<sessions_board::SessionFact> {
+    use sessions_board::{RunStatus, SessionFact};
+    let dir = &state.config_dir;
+    let rows = history::list(dir);
+    let waiting: std::collections::HashSet<String> = {
+        let mut set: std::collections::HashSet<String> = inbox::decisions(dir)
+            .into_iter()
+            .filter(|d| !d.chat_id.is_empty())
+            .map(|d| d.chat_id)
+            .collect();
+        for row in &rows {
+            if helper_asks::needs_you(&row.id) {
+                set.insert(row.id.clone());
+            }
+        }
+        set
+    };
+    let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+    let mut facts = Vec::with_capacity(rows.len());
+    for row in rows {
+        let busy = chats.get(&row.id).is_some_and(|s| s.busy())
+            || helper_asks::in_turn(&row.id);
+        let failed = session_recently_failed(dir, &row.id);
+        let run = if waiting.contains(&row.id) {
+            RunStatus::Waiting
+        } else if failed {
+            RunStatus::Failed
+        } else if busy {
+            RunStatus::Running
+        } else {
+            RunStatus::Idle
+        };
+        let (preview, prs, involving_me) = session_tile_bits(dir, &row.id);
+        facts.push(SessionFact {
+            id: row.id,
+            title: row.title,
+            updated_ms: row.updated,
+            preview,
+            run,
+            prs,
+            involving_me,
+        });
+    }
+    facts
+}
+
+fn session_recently_failed(config_dir: &Path, id: &str) -> bool {
+    let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+    match grokhub_agent::work_for(id) {
+        Ok(works) => works.iter().any(|w| {
+            matches!(w.ended, Some(grokhub_agent::Ended::Failed(_)))
+                && !matches!(
+                    w.state,
+                    grokhub_agent::WorkState::Merged | grokhub_agent::WorkState::Discarded
+                )
+        }),
+        Err(_) => false,
+    }
+}
+
+fn session_tile_bits(
+    config_dir: &Path,
+    id: &str,
+) -> (String, Vec<sessions_board::PrLink>, bool) {
+    match history::load(config_dir, id, 40) {
+        Ok(t) => {
+            let mut involving_me = false;
+            let mut blob = String::new();
+            for line in &t.lines {
+                if matches!(line.role, history::Role::User) {
+                    involving_me = true;
+                }
+                if !blob.is_empty() {
+                    blob.push(' ');
+                }
+                blob.push_str(&line.text);
+            }
+            let preview = t
+                .lines
+                .iter()
+                .rev()
+                .find(|l| !l.text.trim().is_empty())
+                .map(|l| l.text.clone())
+                .unwrap_or_default();
+            (preview, sessions_board::extract_prs(&blob), involving_me)
+        }
+        Err(_) => (String::new(), Vec::new(), true),
+    }
+}
+
+/// Sessions board: conversations in columns by rules and pins.
+#[tauri::command]
+async fn get_sessions_board(
+    state: State<'_, ShellState>,
+    filter: Option<String>,
+    query: Option<String>,
+) -> Result<sessions_board::Page, String> {
+    let filter = sessions_board::PersonalFilter::parse(filter.as_deref().unwrap_or("everyone"));
+    let query = query.unwrap_or_default();
+    let dir = state.config_dir.clone();
+    let facts = sessions_board_facts(&state);
+    off_main(move || Ok(sessions_board::page_from(&dir, facts, filter, &query))).await?
+}
+
+#[tauri::command]
+async fn sessions_board_stamp(state: State<'_, ShellState>) -> Result<u64, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || Ok(sessions_board::stamp(&dir))).await?
+}
+
+#[tauri::command]
+async fn sessions_board_pin(
+    state: State<'_, ShellState>,
+    id: String,
+    column_id: String,
+    filter: Option<String>,
+    query: Option<String>,
+) -> Result<sessions_board::Page, String> {
+    let filter = sessions_board::PersonalFilter::parse(filter.as_deref().unwrap_or("everyone"));
+    let query = query.unwrap_or_default();
+    let dir = state.config_dir.clone();
+    let facts = sessions_board_facts(&state);
+    off_main(move || {
+        let mut spec = sessions_board::load(&dir);
+        sessions_board::set_pin(&mut spec, &id, &column_id)?;
+        sessions_board::save(&dir, &spec)?;
+        Ok(sessions_board::page_from(&dir, facts, filter, &query))
+    })
+    .await?
+}
+
+/// Board agent reshape: deterministic column edits (Auto only; no model picker).
+#[tauri::command]
+async fn sessions_board_reshape(
+    state: State<'_, ShellState>,
+    instruction: String,
+    filter: Option<String>,
+    query: Option<String>,
+) -> Result<sessions_board::ReshapeResult, String> {
+    let filter = sessions_board::PersonalFilter::parse(filter.as_deref().unwrap_or("everyone"));
+    let query = query.unwrap_or_default();
+    let dir = state.config_dir.clone();
+    let facts = sessions_board_facts(&state);
+    off_main(move || {
+        let mut spec = sessions_board::load(&dir);
+        let note = sessions_board::reshape(&mut spec, &instruction)?;
+        sessions_board::save(&dir, &spec)?;
+        Ok(sessions_board::ReshapeResult {
+            note,
+            page: sessions_board::page_from(&dir, facts, filter, &query),
+        })
+    })
+    .await?
+}
+
 /// Workboard: the cabin's work cards from the same file, through the shared
 /// board lock and merge.
 #[tauri::command]
@@ -7985,6 +8142,25 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "home_catalog" => out(block_on(home_catalog(state))?),
         "set_home_layout" => out(block_on(set_home_layout(state, arg(args, "pick")?))?),
+        "get_sessions_board" => out(block_on(get_sessions_board(
+            state,
+            arg(args, "filter")?,
+            arg(args, "query")?,
+        ))?),
+        "sessions_board_stamp" => out(block_on(sessions_board_stamp(state))?),
+        "sessions_board_pin" => out(block_on(sessions_board_pin(
+            state,
+            arg(args, "id")?,
+            arg(args, "columnId")?,
+            arg(args, "filter")?,
+            arg(args, "query")?,
+        ))?),
+        "sessions_board_reshape" => out(block_on(sessions_board_reshape(
+            state,
+            arg(args, "instruction")?,
+            arg(args, "filter")?,
+            arg(args, "query")?,
+        ))?),
         "get_workboard" => out(block_on(get_workboard(state))?),
         "workboard_add" => out(block_on(workboard_add(
             state,
@@ -9397,6 +9573,10 @@ pub fn run() {
             workboard_sweep_dismiss,
             get_workboard_tidy,
             set_workboard_tidy,
+            get_sessions_board,
+            sessions_board_stamp,
+            sessions_board_pin,
+            sessions_board_reshape,
             get_behavior,
             get_pc_helpers,
             composer_ghost_suggest,

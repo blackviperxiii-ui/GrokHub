@@ -6014,6 +6014,104 @@ button.primary:not(.quick-chip) {
   width: 100%;
 }
 
+.workboard-kinds {
+  display: flex;
+  gap: 4px;
+}
+
+.workboard-kinds button {
+  border: 1px solid var(--border, #333);
+  background: transparent;
+  color: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.workboard-kinds button.active,
+.workboard-kinds button[aria-selected="true"] {
+  border-color: var(--fg, #e7e9ea);
+  background: color-mix(in srgb, var(--fg, #e7e9ea) 12%, transparent);
+}
+
+.sessions-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sessions-toolbar,
+.sessions-agent,
+.sessions-filters,
+.sessions-query,
+.sessions-pin-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sessions-filters button.active {
+  border-color: var(--fg, #e7e9ea);
+}
+
+.sessions-agent {
+  width: 100%;
+}
+
+.sessions-agent input,
+.sessions-query input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.sessions-rule {
+  margin-left: 8px;
+  font-weight: 400;
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+.sessions-tile .sessions-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sessions-run {
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.sessions-prs {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sessions-prs a {
+  font-size: 0.85em;
+}
+
+.sessions-empty,
+.sessions-col-empty,
+.sessions-help,
+.sessions-count,
+.sessions-note {
+  margin: 0;
+  opacity: 0.85;
+}
+
 .workboard-add,
 .board-edit {
   display: flex;

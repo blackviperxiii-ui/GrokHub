@@ -166,6 +166,10 @@ pub const WEB_COMMANDS: &[&str] = &[
     "workboard_delete_archived",
     "workboard_sweep_undo",
     "workboard_sweep_dismiss",
+    "get_sessions_board",
+    "sessions_board_stamp",
+    "sessions_board_pin",
+    "sessions_board_reshape",
     "get_behavior",
     "get_privacy",
     "get_background",
@@ -1098,6 +1102,10 @@ mod tests {
             "workboard_add",
             "workboard_act",
             "workboard_work",
+            "get_sessions_board",
+            "sessions_board_stamp",
+            "sessions_board_pin",
+            "sessions_board_reshape",
             "stage_attachment",
             "remove_attachment",
         ] {
@@ -1374,7 +1382,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 100] = [
+        const REVIEWED: [&str; 104] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1410,6 +1418,7 @@ mod tests {
             "get_profile",
             "get_pulse",
             "get_queue",
+            "get_sessions_board",
             "get_settings",
             "get_skills",
             "get_workboard",
@@ -1455,6 +1464,9 @@ mod tests {
             "save_memory_file",
             "search_memory",
             "send_chat",
+            "sessions_board_pin",
+            "sessions_board_reshape",
+            "sessions_board_stamp",
             "set_automation_enabled",
             "set_chat_archive",
             "set_home_layout",
@@ -1537,6 +1549,10 @@ mod tests {
             "workboard_delete_archived",
             "workboard_sweep_undo",
             "workboard_sweep_dismiss",
+            "get_sessions_board",
+            "sessions_board_stamp",
+            "sessions_board_pin",
+            "sessions_board_reshape",
         ] {
             assert!(web_command(name), "{name}");
         }
