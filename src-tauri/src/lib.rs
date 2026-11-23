@@ -186,6 +186,7 @@ pub mod unattended;
 mod update_rollback;
 pub mod voice;
 mod voice_live;
+pub mod wake_word;
 mod vstack_sync;
 pub mod sessions_board;
 pub mod workboard;
@@ -4204,6 +4205,32 @@ async fn meetings_act(
     let dir = state.config_dir.clone();
     let q = query.unwrap_or_default();
     off_main(move || meetings::act(&dir, act, &q)).await?
+}
+
+#[tauri::command]
+async fn get_wake_word(state: State<'_, ShellState>) -> Result<wake_word::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || wake_word::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn wake_word_act(
+    state: State<'_, ShellState>,
+    act: wake_word::Act,
+) -> Result<wake_word::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || wake_word::act(&dir, act)).await?
+}
+
+/// Feed one on-device transcript snippet into the wake matcher. Must not be
+/// cloud STT — always-listen stays local.
+#[tauri::command]
+async fn wake_word_feed_local(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<wake_word::FeedResult, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || wake_word::feed_local(&dir, &text)).await?
 }
 
 #[tauri::command]
@@ -9333,6 +9360,9 @@ pub fn run() {
             get_journal,
             get_meetings,
             meetings_act,
+            get_wake_word,
+            wake_word_act,
+            wake_word_feed_local,
             journal_add,
             journal_act,
             journal_to_mission,
