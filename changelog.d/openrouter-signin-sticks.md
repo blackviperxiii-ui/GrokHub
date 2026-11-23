@@ -1,3 +1,0 @@
-- Settings: Sign in with OpenRouter now finishes in Settings. The key it brings back, and the allow card after it, show right under the OpenRouter row (and under Other providers in Permissions) instead of only in the chat behind Settings, where they timed out unseen and the key was dropped.
-- Settings: the OpenRouter row says where the sign-in stands (Sign in, approve the card below, Allow, or signed in with Sign in again), the sign-in is checked every frame instead of on the 15-second background beat, and the window comes forward when the key arrives.
-- OpenRouter sign-in sends and checks `state` and names the new key, per OpenRouter's current OAuth PKCE docs; a deny now says why.

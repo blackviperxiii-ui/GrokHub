@@ -1,1 +1,0 @@
-- Security housekeeping: the yanked async-executor 1.14.0 is replaced with 1.14.1, the known glib 0.18 advisory is documented in deny.toml, and Dependabot now sends one grouped monthly update into beta for Rust and the UI.

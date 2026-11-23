@@ -1,1 +1,0 @@
-- A shell command that outlives its timeout now keeps running as a background task wherever background tasks are on, and the agent gets its output so far plus the task id, instead of the command being killed. A halted session, or a run without background tasks, still kills it as before.

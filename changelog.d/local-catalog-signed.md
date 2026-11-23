@@ -1,1 +1,0 @@
-- New local models now reach you without an app update. Once a day the app looks for a newer model list in GrokHub's newest release, checks its signature, and uses it from the next start. A list that isn't signed, or doesn't load whole, is ignored.

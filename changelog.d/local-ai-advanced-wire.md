@@ -1,1 +1,0 @@
-- Local AI Advanced: idle unload and Never unload apply; dead Device and memory-cap controls removed.

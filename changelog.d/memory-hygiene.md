@@ -1,1 +1,0 @@
-- Session memory saved before a compaction now holds only the chat's own words, the newest part, never playbook or recalled text. `/dream` keeps your memory file when a rewrite would gut it or drop a line recall used lately, and tells you what it kept and dropped.

@@ -1,1 +1,0 @@
-- Settings → General → Bot Desktop (Linux): the desktop tools work on a hidden screen of their own, so your cursor, keys and windows stay yours. It applies to the next step of a running chat, starts again with the app, and stops when the app quits.

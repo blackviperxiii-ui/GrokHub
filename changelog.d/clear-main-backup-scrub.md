@@ -1,1 +1,0 @@
-- Fix: clearing Main always removes Main's old chat from `threads.json.bak`. Before, a save still waiting to be written could do that cleanup too early, and the clear's own save then backed the old chat up and kept it. Delete all had the same problem and is fixed the same way.

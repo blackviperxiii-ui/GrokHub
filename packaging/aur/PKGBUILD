@@ -1,6 +1,6 @@
 # Maintainer: GrokHub contributors
 pkgname=grokhub
-pkgver=3.5.0
+pkgver=3.6.0
 pkgrel=1
 pkgdesc="Loadout: a gaming and PC companion desktop app, built with Tauri, and its LAN hub; no Electron"
 arch=('x86_64')

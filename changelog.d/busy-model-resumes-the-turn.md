@@ -1,1 +1,0 @@
-- When Grok is at capacity or the connection drops mid-reply, the turn now picks itself back up on its own: it keeps what already showed, carries on from there on another model for a minute, and only stops with a plain "too busy" note after several tries, so you no longer have to type "continue".

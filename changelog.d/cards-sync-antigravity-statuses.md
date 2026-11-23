@@ -1,1 +1,0 @@
-- Update `cards-sync` Notion status names (`Ready for work`, `Working on it now`, `Completed`), add `antigravity` as a synced coder, and skip archived Notion pages gracefully when closing linked issues.

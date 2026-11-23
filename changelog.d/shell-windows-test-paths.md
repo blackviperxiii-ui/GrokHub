@@ -1,1 +1,0 @@
-- Two desktop tests now pass on Windows: the Steam library fixture escapes its folder paths the way Steam writes them, and the skills test builds its expected folder with the system's separator.

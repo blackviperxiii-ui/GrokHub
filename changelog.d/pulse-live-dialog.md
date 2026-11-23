@@ -1,1 +1,0 @@
-- Pulse Live offers open a checklist dialog (Start fix, Allow / Deny, Stop fix, Undo fix) instead of only chat; Background looks and Discuss stay as they are.

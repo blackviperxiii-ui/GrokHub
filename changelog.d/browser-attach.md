@@ -1,1 +1,0 @@
-- Settings → General → Your browser: the browser tool can work in a Chrome or Edge you already run (started with `--remote-debugging-port`), signed in, but only on the sites you list. Navigation elsewhere is turned away before it is sent, and Playwright blocks requests to other origins. With no sites listed, or a browser that isn't on this computer, it keeps its own browser.

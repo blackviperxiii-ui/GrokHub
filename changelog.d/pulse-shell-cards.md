@@ -1,4 +1,0 @@
-- Shell Pulse: each post says where it is from and why in words ("Helldivers 2 on Steam · You play Helldivers 2"), and Read it opens the source page.
-- Shell Pulse: Love pressed again takes the heart off, and the taste note forgets that love.
-- Shell Pulse: today's set ends with "That's all for today", then the older posts; the page looks for new posts once a minute while it is open.
-- Shell Pulse: an empty feed says what the writer found last time, with an Add interests button.

@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-agent"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "android-native-keyring-store",
  "apple-native-keyring-store",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-code"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "grokhub-agent",
  "grokhub-core",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-core"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "bzip2",
  "dirs",
@@ -1258,7 +1258,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-desktop"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "ashpd",
  "evdev",
@@ -1279,14 +1279,14 @@ dependencies = [
 
 [[package]]
 name = "grokhub-fps-probe"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "grokhub-hub"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "grokhub-agent",
  "grokhub-core",
@@ -1300,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-proto"
-version = "3.5.0"
+version = "3.6.0"
 dependencies = [
  "serde",
  "serde_json",

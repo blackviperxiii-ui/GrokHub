@@ -1,4 +1,0 @@
-- Nyx always has web search for a lookup: web_search and web_fetch are never dropped from a busy workspace's tool list, and Plan and Ask chats can look things up too.
-- Game questions (quests, items, bosses, lore, patches) are searched before Nyx answers, without being asked. "Where do I turn in Aqir research tokens in WoW" is game help now, not a research report.
-- Typing a tool like web_search into the terminal no longer runs (and fails) as a command; Nyx is told to call the tool itself.
-- Nyx no longer offers to look something up when no search worked; it says so and marks what comes from memory.

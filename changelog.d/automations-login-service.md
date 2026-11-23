@@ -1,1 +1,0 @@
-- `grokhub-shell --install-automations` sets up a login service so automations keep running with the app closed: a systemd user unit on Linux, a launchd agent on macOS, or a logon task on Windows. Each runs as you, never as root. `--remove-automations` takes it away. If the service can't start, nothing is left behind.

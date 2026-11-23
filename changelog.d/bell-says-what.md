@@ -1,1 +1,0 @@
-- Every notification now says what happened and where: a bare "Saved" reads "Saved your Appearance settings" (or the page or chat it was on), each entry shows the place it came from, and clicking it opens that place or thing. In the shell, a finished, failed or waiting reply names its chat, and Open chat opens that chat.

@@ -1,3 +1,0 @@
-- Activity in the titlebar now holds messages typed during a reply: each queued message is its own row in order ("Next up", "2nd in line"), with Steer now and Remove, and Remove puts the text back in an empty chat box. Waiting side questions, local model downloads and the screen recording show there too, and background tasks get Stop.
-- The Activity button counts the line: "1 of 2 running" when anything is queued.
-- The strip above the chat box keeps only the Steer / Queue choice for text you're typing; queued messages and background task rows no longer show there.

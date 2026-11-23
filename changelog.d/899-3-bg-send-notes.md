@@ -1,1 +1,0 @@
-- Docs and comments: `/bg` and `/send` start a fresh session (not a chat fork); Pulse ··· no longer claims a "Run in the background" item; `enqueue_local` is documented as a local/test inbox helper, not `/send`.

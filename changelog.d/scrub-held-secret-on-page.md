@@ -1,1 +1,0 @@
-- A secret typed into a chat's form card (a token or password a connector asked for) is now also scrubbed from the reply, thoughts, tool cards and permission cards already on the page, not only from what comes after it.

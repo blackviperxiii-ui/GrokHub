@@ -1,4 +1,0 @@
-- Shell Pulse: every check moves the topic searches on, so the same three searches no longer repeat until a post lands.
-- Shell Pulse: the day's 16 calls are spent only when a model call is made, counted on your own day, and the taste note is rebuilt only when there is something new to write about.
-- Shell Pulse: Not this and Dismiss on a post teach the writer "less of this", and chat lines keep ten slots so your loves stay in the taste note.
-- Shell Pulse: the writer keeps the quiet hours set in Settings → Behavior instead of a fixed 22:00 to 07:00, and the first run seeds interests from your memory notes.

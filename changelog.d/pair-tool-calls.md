@@ -1,1 +1,0 @@
-- Stop, Halt or a denied step partway through a batch no longer leaves tool calls without an output, and chats saved that way heal on load.

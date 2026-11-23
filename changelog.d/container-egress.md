@@ -1,1 +1,0 @@
-- With `backend = "container"`, a sandboxed command can now reach package registries and code hosts through the egress proxy, the same way host-sandboxed commands do, instead of having no network at all. Nothing else gets out: no DNS lookups or direct connections. Images without `perl` (which Debian-based images include) still run with no network, and the command says so.

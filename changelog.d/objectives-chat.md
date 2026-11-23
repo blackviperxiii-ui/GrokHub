@@ -1,2 +1,0 @@
-### Added
-- Goals from chat: when you talk about a game goal, like "I want 99 fishing in OSRS", it shows up in the suggested tray on Objectives so you can Track it or say Not now. Say "add this goal" and it's tracked straight away. When you say how far you've got on a tracked goal, like "I'm level 82 now", its bar moves. It only links goals to games you own or that it knows, it reads nothing from a running game, and it asks about the same goal only once per chat. The goal lines the reply carries for this never show in the chat.

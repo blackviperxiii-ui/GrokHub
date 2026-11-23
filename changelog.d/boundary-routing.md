@@ -1,2 +1,0 @@
-- Agent: notes the app adds mid-run (checkpoints, background notices, the ledger, summaries) no longer count as a new ask for routing, so they don't restart the effort ladder mid-run.
-- Agent: an off-by-default switch, `boundary_routing.toml`, holds a run's effort until the next turn or compaction and runs general helpers briefed on the quick lane, ready for the eval to prove before it's turned on.

@@ -1,2 +1,0 @@
-- Settings > Pulse has a new "Fixes Loadout may apply on its own" section with one switch per kind of fix, all off. Off, a card offers its fix and waits for your tap. On skips only the tap: anything that changes your computer still asks on its approval card.
-- The first switch covers checking a crashing program's crash history. Switched on, the read-only check runs when the crash card shows up, once, and its result goes on the card.

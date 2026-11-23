@@ -1,1 +1,0 @@
-- A save to the work board now waits its turn while other writers keep the board busy, instead of failing with "locked by another writer" after seven seconds.

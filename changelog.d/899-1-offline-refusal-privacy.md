@@ -1,1 +1,0 @@
-- Offline only refusals now say to turn it off in Settings → Privacy & data (where the switch lives), not Settings → AI models.

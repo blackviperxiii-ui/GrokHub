@@ -1,1 +1,0 @@
-- Chats with Grok now keep one WebSocket open per chat and send only what's new each turn, for faster tool-heavy runs. Anything the socket can't carry falls back to the normal connection; turn it off with `enabled = false` in websocket.toml.

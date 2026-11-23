@@ -1,1 +1,0 @@
-- The on-device model's launch tuning follows the Local AI trust dial: on offer or watch it stops trying other launch settings and keeps the one it has.

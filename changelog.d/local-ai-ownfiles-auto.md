@@ -1,1 +1,0 @@
-- Local AI: Auto scores your added model files on merit (size, speed) alongside downloads, so an added file can win when it fits the task better. There is still no model picker.

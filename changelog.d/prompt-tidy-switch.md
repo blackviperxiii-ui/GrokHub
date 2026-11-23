@@ -1,2 +1,0 @@
-- Settings → Local AI has the "Tidy typos on this computer" switch again, off by default. With an on-device model set up and loaded, it fixes typos before your message goes to the model; your chat keeps what you typed.
-- Settings files saved with a byte-order mark (as older Notepad does) no longer block settings changes.

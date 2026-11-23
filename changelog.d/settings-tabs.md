@@ -1,3 +1,0 @@
-- Settings: a row of category buttons across the top (Account, Look & feel, AI & chat, Your PC, Privacy & safety, Help & updates) and a page menu on the right that follows the chosen category. One page shows at a time instead of one endless scroll.
-- Settings: a big Back button names the page you came from, and the left rail (Chat, Pulse and the rest) works while Settings is open.
-- Settings: the old Behavior page is split into PC helpers, App & extras, and Automations & limits; every setting kept as it was.

@@ -1,1 +1,0 @@
-- The desktop app's Local AI page now shows the running model too, with Keep loaded and Unload now. Its Manual draft model choice is gone: the speed test and the live reply check decide when the draft model runs.

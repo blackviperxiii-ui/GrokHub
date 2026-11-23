@@ -1,4 +1,0 @@
-- Download models: the Hugging Face fit badges use the theme's text color, so "Fits" and "Tight" stay readable on the dark themes.
-- Game companion: news and guide links open in your browser like every other outside link, and an entry that isn't a web page shows as plain text.
-- Login service: the Windows logon task and the systemd unit take the product name from the brand file.
-- Security: url 2.5.9 (RUSTSEC-2026-0592, stack overflow on nested blob: URLs).

@@ -1,1 +1,0 @@
-- Replies can now be read aloud on your own PC with no Grok sign-in. Download the Kokoro voice from the Voice tab in Models, and it speaks with the mouth moving, using the same voice names (Ara, Eve, Leo, Rex, Sal). Nothing leaves the computer.

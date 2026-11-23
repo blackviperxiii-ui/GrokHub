@@ -1,1 +1,0 @@
-- Settings → What the app learned on the desktop app now has buttons to save a backup, take one in (it asks first), put back what was here, and show the fault report. Nothing is sent anywhere.

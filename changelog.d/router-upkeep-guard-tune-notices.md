@@ -1,1 +1,0 @@
-- The desktop app runs the router's hourly accuracy guard and self-tuning again, and puts a Home update on the page when your plan loses models or gains new ones (each told once), as the old cabin did.

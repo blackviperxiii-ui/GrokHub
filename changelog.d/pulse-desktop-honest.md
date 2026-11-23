@@ -1,3 +1,0 @@
-- Pulse: your Feed instructions now steer the summaries on posts fetched from your sources too, so "Future posts follow them" holds for every post, not only the daily digest.
-- Pulse: the page no longer reads the brief's file or checks cached images on disk every frame while it paints.
-- Pulse: notifications go through one gate. Only time-sensitive ones (due within the hour) pop up, never while a game is running or in quiet hours, and at most three a day; the rest wait on the page.

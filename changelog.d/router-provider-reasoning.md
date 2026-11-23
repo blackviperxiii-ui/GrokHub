@@ -1,2 +1,0 @@
-- OpenRouter models keep their own reasoning between tool steps: their reasoning details go back with the next request, only to the model that wrote them.
-- The local model's thinking now comes back apart from its answer, so it never shows up as reply text.

@@ -1,1 +1,0 @@
-- Code editor: Projects link to a local folder or remote git URL (beta-first), show sync and discovered repo rules, and pass a `RepoRulesBundle` to orchestrator helpers on every task.

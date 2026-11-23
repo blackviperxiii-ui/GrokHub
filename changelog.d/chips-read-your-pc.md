@@ -1,1 +1,0 @@
-- Quick chips now notice what your PC and day are doing: a game running ("Fix stutter in …"), one that just closed, a nearly full drive, an update waiting, and Friday evening plans (held back during quiet hours). They read only what Loadout already knows, with no new game or system reads.

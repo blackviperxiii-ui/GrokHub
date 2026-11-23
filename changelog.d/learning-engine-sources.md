@@ -1,2 +1,0 @@
-- Learning engine, second part: quick chips, Pulse and Home cards, and finished runs now feed it in both apps. It records which chips are picked, hidden or passed over, which kinds of card are liked or dismissed, and how each model and skill did (worked, failed, corrected, undone, time and cost). Ids and numbers only; nothing reads it yet, so the app behaves the same.
-- Learning engine: the cabin and the desktop app can run on one folder without losing what the other learned, and Forget in one holds in the other.

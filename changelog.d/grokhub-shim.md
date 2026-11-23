@@ -1,1 +1,0 @@
-- `grokhub --mcp-*` and `grokhub --doctor` keep working through a small `grokhub` shim that hands them to `grokhub-hub` and says the new name once; it stays for at least one release.

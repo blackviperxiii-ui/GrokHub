@@ -1,1 +1,0 @@
-- With adults-only on and dynamic chat picking the voice, an 18+ message now hands the chat to the adults-only voice right away instead of the usual voice turning it down. A voice you picked by hand for a chat still stays put.

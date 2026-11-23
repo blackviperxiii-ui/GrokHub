@@ -1,1 +1,0 @@
-- The learning engine notices a habit that flipped: four times in a row against something it was sure of drops most of the old habit at once, without waiting for the 30-day fade.

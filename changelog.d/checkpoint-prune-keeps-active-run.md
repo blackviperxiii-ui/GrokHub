@@ -1,1 +1,0 @@
-- Rewind checkpoints: pruning no longer deletes the run it is writing or restoring, and orders same-second runs by their exact time instead of directory order.

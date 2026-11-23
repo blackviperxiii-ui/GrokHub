@@ -1,1 +1,0 @@
-- On macOS, sandboxed shell commands now run under a Seatbelt profile: the network reaches only the egress proxy, writes stay in the workspace, temp folders and caches, and key, credential, keychain and browser folders can't be read.

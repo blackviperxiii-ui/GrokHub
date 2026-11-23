@@ -1,1 +1,0 @@
-- Simple read-only asks like "list my skills", "how much disk space do I have" or "is local AI running?" now answer right away from the matching tool with no model request; anything less plain still goes to the model.

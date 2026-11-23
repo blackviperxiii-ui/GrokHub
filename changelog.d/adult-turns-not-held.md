@@ -1,3 +1,0 @@
-- Ordinary 18+ turns are no longer stopped with "Not sent": the app's own note listing the hard limits was being read as part of your message. Only what you type is checked now.
-- On this computer's model with 18+ on, only the hard limits stay: the "jokes, not sex chat" and "never a sex scene" lines come off, and adult chat runs unrefused.
-- A chat export now says when the app answered a turn itself, so a turn with no thoughts or tool rows reads clearly.

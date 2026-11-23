@@ -1,1 +1,0 @@
-- Export (and `/export`) now saves the whole chat to your Desktop, named after the chat: every message, the thought process and each tool step in order, nothing cut. It used to land in the app's hidden folder and leave the thoughts out. With no Desktop, it still goes to the project or app folder.

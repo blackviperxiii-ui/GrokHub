@@ -1,1 +1,0 @@
-- Settings → AI & chat now shows the on-device model that is running: its name and quant, whether it runs on the GPU, the CPU or both, its size, the last reply's speed, its draft model and how many guesses it kept, and when it unloads. Two buttons sit under it: Keep loaded and Unload now.

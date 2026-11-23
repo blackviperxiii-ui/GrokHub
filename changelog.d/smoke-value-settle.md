@@ -1,1 +1,0 @@
-- Shell: retry WebDriver type into an element that was still moving, the same way clicks already settle.

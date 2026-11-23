@@ -1,1 +1,0 @@
-- Code: Helpers and commands move to an Editor Helpers tab; agent chat stays conversation only, and each helper card keeps its model for the orchestrator.

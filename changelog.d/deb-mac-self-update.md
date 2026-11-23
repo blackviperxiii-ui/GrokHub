@@ -1,1 +1,0 @@
-- The `.deb` and the Mac app update themselves from Settings → Updates now. A `.deb` install gets the new signed `.deb` through the system password prompt. A Mac app is swapped for the release's signed `.app.tar.gz`, which tagged and nightly releases now carry. When a release has no build for this computer, the check says so instead of showing an updater error.

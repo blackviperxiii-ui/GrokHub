@@ -1,2 +1,0 @@
-- Auto routing now also remembers how similar chat turns went on your PC. When the small on-device word model is downloaded, each typed turn is compared with past turns, and when they clearly agree the router follows them; when they disagree it thinks harder rather than less.
-- The memory stays on your PC and holds no words from your chats, only number fingerprints and how each turn went, capped at 2,000 turns. Turning off memory embeddings turns it off too.

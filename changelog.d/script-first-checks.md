@@ -1,1 +1,0 @@
-- Automations can be script-first. Put the check in backticks, as in "every day at 9am check `df -h /` and tell me only when it changes". The command runs first, and the model only sees what it printed. "Only when it changes" waits with no model call while the output stays the same, then shows only the new lines. "Without AI" makes the run the command's output alone.

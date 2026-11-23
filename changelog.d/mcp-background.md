@@ -1,1 +1,0 @@
-- MCP servers start connecting in the background when Loadout opens, side by side, so the first chat no longer waits on every server in turn. A chat's MCP tools stay fixed for the rest of a turn; a server that connects meanwhile joins at the end of the list on your next message instead of rewriting the tool list mid-turn.

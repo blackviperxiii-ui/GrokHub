@@ -1,1 +1,0 @@
-- Test-only compaction hooks are compiled out of release builds (the tool-output eval now reads a scratch config file), and Grok requests with tools say parallel_tool_calls outright.

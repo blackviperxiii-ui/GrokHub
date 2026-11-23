@@ -1,1 +1,0 @@
-- Windows: split Grok OAuth tokens across numbered keyring entries so Sign in with Grok fits Credential Manager’s 2560-character limit.
