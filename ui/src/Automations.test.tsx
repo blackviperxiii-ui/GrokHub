@@ -49,7 +49,14 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Automations, AUTOMATIONS_EMPTY, checkLine, KEEP_RUNNING } from "./Automations";
+import {
+  Automations,
+  AUTOMATIONS_EMPTY,
+  checkLine,
+  KEEP_RUNNING,
+  lifecycleLine,
+  waitLine,
+} from "./Automations";
 
 function row(over: Partial<AutomationRow>): AutomationRow {
   return {
@@ -62,6 +69,8 @@ function row(over: Partial<AutomationRow>): AutomationRow {
     describe: "every weekday at 9am summarize my inbox",
     checkCommand: "",
     gate: { onChange: false, noAgent: false },
+    wait: "",
+    lifecycle: "",
     ...over,
   };
 }
@@ -95,6 +104,17 @@ describe("Automations", () => {
     expect(
       checkLine(row({ checkCommand: "uptime", gate: { onChange: false, noAgent: true } })),
     ).toBe("checks `uptime` first, without AI");
+  });
+
+  it("waitLine and lifecycleLine show wait and phases", () => {
+    expect(waitLine(row({}))).toBeNull();
+    expect(waitLine(row({ wait: "waits until `file:/tmp/ready`" }))).toBe(
+      "waits until `file:/tmp/ready`",
+    );
+    expect(lifecycleLine(row({}))).toBeNull();
+    expect(
+      lifecycleLine(row({ lifecycle: "run ok · delivery ok · completion ok" })),
+    ).toBe("run ok · delivery ok · completion ok");
   });
 
   it("shows a check line on each gated row", async () => {
