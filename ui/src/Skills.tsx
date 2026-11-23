@@ -14,7 +14,7 @@ import {
   type SkillsHubHit,
 } from "./api";
 import { Toggle } from "./Toggle";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 export const SKILLS_HUB_NOTE =
   "Search ClawHub, SkillsSH, GitHub (owner/repo), or a host with /.well-known/skills. New installs go through the skill scanner and quarantine.";
@@ -199,6 +199,7 @@ export function Skills({
   const shown = rows ? filterSkills(rows, query) : [];
   return (
     <section className="skills" aria-label="Skills">
+      <PageHead title="Skills" />
       <div className="card-buttons">
         <input
           type="search"

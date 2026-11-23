@@ -2848,7 +2848,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .mcp-app {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 8px 0;
   min-width: 0;
 }
@@ -2864,7 +2864,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  font-size: var(--font-small);
+  font-size: var(--font-caption);
   color: var(--muted);
 }
 
@@ -2882,7 +2882,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 
 .mcp-app-status {
   margin: 0;
-  font-size: var(--font-small);
+  font-size: var(--font-caption);
   color: var(--danger-text);
 }
 
@@ -3121,7 +3121,12 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .code,
 .workboard,
 .history,
-.pulse {
+.pulse,
+.devices,
+.agents,
+.skills,
+.imagine,
+.updates-page {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -3135,10 +3140,39 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .connectors,
 .journal,
 .meetings,
-.history {
+.history,
+.devices,
+.agents,
+.skills,
+.imagine,
+.command-box,
+.updates-page {
   width: 100%;
   max-width: 880px;
   margin-inline: auto;
+}
+
+/* A page opens with its title and, when it has one, a one-line lede. */
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+
+.page-lede {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+}
+
+/* An empty or loading line sits under what it describes, not adrift
+   mid-page, so what follows it (Hooks, Routines) stays in reach. */
+:is(.automations, .memory, .connectors, .journal, .meetings, .history, .devices, .agents, .skills,
+  .imagine, .command-box, .updates-page, .workboard, .mods) > .empty {
+  margin: 0;
 }
 
 .automations .add,
@@ -3281,10 +3315,6 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   overflow-wrap: anywhere;
 }
 
-/* Hooks and GitHub follow the list, so an empty list stays at the top. */
-.connectors > .empty {
-  margin: 0;
-}
 
 .hooks,
 .github {
@@ -3295,7 +3325,8 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .hooks h2,
-.github h2 {
+.github h2,
+.memory-files h2 {
   font-size: var(--font-prose);
   margin: 8px 0 0;
 }
@@ -5106,7 +5137,7 @@ a.feed-title:focus-visible {
 
   :root:not([data-reduce-motion="true"]) .rail button[aria-current="page"],
   :root:not([data-reduce-motion="true"]) :is(.settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
-  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
+  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"], .workboard-kinds [role="tab"])[aria-selected="true"] {
     animation: tab-open var(--t-base) var(--ease-out) backwards;
   }
 
@@ -5167,13 +5198,6 @@ a.feed-title:focus-visible {
 }
 
 /* Imagine: the prompt bar on top, the gallery (the cabin's wall) below. */
-.imagine {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-}
 
 .imagine-bar {
   display: flex;
@@ -5241,16 +5265,6 @@ a.feed-title:focus-visible {
 }
 
 /* Devices: this computer, Web access and the paired browsers, one column. */
-.devices {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .devices textarea {
   flex-shrink: 0;
@@ -5287,11 +5301,6 @@ a.feed-title:focus-visible {
 }
 .fleet .glow-bar.fleet-bar {
   margin-top: 4px;
-}
-.fleet .fleet-refresh {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: #000;
 }
 .fleet label {
   display: flex;
@@ -5362,6 +5371,7 @@ a.feed-title:focus-visible {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"],
 .code-run,
 button.cta,
 button.primary:not(.quick-chip) {
@@ -5376,6 +5386,7 @@ button.primary:not(.quick-chip) {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"],
 .code-run,
 button.cta,
 button.primary:not(.quick-chip) {
@@ -6019,21 +6030,6 @@ button.primary:not(.quick-chip) {
   gap: 4px;
 }
 
-.workboard-kinds button {
-  border: 1px solid var(--border, #333);
-  background: transparent;
-  color: inherit;
-  padding: 6px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.workboard-kinds button.active,
-.workboard-kinds button[aria-selected="true"] {
-  border-color: var(--fg, #e7e9ea);
-  background: color-mix(in srgb, var(--fg, #e7e9ea) 12%, transparent);
-}
-
 .sessions-board {
   display: flex;
   flex-direction: column;
@@ -6052,7 +6048,7 @@ button.primary:not(.quick-chip) {
 }
 
 .sessions-filters button.active {
-  border-color: var(--fg, #e7e9ea);
+  border-color: var(--red);
 }
 
 .sessions-agent {
@@ -6069,7 +6065,7 @@ button.primary:not(.quick-chip) {
   margin-left: 8px;
   font-weight: 400;
   opacity: 0.6;
-  font-size: 0.85em;
+  font-size: var(--font-caption);
 }
 
 .sessions-tile .sessions-open {
@@ -6086,21 +6082,21 @@ button.primary:not(.quick-chip) {
 }
 
 .sessions-run {
-  font-size: 0.85em;
+  font-size: var(--font-caption);
   opacity: 0.85;
 }
 
 .sessions-prs {
   list-style: none;
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .sessions-prs a {
-  font-size: 0.85em;
+  font-size: var(--font-caption);
 }
 
 .sessions-empty,
@@ -6264,16 +6260,6 @@ button.primary:not(.quick-chip) {
 }
 
 /* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
-.agents {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .agents h2 {
   font-size: var(--font-prose);
@@ -6387,16 +6373,6 @@ button.primary:not(.quick-chip) {
 }
 
 /* The Skills page (Skills.tsx): one centered column like Connectors. */
-.skills {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .skills input[type="search"] {
   flex: 1;
@@ -6736,7 +6712,8 @@ button.primary:not(.quick-chip) {
 }
 
 .home-head h2,
-.objectives-head h2 {
+.objectives-head h2,
+.page-head h2 {
   margin: 0;
   font-size: var(--font-headline);
   letter-spacing: var(--tracking-headline);
@@ -8256,12 +8233,14 @@ fieldset.channel label {
   gap: 4px;
 }
 
-.code-side-tabs [role="tab"] {
+.code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"] {
   min-height: 32px;
   padding: 4px 12px;
 }
 
-.code-side-tabs [role="tab"][aria-selected="true"] {
+.code-side-tabs [role="tab"][aria-selected="true"],
+.workboard-kinds [role="tab"][aria-selected="true"] {
   border-color: var(--red);
   background: var(--tab-open-bg);
   color: var(--tab-open-text);

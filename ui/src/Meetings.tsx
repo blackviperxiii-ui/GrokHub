@@ -6,13 +6,14 @@ import {
   type MeetingRow,
   type MeetingsPage,
 } from "./api";
-import { StatusLine, useNote } from "./ui";
+import { PRODUCT_NAME } from "./brand";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 export const MEETINGS_EMPTY =
   "No past meetings yet. Allow Join and Record, start a meeting, follow notes, and use Talk.";
 
 export const JOIN_HINT =
-  "Off until you allow it. Lets you start a meeting session in Loadout. Nothing joins Meet, Zoom, or Teams for you.";
+  `Off until you allow it. Lets you start a meeting session in ${PRODUCT_NAME}. Nothing joins Meet, Zoom, or Teams for you.`;
 
 export const RECORD_HINT =
   "Off until you allow it. Keeps a transcript of notes, Talk turns, and speech lines you save. Explicit consent before any recording.";
@@ -170,12 +171,9 @@ export function Meetings() {
 
   return (
     <section className="meetings journal" aria-label="Meetings">
-      <h2>Meetings</h2>
-      <p className="hint">
-        Follow live notes and use in-meeting Talk during a call. Transcripts stay on this computer
-        and are searchable after. Join and Record need an explicit Allow — nothing records or joins
-        until you do.
-      </p>
+      <PageHead title="Meetings">
+        Live notes and Talk during a call. Transcripts stay on this computer, and you can search them after.
+      </PageHead>
 
       <div className="rows" role="group" aria-label="Privacy and consent">
         <div className="consent-row" style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -256,7 +254,7 @@ export function Meetings() {
               In-meeting Talk
               <input
                 value={talk}
-                placeholder="Ask Loadout during the meeting…"
+                placeholder={`Ask ${PRODUCT_NAME} during the meeting…`}
                 onChange={(e) => setTalk(e.target.value)}
               />
             </label>

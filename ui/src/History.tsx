@@ -27,7 +27,7 @@ import {
 } from "./api";
 import { isCodeSession } from "./CodeProjects";
 import { SavedCard } from "./SavedCard";
-import { ConfirmRow, StatusLine, useDismiss, useNote } from "./ui";
+import { ConfirmRow, PageHead, StatusLine, useDismiss, useNote } from "./ui";
 
 /** Project sessions live in the Code Editor Projects tab, not here. */
 export const HISTORY_CODE_IN_EDITOR =
@@ -457,6 +457,7 @@ export function History({
 
   return (
     <section className="history" aria-label="History">
+      <PageHead title="History" />
       <div className="history-head">
         <input
           type="search"

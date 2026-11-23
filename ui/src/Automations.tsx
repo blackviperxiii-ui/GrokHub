@@ -21,7 +21,7 @@ import {
 import { PRODUCT_NAME } from "./brand";
 import { Routines } from "./Routines";
 import { Toggle } from "./Toggle";
-import { ConfirmRow } from "./ui";
+import { ConfirmRow, PageHead } from "./ui";
 
 export function resultLine(result: RunResult): string {
   if (result.error) return result.error;
@@ -256,6 +256,7 @@ export function Automations({
 
   return (
     <section className="automations" aria-label="Automations">
+      <PageHead title="Automations" />
       <form className="add" onSubmit={add}>
         <input
           aria-label="New automation"

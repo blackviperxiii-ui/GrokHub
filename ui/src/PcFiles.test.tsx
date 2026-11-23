@@ -190,6 +190,8 @@ describe("PcFiles", () => {
       baseUrl: "http://127.0.0.1:8123",
       hasToken: true,
     };
+    // Turning it on with no address saves no address; Save address saves one.
+    api.setHomeAssistant.mockResolvedValueOnce({ ...HOME_OFF, enabled: true });
     api.setHomeAssistant.mockResolvedValue({ ...on, hasToken: false });
     api.setHomeAssistantToken.mockResolvedValue(on);
     api.testHomeAssistant.mockResolvedValue("Connected. Home Assistant API is reachable.");

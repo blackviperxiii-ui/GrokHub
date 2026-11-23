@@ -1,0 +1,2 @@
+- Every page under More opens with its title and a one-line lede, sits in the same centered column, and shows its empty or loading line right under what it describes instead of mid-page.
+- Fleet's Refresh is a regular button again; amber stays for XP and the live call to action.

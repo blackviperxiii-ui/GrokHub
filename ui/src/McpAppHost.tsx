@@ -3,6 +3,7 @@
  * ui/initialize, tool-input / tool-result, tools/call, ui/open-link. */
 import { useEffect, useRef, useState } from "react";
 import { call as invoke } from "./transport";
+import { PRODUCT_NAME } from "./brand";
 import { openExternal, externalUrlOk } from "./external";
 
 export type McpAppPayload = {
@@ -28,32 +29,18 @@ export function McpAppHost({ id, app }: { id: string; app: McpAppPayload }) {
   const pending = useRef(new Map<string | number, (msg: JsonRpc) => void>());
   const initialized = useRef(false);
 
-  useEffect(() => {
-    initialized.current = false;
+  // A new app starts over: not ready, no status. Adjusted while rendering, so
+  // the old app's state never paints under the new one.
+  const source = `${id}\n${app.resourceUri}\n${app.html}`;
+  const [shown, setShown] = useState(source);
+  if (shown !== source) {
+    setShown(source);
     setReady(false);
     setStatus("");
-  }, [id, app.resourceUri, app.html]);
-
+  }
   useEffect(() => {
-    function onMessage(ev: MessageEvent) {
-      if (frame.current && ev.source !== frame.current.contentWindow) return;
-      const msg = ev.data as JsonRpc;
-      if (!msg || msg.jsonrpc !== "2.0") return;
-      if ("method" in msg && msg.method) {
-        void handleRequest(msg);
-        return;
-      }
-      if ("id" in msg && msg.id != null) {
-        const done = pending.current.get(msg.id);
-        if (done) {
-          pending.current.delete(msg.id);
-          done(msg);
-        }
-      }
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  });
+    initialized.current = false;
+  }, [source]);
 
   async function handleRequest(msg: Extract<JsonRpc, { method: string }>) {
     const win = frame.current?.contentWindow;
@@ -63,7 +50,7 @@ export function McpAppHost({ id, app }: { id: string; app: McpAppPayload }) {
     };
     switch (msg.method) {
       case "ui/initialize": {
-        let hostInfo = { name: "GrokHub", version: "0" };
+        let hostInfo = { name: PRODUCT_NAME, version: "0" };
         let hostCapabilities = { serverTools: {}, serverResources: {} };
         try {
           const init = await invoke<{
@@ -168,6 +155,27 @@ export function McpAppHost({ id, app }: { id: string; app: McpAppPayload }) {
         }
     }
   }
+
+  useEffect(() => {
+    function onMessage(ev: MessageEvent) {
+      if (frame.current && ev.source !== frame.current.contentWindow) return;
+      const msg = ev.data as JsonRpc;
+      if (!msg || msg.jsonrpc !== "2.0") return;
+      if ("method" in msg && msg.method) {
+        void handleRequest(msg);
+        return;
+      }
+      if ("id" in msg && msg.id != null) {
+        const done = pending.current.get(msg.id);
+        if (done) {
+          pending.current.delete(msg.id);
+          done(msg);
+        }
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  });
 
   return (
     <div

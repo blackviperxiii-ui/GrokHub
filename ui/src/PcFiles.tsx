@@ -199,9 +199,12 @@ function HomeAssistantPanel({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  // A saved address replaces the field's text (adjusted while rendering).
+  const [savedUrl, setSavedUrl] = useState(home.baseUrl);
+  if (savedUrl !== home.baseUrl) {
+    setSavedUrl(home.baseUrl);
     setUrl(home.baseUrl);
-  }, [home.baseUrl]);
+  }
 
   async function saveHome(job: Promise<HomeAssistant>) {
     setBusy(true);

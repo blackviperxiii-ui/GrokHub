@@ -32,6 +32,7 @@ import { StatusTracker, statusFromLane } from "./Progress";
 import { SessionsBoard } from "./SessionsBoard";
 import { CardChat, ownChat } from "./WorkboardChat";
 import { CardTriage, dueLocalValue, priorityChip } from "./WorkboardTriage";
+import { PageHead } from "./ui";
 
 export type WorkboardKind = "cards" | "sessions";
 
@@ -278,6 +279,7 @@ export function Workboard({
 
   return (
     <section className="workboard" aria-label="Workboard">
+      <PageHead title="Workboard" />
       <div className="workboard-kinds" role="tablist" aria-label="Board kind">
         <button
           type="button"

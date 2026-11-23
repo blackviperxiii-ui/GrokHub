@@ -23,6 +23,7 @@ import {
   StepLine,
   useInstall,
 } from "./ModsInstall";
+import { PageHead } from "./ui";
 
 export type ModsTab = ModList | "newFinds" | "installed";
 
@@ -218,7 +219,7 @@ export function Mods() {
 
   return (
     <section className="mods" aria-label="Mods">
-      <p className="card-status">{subtitle}</p>
+      <PageHead title="Mods">{subtitle}</PageHead>
       {note && (
         <p className="note" role="status">
           {note}

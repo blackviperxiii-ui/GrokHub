@@ -14,7 +14,7 @@ import {
   type PairedBrowser,
   type Share,
 } from "./api";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 /** How often the page re-reads the list, so a browser that just paired shows. */
 export const REFRESH_MS = 15_000;
@@ -213,6 +213,7 @@ export function Devices({
 
   return (
     <section className="devices" aria-label="Devices">
+      <PageHead title="Devices" />
       <div className="card device" aria-label="This computer">
         <div className="card-title">{devices?.computer ?? "This computer"}</div>
         <div className="card-status">This computer</div>
