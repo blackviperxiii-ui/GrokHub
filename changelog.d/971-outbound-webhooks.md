@@ -1,0 +1,1 @@
+- Outbound signed lifecycle webhooks for session, turn, and tool events, plus agent hooks `pre_llm_call`, `hold_stream`, `post_compaction`, and `on_session_delete`.
