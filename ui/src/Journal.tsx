@@ -10,7 +10,7 @@ import {
   type JournalQuestion,
 } from "./api";
 import { newConversationId } from "./Chat";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 export const JOURNAL_EMPTY =
   "No open questions. Add a decision you're weighing and I'll help you test it.";
@@ -82,6 +82,7 @@ export function Journal({ onMission }: { onMission: (mission: JournalMission) =>
 
   return (
     <section className="journal" aria-label="Journal">
+      <PageHead title="Journal" />
       <form className="journal-add" onSubmit={(e) => void add(e)}>
         <label>
           A decision you're weighing

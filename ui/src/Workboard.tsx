@@ -31,6 +31,7 @@ import { newConversationId } from "./Chat";
 import { StatusTracker, statusFromLane } from "./Progress";
 import { CardChat, ownChat } from "./WorkboardChat";
 import { CardTriage, dueLocalValue, priorityChip } from "./WorkboardTriage";
+import { PageHead } from "./ui";
 
 export const BOARD_EMPTY = "No cards yet. A chat run files one here, or add your own.";
 export const BOARD_HELP =
@@ -271,6 +272,7 @@ export function Workboard({
 
   return (
     <section className="workboard" aria-label="Workboard">
+      <PageHead title="Workboard" />
       <form className="workboard-add" onSubmit={(e) => void add(e)}>
         <input
           aria-label="Card title"

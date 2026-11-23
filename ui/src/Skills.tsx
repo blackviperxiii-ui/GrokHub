@@ -11,7 +11,7 @@ import {
   type SkillSource,
 } from "./api";
 import { Toggle } from "./Toggle";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 /** The groups, in page order. Built-in skills live in the Code tab, not here. */
 export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
@@ -158,6 +158,7 @@ export function Skills({
   const shown = rows ? filterSkills(rows, query) : [];
   return (
     <section className="skills" aria-label="Skills">
+      <PageHead title="Skills" />
       <div className="card-buttons">
         <input
           type="search"

@@ -8,7 +8,7 @@ import {
   type UpdateOffer,
   type UpdatesPage,
 } from "./api";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 /** Offers that change what's installed: the page reads again after them. */
 const RE_READ = new Set<UpdateOffer>(["updateSystem", "updateApps", "updateDrivers", "rollBackDrivers"]);
@@ -60,6 +60,7 @@ export function UpdatesDrivers() {
 
   return (
     <section className="updates-page" aria-label="Updates & Drivers">
+      <PageHead title="Updates & Drivers" />
       <div className="card">
         <div className="card-title">{page?.headline ?? "Checking what's waiting…"}</div>
         {page?.driver && <div className="card-detail-line">{page.driver}</div>}

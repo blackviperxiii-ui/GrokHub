@@ -15,6 +15,7 @@ import {
 import { Lightbox } from "./FeedCard";
 import { GrokSignIn, type SignInFlow } from "./GrokSignIn";
 import { subscribeImagine } from "./imagineAsk";
+import { PageHead } from "./ui";
 
 /** What the shell says when there is no key, or Imagine refuses it. */
 export const NEED_SIGNIN = "Sign in to Imagine first.";
@@ -267,6 +268,7 @@ export function Imagine() {
   const showSignIn = page !== null && page.canSignIn && (needsSignIn || page.account !== null);
   return (
     <section className="imagine" aria-label="Imagine">
+      <PageHead title="Imagine" />
       <div className="card-buttons">
         <button type="button" className="quiet" onClick={newProject}>
           + New project
