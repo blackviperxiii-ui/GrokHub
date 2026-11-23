@@ -8039,6 +8039,21 @@ mod tests {
                 ALL,
             ),
             ("mods_installed", r#"{"game":"skyrim","path":"a"}"#, ALL),
+            (
+                "home_list_entities",
+                r#"{"domain":"light","area":"kitchen","path":"a"}"#,
+                ALL,
+            ),
+            (
+                "home_get_state",
+                r#"{"entity_id":"light.a","path":"a"}"#,
+                ALL,
+            ),
+            (
+                "home_list_services",
+                r#"{"domain":"light","path":"a"}"#,
+                ALL,
+            ),
             // Edits.
             (
                 "write",
@@ -8116,6 +8131,11 @@ mod tests {
             (
                 "mods_prepare_install",
                 r#"{"game":"skyrim","id":"12","file":"main","path":"a"}"#,
+                ALL,
+            ),
+            (
+                "home_call_service",
+                r#"{"domain":"light","service":"turn_on","entity_id":"light.a","path":"a"}"#,
                 ALL,
             ),
             (
@@ -8300,7 +8320,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 76);
+        assert_eq!(native.len(), 80);
     }
 
     #[test]

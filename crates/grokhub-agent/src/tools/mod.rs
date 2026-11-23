@@ -8,6 +8,7 @@ mod desktop;
 pub(crate) mod fence;
 mod glob;
 mod grep;
+pub(crate) mod home_assistant;
 mod html_md;
 mod list_dir;
 pub(crate) mod local_ai;
@@ -251,6 +252,7 @@ pub fn dispatch_for_job(
         "connection_delete" => connections::delete(&args),
         local_ai::SELFTEST => local_ai::selftest(&args),
         mods::PREPARE => mods::run(name, &args),
+        home_assistant::CALL_SERVICE => home_assistant::run(name, &args),
         "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "web_search" => web_search::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
@@ -355,6 +357,9 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         session_search::NAME => session_search::run(ctx.session, args),
         ptc::NAME => ptc::run(ctx, args),
         mods::SEARCH | mods::DETAIL | mods::INSTALLED => mods::run(name, args),
+        home_assistant::LIST_ENTITIES
+        | home_assistant::GET_STATE
+        | home_assistant::LIST_SERVICES => home_assistant::run(name, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }

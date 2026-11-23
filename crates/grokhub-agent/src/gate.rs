@@ -35,6 +35,9 @@ const READONLY: &[&str] = &[
     "mods_search",
     "mods_detail",
     "mods_installed",
+    "home_list_entities",
+    "home_get_state",
+    "home_list_services",
     // Checks a panel spec for the chat to draw; only on with generative UI.
     "show_panel",
 ];
@@ -50,6 +53,7 @@ const CONTROL: &[&str] = &[
     "connection_delete",
     "local_ai_selftest",
     "mods_prepare_install",
+    "home_call_service",
     "spawn_subagent",
     "send_subagent_message",
     "merge_subagent_work",

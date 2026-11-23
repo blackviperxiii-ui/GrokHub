@@ -121,6 +121,7 @@ mod composer_ghost;
 #[cfg(desktop)]
 mod focus_help;
 pub mod github;
+pub mod home_assistant;
 pub mod hook_command;
 pub mod onboard;
 pub mod opener;
@@ -7018,6 +7019,43 @@ async fn get_pc_files(state: State<'_, ShellState>) -> Result<pc_files::FilesHel
     off_main(move || pc_files::read(&dir)).await
 }
 
+/// Settings → Your PC → PC helpers → Home Assistant (consent, URL; token never returned).
+#[tauri::command]
+async fn get_home_assistant(
+    state: State<'_, ShellState>,
+) -> Result<home_assistant::HomeAssistantView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home_assistant::view(&dir)).await
+}
+
+/// Flip consent and optionally set the Home Assistant base URL.
+#[tauri::command]
+async fn set_home_assistant(
+    state: State<'_, ShellState>,
+    enabled: bool,
+    base_url: Option<String>,
+) -> Result<home_assistant::HomeAssistantView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home_assistant::set_config(&dir, enabled, base_url)).await?
+}
+
+/// Save or clear the Home Assistant long-lived access token (keychain).
+#[tauri::command]
+async fn set_home_assistant_token(
+    state: State<'_, ShellState>,
+    token: String,
+) -> Result<home_assistant::HomeAssistantView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home_assistant::set_token(&dir, token)).await?
+}
+
+/// Probe Home Assistant `/api/` with the saved URL and token.
+#[tauri::command]
+async fn test_home_assistant(state: State<'_, ShellState>) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || home_assistant::test_connection(&dir)).await?
+}
+
 /// Turn one of those switches on or off (`downloadsTidy`, `modelDrop`,
 /// `backupNudge`, `resumeCode`, `netLog`, `printAlerts`, `printCamera`).
 #[tauri::command]
@@ -8678,6 +8716,8 @@ pub fn run() {
                     }),
                 ));
             }
+            // Home Assistant tools when the user has consented and configured them.
+            home_assistant::register(app.state::<ShellState>().config_dir.clone());
             #[cfg(desktop)]
             start_scheduler(app);
             start_channel_inbox(app.handle().clone());
@@ -9308,6 +9348,10 @@ pub fn run() {
             set_pc_auto_sleep,
             forget_pc_rhythm,
             get_pc_files,
+            get_home_assistant,
+            set_home_assistant,
+            set_home_assistant_token,
+            test_home_assistant,
             set_pc_files_switch,
             set_pc_folders,
             set_pc_models_folder,
