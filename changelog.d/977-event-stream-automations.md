@@ -1,0 +1,1 @@
+- Automations can wait on a saved condition or a monitored event stream, and track delivery, run, and completion as separate states.
