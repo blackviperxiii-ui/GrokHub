@@ -846,6 +846,8 @@ export function initScript(theme = "ops-dark") {
             rows: [],
             said: null,
           };
+        case "get_meetings":
+          return { consent: { join: false, record: false }, live: null, past: [], hits: [], query: "" };
         case "list_automations":
         case "list_connectors":
         case "list_skills":
