@@ -616,7 +616,7 @@ pub fn zoom_with(config_dir: &Path, id: &str, model: Option<&StaticModel>) -> Re
         groups,
         compacted: grokhub_agent::compacted_messages(&info),
         created: info.created,
-        updated: history::updated_ms(&info),
+        updated: history::updated_ms(&info.id, info.created),
     })
 }
 

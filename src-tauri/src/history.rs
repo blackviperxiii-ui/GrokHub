@@ -87,21 +87,21 @@ fn shell_id(id: &str) -> Result<&str, String> {
 /// When the chat's file last changed, or its start time if that can't be read.
 /// Never before the start: the file system's coarse clock can stamp a file
 /// written in the same millisecond a few ms behind `now_ms`.
-pub(crate) fn updated_ms(info: &SessionInfo) -> u64 {
-    grokhub_agent::session_file(&info.id)
+pub(crate) fn updated_ms(id: &str, created: u64) -> u64 {
+    grokhub_agent::session_file(id)
         .ok()
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok())
         .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-        .map_or(info.created, |at| (at.as_millis() as u64).max(info.created))
+        .map_or(created, |at| (at.as_millis() as u64).max(created))
 }
 
-fn row(info: &SessionInfo) -> ChatRow {
+fn row(id: &str, title: &str, created: u64) -> ChatRow {
     ChatRow {
-        id: info.id.clone(),
-        title: info.title.clone(),
-        created: info.created,
-        updated: updated_ms(info),
+        id: id.to_string(),
+        title: title.to_string(),
+        created,
+        updated: updated_ms(id, created),
         pinned: false,
         project: None,
         main: false,
@@ -143,22 +143,29 @@ pub fn toggle_pin(config_dir: &Path, id: &str) -> Result<bool, String> {
     Ok(pinned)
 }
 
-/// The shell's sessions, newest activity first. Call under a `ConfigGuard`.
+/// The shell's sessions in full, newest activity first. Call under a
+/// `ConfigGuard`. A list of rows takes [`list`], which reads no turns.
 fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
-    let mut found: Vec<(ChatRow, SessionInfo)> = grokhub_agent::list_sessions()
+    let found = grokhub_agent::list_sessions()
         .into_iter()
         .filter(|info| info.id.starts_with(PREFIX))
-        .map(|info| (row(&info), info))
+        .map(|info| (row(&info.id, &info.title, info.created), info))
         .collect();
+    marked(found, |info| &info.cwd)
+}
+
+/// Marks each row Main, pinned and with its project (from the folder `cwd`
+/// names), then sorts pins first and newest activity first.
+fn marked<T>(mut found: Vec<(ChatRow, T)>, cwd: impl Fn(&T) -> &str) -> Vec<(ChatRow, T)> {
     let config_dir = grokhub_agent::perm::config_dir();
     let pins = pinned_ids(&config_dir);
     let main = crate::chat_tabs::main_id(&config_dir);
     let nodes = crate::projects::load(&config_dir).unwrap_or_default();
     let home = std::env::var("HOME").ok();
-    for (row, info) in &mut found {
+    for (row, item) in &mut found {
         row.main = main.as_deref() == Some(row.id.as_str());
         row.pinned = row.main || pins.contains(&row.id);
-        row.project = project_of(&nodes, &info.cwd, home.as_deref());
+        row.project = project_of(&nodes, cwd(item), home.as_deref());
     }
     found.sort_by(|(a, _), (b, _)| {
         b.pinned
@@ -169,9 +176,19 @@ fn shell_sessions() -> Vec<(ChatRow, SessionInfo)> {
     found
 }
 
+/// The shell's chats as rows, from each file's first line alone: the tab
+/// strip, History and Home ask for these every time they open.
 pub fn list(config_dir: &Path) -> Vec<ChatRow> {
     let _config = ConfigGuard::set(config_dir);
-    shell_sessions().into_iter().map(|(row, _)| row).collect()
+    let found = grokhub_agent::list_session_heads()
+        .into_iter()
+        .filter(|head| head.id.starts_with(PREFIX))
+        .map(|head| (row(&head.id, &head.title, head.created), head))
+        .collect();
+    marked(found, |head| &head.cwd)
+        .into_iter()
+        .map(|(row, _)| row)
+        .collect()
 }
 
 /// Every chat as saved, newest activity first, pins left out of the order.
@@ -608,7 +625,7 @@ fn read_only_sources(
         }
         rows.push((
             ReadOnlyRow {
-                updated: updated_ms(&info),
+                updated: updated_ms(&info.id, info.created),
                 id: info.id.clone(),
                 title: info.title.clone(),
                 source: "cabin",

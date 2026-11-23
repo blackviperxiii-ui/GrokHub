@@ -1,0 +1,1 @@
+- Chat lists open faster: the tab strip, History, Home and the phone and web thread lists read only each saved chat's first line instead of every turn of every chat (400 chats, 93 MB: about 253 ms down to 1.5 ms per list, and the window asks for six lists as it starts).

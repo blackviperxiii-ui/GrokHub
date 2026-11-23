@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -19,18 +19,20 @@ use crate::{CancelToken, ContentPart, InputItem, Usage};
 
 const ENGINE: &str = "native";
 
+/// A session file's first line: what a list of chats shows, read without
+/// the turns ([`list_session_heads`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Header {
-    id: String,
-    title: String,
-    created: u64,
-    cwd: String,
-    model: String,
-    renamed: bool,
+pub struct SessionHead {
+    pub id: String,
+    pub title: String,
+    pub created: u64,
+    pub cwd: String,
+    pub model: String,
+    pub renamed: bool,
     /// Parent session id when this chat was forked. Empty otherwise.
     /// Desktop `/bg` and `/send` start a fresh session; this field remains for
     /// older forked files and for `delete_forks_of` / tests.
-    forked_from: String,
+    pub forked_from: String,
 }
 
 /// Session line type of an xAI compaction item ([`InputItem::ServerCompaction`]).
@@ -394,28 +396,64 @@ pub fn merge_history(cli: &[GrokSession], native: &[SessionInfo]) -> Vec<History
     rows
 }
 
-pub fn list_sessions() -> Vec<SessionInfo> {
+/// Every session file with its id (the file name), in no order.
+fn session_files() -> Vec<(PathBuf, String)> {
     let Ok(entries) = fs::read_dir(sessions_dir()) else {
         return Vec::new();
     };
-    let mut found = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if safe_id(id).is_err() {
-            continue;
-        }
-        if let Ok(info) = read_session(&path, id, false) {
-            found.push(info);
-        }
-    }
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                return None;
+            }
+            let id = path.file_stem().and_then(|stem| stem.to_str())?.to_string();
+            safe_id(&id).ok()?;
+            Some((path, id))
+        })
+        .collect()
+}
+
+/// Every session in full, newest first. Reads every turn of every file: a
+/// list that only shows titles takes [`list_session_heads`].
+pub fn list_sessions() -> Vec<SessionInfo> {
+    let mut found: Vec<SessionInfo> = session_files()
+        .into_iter()
+        .filter_map(|(path, id)| read_session(&path, &id, false).ok())
+        .collect();
     found.sort_by(|a, b| b.created.cmp(&a.created).then(a.id.cmp(&b.id)));
     found
+}
+
+/// The same sessions as [`list_sessions`], in the same order, with only each
+/// file's first line read: the chat lists ask for these on every open.
+pub fn list_session_heads() -> Vec<SessionHead> {
+    let mut found: Vec<SessionHead> = session_files()
+        .into_iter()
+        .filter_map(|(path, id)| read_head(&path, &id))
+        .collect();
+    found.sort_by(|a, b| b.created.cmp(&a.created).then(a.id.cmp(&b.id)));
+    found
+}
+
+/// The header [`read_session`] would take: the first line that is not
+/// blank. A file with nothing after it but an unended line has none, as
+/// `split_kept_lines` drops that torn line.
+fn read_head(path: &Path, fallback_id: &str) -> Option<SessionHead> {
+    let mut reader = BufReader::new(fs::File::open(path).ok()?);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 || line.pop() != Some(b'\n') {
+            return None;
+        }
+        if !line.is_empty() {
+            break;
+        }
+    }
+    let value: Value = serde_json::from_str(&String::from_utf8_lossy(&line)).ok()?;
+    parse_header(&value, fallback_id)
 }
 
 pub fn load_session(id: &str) -> Result<SessionInfo, String> {
@@ -1398,7 +1436,7 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let header = header_json(&Header {
+    let header = header_json(&SessionHead {
         id: id.to_string(),
         title: "Chat".into(),
         created: grokhub_core::now_ms(),
@@ -1452,7 +1490,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
     let mut bytes = Vec::new();
     push_line(
         &mut bytes,
-        &header_json(&Header {
+        &header_json(&SessionHead {
             id: info.id.clone(),
             title: info.title.clone(),
             created: info.created,
@@ -1529,7 +1567,7 @@ fn read_session(path: &Path, fallback_id: &str, repair: bool) -> Result<SessionI
     Ok(assemble(header, records))
 }
 
-fn assemble(header: Header, records: Vec<Record>) -> SessionInfo {
+fn assemble(header: SessionHead, records: Vec<Record>) -> SessionInfo {
     let mut usage = Usage::default();
     let mut meter = String::new();
     for record in &records {
@@ -1582,7 +1620,7 @@ fn split_kept_lines(raw: &[u8]) -> (Vec<String>, bool) {
     (lines, repair)
 }
 
-fn parse_header(value: &Value, fallback_id: &str) -> Option<Header> {
+fn parse_header(value: &Value, fallback_id: &str) -> Option<SessionHead> {
     if value.get("engine").and_then(|engine| engine.as_str()) != Some(ENGINE) {
         return None;
     }
@@ -1593,7 +1631,7 @@ fn parse_header(value: &Value, fallback_id: &str) -> Option<Header> {
         id
     };
     let title = string_field(value, "title");
-    Some(Header {
+    Some(SessionHead {
         id,
         title: if title.is_empty() {
             "Chat".into()
@@ -1731,7 +1769,7 @@ fn visible_records(records: &[Record]) -> Vec<Record> {
     out
 }
 
-fn header_json(header: &Header) -> Value {
+fn header_json(header: &SessionHead) -> Value {
     let mut value = json!({
         "id": header.id,
         "title": header.title,
@@ -3663,5 +3701,76 @@ mod tests {
             "{file}"
         );
         assert!(!export_markdown(id).unwrap().contains("gAAAA"));
+    }
+
+    #[test]
+    fn heads_list_what_the_full_read_lists_from_first_lines_alone() {
+        let (_dir, _guard) = isolated("heads");
+        let usage = Usage::default();
+        record_turn(
+            "native-a",
+            "/work/a",
+            "grok-4",
+            &[user("first"), assistant("one")],
+            &usage,
+            "",
+            "first",
+        )
+        .unwrap();
+        rename_session("native-a", "Fan curve").unwrap();
+        let head = |id: &str, created: u64| {
+            header_json(&SessionHead {
+                id: id.into(),
+                title: format!("Title {id}"),
+                created,
+                cwd: String::new(),
+                model: "grok-4".into(),
+                renamed: false,
+                forked_from: String::new(),
+            })
+        };
+        let dir = sessions_dir();
+        // A torn last turn: the header still lists, as read_session keeps it.
+        fs::write(
+            dir.join("native-torn.jsonl"),
+            format!("{}\n{{\"type\":\"mess", head("native-torn", 2)),
+        )
+        .unwrap();
+        // Blank lines before the header are skipped by both.
+        fs::write(
+            dir.join("native-gap.jsonl"),
+            format!("\n\n{}\n", head("native-gap", 1)),
+        )
+        .unwrap();
+        // A header that never ended, an empty file and a first line that is
+        // not a header: neither read lists them.
+        fs::write(
+            dir.join("native-unended.jsonl"),
+            head("native-unended", 3).to_string(),
+        )
+        .unwrap();
+        fs::write(dir.join("native-blank.jsonl"), "").unwrap();
+        fs::write(dir.join("native-junk.jsonl"), "not json\n{}\n").unwrap();
+
+        let heads = list_session_heads();
+        let rows: Vec<(&str, &str, &str)> = heads
+            .iter()
+            .map(|h| (h.id.as_str(), h.title.as_str(), h.cwd.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("native-a", "Fan curve", "/work/a"),
+                ("native-torn", "Title native-torn", ""),
+                ("native-gap", "Title native-gap", ""),
+            ]
+        );
+        assert!(heads[0].renamed);
+        let full: Vec<(String, String)> = list_sessions()
+            .into_iter()
+            .map(|i| (i.id, i.title))
+            .collect();
+        let short: Vec<(String, String)> = heads.into_iter().map(|h| (h.id, h.title)).collect();
+        assert_eq!(full, short);
     }
 }

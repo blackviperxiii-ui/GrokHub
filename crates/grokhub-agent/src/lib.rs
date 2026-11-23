@@ -181,10 +181,10 @@ pub use run::{
 pub use session::{
     attach_run, cancel_session, compacted_messages, delete_forks_of, delete_session,
     export_markdown, forget_message, fork_session, format_cost_ticks, history_generation,
-    list_sessions, load_session, local_title, merge_history, message_pairs, record_compaction,
-    record_turn, rename_session, resume_input, session_file, session_intact, shown_pairs,
-    transcript_pairs, usage_label, user_lines, Forget, Forgotten, HistoryRow, RunGuard,
-    SessionInfo, TurnThought, UserKind, UserLine, FORGET_BUSY,
+    list_session_heads, list_sessions, load_session, local_title, merge_history, message_pairs,
+    record_compaction, record_turn, rename_session, resume_input, session_file, session_intact,
+    shown_pairs, transcript_pairs, usage_label, user_lines, Forget, Forgotten, HistoryRow,
+    RunGuard, SessionHead, SessionInfo, TurnThought, UserKind, UserLine, FORGET_BUSY,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
