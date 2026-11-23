@@ -9,6 +9,7 @@ pub mod app_json;
 pub mod app_lock;
 pub mod appearance;
 pub mod attach;
+pub mod at_context;
 pub mod audio_check;
 pub mod auto_fix;
 pub mod automation;
@@ -213,6 +214,7 @@ pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;
+pub mod skills_hub;
 pub mod slash;
 pub mod small_talk;
 pub mod ssrf;
@@ -287,6 +289,10 @@ pub use attach::{
     imagine_ref_status, kick_consumes_attach, list_pick_names, parse_picker_stdout, picker_args,
     picker_save_args, plus_empty_status, plus_menu_rows, png_ihdr_size, take_text_body, AttachKind,
     PlusAct, PlusTarget, IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
+};
+pub use at_context::{
+    expand_at_context, find_at_refs, AtKind, AtRef, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
+    FOLDER_ENTRY_CAP, GIT_COMMIT_CAP,
 };
 pub use automation::{
     automation_alert, automation_blocked_by_policy, automation_health_line,
@@ -678,6 +684,10 @@ pub use skill::{
     skill_follow_block, skill_lock_path, skill_quarantine_reason, skill_safe,
     skill_use_in_chat_prompt, verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillMd,
     SkillScan, SkillThreat, AUTO_SKILL_PITFALL, SKILL_LOCK_FILE,
+};
+pub use skills_hub::{
+    fetch_skill_md, install_hub_skill, parse_clawhub_search, parse_github_tree_skills,
+    parse_skills_sh_search, parse_well_known_index, search_hub, HubHit, HubSource, InstallOutcome,
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,

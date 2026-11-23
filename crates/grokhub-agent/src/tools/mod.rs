@@ -226,6 +226,9 @@ pub fn dispatch_for_job(
     {
         return ToolOutput::err(refused);
     }
+    if name == registry::TOOL_SEARCH {
+        return registry::run_tool_search(&args);
+    }
     if name == registry::LOAD_TOOL_SCHEMA {
         return registry::run_load_tool_schema(&args);
     }
@@ -353,6 +356,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
         "scheduler_list" => control::scheduler_list(),
         "search_tool" => crate::mcp::search_output(args),
+        registry::TOOL_SEARCH => registry::run_tool_search(args),
         registry::LOAD_TOOL_SCHEMA => registry::run_load_tool_schema(args),
         "skill" => crate::skills::tool_run(ctx.workspace, args),
         "diagnose" => crate::repair::tool_run(args),

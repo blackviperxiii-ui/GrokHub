@@ -1196,6 +1196,8 @@ mod tests {
             "create_skill",
             "get_skill_detail",
             "edit_skill",
+            "search_skills_hub",
+            "install_skills_hub",
             "get_local_ai",
             "save_local_ai",
             "start_local_engine_download",

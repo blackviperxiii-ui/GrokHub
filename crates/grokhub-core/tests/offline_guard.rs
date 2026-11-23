@@ -77,6 +77,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
     ("crates/grokhub-core/src/net_log.rs", 1, "net log resolver connect probe (shared by the app and the shell): offline::refuse first; its speed test goes through connectivity's facade agent above"),
     // Web tools, Pulse, GitHub, plugins.
+    ("crates/grokhub-core/src/at_context.rs", 1, "@url: fetch: offline::check_url + public_http_url, then http::agent public_only"),
+    ("crates/grokhub-core/src/home_assistant.rs", 1, "Home Assistant REST: saved_host dialer (offline::check_host on the configured server; LAN/loopback stay while Offline only is on)"),
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
     ("crates/grokhub-agent/src/tools/web_search.rs", 2, "Brave: egress guard; a SearXNG server on your network: egress guard + the saved-server resolver (offline::check_host, local addresses only while on); DDG / public SearXNG go through web_fetch"),
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
@@ -99,6 +101,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
+    ("crates/grokhub-core/src/skills_hub.rs", 1, "Skills Hub registry GETs: offline::refuse + public_http_url, then public_only facade agent"),
     // Sign-in, updates, downloads.
     ("src-tauri/src/catalog_refresh.rs", 1, "daily signed model catalog: runtime_download_url_ok + guard_quiet on every hop, public_only"),
     ("src-tauri/src/shell_update.rs", 1, "shell self-update release list: guard_quiet + public_only; the plugin's check and download refuse first (offline::refuse)"),
