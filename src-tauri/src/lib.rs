@@ -5178,6 +5178,37 @@ async fn open_skill_folder(
     .await?
 }
 
+/// Skills Hub search across ClawHub, SkillsSH, GitHub, and well-known hosts.
+#[tauri::command]
+async fn search_skills_hub(query: String) -> Result<Vec<skills::HubHit>, String> {
+    off_main(move || skills::hub_search(&query)).await?
+}
+
+/// Install a Skills Hub hit into cabin skills (959 scanner + quarantine).
+#[tauri::command]
+async fn install_skills_hub(
+    state: State<'_, ShellState>,
+    source: String,
+    id: String,
+    name: String,
+    description: String,
+) -> Result<skills::HubInstall, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || {
+        skills::hub_install(
+            &dir,
+            &workspace,
+            home.as_deref(),
+            &source,
+            &id,
+            &name,
+            &description,
+        )
+    })
+    .await?
+}
+
 #[tauri::command]
 async fn get_library() -> Result<library::Page, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
@@ -9167,6 +9198,8 @@ pub fn run() {
             create_skill,
             get_skill_detail,
             edit_skill,
+            search_skills_hub,
+            install_skills_hub,
             get_learned,
             learned_act,
             learned_say,

@@ -3886,6 +3886,32 @@ export function editSkill(
   return invoke<SkillPage>("edit_skill", { name, description, trigger, instructions });
 }
 
+/** Skills Hub discovery hit (ClawHub, SkillsSH, GitHub, well-known). */
+export interface SkillsHubHit {
+  source: string;
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface SkillsHubInstall {
+  page: SkillPage;
+  note: string;
+}
+
+export function searchSkillsHub(query: string): Promise<SkillsHubHit[]> {
+  return invoke<SkillsHubHit[]>("search_skills_hub", { query });
+}
+
+export function installSkillsHub(hit: SkillsHubHit): Promise<SkillsHubInstall> {
+  return invoke<SkillsHubInstall>("install_skills_hub", {
+    source: hit.source,
+    id: hit.id,
+    name: hit.name,
+    description: hit.description,
+  });
+}
+
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
 export type TaskStatus = "running" | "failed" | "done" | "stopped";
 
