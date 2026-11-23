@@ -1565,6 +1565,7 @@ span.profile-avatar {
 
 .chat-frame > .chat {
   min-width: 0;
+  container: chat-column / inline-size;
 }
 
 .chat-side {
@@ -2503,6 +2504,22 @@ button.md-copy {
 .settings-nav button {
   text-align: left;
   min-height: 40px;
+}
+
+/* The window opens 900px wide, where the companion's column leaves the chat
+   under 700px and the buttons squeezed the box to two words a line. There the
+   box takes its own row and the buttons sit under it, as on a phone.
+   After the composer's own rules, which it overrides. */
+@container chat-column (max-width: 699px) {
+  .composer {
+    flex-wrap: wrap;
+  }
+
+  .composer-ghost-wrap {
+    order: -1;
+    flex: 1 0 100%;
+    width: auto;
+  }
 }
 
 /* Phones: the categories scroll sideways in one row, and the category's pages

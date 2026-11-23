@@ -56,7 +56,7 @@ import {
   type TurnRead,
 } from "./api";
 import { GameNote, useNoteStatus } from "./GameNote";
-import { ChipRow, useChipRow } from "./Chips";
+import { ChipRow, SEED_CHIP_PREFIX, useChipRow } from "./Chips";
 import { ChatTabs, HangoutHeader } from "./ChatTabs";
 import { GoalAsk } from "./Goals";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
@@ -2550,7 +2550,7 @@ export function Chat({
         <GoalAsk key={goalAsk.id} id={goalAsk.id} title={goalAsk.title} onDone={() => setGoalAsk(null)} />
       ) : null}
       {!remote && <BudgetCard busy={busy} onOpenSettings={onOpenSettings} />}
-      <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
+      <ChipRow chips={embedded ? row.chips.filter((c) => !c.id.startsWith(SEED_CHIP_PREFIX)) : row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
       {noteSaved && (
         <p className="note" role="status">
           {noteSaved}

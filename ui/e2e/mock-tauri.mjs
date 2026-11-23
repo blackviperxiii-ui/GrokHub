@@ -117,11 +117,11 @@ const EMPTY_TRANSCRIPT = {
 const EMPTY_TAB = { id: "shot-chat", title: "Hangout", pinned: false, updated: 0, main: false };
 const SECOND_TAB = { id: "shot-chat-2", title: "Fan curve", pinned: false, updated: 0, main: false };
 
-/** Composer and Home chip row: two plain chips and the one primary. */
+/** Composer and Home chip row: three starter chips, ids as the app gives them (Code drops these), two plain and the one primary. */
 const QUICK_CHIPS = [
-  { id: "c1", label: "Plan my weekend", value: "Plan my weekend", action: "ask", hint: "", primary: false },
-  { id: "c2", label: "Roast my build", value: "Roast my build", action: "ask", hint: "", primary: false },
-  { id: "c3", label: "Fix my stutter", value: "Fix my stutter", action: "ask", hint: "", primary: true },
+  { id: "seed-weekend", label: "Plan my weekend", value: "Plan my weekend", action: "ask", hint: "", primary: false },
+  { id: "seed-roast", label: "Roast my build", value: "Roast my build", action: "ask", hint: "", primary: false },
+  { id: "seed-stutter", label: "Fix my stutter", value: "Fix my stutter", action: "ask", hint: "", primary: true },
 ];
 
 const XP = {

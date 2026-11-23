@@ -487,6 +487,15 @@ describe("Code tab", () => {
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
   });
 
+  it("a skills list that fails to load says why, and the tab stops saying Loading", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockRejectedValue("couldn't read the skills folder");
+    render(<Code shown onOpenSettings={() => {}} />);
+    expect(await screen.findByText("couldn't read the skills folder")).toBeInTheDocument();
+    await openSideTab("Skills");
+    expect(screen.queryByText("Loading skills…")).toBeNull();
+  });
+
   it("opens a built-in and shows its body", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
