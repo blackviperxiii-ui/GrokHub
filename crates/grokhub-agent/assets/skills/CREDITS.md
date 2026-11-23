@@ -1,7 +1,7 @@
 # Built-in vstack skills: credit and license
 
 Bundled from [vstack](https://github.com/blackviperxiii-ui/vstack) release
-[`v1.4.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.4.0) (commit `11cca98b4a55da3118f51e749ac62faefbc21b3b`).
+[`v1.5.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.5.0) (commit `ed794cc8272f5b59243db67ade79138c32acb33b`).
 `.github/scripts/vstack_sync.py` writes this file, the skill folders and
 `../../src/builtin_skills.rs` from `vstack.json`; edit that list, not these files.
 
@@ -23,6 +23,7 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - correct
 - create-formal-verification-skill
 - create-verification-skill
+- database-architect
 - elevate
 - figure-it-out
 - follow-through
@@ -79,4 +80,4 @@ Left out:
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `db2aff9fa228ccc8385b52397dde7fef6b74a8243cee0fb3dfc5a23b438420ef`
+Bundle SHA-256: `ef655c0e974128a378c1af44cbe339a94952261bc15ba42ad12918579808ab8d`

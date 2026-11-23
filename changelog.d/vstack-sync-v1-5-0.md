@@ -1,0 +1,1 @@
+- Built-in skills: the bundled vstack skills now come from vstack v1.5.0.

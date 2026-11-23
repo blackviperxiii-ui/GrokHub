@@ -3,10 +3,10 @@
 //! `python3 .github/scripts/vstack_sync.py sync --tag vX.Y.Z`.
 
 /// Bundled upstream vstack tag.
-pub const BUILTIN_VSTACK_TAG: &str = "v1.4.0";
+pub const BUILTIN_VSTACK_TAG: &str = "v1.5.0";
 
 /// Bundled upstream vstack commit.
-pub const BUILTIN_VSTACK_COMMIT: &str = "11cca98b4a55da3118f51e749ac62faefbc21b3b";
+pub const BUILTIN_VSTACK_COMMIT: &str = "ed794cc8272f5b59243db67ade79138c32acb33b";
 
 /// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`): folder and
 /// `SKILL.md`.
@@ -43,6 +43,10 @@ pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
     (
         "create-verification-skill",
         include_str!("../assets/skills/create-verification-skill/SKILL.md"),
+    ),
+    (
+        "database-architect",
+        include_str!("../assets/skills/database-architect/SKILL.md"),
     ),
     ("elevate", include_str!("../assets/skills/elevate/SKILL.md")),
     (
@@ -350,6 +354,26 @@ pub const BUILTIN_SKILL_FILES: &[(&str, &str, &str)] = &[
         "chrome-extensions",
         "references/webstore/store-listing.md",
         include_str!("../assets/skills/chrome-extensions/references/webstore/store-listing.md"),
+    ),
+    (
+        "database-architect",
+        "AGENT.md",
+        include_str!("../assets/skills/database-architect/AGENT.md"),
+    ),
+    (
+        "database-architect",
+        "LICENSE",
+        include_str!("../assets/skills/database-architect/LICENSE"),
+    ),
+    (
+        "database-architect",
+        "NOTICE.md",
+        include_str!("../assets/skills/database-architect/NOTICE.md"),
+    ),
+    (
+        "database-architect",
+        "VENDORED.json",
+        include_str!("../assets/skills/database-architect/VENDORED.json"),
     ),
     (
         "elevate",
