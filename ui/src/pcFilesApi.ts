@@ -104,3 +104,28 @@ export function pcSpeedTest(): Promise<number> {
 export function pcNetCsv(): Promise<string> {
   return invoke<string>("pc_net_csv");
 }
+
+/** Settings → Your PC → PC helpers → Home Assistant (src-tauri/src/home_assistant.rs). */
+export interface HomeAssistant {
+  enabled: boolean;
+  baseUrl: string;
+  hasToken: boolean;
+  urlHint: string;
+  note: string;
+}
+
+export function getHomeAssistant(): Promise<HomeAssistant> {
+  return invoke<HomeAssistant>("get_home_assistant");
+}
+
+export function setHomeAssistant(enabled: boolean, baseUrl?: string | null): Promise<HomeAssistant> {
+  return invoke<HomeAssistant>("set_home_assistant", { enabled, baseUrl: baseUrl ?? null });
+}
+
+export function setHomeAssistantToken(token: string): Promise<HomeAssistant> {
+  return invoke<HomeAssistant>("set_home_assistant_token", { token });
+}
+
+export function testHomeAssistant(): Promise<string> {
+  return invoke<string>("test_home_assistant");
+}

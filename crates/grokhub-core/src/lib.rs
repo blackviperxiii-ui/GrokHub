@@ -107,6 +107,7 @@ pub mod hf_gguf;
 pub mod history;
 pub mod hobby_paths;
 pub mod home;
+pub mod home_assistant;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;

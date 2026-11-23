@@ -201,6 +201,10 @@ pub use tasks::{
     TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
+pub use tools::home_assistant::{
+    available as home_assistant_available, clear_host as clear_home_assistant_host,
+    set_host as set_home_assistant_host, HomeAssistantOps, OFF_MSG as HOME_ASSISTANT_OFF,
+};
 pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
     brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,

@@ -22,6 +22,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [learn](learn.md) | `crates/grokhub-core/src/learn/`: the learning engine's signal stream, beliefs, confidence ladder and files |
 | [ask-offers](ask-offers.md) | Repeated local asks → one Automate / Skill offer (intent × hour) |
 | [print-alerts](print-alerts.md) | Command Centre card 60: LAN 3D printer finish/fail Pulse alerts |
+| [home-assistant](home-assistant.md) | Order 973: first-class Home Assistant list/read/control with consent |
 | [hobby-paths](hobby-paths.md) | Know me hobby learning paths: opt-in tips, progress, Pulse cards |
 | [personalities](personalities.md) | voices, the 18+ heat dial, dynamic chat and the quip bank |
 | [voice](voice.md) | voice mode: open mic, streaming speech-to-text, spoken replies, barge-in |
