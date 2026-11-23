@@ -21,6 +21,7 @@ const READONLY: &[&str] = &[
     "get_command_or_subagent_output",
     "scheduler_list",
     "search_tool",
+    "tool_search",
     "load_tool_schema",
     "skill",
     "todo_write",

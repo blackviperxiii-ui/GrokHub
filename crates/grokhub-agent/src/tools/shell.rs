@@ -59,11 +59,12 @@ pub(crate) fn too_long(command: &str) -> Option<String> {
 
 /// Tools a model sometimes types into the shell as if they were programs
 /// (`bash: web_search: command not found`, then the same call twice more).
-const TOOLS_NOT_COMMANDS: [&str; 6] = [
+const TOOLS_NOT_COMMANDS: [&str; 7] = [
     "web_search",
     "web_fetch",
     "report_findings",
     "todo_write",
+    "tool_search",
     "load_tool_schema",
     "search_replace",
 ];

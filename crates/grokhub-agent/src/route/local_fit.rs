@@ -5,9 +5,9 @@
 //! request would not fit. [`fit`] shrinks only what it must, in this order,
 //! and stops as soon as the request fits with room left for the reply:
 //!
-//! 1. Tools: keep the core workspace and web tools, `load_tool_schema` (its
-//!    index cut to the names, so a deferred tool can still be loaded) and any
-//!    the caller must keep (with their required fields only).
+//! 1. Tools: keep the core workspace and web tools, `tool_search` (its
+//!    index cut to the names) and `load_tool_schema`, so a deferred tool can
+//!    still be found and loaded, and any the caller must keep (required fields only).
 //! 2. System: drop the optional guidance sections. Safety, memory, the cabin
 //!    rules, the personality and AGENTS.md stay.
 //! 3. Older user turns lose the per-turn cabin notes (the newest keeps them).
@@ -39,8 +39,9 @@ pub const CORE_TOOLS: &[&str] = &[
     "web_search",
     "web_fetch",
     "get_command_or_subagent_output",
-    // Without it a deferred tool (web_fetch, which web_search points at)
-    // can't be loaded on a small window at all.
+    // Without these a deferred tool (web_fetch, which web_search points at)
+    // can't be found or loaded on a small window at all.
+    "tool_search",
     "load_tool_schema",
 ];
 
@@ -268,13 +269,13 @@ fn fit_from(
     (out, done, s)
 }
 
-/// Where `load_tool_schema`'s description starts its `name — blurb` lines.
-const INDEX_AT: &str = "Deferred tools (index):\n";
+/// Where `tool_search`'s description starts its `name — blurb` lines.
+const INDEX_AT: &str = "Full deferred index:\n";
 
-/// `load_tool_schema` with its index cut to the tool names: a small window
-/// still reaches every deferred tool for a fraction of the tokens.
+/// `tool_search` with its index cut to the tool names: a small window still
+/// reaches every deferred tool for a fraction of the tokens.
 fn names_only_index(tool: &mut serde_json::Value) {
-    if tool["name"].as_str() != Some(crate::tools::registry::LOAD_TOOL_SCHEMA) {
+    if tool["name"].as_str() != Some(crate::tools::registry::TOOL_SEARCH) {
         return;
     }
     let Some((_, index)) = tool["description"]
@@ -290,7 +291,7 @@ fn names_only_index(tool: &mut serde_json::Value) {
         .filter(|n| !n.is_empty())
         .collect();
     tool["description"] = format!(
-        "Load a deferred tool's full schema by name before you call it. Deferred tools: {}",
+        "Search deferred tools by name or toolset, then load_tool_schema. Deferred tools: {}",
         names.join(", ")
     )
     .into();

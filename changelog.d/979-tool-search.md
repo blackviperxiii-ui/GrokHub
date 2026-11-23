@@ -1,0 +1,1 @@
+- Chat: `tool_search` finds deferred rare toolsets (cron, image, desktop) before `load_tool_schema` loads them, so those schemas stay out of a typical turn until needed.
