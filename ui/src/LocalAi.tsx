@@ -29,6 +29,7 @@ import {
 import { ModelLibrary, type LibraryFocus } from "./ModelLibrary";
 import { Toggle } from "./Toggle";
 import { VoiceRouteSettings } from "./VoiceRouteSettings";
+import { WakeWordSettings } from "./WakeWordSettings";
 import { PRODUCT_NAME } from "./brand";
 
 /** Shown once per file before a model file from outside the catalog is added. */
@@ -608,6 +609,7 @@ export function LocalAi({ focus }: { focus?: LibraryFocus } = {}) {
         </p>
       )}
       <VoiceRouteSettings />
+      <WakeWordSettings />
       <ModelLibrary focus={focus} />
     </section>
   );

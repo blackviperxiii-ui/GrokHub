@@ -247,6 +247,7 @@ pub mod voice_engine;
 pub mod voice_flow;
 pub mod voice_live;
 pub mod voice_turn;
+pub mod wake_word;
 pub mod vstack_sync;
 pub mod watch_learn;
 pub mod week_recap;
@@ -784,6 +785,13 @@ pub use voice::{
     CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
     VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES,
     VOICE_PAUSED, VOICE_READY_HIDE_MS, VOICE_TALK_STYLE,
+};
+pub use wake_word::{
+    effective_phrases, effective_stop, match_phrase, normalize_phrase, phrase_in_text,
+    route_profile, set_default_profile, set_enabled, set_mic_consent, set_phrases, set_routes,
+    set_stop_phrases, WakeAction, WakeConfig, WakeConsent, WakeListener, WakePhase, WakeRoute,
+    DEFAULT_PHRASES, DEFAULT_STOP, LISTEN_OFF, MAX_PHRASES, MAX_ROUTES, MAX_STOP, MIC_OFF,
+    PHRASE_MAX, VOICE_BUSY,
 };
 pub use windshield::{
     build_windshield, control_at, filter_atspi_rows, is_interactive_role, keep_atspi_row,

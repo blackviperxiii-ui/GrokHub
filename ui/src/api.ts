@@ -662,6 +662,57 @@ export function setVoiceRoute(config: VoiceRouteConfig): Promise<VoiceRouteConfi
   return invoke<VoiceRouteConfig>("set_voice_route", { config });
 }
 
+/** Always-listening on-device wake word (Order 970). Mic opt-in; matching stays local. */
+export interface WakeWordRoute {
+  phrase: string;
+  profileId: string;
+}
+
+export interface WakeWordPage {
+  micConsent: boolean;
+  enabled: boolean;
+  phrases: string[];
+  stopPhrases: string[];
+  routes: WakeWordRoute[];
+  defaultProfile: string;
+  phase: string;
+  voiceBusy: boolean;
+  defaultPhrases: string[];
+  defaultStop: string[];
+  privacy: string;
+}
+
+export type WakeWordAct =
+  | { kind: "setMicConsent"; on: boolean }
+  | { kind: "setEnabled"; on: boolean }
+  | { kind: "setPhrases"; phrases: string[] }
+  | { kind: "setStopPhrases"; phrases: string[] }
+  | { kind: "setRoutes"; routes: WakeWordRoute[] }
+  | { kind: "setDefaultProfile"; profileId: string }
+  | { kind: "arm" }
+  | { kind: "disarm" }
+  | { kind: "setVoiceBusy"; busy: boolean };
+
+export interface WakeWordFeedResult {
+  kind: "none" | "start_turn" | "stop" | string;
+  phrase?: string | null;
+  profileId?: string | null;
+  phase: string;
+}
+
+export function getWakeWord(): Promise<WakeWordPage> {
+  return invoke<WakeWordPage>("get_wake_word");
+}
+
+export function wakeWordAct(act: WakeWordAct): Promise<WakeWordPage> {
+  return invoke<WakeWordPage>("wake_word_act", { act });
+}
+
+/** Feed an on-device transcript into the wake matcher. Never pass cloud STT. */
+export function wakeWordFeedLocal(text: string): Promise<WakeWordFeedResult> {
+  return invoke<WakeWordFeedResult>("wake_word_feed_local", { text });
+}
+
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
 export function answerElicit(
   conversationId: string,
