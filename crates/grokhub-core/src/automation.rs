@@ -1268,7 +1268,7 @@ mod tests {
                 next_run: Some(500),
                 run_count: 0,
                 health: Default::default(),
-            lifecycle: Default::default(),
+                lifecycle: Default::default(),
             }],
             1_000,
         );

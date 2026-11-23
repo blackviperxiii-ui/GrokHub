@@ -168,6 +168,7 @@ pub mod screenshot_offer;
 pub mod self_improve;
 #[cfg(desktop)]
 pub mod self_review;
+pub mod sessions_board;
 pub mod settings;
 pub mod shell_update;
 pub mod ship_gate;
@@ -186,9 +187,8 @@ pub mod unattended;
 mod update_rollback;
 pub mod voice;
 mod voice_live;
-pub mod wake_word;
 mod vstack_sync;
-pub mod sessions_board;
+pub mod wake_word;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -3404,8 +3404,7 @@ fn mcp_app_initialize() -> serde_json::Value {
 async fn mcp_app_call_tool(
     server: String,
     name: String,
-    #[allow(non_snake_case)]
-    arguments: Option<serde_json::Value>,
+    #[allow(non_snake_case)] arguments: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let args = arguments.unwrap_or_else(|| serde_json::json!({}));
     off_main(move || grokhub_agent::app_call_tool(&server, &name, &args)).await?
@@ -4499,8 +4498,7 @@ fn sessions_board_facts(state: &ShellState) -> Vec<sessions_board::SessionFact> 
     let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
     let mut facts = Vec::with_capacity(rows.len());
     for row in rows {
-        let busy = chats.get(&row.id).is_some_and(|s| s.busy())
-            || helper_asks::in_turn(&row.id);
+        let busy = chats.get(&row.id).is_some_and(|s| s.busy()) || helper_asks::in_turn(&row.id);
         let failed = session_recently_failed(dir, &row.id);
         let run = if waiting.contains(&row.id) {
             RunStatus::Waiting
@@ -4539,10 +4537,7 @@ fn session_recently_failed(config_dir: &Path, id: &str) -> bool {
     }
 }
 
-fn session_tile_bits(
-    config_dir: &Path,
-    id: &str,
-) -> (String, Vec<sessions_board::PrLink>, bool) {
+fn session_tile_bits(config_dir: &Path, id: &str) -> (String, Vec<sessions_board::PrLink>, bool) {
     match history::load(config_dir, id, 40) {
         Ok(t) => {
             let mut involving_me = false;

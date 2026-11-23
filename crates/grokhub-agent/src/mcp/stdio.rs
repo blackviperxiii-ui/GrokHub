@@ -127,16 +127,8 @@ impl StdioConn {
     }
 
     /// `resources/read` for one URI (MCP Apps `ui://` HTML, and other resources).
-    pub(crate) fn read_resource(
-        &mut self,
-        uri: &str,
-        timeout: Duration,
-    ) -> Result<Value, String> {
-        self.roundtrip(
-            "resources/read",
-            serde_json::json!({ "uri": uri }),
-            timeout,
-        )
+    pub(crate) fn read_resource(&mut self, uri: &str, timeout: Duration) -> Result<Value, String> {
+        self.roundtrip("resources/read", serde_json::json!({ "uri": uri }), timeout)
     }
 
     /// `ping` in the session era; the stateless era dropped it, so `server/discover`.

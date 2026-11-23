@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{now_ms, uid};
 
 /// Refuse start/join until the person allows joining.
-pub const JOIN_OFF: &str =
-    "Meeting join is off. Allow Join on the Meetings page, then try again.";
+pub const JOIN_OFF: &str = "Meeting join is off. Allow Join on the Meetings page, then try again.";
 /// Refuse recording/transcript/Talk that needs capture until record is allowed.
 pub const RECORD_OFF: &str =
     "Meeting recording is off. Allow Record on the Meetings page, then try again.";
@@ -199,11 +198,7 @@ pub fn start_meeting<'a>(
     let id = meeting.id.clone();
     store.meetings.insert(0, meeting);
     store.live_id = Some(id.clone());
-    store
-        .meetings
-        .iter()
-        .find(|m| m.id == id)
-        .ok_or(MISSING)
+    store.meetings.iter().find(|m| m.id == id).ok_or(MISSING)
 }
 
 fn live_mut(store: &mut MeetingsStore) -> Result<&mut Meeting, &'static str> {
@@ -280,20 +275,14 @@ pub fn append_speech<'a>(
     }
     let at = now.unwrap_or_else(now_ms);
     let meeting = live_mut(store)?;
-    meeting.transcript.push(TranscriptLine::new(
-        LineKind::Speech,
-        text,
-        speaker,
-        at,
-    ));
+    meeting
+        .transcript
+        .push(TranscriptLine::new(LineKind::Speech, text, speaker, at));
     Ok(meeting)
 }
 
 /// End the live meeting.
-pub fn end_meeting(
-    store: &mut MeetingsStore,
-    now: Option<u64>,
-) -> Result<&Meeting, &'static str> {
+pub fn end_meeting(store: &mut MeetingsStore, now: Option<u64>) -> Result<&Meeting, &'static str> {
     let id = store.live_id.clone().ok_or(NO_LIVE)?;
     let at = now.unwrap_or_else(now_ms);
     let meeting = store

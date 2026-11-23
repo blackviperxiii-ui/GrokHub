@@ -8,9 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use grokhub_core::http;
-use grokhub_core::outbound_webhooks::{
-    matching, prepare_post, LifecycleKind, OutboundHook,
-};
+use grokhub_core::outbound_webhooks::{matching, prepare_post, LifecycleKind, OutboundHook};
 use grokhub_core::{now_ms, public_http_url};
 use serde_json::Value;
 
@@ -28,10 +26,7 @@ pub fn emit(config_dir: &Path, kind: LifecycleKind, event: &str, session: &str, 
     let now = now_ms();
     for hook in hooks {
         if let Err(err) = post_one(config_dir, &hook, kind, event, session, detail, now) {
-            eprintln!(
-                "outbound webhook {}: {err}",
-                hook.name
-            );
+            eprintln!("outbound webhook {}: {err}", hook.name);
         }
     }
 }

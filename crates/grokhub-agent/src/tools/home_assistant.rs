@@ -203,12 +203,7 @@ pub fn run(name: &str, args: &Value) -> ToolOutput {
             }
             let entity_id = opt_str(args, "entity_id");
             let data = args.get("data").and_then(Value::as_object);
-            host.call_service(
-                &domain,
-                &service,
-                entity_id.as_deref(),
-                data,
-            )
+            host.call_service(&domain, &service, entity_id.as_deref(), data)
         }
         other => return ToolOutput::err(format!("Unknown Home Assistant tool `{other}`.")),
     };
@@ -237,7 +232,11 @@ mod tests {
     }
 
     impl HomeAssistantOps for Fake {
-        fn list_entities(&self, domain: Option<&str>, area: Option<&str>) -> Result<String, String> {
+        fn list_entities(
+            &self,
+            domain: Option<&str>,
+            area: Option<&str>,
+        ) -> Result<String, String> {
             self.calls
                 .lock()
                 .unwrap()
@@ -246,10 +245,15 @@ mod tests {
         }
         fn get_state(&self, entity_id: &str) -> Result<String, String> {
             self.calls.lock().unwrap().push(format!("get:{entity_id}"));
-            Ok(format!("entity_id: {entity_id}\nstate: on\nattributes:\n{{}}"))
+            Ok(format!(
+                "entity_id: {entity_id}\nstate: on\nattributes:\n{{}}"
+            ))
         }
         fn list_services(&self, domain: Option<&str>) -> Result<String, String> {
-            self.calls.lock().unwrap().push(format!("services:{domain:?}"));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("services:{domain:?}"));
             Ok("1 domains:\n- light: turn_on".into())
         }
         fn call_service(

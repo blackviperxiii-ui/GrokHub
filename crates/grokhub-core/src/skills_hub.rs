@@ -385,9 +385,7 @@ fn looks_like_host(q: &str) -> Option<String> {
     let q = q.trim();
     let host = if let Some(rest) = q.strip_prefix("https://") {
         rest.split('/').next().unwrap_or("")
-    } else if q.contains("://") {
-        return None;
-    } else if q.contains('/') {
+    } else if q.contains("://") || q.contains('/') {
         return None;
     } else {
         q

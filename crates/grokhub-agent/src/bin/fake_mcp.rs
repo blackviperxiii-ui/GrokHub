@@ -231,7 +231,12 @@ fn tool_list() -> Vec<Value> {
                 "ui://inventory/dashboard",
                 &["model", "app"],
             ),
-            app_tool("restock_item", "Restock one SKU", "ui://inventory/dashboard", &["app"]),
+            app_tool(
+                "restock_item",
+                "Restock one SKU",
+                "ui://inventory/dashboard",
+                &["app"],
+            ),
             tool("echo", "Echo arguments"),
         ];
     }

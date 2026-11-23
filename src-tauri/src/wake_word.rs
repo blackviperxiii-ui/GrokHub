@@ -136,10 +136,7 @@ fn feed_view(action: WakeAction, phase: WakePhase) -> FeedResult {
             profile_id: None,
             phase: phase_label(phase).into(),
         },
-        WakeAction::StartTurn {
-            phrase,
-            profile_id,
-        } => FeedResult {
+        WakeAction::StartTurn { phrase, profile_id } => FeedResult {
             kind: "start_turn".into(),
             phrase: Some(phrase),
             profile_id: Some(profile_id),
@@ -213,7 +210,9 @@ pub fn act(config_dir: &Path, act: Act) -> Result<Page, String> {
         listen.config = load_unlocked(config_dir)?;
         match act {
             Act::SetMicConsent { on } => set_mic_consent(&mut listen.config, on),
-            Act::SetEnabled { on } => set_enabled(&mut listen.config, on).map_err(|e| e.to_string())?,
+            Act::SetEnabled { on } => {
+                set_enabled(&mut listen.config, on).map_err(|e| e.to_string())?
+            }
             Act::SetPhrases { phrases } => set_phrases(&mut listen.config, &phrases),
             Act::SetStopPhrases { phrases } => set_stop_phrases(&mut listen.config, &phrases),
             Act::SetRoutes { routes } => {

@@ -10,9 +10,7 @@ use std::sync::Arc;
 use grokhub_agent::HomeAssistantOps;
 use grokhub_core::home_assistant as ha;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
-
-use crate::credential;
+use serde_json::{Map, Value};
 
 /// Settings page view — never includes the raw token.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,24 +35,25 @@ impl Default for HomeAssistantView {
     }
 }
 
+#[cfg(not(test))]
 fn keychain_message(err: keyring::Error) -> String {
     format!("The system keychain is not available: {err}")
 }
 
+#[cfg(not(test))]
 fn backend() -> grokhub_agent::keyring_blob::OsBackend {
-    grokhub_agent::keyring_blob::OsBackend::new(credential::SERVICE, keychain_message)
+    grokhub_agent::keyring_blob::OsBackend::new(crate::credential::SERVICE, keychain_message)
 }
 
 #[cfg(test)]
 static TEST_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 fn load_token() -> Option<String> {
-    if cfg!(test) {
-        return TEST_TOKEN
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+    #[cfg(test)]
+    {
+        TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+    #[cfg(not(test))]
     match grokhub_agent::keyring_blob::get(&backend(), ha::KEYRING_ACCOUNT) {
         Ok(Some(t)) if !t.trim().is_empty() => Some(t),
         _ => None,
@@ -62,11 +61,14 @@ fn load_token() -> Option<String> {
 }
 
 fn store_token(token: Option<&str>) -> Result<(), String> {
-    if cfg!(test) {
-        *TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()) =
-            token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
-        return Ok(());
+    #[cfg(test)]
+    {
+        *TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()) = token
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        Ok(())
     }
+    #[cfg(not(test))]
     match token {
         Some(t) if !t.trim().is_empty() => {
             grokhub_agent::keyring_blob::set(&backend(), ha::KEYRING_ACCOUNT, t.trim())
@@ -144,13 +146,10 @@ pub fn set_token(config_dir: &Path, token: String) -> Result<HomeAssistantView, 
 pub fn test_connection(config_dir: &Path) -> Result<String, String> {
     let settings = load_settings(config_dir);
     if !settings.enabled {
-        return Err(
-            "Turn on Home Assistant first (Settings → Your PC → PC helpers).".into(),
-        );
+        return Err("Turn on Home Assistant first (Settings → Your PC → PC helpers).".into());
     }
-    let token = load_token().ok_or_else(|| {
-        "Add a Home Assistant long-lived access token first.".to_string()
-    })?;
+    let token = load_token()
+        .ok_or_else(|| "Add a Home Assistant long-lived access token first.".to_string())?;
     let body = ha::ping(&settings.base_url, &token)?;
     if body.contains("API running") || body.contains("message") {
         Ok("Connected. Home Assistant API is reachable.".into())
@@ -206,14 +205,7 @@ impl HomeAssistantOps for Host {
         data: Option<&Map<String, Value>>,
     ) -> Result<String, String> {
         let (settings, token) = self.credentials()?;
-        ha::call_service(
-            &settings.base_url,
-            &token,
-            domain,
-            service,
-            entity_id,
-            data,
-        )
+        ha::call_service(&settings.base_url, &token, domain, service, entity_id, data)
     }
 }
 
@@ -238,6 +230,7 @@ pub fn register(config_dir: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn tmp() -> PathBuf {

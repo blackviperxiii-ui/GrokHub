@@ -191,11 +191,7 @@ impl HttpConn {
     }
 
     /// `resources/read` for one URI (MCP Apps `ui://` HTML, and other resources).
-    pub(crate) fn read_resource(
-        &mut self,
-        uri: &str,
-        timeout: Duration,
-    ) -> Result<Value, String> {
+    pub(crate) fn read_resource(&mut self, uri: &str, timeout: Duration) -> Result<Value, String> {
         self.roundtrip("resources/read", json!({ "uri": uri }), timeout)
     }
 

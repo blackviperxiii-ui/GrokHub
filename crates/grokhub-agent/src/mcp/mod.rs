@@ -251,11 +251,7 @@ impl Conn {
         }
     }
 
-    fn read_resource(
-        &mut self,
-        uri: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Value, String> {
+    fn read_resource(&mut self, uri: &str, timeout: std::time::Duration) -> Result<Value, String> {
         match self {
             Conn::Stdio(conn) => conn.read_resource(uri, timeout),
             Conn::Http(conn) => conn.read_resource(uri, timeout),
@@ -1154,7 +1150,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
                     if let Ok((html, prefers_border)) =
                         apps::decode_resource(&ui.resource_uri, &resource)
                     {
-                        out.mcp_app = Some(McpAppView {
+                        out.mcp_app = Some(Box::new(McpAppView {
                             server: rec.server.clone(),
                             tool: rec.raw.clone(),
                             resource_uri: ui.resource_uri.clone(),
@@ -1162,7 +1158,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
                             prefers_border,
                             tool_input: args.clone(),
                             tool_result: raw,
-                        });
+                        }));
                     }
                 }
             }
@@ -1694,8 +1690,9 @@ fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents, install_test_listing,
-        install_test_tools, read_mcp_text, schema_tools, search_output, try_dispatch,
+        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents,
+        install_test_listing, install_test_tools, read_mcp_text, schema_tools, search_output,
+        try_dispatch,
     };
     use crate::gate::{decide, decide_with, mcp_policy_deny, Decision, Gate, PermMode};
     use crate::perm::ConfigGuard;

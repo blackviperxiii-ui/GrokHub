@@ -163,7 +163,10 @@ pub fn default_csp() -> String {
 
 /// HTML wrapped with a CSP meta tag when the document has no Content-Security-Policy.
 pub fn with_csp(html: &str, csp: &str) -> String {
-    if html.to_ascii_lowercase().contains("content-security-policy") {
+    if html
+        .to_ascii_lowercase()
+        .contains("content-security-policy")
+    {
         return html.to_string();
     }
     let meta = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\">");
@@ -270,7 +273,10 @@ mod tests {
 
     #[test]
     fn with_csp_injects_into_head() {
-        let html = with_csp("<html><head></head><body>x</body></html>", "default-src 'none'");
+        let html = with_csp(
+            "<html><head></head><body>x</body></html>",
+            "default-src 'none'",
+        );
         assert!(html.contains("Content-Security-Policy"));
         assert!(html.contains("default-src 'none'"));
     }
