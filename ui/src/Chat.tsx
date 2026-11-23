@@ -108,6 +108,7 @@ import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
 import { PanelCard, panelActionText } from "./PanelCard";
+import { McpAppHost } from "./McpAppHost";
 import { ChatFindBar } from "./ChatFindBar";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
 import { scrubHeld } from "./heldScrub";
@@ -170,6 +171,8 @@ export type Item =
   /** A show_panel panel. Dismissed stays in the list, so the same panel
    * sent again stays hidden; a changed one comes back. */
   | (Extract<ChatEvent, { kind: "panel" }> & { dismissed?: boolean })
+  /** An MCP App iframe hosted from a tool's ui:// resource. */
+  | Extract<ChatEvent, { kind: "mcpApp" }>
   /** A report_findings card under the reply (Order 733). */
   | Extract<ChatEvent, { kind: "findings" }>
   /** The reply's Finished block as a card (Order 733). */
@@ -395,6 +398,8 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
       if (was.kind === "panel" && JSON.stringify(was.spec) === JSON.stringify(event.spec)) return items;
       return items.map((item, i) => (i === at ? { ...event } : item));
     }
+    case "mcpApp":
+      return [...items, { ...event }];
     case "findings":
     case "evidence":
       return [...items, { ...event }];
@@ -789,6 +794,8 @@ function LogItem({
           onDismiss={onPanelDismiss}
         />
       );
+    case "mcpApp":
+      return <McpAppHost id={item.id} app={item.app} />;
     case "findings":
       return <FindingsCard event={item} onFix={onFix} />;
     case "recap":

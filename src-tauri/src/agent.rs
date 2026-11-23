@@ -231,6 +231,12 @@ pub enum UiEvent {
         id: String,
         spec: serde_json::Value,
     },
+    /// An MCP App HTML view for the sandboxed in-chat host. `app` carries
+    /// server, tool, html, and the tool input/result for the iframe bridge.
+    McpApp {
+        id: String,
+        app: serde_json::Value,
+    },
     /// The reply's `Finished` block as a card. `body` is the reply with the
     /// block taken out, so the page swaps the bubble's text for it.
     Recap {
@@ -533,6 +539,15 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
                 serde_json::from_value(spec.clone()).ok()?;
             grokhub_core::panel_spec::validate_panel_spec(&checked).ok()?;
             UiEvent::Panel { id, spec }
+        }
+        AcpEvent::McpApp { id, app } => {
+            // Require a ui:// URI and HTML before the page hosts the iframe.
+            let uri = app.get("resourceUri").and_then(|v| v.as_str()).unwrap_or("");
+            let html = app.get("html").and_then(|v| v.as_str()).unwrap_or("");
+            if !uri.starts_with("ui://") || html.trim().is_empty() {
+                return None;
+            }
+            UiEvent::McpApp { id, app }
         }
         AcpEvent::Elicit(ask) => UiEvent::Elicit {
             id: ask.tool_call_id,

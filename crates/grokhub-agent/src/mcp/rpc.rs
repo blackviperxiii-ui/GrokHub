@@ -335,6 +335,7 @@ pub(crate) fn parse_tools(result: &Value) -> (Vec<RawTool>, Option<String>) {
                 output_schema,
                 hints: parse_hints(item),
                 icons: parse_icons(item.get("icons")),
+                ui: super::apps::parse_ui_meta(item),
             });
         }
     }
@@ -418,6 +419,8 @@ pub(crate) struct RawTool {
     pub output_schema: Option<Value>,
     pub hints: ToolHints,
     pub icons: Vec<ToolIcon>,
+    /// `_meta.ui` when this tool hosts an MCP App view.
+    pub ui: Option<super::apps::UiMeta>,
 }
 
 /// A tool's `annotations` hints. The server sets them, so they can only make
@@ -448,7 +451,12 @@ pub struct ToolIcon {
 }
 
 fn client_capabilities() -> Value {
-    json!({ "elicitation": { "form": {}, "url": {} } })
+    json!({
+        "elicitation": { "form": {}, "url": {} },
+        "extensions": {
+            (super::apps::EXTENSION): super::apps::client_capability()
+        }
+    })
 }
 
 fn client_info() -> Value {
@@ -532,13 +540,26 @@ pub(crate) const MAX_INPUT_ROUNDS: usize = 4;
 /// `_meta`) and gives back the result. An `input_required` result is answered
 /// on the elicit card and the call is sent again with `inputResponses` and the
 /// server's `requestState` (Multi Round-Trip Requests), at most
-/// [`MAX_INPUT_ROUNDS`] times.
+/// [`MAX_INPUT_ROUNDS`] times. Transports that also need the raw result use
+/// [`call_tool_raw`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn call_tool(
     server: &str,
     name: &str,
     args: &Value,
     send: &mut dyn FnMut(Value) -> Result<Value, String>,
 ) -> Result<(String, bool), String> {
+    let (text, failed, _) = call_tool_raw(server, name, args, send)?;
+    Ok((text, failed))
+}
+
+/// Like [`call_tool`], and also the raw `CallToolResult` (for MCP Apps hosts).
+pub(crate) fn call_tool_raw(
+    server: &str,
+    name: &str,
+    args: &Value,
+    send: &mut dyn FnMut(Value) -> Result<Value, String>,
+) -> Result<(String, bool, Value), String> {
     let base = json!({"name": name, "arguments": args});
     let mut params = base.clone();
     for _ in 0..=MAX_INPUT_ROUNDS {
@@ -554,7 +575,11 @@ pub(crate) fn call_tool(
                     params["requestState"] = json!(state);
                 }
             }
-            _ => return Ok(tool_output(&complete(server, result)?)),
+            _ => {
+                let raw = complete(server, result)?;
+                let (text, failed) = tool_output(&raw);
+                return Ok((text, failed, raw));
+            }
         }
     }
     Err(format!(
@@ -744,7 +769,14 @@ mod tests {
                 "_meta": {
                     "progressToken": 7,
                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}, "url": {}}},
+                    "io.modelcontextprotocol/clientCapabilities": {
+                        "elicitation": {"form": {}, "url": {}},
+                        "extensions": {
+                            "io.modelcontextprotocol/ui": {
+                                "mimeTypes": ["text/html;profile=mcp-app"]
+                            }
+                        }
+                    },
                     "io.modelcontextprotocol/clientInfo": {"name": "GrokHub", "version": env!("CARGO_PKG_VERSION")}
                 }
             })

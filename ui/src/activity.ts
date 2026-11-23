@@ -102,10 +102,11 @@ export function chatActivity(
         : undefined;
     case "error":
       return { ...restart, status: "failed", detail: clip(event.message), at: now };
-    // A panel comes with its tool row, which already counts the step.
+    // A panel / MCP App comes with its tool row, which already counts the step.
     case "suggestions":
     case "goal":
     case "panel":
+    case "mcpApp":
       return prev;
   }
 }

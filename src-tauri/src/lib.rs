@@ -3390,6 +3390,25 @@ async fn answer_connector_key(id: String, approve: bool) -> Result<connectors::C
     off_main(move || connectors::answer_key(&id, approve)).await?
 }
 
+/// Host payload for an MCP App iframe's `ui/initialize`.
+#[tauri::command]
+fn mcp_app_initialize() -> serde_json::Value {
+    grokhub_agent::app_host_initialize()
+}
+
+/// Proxy an app-visible `tools/call` from an MCP App iframe. Rejects tools
+/// that are not app-visible on that server.
+#[tauri::command]
+async fn mcp_app_call_tool(
+    server: String,
+    name: String,
+    #[allow(non_snake_case)]
+    arguments: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let args = arguments.unwrap_or_else(|| serde_json::json!({}));
+    off_main(move || grokhub_agent::app_call_tool(&server, &name, &args)).await?
+}
+
 /// What this platform runs; the UI hides the rest.
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
@@ -7835,6 +7854,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
         "get_chat_archive" => out(get_chat_archive()),
         "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
+        "mcp_app_initialize" => out(mcp_app_initialize()),
+        "mcp_app_call_tool" => out(block_on(mcp_app_call_tool(
+            arg(args, "server")?,
+            arg(args, "name")?,
+            arg::<Option<Value>>(args, "arguments")?,
+        ))?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -9047,6 +9072,8 @@ pub fn run() {
             sign_in_connector,
             save_connector_key,
             answer_connector_key,
+            mcp_app_initialize,
+            mcp_app_call_tool,
             code_repo,
             code_diff,
             code_builtins,

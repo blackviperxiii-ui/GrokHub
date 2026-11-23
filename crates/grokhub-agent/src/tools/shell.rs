@@ -480,6 +480,7 @@ fn finish(status: &str, raw: &[u8], failed: bool) -> ToolOutput {
         text,
         image_data_url: None,
         failed,
+        mcp_app: None,
     }
 }
 

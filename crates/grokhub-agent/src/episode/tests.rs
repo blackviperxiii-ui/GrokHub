@@ -360,6 +360,7 @@ impl DesktopOps for FakeDesk {
                     format!("data:image/png;base64,FRAME{n}")
                 }),
                 failed: false,
+                mcp_app: None,
             };
         }
         ToolOutput::ok(format!("{name} ok"))

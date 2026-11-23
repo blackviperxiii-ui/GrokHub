@@ -135,9 +135,9 @@ pub use hooks::{
 pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use lead::{lead_on, set_lead_session, LeadPhase};
 pub use mcp::{
-    alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
-    restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
-    ElicitView,
+    alias_elicit, app_call_tool, app_host_initialize, attach_elicit, configured, detach_elicit,
+    doctor, import_documents, import_paths, restart, set_workspace, shutdown_all, unalias_elicit,
+    DoctorRow, ElicitInbox, ElicitNote, ElicitView, McpAppView,
 };
 pub use memory::{
     amr_enabled, amr_store, dream, dream_model_enabled, first_turn_injection, flush_pending,

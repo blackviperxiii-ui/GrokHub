@@ -2844,6 +2844,48 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   border-color: var(--warn-text);
 }
 
+/* MCP Apps host: sandboxed iframe for text/html;profile=mcp-app views. */
+.mcp-app {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  min-width: 0;
+}
+
+.mcp-app.bordered {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.mcp-app-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--font-small);
+  color: var(--muted);
+}
+
+.mcp-app-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.mcp-app-frame {
+  width: 100%;
+  min-height: 220px;
+  border: 0;
+  background: var(--bg);
+}
+
+.mcp-app-status {
+  margin: 0;
+  font-size: var(--font-small);
+  color: var(--danger-text);
+}
+
 /* A show_panel panel: plain text, tables and buttons inside a turn card. */
 .panel-head {
   display: flex;

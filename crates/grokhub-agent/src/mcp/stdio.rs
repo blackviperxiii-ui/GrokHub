@@ -109,19 +109,34 @@ impl StdioConn {
         args: &Value,
         key: Option<&str>,
         timeout: Duration,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Value), String> {
         if self.stateless.is_some() {
             let server = self.server.clone();
-            return rpc::call_tool(&server, name, args, &mut |params| {
+            let (text, failed, raw) = rpc::call_tool_raw(&server, name, args, &mut |params| {
                 self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
-            });
+            })?;
+            return Ok((text, failed, raw));
         }
         let result = self.roundtrip(
             "tools/call",
             rpc::with_key(serde_json::json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
-        Ok(rpc::tool_output(&result))
+        let (text, failed) = rpc::tool_output(&result);
+        Ok((text, failed, result))
+    }
+
+    /// `resources/read` for one URI (MCP Apps `ui://` HTML, and other resources).
+    pub(crate) fn read_resource(
+        &mut self,
+        uri: &str,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        self.roundtrip(
+            "resources/read",
+            serde_json::json!({ "uri": uri }),
+            timeout,
+        )
     }
 
     /// `ping` in the session era; the stateless era dropped it, so `server/discover`.
