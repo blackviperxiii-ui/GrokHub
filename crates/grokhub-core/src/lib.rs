@@ -8,8 +8,8 @@ pub mod amr;
 pub mod app_json;
 pub mod app_lock;
 pub mod appearance;
-pub mod attach;
 pub mod at_context;
+pub mod attach;
 pub mod audio_check;
 pub mod auto_fix;
 pub mod automation;
@@ -158,7 +158,6 @@ pub mod mods;
 pub mod msg_channels;
 pub mod msg_discord;
 pub mod msg_telegram;
-pub mod outbound_webhooks;
 pub mod net_log;
 pub mod nudge_watchers;
 pub mod oauth;
@@ -169,6 +168,7 @@ pub mod onboard_identity;
 pub mod openclaw;
 pub mod organs;
 pub mod osrs_hiscores;
+pub mod outbound_webhooks;
 pub mod outcome;
 pub mod pair;
 pub mod panel_spec;
@@ -247,8 +247,8 @@ pub mod voice_engine;
 pub mod voice_flow;
 pub mod voice_live;
 pub mod voice_turn;
-pub mod wake_word;
 pub mod vstack_sync;
+pub mod wake_word;
 pub mod watch_learn;
 pub mod week_recap;
 pub mod what_changed;
@@ -286,16 +286,16 @@ pub use ask_offers::{
     SOURCE_PREFIX as ASK_OFFER_PREFIX, TICK_EVERY_MS as ASK_OFFER_TICK_MS,
     WINDOW_MS as ASK_OFFER_WINDOW_MS,
 };
+pub use at_context::{
+    expand_at_context, find_at_refs, AtKind, AtRef, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
+    FOLDER_ENTRY_CAP, GIT_COMMIT_CAP,
+};
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,
     attach_send_line, bound_scan, chat_attach_status, clip_image_args, image_pixels_ok,
     imagine_ref_status, kick_consumes_attach, list_pick_names, parse_picker_stdout, picker_args,
     picker_save_args, plus_empty_status, plus_menu_rows, png_ihdr_size, take_text_body, AttachKind,
     PlusAct, PlusTarget, IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
-};
-pub use at_context::{
-    expand_at_context, find_at_refs, AtKind, AtRef, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
-    FOLDER_ENTRY_CAP, GIT_COMMIT_CAP,
 };
 pub use automation::{
     automation_alert, automation_blocked_by_policy, automation_health_line,
@@ -309,14 +309,14 @@ pub use automation::{
     user_asked_to_schedule, watch_once_keeps_running, AutoHealth, AutoOutcome, Automation,
     AutomationAlert, ScheduleRoute,
 };
+pub use automation_preflight::{
+    check_binary, mark_automation_preflight_failed, mentioned_connectors, needs_model_route,
+    preflight, PreflightBlock, PreflightCtx, PREFLIGHT_STOP, WELL_KNOWN_CONNECTORS,
+};
 pub use automation_wait::{
     append_stream_event, eval_condition, lifecycle_line, mark_automation_waiting, stream_path,
     wait_line, wait_prompt, wait_step, AutoLifecycle, LifePhase, WaitStep, WaitTrigger,
     STREAMS_DIR, WAIT_POLL_MS,
-};
-pub use automation_preflight::{
-    check_binary, mark_automation_preflight_failed, mentioned_connectors, needs_model_route,
-    preflight, PreflightBlock, PreflightCtx, PREFLIGHT_STOP, WELL_KNOWN_CONNECTORS,
 };
 pub use blueprint_catalog::{
     catalog as blueprint_catalog, fill as fill_blueprint, Blueprint, BlueprintSlot,

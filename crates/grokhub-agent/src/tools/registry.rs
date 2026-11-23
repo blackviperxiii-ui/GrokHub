@@ -812,12 +812,7 @@ mod tests {
                 full.clone(),
                 12_800,
             ),
-            (
-                "plan/ask",
-                profile(PermMode::Ask, true, true),
-                full,
-                8_500,
-            ),
+            ("plan/ask", profile(PermMode::Ask, true, true), full, 8_500),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
@@ -858,12 +853,7 @@ mod tests {
             "expected ≥25% smaller: before={before} after={after}"
         );
         let stable = stable_schemas(&gate, ON);
-        for rare in [
-            "scheduler_create",
-            "image_generate",
-            "screenshot",
-            "click",
-        ] {
+        for rare in ["scheduler_create", "image_generate", "screenshot", "click"] {
             assert!(
                 !stable.iter().any(|t| t["name"] == rare),
                 "{rare} must stay unloaded until tool_search / load_tool_schema"

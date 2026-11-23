@@ -120,15 +120,14 @@ pub fn sign_webhook(secret: &[u8], body: &[u8], timestamp: &str) -> Result<Strin
         .map_err(|_| "the webhook timestamp isn't a number".to_string())?;
     let mut signed = format!("{}.", timestamp.trim()).into_bytes();
     signed.extend_from_slice(body);
-    Ok(format!("sha256={}", hex::encode(hmac_sha256(secret, &signed))))
+    Ok(format!(
+        "sha256={}",
+        hex::encode(hmac_sha256(secret, &signed))
+    ))
 }
 
 /// Headers a receiver needs, plus the Unix-seconds timestamp string.
-pub fn signed_headers(
-    secret: &[u8],
-    body: &[u8],
-    now_ms: u64,
-) -> Result<(String, String), String> {
+pub fn signed_headers(secret: &[u8], body: &[u8], now_ms: u64) -> Result<(String, String), String> {
     let timestamp = (now_ms / 1000).to_string();
     let signature = sign_webhook(secret, body, &timestamp)?;
     Ok((signature, timestamp))
@@ -358,8 +357,7 @@ mod tests {
         );
         assert!(matching(&dir, LifecycleKind::Turn).is_empty());
         assert_eq!(
-            add_outbound(&dir, "deploys", "https://hooks.example.com/y", &[])
-                .unwrap_err(),
+            add_outbound(&dir, "deploys", "https://hooks.example.com/y", &[]).unwrap_err(),
             "There's already an outbound webhook named deploys."
         );
         assert_eq!(

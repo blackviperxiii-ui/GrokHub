@@ -157,7 +157,12 @@ pub fn wait_step(wait: &WaitTrigger, config_dir: &Path) -> WaitStep {
         return condition_step(wait.source.trim());
     }
     if wait.is_event_stream() {
-        return stream_step(config_dir, wait.source.trim(), &wait.match_text, &wait.cursor);
+        return stream_step(
+            config_dir,
+            wait.source.trim(),
+            &wait.match_text,
+            &wait.cursor,
+        );
     }
     WaitStep::None
 }
@@ -259,7 +264,10 @@ fn stream_step(config_dir: &Path, stream_id: &str, match_text: &str, cursor: &st
             continue;
         }
         let context = if needle.is_empty() {
-            format!("Event stream `{stream_id}` has a new event:\n{}", clip(&text, WAIT_ASK_CHARS))
+            format!(
+                "Event stream `{stream_id}` has a new event:\n{}",
+                clip(&text, WAIT_ASK_CHARS)
+            )
         } else {
             format!(
                 "Event stream `{stream_id}` matched `{needle}`:\n{}",
@@ -428,7 +436,10 @@ mod tests {
 
     #[test]
     fn plain_wait_is_none_step() {
-        assert_eq!(wait_step(&WaitTrigger::default(), Path::new("/tmp")), WaitStep::None);
+        assert_eq!(
+            wait_step(&WaitTrigger::default(), Path::new("/tmp")),
+            WaitStep::None
+        );
     }
 
     #[test]

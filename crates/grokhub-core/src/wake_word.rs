@@ -178,10 +178,7 @@ impl WakeListener {
                 if let Some(phrase) = match_phrase(text, &effective_phrases(&self.config)) {
                     let profile_id = route_profile(&self.config, &phrase);
                     self.phase = WakePhase::InTurn;
-                    Ok(WakeAction::StartTurn {
-                        phrase,
-                        profile_id,
-                    })
+                    Ok(WakeAction::StartTurn { phrase, profile_id })
                 } else {
                     Ok(WakeAction::None)
                 }
@@ -257,10 +254,7 @@ pub fn set_default_profile(cfg: &mut WakeConfig, profile_id: &str) {
 /// Phrases used for matching: saved list, or built-in defaults when empty.
 pub fn effective_phrases(cfg: &WakeConfig) -> Vec<String> {
     if cfg.phrases.is_empty() {
-        DEFAULT_PHRASES
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect()
+        DEFAULT_PHRASES.iter().map(|s| (*s).to_string()).collect()
     } else {
         cfg.phrases.clone()
     }
@@ -332,10 +326,7 @@ pub fn phrase_in_text(hay: &str, needle: &str) -> bool {
 
 /// First matching phrase in `candidates`, or None.
 pub fn match_phrase(text: &str, candidates: &[String]) -> Option<String> {
-    candidates
-        .iter()
-        .find(|p| phrase_in_text(text, p))
-        .cloned()
+    candidates.iter().find(|p| phrase_in_text(text, p)).cloned()
 }
 
 /// Profile for a matched wake phrase.
@@ -395,15 +386,12 @@ mod tests {
 
         let mut listen = WakeListener::new(cfg);
         listen.arm().unwrap();
-        assert_eq!(
-            listen.feed_local("noise only").unwrap(),
-            WakeAction::None
-        );
-        match listen.feed_local("…Hey, Cabin!! what is the weather").unwrap() {
-            WakeAction::StartTurn {
-                phrase,
-                profile_id,
-            } => {
+        assert_eq!(listen.feed_local("noise only").unwrap(), WakeAction::None);
+        match listen
+            .feed_local("…Hey, Cabin!! what is the weather")
+            .unwrap()
+        {
+            WakeAction::StartTurn { phrase, profile_id } => {
                 assert_eq!(phrase, "hey cabin");
                 assert_eq!(profile_id, "nyx");
             }

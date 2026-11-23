@@ -313,8 +313,7 @@ fn passes_filter(fact: &SessionFact, filter: PersonalFilter, query: &str) -> boo
     if q.is_empty() {
         return true;
     }
-    fact.title.to_ascii_lowercase().contains(&q)
-        || fact.preview.to_ascii_lowercase().contains(&q)
+    fact.title.to_ascii_lowercase().contains(&q) || fact.preview.to_ascii_lowercase().contains(&q)
 }
 
 /// Build the page from a board spec and live session facts.
@@ -360,11 +359,8 @@ pub fn build_page(
         }
     }
     for col in &mut columns {
-        col.tiles.sort_by(|a, b| {
-            b.updated_ms
-                .cmp(&a.updated_ms)
-                .then(a.id.cmp(&b.id))
-        });
+        col.tiles
+            .sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
     }
     Page {
         name: spec.name.clone(),
@@ -442,9 +438,7 @@ pub fn reshape(spec: &mut BoardSpec, instruction: &str) -> Result<String, String
         let id = parts
             .next()
             .ok_or_else(|| "Say which column and rule.".to_string())?;
-        let rule_raw = parts
-            .next()
-            .ok_or_else(|| "Say which rule.".to_string())?;
+        let rule_raw = parts.next().ok_or_else(|| "Say which rule.".to_string())?;
         let rule = Rule::parse(rule_raw).ok_or_else(|| {
             "Use waiting, failed, running, pr_open, pr_merged, or idle.".to_string()
         })?;
@@ -555,7 +549,10 @@ pub fn extract_prs(text: &str) -> Vec<PrLink> {
     let mut seen = std::collections::HashSet::new();
     for word in text.split_whitespace() {
         let cleaned = word.trim_matches(|c: char| {
-            matches!(c, ')' | '(' | '[' | ']' | '"' | '\'' | ',' | '.' | ';' | '!')
+            matches!(
+                c,
+                ')' | '(' | '[' | ']' | '"' | '\'' | ',' | '.' | ';' | '!'
+            )
         });
         let lower = cleaned.to_ascii_lowercase();
         let Some(idx) = lower.find("github.com/") else {
@@ -616,7 +613,8 @@ fn pr_state_near(hay: &str, url: &str, raw: &str) -> String {
         }
         offset += token.len() + 1;
     }
-    best.map(|(_, s)| s.to_string()).unwrap_or_else(|| "open".into())
+    best.map(|(_, s)| s.to_string())
+        .unwrap_or_else(|| "open".into())
 }
 
 /// Keep chats with activity inside the board window.
@@ -677,8 +675,7 @@ mod tests {
     #[test]
     fn pin_beats_rule() {
         let mut spec = BoardSpec::default();
-        spec.pins
-            .insert("shell-a".into(), "done".into());
+        spec.pins.insert("shell-a".into(), "done".into());
         let f = fact("shell-a", RunStatus::Running, vec![]);
         assert_eq!(place(&spec, &f), "done");
     }
@@ -690,10 +687,7 @@ mod tests {
             place(&spec, &fact("a", RunStatus::Waiting, vec![])),
             "needs-input"
         );
-        assert_eq!(
-            place(&spec, &fact("b", RunStatus::Failed, vec![])),
-            "stuck"
-        );
+        assert_eq!(place(&spec, &fact("b", RunStatus::Failed, vec![])), "stuck");
         assert_eq!(
             place(&spec, &fact("c", RunStatus::Running, vec![])),
             "working"
@@ -702,18 +696,12 @@ mod tests {
             url: "https://github.com/o/r/pull/1".into(),
             state: "open".into(),
         }];
-        assert_eq!(
-            place(&spec, &fact("d", RunStatus::Idle, open)),
-            "in-review"
-        );
+        assert_eq!(place(&spec, &fact("d", RunStatus::Idle, open)), "in-review");
         let merged = vec![PrLink {
             url: "https://github.com/o/r/pull/2".into(),
             state: "merged".into(),
         }];
-        assert_eq!(
-            place(&spec, &fact("e", RunStatus::Idle, merged)),
-            "merged"
-        );
+        assert_eq!(place(&spec, &fact("e", RunStatus::Idle, merged)), "merged");
         assert_eq!(place(&spec, &fact("f", RunStatus::Idle, vec![])), "done");
     }
 
@@ -763,7 +751,11 @@ mod tests {
             .unwrap()
             .contains("Active"));
         assert_eq!(
-            spec.columns.iter().find(|c| c.id == "working").unwrap().label,
+            spec.columns
+                .iter()
+                .find(|c| c.id == "working")
+                .unwrap()
+                .label,
             "Active"
         );
         reshape(&mut spec, "move done before needs-input").unwrap();
@@ -774,12 +766,28 @@ mod tests {
             Rule::Waiting
         );
         reshape(&mut spec, "fallback working").unwrap();
-        assert!(spec.columns.iter().find(|c| c.id == "working").unwrap().fallback);
-        assert!(!spec.columns.iter().find(|c| c.id == "done").unwrap().fallback);
+        assert!(
+            spec.columns
+                .iter()
+                .find(|c| c.id == "working")
+                .unwrap()
+                .fallback
+        );
+        assert!(
+            !spec
+                .columns
+                .iter()
+                .find(|c| c.id == "done")
+                .unwrap()
+                .fallback
+        );
         spec.pins.insert("shell-x".into(), "working".into());
         reshape(&mut spec, "reset columns").unwrap();
         assert_eq!(spec.columns[0].id, "needs-input");
-        assert_eq!(spec.pins.get("shell-x").map(String::as_str), Some("working"));
+        assert_eq!(
+            spec.pins.get("shell-x").map(String::as_str),
+            Some("working")
+        );
     }
 
     #[test]
@@ -795,10 +803,7 @@ mod tests {
 
     #[test]
     fn save_and_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!(
-            "gh-sessions-board-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("gh-sessions-board-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut spec = BoardSpec::default();

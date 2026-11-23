@@ -1011,10 +1011,7 @@ fn mcp_apps_host_loads_ui_resource_and_hides_app_only_tools() {
         ("connected", 3),
         "{rows:?}"
     );
-    let listed: Vec<String> = mcp::tool_list()
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
+    let listed: Vec<String> = mcp::tool_list().into_iter().map(|t| t.name).collect();
     assert!(listed.contains(&"show_inventory".into()), "{listed:?}");
     assert!(listed.contains(&"restock_item".into()), "{listed:?}");
     assert!(listed.contains(&"echo".into()), "{listed:?}");
@@ -1076,10 +1073,7 @@ fn mcp_apps_host_loads_ui_resource_and_hides_app_only_tools() {
             .pointer("/structuredContent/warehouse")
             .and_then(Value::as_str)
             == Some("berlin")
-            || app
-                .tool_result
-                .to_string()
-                .contains("berlin"),
+            || app.tool_result.to_string().contains("berlin"),
         "{}",
         app.tool_result
     );
@@ -1087,13 +1081,7 @@ fn mcp_apps_host_loads_ui_resource_and_hides_app_only_tools() {
     // App-visible call works; model-only echo from app path is refused when
     // visibility is app-only. restock is app-visible.
     let restock = mcp::app_call_tool("box", "restock_item", &json!({"sku": "MS-02"})).unwrap();
-    assert!(
-        restock.to_string().contains("MS-02"),
-        "{restock}"
-    );
+    assert!(restock.to_string().contains("MS-02"), "{restock}");
     let denied = mcp::app_call_tool("box", "echo", &json!({})).unwrap_err();
-    assert!(
-        denied.contains("not available to apps"),
-        "{denied}"
-    );
+    assert!(denied.contains("not available to apps"), "{denied}");
 }

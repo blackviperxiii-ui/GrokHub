@@ -917,8 +917,7 @@ fn run_turn(
             }
             crate::hooks::PromptHook::Continue { .. } => {}
         }
-        let hold_stream =
-            crate::hooks::on_hold_stream(input.conversation_id, input.workspace);
+        let hold_stream = crate::hooks::on_hold_stream(input.conversation_id, input.workspace);
         crate::outbound_hooks::emit_turn(
             &crate::perm::config_dir(),
             "PreLlmCall",

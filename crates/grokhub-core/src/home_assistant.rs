@@ -112,9 +112,7 @@ pub fn valid_entity_id(id: &str) -> bool {
     if object.contains('.') {
         return false;
     }
-    valid_slug(domain)
-        && !object.is_empty()
-        && object.chars().all(is_slug_char)
+    valid_slug(domain) && !object.is_empty() && object.chars().all(is_slug_char)
 }
 
 pub fn domain_blocked(domain: &str) -> bool {
@@ -136,8 +134,8 @@ pub fn summarize_states(
     domain: Option<&str>,
     area: Option<&str>,
 ) -> Result<Vec<EntitySummary>, String> {
-    let value: Value =
-        serde_json::from_str(body).map_err(|e| format!("Home Assistant states were not JSON: {e}"))?;
+    let value: Value = serde_json::from_str(body)
+        .map_err(|e| format!("Home Assistant states were not JSON: {e}"))?;
     let rows = value
         .as_array()
         .ok_or_else(|| "Home Assistant states were not a list.".to_string())?;
@@ -208,8 +206,8 @@ pub fn format_entities(rows: &[EntitySummary]) -> String {
 
 /// Format one `/api/states/<id>` object for the model.
 pub fn format_state(body: &str) -> Result<String, String> {
-    let v: Value =
-        serde_json::from_str(body).map_err(|e| format!("Home Assistant state was not JSON: {e}"))?;
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| format!("Home Assistant state was not JSON: {e}"))?;
     let entity_id = v
         .get("entity_id")
         .and_then(Value::as_str)
@@ -264,11 +262,7 @@ pub fn format_services(body: &str, domain: Option<&str>) -> Result<String, Strin
 }
 
 /// Gate a service call before any network I/O.
-pub fn gate_call(
-    domain: &str,
-    service: &str,
-    entity_id: Option<&str>,
-) -> Result<(), String> {
+pub fn gate_call(domain: &str, service: &str, entity_id: Option<&str>) -> Result<(), String> {
     let domain = domain.trim();
     let service = service.trim();
     if !valid_slug(domain) {
@@ -400,11 +394,7 @@ pub fn call_service(
     if let Some(id) = entity_id.map(str::trim).filter(|s| !s.is_empty()) {
         body.insert("entity_id".into(), Value::String(id.to_string()));
     }
-    let path = format!(
-        "/api/services/{}/{}",
-        domain.trim(),
-        service.trim()
-    );
+    let path = format!("/api/services/{}/{}", domain.trim(), service.trim());
     let resp = post_json(&base, token, &path, &Value::Object(body))?;
     if resp.trim().is_empty() {
         Ok(format!(

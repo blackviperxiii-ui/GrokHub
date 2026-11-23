@@ -1383,12 +1383,14 @@ fn canonical_event(key: &str) -> Option<&'static str> {
         "SubagentStop" | "subagent_stop" | "subagentStop" | "SubagentEnd" | "subagent_end"
         | "subagentEnd" => "SubagentStop",
         "PreCompact" | "pre_compact" | "preCompact" => "PreCompact",
-        "PostCompact" | "post_compact" | "postCompact" | "post_compaction"
-        | "postCompaction" => "PostCompact",
+        "PostCompact" | "post_compact" | "postCompact" | "post_compaction" | "postCompaction" => {
+            "PostCompact"
+        }
         "PreLlmCall" | "pre_llm_call" | "preLlmCall" => "PreLlmCall",
         "HoldStream" | "hold_stream" | "holdStream" => "HoldStream",
-        "SessionEnd" | "session_end" | "sessionEnd" | "on_session_delete"
-        | "onSessionDelete" => "SessionEnd",
+        "SessionEnd" | "session_end" | "sessionEnd" | "on_session_delete" | "onSessionDelete" => {
+            "SessionEnd"
+        }
         _ => return None,
     })
 }
@@ -2236,10 +2238,7 @@ mod tests {
             "PostCompact"
         );
         on_session_delete(&session, &dir);
-        assert_eq!(
-            fs::read_to_string(dir.join("ended")).unwrap(),
-            "SessionEnd"
-        );
+        assert_eq!(fs::read_to_string(dir.join("ended")).unwrap(), "SessionEnd");
         drop(guard);
         let _ = fs::remove_dir_all(&dir);
     }

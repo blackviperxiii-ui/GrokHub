@@ -50,10 +50,7 @@ static TEST_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None
 
 fn load_token() -> Option<String> {
     if cfg!(test) {
-        return TEST_TOKEN
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        return TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
     }
     match grokhub_agent::keyring_blob::get(&backend(), ha::KEYRING_ACCOUNT) {
         Ok(Some(t)) if !t.trim().is_empty() => Some(t),
@@ -63,8 +60,9 @@ fn load_token() -> Option<String> {
 
 fn store_token(token: Option<&str>) -> Result<(), String> {
     if cfg!(test) {
-        *TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()) =
-            token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        *TEST_TOKEN.lock().unwrap_or_else(|e| e.into_inner()) = token
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
         return Ok(());
     }
     match token {
@@ -144,13 +142,10 @@ pub fn set_token(config_dir: &Path, token: String) -> Result<HomeAssistantView, 
 pub fn test_connection(config_dir: &Path) -> Result<String, String> {
     let settings = load_settings(config_dir);
     if !settings.enabled {
-        return Err(
-            "Turn on Home Assistant first (Settings → Your PC → PC helpers).".into(),
-        );
+        return Err("Turn on Home Assistant first (Settings → Your PC → PC helpers).".into());
     }
-    let token = load_token().ok_or_else(|| {
-        "Add a Home Assistant long-lived access token first.".to_string()
-    })?;
+    let token = load_token()
+        .ok_or_else(|| "Add a Home Assistant long-lived access token first.".to_string())?;
     let body = ha::ping(&settings.base_url, &token)?;
     if body.contains("API running") || body.contains("message") {
         Ok("Connected. Home Assistant API is reachable.".into())
@@ -206,14 +201,7 @@ impl HomeAssistantOps for Host {
         data: Option<&Map<String, Value>>,
     ) -> Result<String, String> {
         let (settings, token) = self.credentials()?;
-        ha::call_service(
-            &settings.base_url,
-            &token,
-            domain,
-            service,
-            entity_id,
-            data,
-        )
+        ha::call_service(&settings.base_url, &token, domain, service, entity_id, data)
     }
 }
 

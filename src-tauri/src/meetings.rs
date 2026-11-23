@@ -213,10 +213,7 @@ pub fn act(config_dir: &Path, act: Act, query: &str) -> Result<Page, String> {
         Act::Search { .. } => {}
     }
     save(config_dir, &data)?;
-    Ok(page_of(
-        &data,
-        search_q.as_deref().unwrap_or(query),
-    ))
+    Ok(page_of(&data, search_q.as_deref().unwrap_or(query)))
 }
 
 #[cfg(test)]

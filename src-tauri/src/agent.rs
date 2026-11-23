@@ -542,7 +542,10 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
         }
         AcpEvent::McpApp { id, app } => {
             // Require a ui:// URI and HTML before the page hosts the iframe.
-            let uri = app.get("resourceUri").and_then(|v| v.as_str()).unwrap_or("");
+            let uri = app
+                .get("resourceUri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let html = app.get("html").and_then(|v| v.as_str()).unwrap_or("");
             if !uri.starts_with("ui://") || html.trim().is_empty() {
                 return None;
