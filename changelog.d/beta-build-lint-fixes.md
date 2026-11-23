@@ -1,0 +1,1 @@
+- The desktop app builds again outside tests after the Home Assistant token change, and the Rust code passes rustfmt and clippy again.
