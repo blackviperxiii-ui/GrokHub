@@ -1351,6 +1351,12 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                 continue;
             }
         };
+        // `@file:` / `@folder:` / `@diff` / `@staged` / `@git:N` / `@url:` expand
+        // into the turn after plus-button attach lines are composed.
+        let message = crate::attach::Composed {
+            text: grokhub_core::expand_at_context(&message.text, &route.workspace),
+            image: message.image,
+        };
         // "From now on, use Claude" moves the chat onto the plan from this
         // turn on, and "stop using Claude" moves it back; there is no switch.
         if let Some(on) = crate::claude_chat::steer(&text) {
