@@ -410,9 +410,9 @@ pub use chips::{
     prune_retired_chip_memory, quick_chip_intent, remember_chip_click, remember_chip_dismiss,
     remember_chip_turn_outcome, remember_home_slash, remember_home_surface, remember_intent,
     remember_typed_prompt, retired_mode_value, scrub_chat_text_chip_keys, skill_offer_chip,
-    top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind, ChipMemory, ChipSignals,
-    ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX, CHIP_MEMORY_VERSION,
-    CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
+    swap_in_code_starters, top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind,
+    ChipMemory, ChipSignals, ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX,
+    CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,

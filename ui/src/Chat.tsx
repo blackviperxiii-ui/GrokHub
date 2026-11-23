@@ -56,7 +56,7 @@ import {
   type TurnRead,
 } from "./api";
 import { GameNote, useNoteStatus } from "./GameNote";
-import { ChipRow, SEED_CHIP_PREFIX, useChipRow } from "./Chips";
+import { ChipRow, useChipRow } from "./Chips";
 import { ChatTabs, HangoutHeader } from "./ChatTabs";
 import { GoalAsk } from "./Goals";
 import { ATTACH_MAX, AttachButton, AttachChips, useAttachments } from "./AttachChips";
@@ -1068,7 +1068,7 @@ export function Chat({
   const [noteFor, setNoteFor] = useState<number | null>(null);
   const [noteSaved, setNoteSaved] = useNoteStatus();
   const row = useChipRow({
-    surface: "composer",
+    surface: embedded ? "code" : "composer",
     // The computer refuses a browser chips for a chat it has not sent in, so
     // the web app's new chat asks for the new-chat row.
     conversationId: remote && !items.some((it) => it.kind === "user") ? undefined : conversationId,
@@ -2550,7 +2550,7 @@ export function Chat({
         <GoalAsk key={goalAsk.id} id={goalAsk.id} title={goalAsk.title} onDone={() => setGoalAsk(null)} />
       ) : null}
       {!remote && <BudgetCard busy={busy} onOpenSettings={onOpenSettings} />}
-      <ChipRow chips={embedded ? row.chips.filter((c) => !c.id.startsWith(SEED_CHIP_PREFIX)) : row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
+      <ChipRow chips={row.chips} busy={busy} keys={active} onTap={tapChip} onHide={row.hide} />
       {noteSaved && (
         <p className="note" role="status">
           {noteSaved}

@@ -124,6 +124,13 @@ const QUICK_CHIPS = [
   { id: "seed-stutter", label: "Fix my stutter", value: "Fix my stutter", action: "ask", hint: "", primary: true },
 ];
 
+// The Code agent's own row (the `code` chip surface).
+const CODE_CHIPS = [
+  { id: "seed-code-tests", label: "Run the tests", value: "Run the tests and tell me what fails.", action: "ask", hint: "", primary: false },
+  { id: "seed-code-explain", label: "Explain this repo", value: "Explain what this repo does and how it is laid out.", action: "ask", hint: "", primary: false },
+  { id: "seed-code-bug", label: "Find a bug to fix", value: "Find a likely bug in this repo and propose a fix.", action: "ask", hint: "", primary: false },
+];
+
 const XP = {
   level: 14,
   title: "Grinder",
@@ -562,6 +569,7 @@ export function initScript(theme = "ops-dark") {
     tab: EMPTY_TAB,
     tab2: SECOND_TAB,
     chips: QUICK_CHIPS,
+    codeChips: CODE_CHIPS,
     home: HOME,
     behavior: BEHAVIOR,
     memory: EMPTY_MEMORY,
@@ -877,7 +885,7 @@ export function initScript(theme = "ops-dark") {
         case "list_mods":
           return emptyList;
         case "quick_chips":
-          return fix.chips;
+          return args.surface === "code" ? fix.codeChips : fix.chips;
         case "get_home":
         case "home_view":
           return fix.home;

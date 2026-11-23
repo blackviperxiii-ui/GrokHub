@@ -2872,24 +2872,25 @@ describe("Chat queue", () => {
     expect(onConversation.mock.calls[1][0]).not.toBe(first);
   });
 
-  it("the agent window leaves out the game and life starter chips; the chat keeps them", async () => {
-    api.quickChips.mockResolvedValue([
-      chip("seed-stutter", "Fix my stutter", "Fix my stutter"),
-      chip("pred-1", "Run the tests", "Run the tests."),
-    ]);
-    const view = render(<Chat onOpenSettings={() => {}} embedded />);
-    const row = await screen.findByRole("group", { name: "Suggestions" });
-    const labels = () =>
-      within(screen.getByRole("group", { name: "Suggestions" }))
+  it("the agent window asks for the Code row and the chat for its own", async () => {
+    api.quickChips.mockImplementation(async (surface: string) =>
+      surface === "code"
+        ? [chip("seed-code-tests", "Run the tests", "Run the tests and tell me what fails.")]
+        : [chip("seed-stutter", "Fix my stutter", "Fix my stutter")],
+    );
+    const labels = async () =>
+      within(await screen.findByRole("group", { name: "Suggestions" }))
         .getAllByRole("button")
         .filter((b) => !b.getAttribute("aria-label")?.startsWith("Hide"))
         .map((b) => b.textContent);
-    expect(row).toBeInTheDocument();
-    expect(labels()).toEqual(["Run the tests"]);
+    const view = render(<Chat onOpenSettings={() => {}} embedded />);
+    expect(await labels()).toEqual(["Run the tests"]);
+    expect(api.quickChips.mock.calls.every(([surface]) => surface === "code")).toBe(true);
     view.unmount();
+    api.quickChips.mockClear();
     render(<Chat onOpenSettings={() => {}} />);
-    await screen.findByRole("group", { name: "Suggestions" });
-    expect(labels()).toEqual(["Fix my stutter", "Run the tests"]);
+    expect(await labels()).toEqual(["Fix my stutter"]);
+    expect(api.quickChips.mock.calls.every(([surface]) => surface === "composer")).toBe(true);
   });
 
   it("in the agent window a queued message is sent with no mode when the reply ends", async () => {
