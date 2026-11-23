@@ -144,6 +144,7 @@ pub mod local_skills;
 pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
+pub mod meetings;
 pub mod mission;
 pub mod model_download;
 pub mod model_drop;
@@ -554,6 +555,12 @@ pub use learning::{
 pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
     CodeTok, MdAlign, MdBlock, MdSpan,
+};
+pub use meetings::{
+    append_speech, end_meeting, follow_notes, get_meeting, search_transcripts, set_join_consent,
+    set_record_consent, start_meeting, talk, LineKind, Meeting, MeetingConsent, MeetingStatus,
+    MeetingsStore, TranscriptHit, TranscriptLine, ALREADY_LIVE, JOIN_OFF, MISSING, NO_LIVE,
+    RECORD_OFF,
 };
 pub use mission::{
     mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,

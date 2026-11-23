@@ -1148,6 +1148,8 @@ mod tests {
             "journal_add",
             "journal_act",
             "journal_to_mission",
+            "get_meetings",
+            "meetings_act",
             "get_permissions",
             // The GitHub token is sent with these.
             "get_github",

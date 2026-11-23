@@ -208,7 +208,7 @@ describe("styles.css views rail and top bar", () => {
 // content then paints over the section below it.
 describe("styles.css Code tab layout", () => {
   it("lets no section of the Code tab shrink, so the changed-files list keeps its height", () => {
-    expect(rule(CSS, ".automations,\n.memory,\n.connectors,\n.journal,\n.code,")).toContain("overflow-y: auto;");
+    expect(rule(CSS, ".automations,\n.memory,\n.connectors,\n.journal,\n.meetings,\n.code,")).toContain("overflow-y: auto;");
     expect(rule(CSS, ".code > * {")).toBe(".code > * { flex-shrink: 0; }");
   });
 

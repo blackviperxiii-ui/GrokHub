@@ -2091,6 +2091,61 @@ export function journalToMission(
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
+/** One meeting transcript line (src-tauri/src/meetings.rs). */
+export interface MeetingLine {
+  id: string;
+  atMs: number;
+  kind: string;
+  speaker: string;
+  text: string;
+}
+
+export interface MeetingRow {
+  id: string;
+  title: string;
+  status: string;
+  startedMs: number;
+  endedMs: number | null;
+  liveNotes: string;
+  transcript: MeetingLine[];
+}
+
+export interface MeetingHit {
+  meetingId: string;
+  meetingTitle: string;
+  lineId: string;
+  kind: string;
+  speaker: string;
+  text: string;
+  atMs: number;
+}
+
+export interface MeetingsPage {
+  consent: { join: boolean; record: boolean };
+  live: MeetingRow | null;
+  past: MeetingRow[];
+  hits: MeetingHit[];
+  query: string;
+}
+
+export type MeetingsAct =
+  | { kind: "setJoin"; on: boolean }
+  | { kind: "setRecord"; on: boolean }
+  | { kind: "start"; title: string }
+  | { kind: "followNotes"; notes: string }
+  | { kind: "talk"; text: string }
+  | { kind: "speech"; speaker: string; text: string }
+  | { kind: "end" }
+  | { kind: "search"; query: string };
+
+export function getMeetings(query = ""): Promise<MeetingsPage> {
+  return invoke<MeetingsPage>("get_meetings", { query });
+}
+
+export function meetingsAct(act: MeetingsAct, query = ""): Promise<MeetingsPage> {
+  return invoke<MeetingsPage>("meetings_act", { act, query });
+}
+
 /** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
 export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
 

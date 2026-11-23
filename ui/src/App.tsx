@@ -91,6 +91,7 @@ const loaders = {
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  meetings: () => import("./Meetings").then((m) => ({ default: m.Meetings })),
   workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   history: () => import("./History").then((m) => ({ default: m.History })),
   home: () => import("./Home").then((m) => ({ default: m.Home })),
@@ -111,6 +112,7 @@ const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
+const Meetings = lazy(loaders.meetings);
 const Code = lazy(loaders.code);
 const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
@@ -858,6 +860,12 @@ export function App() {
             />
           </Page>
         ) : null;
+      case "meetings":
+        return opened.has("meetings") && !caps.remote ? (
+          <Page key="meetings" shown={shown}>
+            <Meetings />
+          </Page>
+        ) : null;
       case "history":
         return opened.has("history") && !caps.remote ? (
           <Page key="history" shown={shown}>
@@ -1091,6 +1099,7 @@ export function App() {
                 {pageNode("code", view === "code")}
                 {pageNode("command", view === "command")}
                 {pageNode("journal", view === "journal")}
+                {pageNode("meetings", view === "meetings")}
                 {pageNode("history", view === "history")}
                 {pageNode("memory", view === "memory")}
                 {pageNode("connectors", view === "connectors")}
@@ -1122,6 +1131,7 @@ export function App() {
               {pageNode("code", view === "code")}
               {pageNode("command", view === "command")}
               {pageNode("journal", view === "journal")}
+              {pageNode("meetings", view === "meetings")}
               {pageNode("history", view === "history")}
               {pageNode("memory", view === "memory")}
               {pageNode("skills", view === "skills")}
