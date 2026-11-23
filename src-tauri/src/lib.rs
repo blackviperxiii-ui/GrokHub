@@ -100,6 +100,7 @@ mod local_model_checks;
 mod local_use;
 #[cfg(test)]
 mod md_fixtures;
+pub mod meetings;
 pub mod memory;
 mod mission;
 pub mod model_library;
@@ -4161,6 +4162,27 @@ async fn vstack_sync_now(
 async fn get_journal(state: State<'_, ShellState>) -> Result<journal::Page, String> {
     let dir = state.config_dir.clone();
     off_main(move || journal::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn get_meetings(
+    state: State<'_, ShellState>,
+    query: Option<String>,
+) -> Result<meetings::Page, String> {
+    let dir = state.config_dir.clone();
+    let q = query.unwrap_or_default();
+    off_main(move || meetings::load(&dir, &q)).await?
+}
+
+#[tauri::command]
+async fn meetings_act(
+    state: State<'_, ShellState>,
+    act: meetings::Act,
+    query: Option<String>,
+) -> Result<meetings::Page, String> {
+    let dir = state.config_dir.clone();
+    let q = query.unwrap_or_default();
+    off_main(move || meetings::act(&dir, act, &q)).await?
 }
 
 #[tauri::command]
@@ -9035,6 +9057,8 @@ pub fn run() {
             vstack_sync_status,
             vstack_sync_now,
             get_journal,
+            get_meetings,
+            meetings_act,
             journal_add,
             journal_act,
             journal_to_mission,

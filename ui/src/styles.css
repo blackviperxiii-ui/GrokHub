@@ -1160,6 +1160,7 @@ span.profile-avatar {
   /* These scroll the window on wider screens; here they scroll inside the
      page so their end clears the bar. */
   .journal,
+  .meetings,
   .workboard,
   .settings-page {
     flex: 1;
@@ -3074,6 +3075,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .memory,
 .connectors,
 .journal,
+.meetings,
 .code,
 .workboard,
 .history,
@@ -3090,6 +3092,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .memory,
 .connectors,
 .journal,
+.meetings,
 .history {
   width: 100%;
   max-width: 880px;

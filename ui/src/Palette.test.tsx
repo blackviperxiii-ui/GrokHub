@@ -44,6 +44,7 @@ describe("paletteRows", () => {
       "Pulse",
       "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
       "Personal",
@@ -81,6 +82,7 @@ describe("paletteRows", () => {
       "History",
       "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
       "Personal",
@@ -142,7 +144,7 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(14, 17)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(15, 18)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Home",
       "Objectives",
@@ -205,7 +207,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(17, 23)).toEqual([
+    expect(rows.slice(18, 24)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -248,6 +250,7 @@ describe("the rail and its More list", () => {
       "history",
       "imagine",
       "journal",
+      "meetings",
       "automations",
       "agents",
       "memory",
@@ -268,6 +271,7 @@ describe("the rail and its More list", () => {
       "History",
       "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
       "Personal",
@@ -474,8 +478,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 24, the last, ends at 996.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 896, behavior: "auto" });
+      // Row 25, the last, ends at 1036.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 936, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {
