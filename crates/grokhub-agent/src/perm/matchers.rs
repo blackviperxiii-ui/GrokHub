@@ -19,7 +19,7 @@ pub fn domain_matches(pattern: &str, url: &str) -> bool {
     let Some(host) = host_of(url) else {
         return false;
     };
-    let domain = normalize_domain(host);
+    let domain = normalize_domain(&host);
     let pattern = normalize_domain(pattern);
     if pattern.is_empty() {
         return false;
@@ -27,21 +27,167 @@ pub fn domain_matches(pattern: &str, url: &str) -> bool {
     domain == pattern || domain.ends_with(&format!(".{pattern}"))
 }
 
-fn host_of(url: &str) -> Option<&str> {
-    let rest = url.trim();
-    let rest = rest.split_once("://").map(|(_, rest)| rest).unwrap_or(rest);
-    let rest = rest.split('/').next().unwrap_or(rest);
-    let rest = rest.split('@').next_back().unwrap_or(rest);
-    let host = if let Some(stripped) = rest.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or("")
-    } else {
-        rest.split(':').next().unwrap_or("")
-    };
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
+/// A URL split the way a browser reads it (the WHATWG URL parser) and so the
+/// way a fetch dials it: tabs and newlines dropped, the scheme and its
+/// slashes (or backslashes) skipped, the authority ending at the first `/`,
+/// `\`, `?` or `#`, userinfo up to the last `@` dropped. `https://a.test?.b.test`
+/// dials `a.test`.
+struct UrlParts {
+    /// Lowercase, `None` when there is none.
+    scheme: Option<String>,
+    /// `host[:port]` as written, without userinfo.
+    authority: String,
+    /// From the first `/`, `\` or `?` (`\` read as `/`), without the fragment.
+    path: String,
+}
+
+fn url_parts(url: &str) -> UrlParts {
+    let url: String = url
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let (scheme, rest) = split_scheme(&url);
+    let end = rest.find(['/', '\\', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let tail = &rest[end..];
+    let tail = tail.split('#').next().unwrap_or("");
+    UrlParts {
+        scheme,
+        authority: authority.to_string(),
+        path: tail.replace('\\', "/"),
     }
+}
+
+/// The scheme and what follows its slashes. A `scheme://` always counts; a
+/// web scheme counts with any slashes (`https:evil.test`), as browsers read
+/// it. `github.com:443/x` has no scheme.
+fn split_scheme(url: &str) -> (Option<String>, &str) {
+    let Some(colon) = url.find(':') else {
+        return (None, url);
+    };
+    let scheme = &url[..colon];
+    let valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    let rest = &url[colon + 1..];
+    let slashed = rest.starts_with(['/', '\\']) && rest[1..].starts_with(['/', '\\']);
+    let web = matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "ws" | "wss"
+    );
+    if valid && (slashed || web) {
+        let rest = rest.trim_start_matches(['/', '\\']);
+        (Some(scheme.to_ascii_lowercase()), rest)
+    } else {
+        (None, url)
+    }
+}
+
+/// The host a fetch of `url` dials (see [`UrlParts`]): no port, IPv6 without
+/// brackets, `%` escapes decoded. `None` without a host.
+fn host_of(url: &str) -> Option<String> {
+    let host = host_part(&url_parts(url).authority);
+    (!host.is_empty()).then_some(host)
+}
+
+/// The host of an authority (`[::1]:80` gives `::1`), `%` escapes decoded.
+fn host_part(authority: &str) -> String {
+    let host = match authority.strip_prefix('[') {
+        Some(inner) => inner.split(']').next().unwrap_or(""),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    percent_decode(host)
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A URL glob (`*.github.com`, `https://*.github.com/*`, `docs.rs/serde/*`)
+/// against the URL a fetch dials: the pattern's host part against the host
+/// it dials (and its port, when the pattern names one), the rest against the
+/// path. So a `*` in the host part never reaches past the host.
+pub fn url_glob_matches(pattern: &str, url: &str) -> bool {
+    let want = url_parts(pattern.trim());
+    let got = url_parts(url);
+    let Some(host) = host_of(url) else {
+        return false;
+    };
+    let scheme_hit = want.scheme.as_deref().is_none_or(|scheme| {
+        got.scheme
+            .as_deref()
+            .is_some_and(|have| glob_match(scheme, have, false))
+    });
+    if !scheme_hit {
+        return false;
+    }
+    let host = host.trim_end_matches('.').to_lowercase();
+    let want_host = want.authority.trim_end_matches('.').to_lowercase();
+    let host_hit = match want_host.rsplit_once(':') {
+        Some((name, port)) if !want_host.starts_with('[') || name.ends_with(']') => {
+            let have_port = got.authority.rsplit_once(':').map(|(_, p)| p);
+            glob_match(name.trim_matches(['[', ']']), &host, false)
+                && have_port.is_some_and(|p| glob_match(port, p, false))
+        }
+        _ => glob_match(want_host.trim_matches(['[', ']']), &host, false),
+    };
+    if !host_hit {
+        return false;
+    }
+    if want.path.is_empty() {
+        return true;
+    }
+    let path = if got.path.is_empty() || got.path.starts_with('?') {
+        format!("/{}", got.path)
+    } else {
+        got.path
+    };
+    glob_match(&want.path, &resolve_dots(&path), false)
+}
+
+/// `path` with its `.` and `..` segments (`%2e` too) resolved, as a fetch
+/// sends it: `/serde/../tokio/x` asks for `/tokio/x`. The query stays.
+fn resolve_dots(path: &str) -> String {
+    let (path, query) = path.split_at(path.find('?').unwrap_or(path.len()));
+    let segments: Vec<&str> = path.split('/').skip(1).collect();
+    let mut out: Vec<&str> = Vec::new();
+    for (i, seg) in segments.iter().enumerate() {
+        let last = i + 1 == segments.len();
+        match seg.to_ascii_lowercase().replace("%2e", ".").as_str() {
+            "." if last => out.push(""),
+            "." => {}
+            ".." => {
+                out.pop();
+                if last {
+                    out.push("");
+                }
+            }
+            _ => out.push(seg),
+        }
+    }
+    format!("/{}{query}", out.join("/"))
 }
 
 pub fn glob_match(pattern: &str, text: &str, path_mode: bool) -> bool {

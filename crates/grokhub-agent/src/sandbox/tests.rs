@@ -247,22 +247,34 @@ fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
     assert!(held(true).enforced());
 }
 
+/// Only a command that is one privilege raise leaves the sandbox: its
+/// password dialog stands for all of it. A raise inside a longer command
+/// used to take every other part out with it, dialog or not (a sudo that
+/// never runs asks nothing), so those now stay in.
 #[test]
-fn privilege_raising_commands_are_spotted_wherever_they_start() {
+fn a_privilege_raise_counts_only_when_it_is_the_whole_command() {
     for cmd in [
         "sudo apt update",
         "/usr/bin/sudo -n true",
-        "cd /x && sudo make install",
-        "echo hi; pkexec ls",
         "FOO=1 doas reboot",
         "env -i sudo ls",
-        "x=$(sudo cat /etc/shadow)",
+        "nohup sudo make install",
+        "\"sudo\" ls",
         "su -c id",
         "run0 systemctl restart foo",
+        "sudo ls > /dev/null 2>&1",
     ] {
         assert!(raises_privileges(cmd), "{cmd}");
     }
     for cmd in [
+        "cd /x && sudo make install",
+        "echo hi; pkexec ls",
+        "x=$(sudo cat /etc/shadow)",
+        "false && sudo true; echo out > /tmp/x",
+        "sudo true > /home/user/.bashrc",
+        "sudo ls $(touch /tmp/x)",
+        "sudo ls | tee x",
+        "sudo ls &",
         "cargo build",
         "echo sudo",
         "grep -r sudo .",
@@ -828,4 +840,126 @@ fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
         ..open.clone()
     };
     assert!(network_note(Some(&no_proxy), true, refused).is_none());
+}
+
+/// A sudo that never runs (`false && sudo true; …`) takes nothing out of
+/// the sandbox: the rest of the command is held like any other, so its
+/// write outside the workspace is refused. Always mode still runs it.
+#[test]
+fn a_sudo_that_never_runs_keeps_the_rest_of_the_command_in_the_sandbox() {
+    let config = scratch("sudo-dodge-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("sudo-dodge-ws");
+    let outside = scratch("sudo-dodge-out");
+    let dodge = format!(
+        "false && sudo true; echo out > {}/dodge.txt",
+        outside.display()
+    );
+    let args = json!({ "command": dodge });
+    assert!(!runs_outside("run_terminal_command", &args));
+    assert!(plan_for_call("run_terminal_command", &args, &ws).is_some());
+    let always = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let policy = crate::perm::Policy::empty();
+    assert_eq!(
+        crate::gate::decide_with(
+            &always,
+            "run_terminal_command",
+            &args.to_string(),
+            false,
+            None,
+            &ws,
+            Some(&policy)
+        ),
+        crate::gate::Decision::Run
+    );
+    #[cfg(target_os = "linux")]
+    if landlock::abi().is_some() {
+        let out = crate::tools::shell::run(&ws, &args, &|| false);
+        assert!(out.failed, "{}", out.text);
+        assert!(out.text.contains("Permission denied"), "{}", out.text);
+        assert!(!outside.join("dodge.txt").exists(), "{}", out.text);
+    }
+    for dir in [&config, &ws, &outside] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A raise the sandbox refused gets a note to run it on its own.
+#[test]
+fn a_refused_privilege_raise_gets_a_note_to_run_it_alone() {
+    let plan = Plan {
+        writable: vec![PathBuf::from("/work")],
+        proxy: None,
+        isolation: None,
+        container: None,
+    };
+    let refused =
+        "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.";
+    assert_eq!(
+        network_note(Some(&plan), true, refused),
+        Some("[sandbox] sudo (or pkexec, doas, su, run0) can't raise privileges inside the sandbox, and it stays inside when it is part of a longer command. Run the privileged command on its own (the password dialog asks), or rerun with outside_sandbox (asks the user).")
+    );
+    assert_eq!(network_note(Some(&plan), false, refused), None);
+    assert_eq!(network_note(None, true, refused), None);
+}
+
+/// With the sandbox off, the floor alone keeps a key path or the consent
+/// ledger out of reach, however the command spells it, in Always and Ask.
+#[test]
+fn with_the_sandbox_off_quoted_and_globbed_key_paths_are_refused() {
+    let config = scratch("rail-off-cfg");
+    std::fs::write(config.join(CONFIG_NAME), "enabled = false\n").unwrap();
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("rail-off-ws");
+    let always = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let ask = crate::gate::Gate {
+        mode: crate::gate::PermMode::Ask,
+        ..always
+    };
+    let policy = crate::perm::Policy::empty();
+    let ledger = "hard floor: consent ledger (only your click changes it)";
+    for (c, why) in [
+        ("cat ~/.ssh/id_rsa", "forbidden path: ssh keys"),
+        (r#"cat ~/."ssh"/id_rsa"#, "forbidden path: ssh keys"),
+        ("cat ~/.ss?/id_rsa", "forbidden path: ssh keys"),
+        ("cat /etc//shadow", "forbidden path: /etc/shadow"),
+        (
+            concat!("cat ~/.grok//auth", ".json"),
+            "forbidden path: grok login",
+        ),
+        ("echo '{}' >> ~/.config/GrokHub/consent.jsonl", ledger),
+        ("echo '{}' >> ~/.config/GrokHub/consent.json?", ledger),
+        (r#"echo '{}' >> ~/.config/GrokHub/"consent".jsonl"#, ledger),
+    ] {
+        let a = json!({"command": c}).to_string();
+        for gate in [&always, &ask] {
+            assert_eq!(
+                crate::gate::decide_with(
+                    gate,
+                    "run_terminal_command",
+                    &a,
+                    false,
+                    None,
+                    &ws,
+                    Some(&policy)
+                ),
+                crate::gate::Decision::Refuse(why.into()),
+                "{c} in {:?}",
+                gate.mode
+            );
+        }
+    }
+    for dir in [&config, &ws] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

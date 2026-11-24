@@ -72,6 +72,55 @@ pub fn peeled_primary(script: &str) -> Option<String> {
     }
 }
 
+/// `words` as one command that reads back as the same words, in sh and in
+/// PowerShell: a word with anything but plain characters goes in single
+/// quotes, and a `'` in it in double quotes (`'it'"'"'s'`). A remembered
+/// grant is stored this way, so `git commit -m "a && b"` stays one command.
+pub fn render(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| {
+            let plain = !word.is_empty()
+                && word.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '-' | '_'
+                                | '.'
+                                | '/'
+                                | ':'
+                                | ','
+                                | '+'
+                                | '@'
+                                | '%'
+                                | '='
+                                | '~'
+                                | '*'
+                                | '?'
+                                | '['
+                                | ']'
+                                | '^'
+                        )
+                });
+            if plain {
+                word.clone()
+            } else {
+                let quoted: Vec<String> =
+                    word.split('\'').map(|part| format!("'{part}'")).collect();
+                quoted.join("\"'\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The words of `grant` when it is one plain command, as [`Seg::words`]
+/// holds them; `None` otherwise.
+pub fn grant_words(grant: &str) -> Option<Vec<String>> {
+    let segs = analyze(grant).segments?;
+    <[Seg; 1]>::try_from(segs).ok().map(|[seg]| seg.words)
+}
+
 fn analyze_depth(script: &str, powershell: bool, depth: usize) -> Facts {
     if depth > 4 {
         return Facts {

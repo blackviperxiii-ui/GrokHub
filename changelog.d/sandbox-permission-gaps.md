@@ -1,0 +1,5 @@
+- Security: a `sudo` inside a longer command no longer takes the rest of that command out of the shell sandbox. Only a command that is one `sudo` (or `pkexec`, `doas`, `su`, `run0`) runs outside it, behind its password dialog. Inside a longer command the `sudo` can't raise privileges, and a note says to run it on its own.
+- Security: WebFetch allow and deny rules now match the host a fetch really connects to, so `https://other.test?.github.com` no longer counts as `github.com`, and a deny rule also covers that host when the URL ends in a `?` or `#` part.
+- Security: the hard floor now sees key files and the consent ledger through shell quotes, escapes, globs and doubled slashes (`~/."ssh"`, `~/.ss?`, `/etc//shadow`, `consent.json?`).
+- Security: Allow always on a command whose quoted text holds `&&` now covers only that command, never a later chain that reads the same.
+- Privacy: the Files scope refuses your home folder however its path is written (`/home/user/.`, `/home//user`, `C:\users\user`).

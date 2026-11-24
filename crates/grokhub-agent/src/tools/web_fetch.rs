@@ -522,6 +522,23 @@ pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::Socket
 mod tests {
     use super::*;
 
+    /// The host a `WebFetch` rule reads is the host web_fetch dials.
+    #[test]
+    fn rules_read_the_host_web_fetch_dials() {
+        use crate::perm::{parse_rule, webfetch_matches, Action};
+        let deny = parse_rule("WebFetch(domain:evil.test)", Action::Deny).unwrap();
+        for u in [
+            "https://evil.test?.github.com/x",
+            "https://evil.test?a=1",
+            "https://evil.test#x",
+            "https://Evil.Test./a",
+            "https://evil.test:8443/x",
+        ] {
+            assert_eq!(parse_public_url(u).unwrap().host, "evil.test", "{u}");
+            assert!(webfetch_matches(&deny, u), "{u}");
+        }
+    }
+
     /// With no network installed, web fetch and web search name no sign-in:
     /// neither needs xAI.
     #[test]
