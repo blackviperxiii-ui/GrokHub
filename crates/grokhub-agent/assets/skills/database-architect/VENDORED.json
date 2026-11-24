@@ -1,0 +1,12 @@
+{
+  "upstream": "davila7/claude-code-templates",
+  "path": "cli-tool/components/agents/database/database-architect.md",
+  "skill": "database-architect",
+  "commit": "1530598131e773d2dc1bdefa7d28df64a7d6b656",
+  "license": "MIT",
+  "digest": "f568020595c2ebbe52583b1bfa91c9fbc038fe0c2c8d2fa28c046e88c761bb94",
+  "files": {
+    "AGENT.md": "0a667ac44adb67dcbc5ae577b0cac42d4fc1f77b06aa2248ecdfb432c130cea0",
+    "LICENSE": "15cc073ffa3a01bb7da145aeae2a842b473860d142c92485536ee9c91195a705"
+  }
+}

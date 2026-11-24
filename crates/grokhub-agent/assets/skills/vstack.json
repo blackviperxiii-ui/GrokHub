@@ -1,8 +1,8 @@
 {
   "about": "vstack skills bundled as Loadout built-ins. .github/scripts/vstack_sync.py reads this list and keeps the folders, CREDITS.md and src/builtin_skills.rs in step with it. always_on skills ride in full in every Code tab session; the rest load with the skill tool. A sync bundles a new upstream skill that is in neither list, and its PR then waits for a person.",
   "repo": "https://github.com/blackviperxiii-ui/vstack",
-  "tag": "v1.4.0",
-  "commit": "11cca98b4a55da3118f51e749ac62faefbc21b3b",
+  "tag": "v1.5.0",
+  "commit": "ed794cc8272f5b59243db67ade79138c32acb33b",
   "always_on": [
     "qa-walkthrough",
     "av-qa-walkthrough",
@@ -20,6 +20,7 @@
     "correct",
     "create-formal-verification-skill",
     "create-verification-skill",
+    "database-architect",
     "elevate",
     "figure-it-out",
     "follow-through",
