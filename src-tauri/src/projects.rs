@@ -47,24 +47,36 @@ pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join("projects.json")
 }
 
-/// The saved rows; none when the file isn't there yet.
+/// The saved rows; none when the file isn't there yet. A row's remote URL
+/// comes back without credentials, whatever wrote it.
 pub fn load(config_dir: &Path) -> Result<Vec<ProjectNode>, String> {
-    match std::fs::read_to_string(path(config_dir)) {
-        Ok(raw) if raw.trim().is_empty() => Ok(Vec::new()),
-        Ok(raw) => serde_json::from_str(&raw)
-            .map_err(|_| "The project list couldn't be read, so nothing was changed.".to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e.to_string()),
+    let mut nodes: Vec<ProjectNode> = match std::fs::read_to_string(path(config_dir)) {
+        Ok(raw) if raw.trim().is_empty() => Vec::new(),
+        Ok(raw) => serde_json::from_str(&raw).map_err(|_| {
+            "The project list couldn't be read, so nothing was changed.".to_string()
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    for url in nodes.iter_mut().filter_map(|n| n.remote_url.as_mut()) {
+        *url = grokhub_code::link::sanitize_remote_url(url);
     }
+    Ok(nodes)
 }
 
-/// Writes through a temp file and a rename, as the shell's settings do.
+/// Writes through a temp file of its own and a rename, so a reader never
+/// sees half a list and two writers never share a temp file.
 pub fn save(config_dir: &Path, nodes: &[ProjectNode]) -> Result<(), String> {
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let raw = serde_json::to_string(nodes).map_err(|e| e.to_string())?;
-    let tmp = config_dir.join("projects.json.tmp");
-    std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
+    grokhub_core::work_file::write_private_atomic(&path(config_dir), raw.as_bytes())
+}
+
+/// Held for each load, change and save of the list, so two of them at once
+/// (two windows, a chat's `/project` and the Code tab) never drop each
+/// other's row.
+fn edit_lock() -> std::sync::MutexGuard<'static, ()> {
+    static EDIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    EDIT.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn work_root() -> String {
@@ -116,6 +128,7 @@ pub fn run_in(
     work_root: &str,
     home: Option<&str>,
 ) -> Result<Done, String> {
+    let _edit = edit_lock();
     let mut nodes = load(config_dir)?;
     match op {
         Op::Show => Ok(said(if bound.trim().is_empty() {
@@ -392,6 +405,7 @@ pub fn set_preferred_branch(
     project_id: &str,
     branch: Option<&str>,
 ) -> Result<(), String> {
+    let _edit = edit_lock();
     let mut nodes = load(config_dir)?;
     let node = nodes
         .iter_mut()
@@ -414,6 +428,7 @@ pub fn set_remote_url(
     project_id: &str,
     url: Option<&str>,
 ) -> Result<(), String> {
+    let _edit = edit_lock();
     let mut nodes = load(config_dir)?;
     let node = nodes
         .iter_mut()
@@ -437,6 +452,7 @@ pub fn apply_link(
     force: bool,
 ) -> Result<(), String> {
     let home = home();
+    let _edit = edit_lock();
     let mut nodes = load(config_dir)?;
     let Some(node) = nodes
         .iter_mut()
@@ -464,6 +480,7 @@ pub fn create(config_dir: &Path, name: &str) -> Result<String, String> {
 }
 
 fn create_in(config_dir: &Path, name: &str, work_root: &str) -> Result<String, String> {
+    let _edit = edit_lock();
     let mut nodes = load(config_dir)?;
     let id = grokhub_core::uid("proj");
     let i = grokhub_core::create_project(&mut nodes, &id, name, None, work_root)
@@ -660,6 +677,101 @@ mod tests {
         assert_eq!(
             go(&config, "", Op::Folder("".into()), &root),
             Err("need a folder name".into())
+        );
+    }
+
+    #[test]
+    fn eight_projects_made_at_once_keep_all_eight_rows() {
+        let (config, root) = (temp_dir("race-cfg"), temp_dir("race-root"));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let (config, root) = (config.clone(), root.clone());
+                std::thread::spawn(move || go(&config, "", Op::New(format!("p{i}")), &root))
+            })
+            .collect();
+        let errors: Vec<String> = threads
+            .into_iter()
+            .filter_map(|t| t.join().unwrap().err())
+            .collect();
+        let mut names: Vec<String> = load(&config)
+            .expect("load")
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        names.sort();
+        let _ = std::fs::remove_dir_all(&config);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(errors, Vec::<String>::new());
+        assert_eq!(names, ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
+    }
+
+    #[test]
+    fn two_writers_round_after_round_keep_both_rows_and_a_readable_list() {
+        let (mut failed, mut lost, mut unreadable) = (0, 0, 0);
+        for round in 0..50 {
+            let config = temp_dir(&format!("pair-cfg-{round}"));
+            let root = temp_dir(&format!("pair-root-{round}"));
+            let writer = |name: &str| {
+                let (config, root, name) = (config.clone(), root.clone(), name.to_string());
+                std::thread::spawn(move || go(&config, "", Op::New(name), &root))
+            };
+            let (a, b) = (writer("alpha"), writer("beta"));
+            let made = [a.join().unwrap(), b.join().unwrap()]
+                .iter()
+                .filter(|r| r.is_ok())
+                .count();
+            failed += usize::from(made < 2);
+            match load(&config) {
+                Ok(rows) => lost += usize::from(rows.len() < made),
+                Err(_) => unreadable += 1,
+            }
+            let _ = std::fs::remove_dir_all(&config);
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        assert_eq!((failed, lost, unreadable), (0, 0, 0));
+    }
+
+    /// Origin's URL can carry a token (set by hand, or by an `insteadOf`
+    /// rule); the row the page gets never does.
+    #[test]
+    fn the_open_project_row_never_carries_credentials() {
+        let (config, root) = (temp_dir("cred-cfg"), temp_dir("cred-root"));
+        let repo = root.join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://user:sk-abcdefghijklmnopqrstuv@github.com/org/app.git?private_token=sk-abcdefghijklmnopqrstuv",
+        ]);
+        let bound = repo.to_string_lossy().into_owned();
+        // `/project bind <folder>` from chat writes the row with no remote.
+        go(&config, "", Op::Bind(bound.clone()), &root).expect("bind");
+        let open = listing_in(&config, &bound, None).expect("listing");
+        // A row saved with a token in it by an older version.
+        let mut rows = load(&config).expect("load");
+        rows[0].remote_url =
+            Some("ssh://git:sk-abcdefghijklmnopqrstuv@example.com/org/app.git".into());
+        save(&config, &rows).expect("save");
+        let saved = listing_in(&config, &bound, None).expect("listing");
+        let _ = std::fs::remove_dir_all(&config);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            open.projects[0].remote_url.as_deref(),
+            Some("https://github.com/org/app.git")
+        );
+        assert_eq!(
+            saved.projects[0].remote_url.as_deref(),
+            Some("ssh://git@example.com/org/app.git")
         );
     }
 
