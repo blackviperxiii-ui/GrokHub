@@ -22,12 +22,154 @@ pub(super) fn git_words_are_routine(words: &[String]) -> bool {
         return false;
     };
     match verb {
-        "add" | "commit" | "pull" | "fetch" => true,
+        "add" | "commit" => true,
+        "fetch" | "pull" => is_routine_fetch(args),
         "worktree" => args.first().map(String::as_str) == Some("list"),
         "checkout" | "switch" => is_routine_branch_switch(args),
         "stash" => is_routine_stash(args),
         _ => false,
     }
+}
+
+/// `fetch` and `pull` options that pick what is fetched or how it is merged.
+/// None names a program, a config value or a transport: `--upload-pack` (and
+/// `-u`, which is `--upload-pack` to `clone`), `-s` (it runs
+/// `git-merge-<name>`), `--edit`, `--gpg-sign` and an interactive rebase
+/// fail closed with every other unlisted spelling.
+const FETCH_BENIGN_FLAGS: &[&str] = &[
+    "-q",
+    "--quiet",
+    "-v",
+    "--verbose",
+    "--progress",
+    "--no-progress",
+    "--all",
+    "-a",
+    "--append",
+    "-f",
+    "--force",
+    "-t",
+    "--tags",
+    "-n",
+    "--no-tags",
+    "-p",
+    "--prune",
+    "--no-prune",
+    "-P",
+    "--prune-tags",
+    "-m",
+    "--multiple",
+    "--atomic",
+    "--dry-run",
+    "-k",
+    "--keep",
+    "--unshallow",
+    "--update-shallow",
+    "--set-upstream",
+    "--show-forced-updates",
+    "--no-show-forced-updates",
+    "--recurse-submodules",
+    "--no-recurse-submodules",
+    "--recurse-submodules=yes",
+    "--recurse-submodules=on-demand",
+    "--recurse-submodules=no",
+    "-4",
+    "--ipv4",
+    "-6",
+    "--ipv6",
+    // `pull` only.
+    "-r",
+    "--rebase",
+    "--rebase=true",
+    "--rebase=false",
+    "--rebase=merges",
+    "--no-rebase",
+    "--ff",
+    "--no-ff",
+    "--ff-only",
+    "--stat",
+    "--no-stat",
+    "--log",
+    "--no-log",
+    "--squash",
+    "--no-squash",
+    "--commit",
+    "--no-commit",
+    "--no-edit",
+    "--autostash",
+    "--no-autostash",
+    "--allow-unrelated-histories",
+    "--signoff",
+];
+
+/// Options whose value (the next word, or after `=`) is a count, a date, a
+/// revision, a refspec or an option for the merge, never a program.
+const FETCH_VALUE_FLAGS: &[&str] = &[
+    "-j",
+    "--jobs",
+    "--depth",
+    "--deepen",
+    "--shallow-since",
+    "--shallow-exclude",
+    "--negotiation-tip",
+    "--refmap",
+    "--filter",
+    "-X",
+    "--strategy-option",
+];
+
+/// The remote helpers git ships, by URL scheme. Any other `<scheme>://` or
+/// `<transport>::` remote runs a `git-remote-<name>` program.
+const FETCH_SCHEMES: &[&str] = &["https", "http", "ssh", "git", "file", "git+ssh", "ssh+git"];
+
+/// `git fetch` / `git pull` with listed options and plain remote or refspec
+/// operands. `--` fails closed: after it, a word that reads as an option is
+/// an operand.
+fn is_routine_fetch(args: &[String]) -> bool {
+    let mut it = args.iter().map(String::as_str);
+    while let Some(word) = it.next() {
+        if FETCH_BENIGN_FLAGS.contains(&word) {
+            continue;
+        }
+        if FETCH_VALUE_FLAGS.contains(&word) {
+            if it.next().is_none() {
+                return false;
+            }
+            continue;
+        }
+        if word.starts_with('-') {
+            // `--depth=1`, `--log=5`: a listed option with its value after `=`.
+            let listed = word
+                .split_once('=')
+                .is_some_and(|(flag, _)| FETCH_VALUE_FLAGS.contains(&flag) || flag == "--log");
+            if !listed {
+                return false;
+            }
+            continue;
+        }
+        if !is_plain_fetch_operand(word) {
+            return false;
+        }
+    }
+    true
+}
+
+/// A remote name, a refspec, a local path, or the address of a transport git
+/// ships. ssh reads a user, host or port that starts with `-` as an option of
+/// its own, so that fails closed too.
+fn is_plain_fetch_operand(word: &str) -> bool {
+    if word.contains("::") || word.contains(char::is_whitespace) {
+        return false;
+    }
+    let address = match word.split_once("://") {
+        Some((scheme, rest)) if FETCH_SCHEMES.contains(&scheme) => rest,
+        Some(_) => return false,
+        None => word,
+    };
+    let authority = address.split('/').next().unwrap_or_default();
+    !authority
+        .split(['@', ':'])
+        .any(|part| part.starts_with('-'))
 }
 
 /// Exact spellings only, so clusters (`-qf`) and abbreviations (`--fo`) fail closed.

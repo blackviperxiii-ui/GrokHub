@@ -1741,4 +1741,122 @@ mod tests {
         )));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// `--upload-pack` names the program git runs for the other side of a
+    /// fetch; a judge that blocks it is asked, and the program never runs.
+    #[test]
+    fn unattended_auto_loop_sends_upload_pack_to_the_judge() {
+        let dir = workspace("upload-pack");
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success());
+        let marker = dir.join("PWNED");
+        let cmd = format!("git fetch --upload-pack='touch {}' .", marker.display());
+        let fake = LoopFake {
+            turns: Mutex::new(vec![
+                Turn {
+                    text: String::new(),
+                    calls: vec![call(
+                        "g",
+                        "run_terminal_command",
+                        &serde_json::json!({ "command": cmd, "timeout": 10000 }).to_string(),
+                    )],
+                    usage: Usage::default(),
+                },
+                done(),
+            ]),
+            judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+            judge_usage: Usage::default(),
+            judge_err: false,
+            seen: Mutex::new(Vec::new()),
+        };
+        let permits = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+        let ran = marker.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(judge_calls(&fake), 1);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 0);
+        assert!(!ran, "the --upload-pack program ran");
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { output, .. }
+                if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+        )));
+    }
+
+    #[test]
+    fn upload_pack_fetch_and_pull_go_to_the_judge() {
+        let client = scripted(
+            r#"{"verdict":"block","reason":"runs a program"}"#,
+            Usage::default(),
+        );
+        let repo = workspace("upload-pack-review");
+        let arguments = serde_json::json!({
+            "command": "git fetch --upload-pack='touch PWNED' .",
+            "timeout": 3000,
+        })
+        .to_string();
+        let reviewed = |attended: bool| {
+            let gate = auto_gate(attended);
+            review(&ReviewIn {
+                client: &client,
+                cancel: &CancelToken::new(),
+                halt: &|| false,
+                gate: &gate,
+                name: "run_terminal_command",
+                arguments: &arguments,
+                workspace: &repo,
+                policy: None,
+                latched_always: false,
+                desk: None,
+                history: &[],
+                conversation_id: "conv",
+                base: Decision::Ask,
+                timeout: JUDGE_TIMEOUT,
+            })
+        };
+        let attended = reviewed(true);
+        let away = reviewed(false);
+        let judged = client.seen.lock().unwrap().len();
+        let _ = std::fs::remove_dir_all(&repo);
+        assert_eq!(attended.decision, Decision::Ask);
+        assert_eq!(attended.ask_reason, "runs a program");
+        assert_eq!(
+            away.decision,
+            Decision::Refuse("Auto mode blocked `run_terminal_command`: runs a program".into())
+        );
+        assert_eq!(judged, 2);
+        for cmd in [
+            "git fetch --upload-pack='touch PWNED' .",
+            "git pull --upload-pack='touch PWNED' .",
+            "git fetch --upload-pack=touch .",
+            "git fetch --upload-pack touch .",
+            "git fetch --upl=touch .",
+            "git pull -u .",
+            "git fetch 'ext::sh -c touch% PWNED'",
+            "git fetch fd::3",
+            "git pull evil::example.com/repo",
+            "git fetch evil://example.com/repo",
+            "git pull --rebase=interactive",
+            "git pull -s evil",
+            "git pull --edit",
+            "git pull --gpg-sign",
+            "git fetch -- origin",
+            "git -c core.sshCommand='touch PWNED' fetch",
+            "git -c protocol.ext.allow=always fetch 'ext::sh -c touch% PWNED'",
+            "git --config-env=core.sshCommand=EVIL fetch",
+            "GIT_SSH_COMMAND='touch PWNED' git fetch",
+            "GIT_CONFIG_PARAMETERS=\"'core.sshCommand'='touch PWNED'\" git pull",
+            "git clone --upload-pack=touch . copy",
+            "git push --receive-pack=touch .",
+        ] {
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+        }
+    }
 }

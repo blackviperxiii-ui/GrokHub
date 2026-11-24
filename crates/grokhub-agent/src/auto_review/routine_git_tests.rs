@@ -94,3 +94,63 @@ fn branch_switching_and_local_workflow_are_routine() {
         assert!(git_words_are_routine(&words(cmd)), "{cmd}");
     }
 }
+
+#[test]
+fn fetch_and_pull_that_name_a_program_or_transport_are_not_routine() {
+    for cmd in [
+        "git fetch --upload-pack=touch .",
+        "git fetch --upload-pack touch .",
+        "git fetch --upload-pack=/tmp/x origin",
+        "git fetch --upl=touch .",
+        "git fetch --no-upload-pack .",
+        "git pull --upload-pack=touch .",
+        "git pull -u .",
+        "git fetch -u origin",
+        "git fetch --exec=touch .",
+        "git fetch ext::sh",
+        "git fetch fd::3",
+        "git pull evil::example.com/repo",
+        "git fetch evil://example.com/repo",
+        "git fetch ssh://-oProxyCommand=touch/x",
+        "git pull --rebase=interactive",
+        "git pull --rebase=i",
+        "git pull -s evil",
+        "git pull --strategy=evil",
+        "git pull --edit",
+        "git pull -e",
+        "git pull --gpg-sign",
+        "git pull -S",
+        "git pull --verify-signatures",
+        "git fetch -- origin",
+        "git fetch -pq",
+        "git fetch --stdin",
+    ] {
+        assert!(!git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+}
+
+#[test]
+fn everyday_fetch_and_pull_stay_routine() {
+    for cmd in [
+        "git fetch",
+        "git fetch origin main",
+        "git fetch --all --prune",
+        "git fetch -p",
+        "git fetch --tags origin",
+        "git fetch --depth=1 origin main",
+        "git fetch --depth 1 origin",
+        "git fetch --jobs 4 --recurse-submodules",
+        "git fetch origin +refs/heads/*:refs/remotes/origin/*",
+        "git fetch https://example.com/my-app.git main",
+        "git fetch ../my-app",
+        "git pull --rebase",
+        "git pull --rebase=merges",
+        "git pull --no-rebase",
+        "git pull --ff-only origin main",
+        "git pull -q --autostash",
+        "git pull --no-edit",
+        "git pull -X ours origin main",
+    ] {
+        assert!(git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+}
