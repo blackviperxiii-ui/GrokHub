@@ -54,6 +54,7 @@ pub mod cli_history;
 pub mod clips;
 pub mod code_resume;
 pub mod companion;
+pub mod companion_nodes;
 pub mod connectivity;
 pub mod connector;
 pub mod consult;

@@ -1,0 +1,1 @@
+- Companion devices, part 1: a phone, another computer or a headless box can pair on its own port (18767) with a one-time code and wait for your yes, and the app reaches it over a relay as one more MCP server, with only the capabilities you allowed. Protocol: docs/design/companion-nodes/README.md.
