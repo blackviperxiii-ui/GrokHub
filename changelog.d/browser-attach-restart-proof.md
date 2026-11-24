@@ -1,0 +1,1 @@
+- Tests: Playwright MCP restarts after Settings → Your browser save and picks up new `--allowed-origins`; not-allowed navigate stays refused.

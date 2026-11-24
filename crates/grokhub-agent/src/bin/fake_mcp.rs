@@ -10,6 +10,8 @@
 //! FAKE_MCP_PAGE_URL=<url> lists `browser_tabs` and answers every call with
 //! a Playwright page section on that URL; FAKE_MCP_PAGE_PAD=<n> puts n
 //! characters of echoed code ahead of it.
+//! FAKE_MCP_ARGV_LOG=<path> appends one JSON line of argv on start (for
+//! proving Playwright attach flags after a restart).
 
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -20,6 +22,7 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_secs(3600));
         }
     }
+    log_argv();
     spawn_child();
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
@@ -69,6 +72,22 @@ fn main() {
 
 fn flag(name: &str) -> bool {
     std::env::var(name).ok().as_deref() == Some("1")
+}
+
+/// Append `{"argv":[...]}` when FAKE_MCP_ARGV_LOG names a file.
+fn log_argv() {
+    let Ok(path) = std::env::var("FAKE_MCP_ARGV_LOG") else {
+        return;
+    };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let line = format!("{}\n", json!({ "argv": args }));
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .unwrap_or_else(|err| panic!("FAKE_MCP_ARGV_LOG open {path}: {err}"));
+    file.write_all(line.as_bytes())
+        .unwrap_or_else(|err| panic!("FAKE_MCP_ARGV_LOG write {path}: {err}"));
 }
 
 const MODERN: &str = "2026-07-28";
