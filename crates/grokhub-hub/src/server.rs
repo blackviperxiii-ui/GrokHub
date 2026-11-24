@@ -338,7 +338,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     )
 }
 
-fn url_path(url: &str) -> String {
+pub(crate) fn url_path(url: &str) -> String {
     let raw = url.split('#').next().unwrap_or(url);
     let p = raw.split_once('?').map_or(raw, |(p, _)| p);
     let path = p.trim_end_matches('/').to_string();
@@ -349,7 +349,7 @@ fn url_path(url: &str) -> String {
     }
 }
 
-fn bearer(req: &Request) -> String {
+pub(crate) fn bearer(req: &Request) -> String {
     req.headers()
         .iter()
         .find(|h| h.field.equiv("Authorization"))
@@ -419,7 +419,7 @@ fn lock(state: &Mutex<HubState>) -> std::sync::MutexGuard<'_, HubState> {
 }
 
 /// The body as JSON. An empty body reads as `{}`; anything else that isn't JSON is a 400.
-fn read_json(req: &mut Request) -> Result<Value, &'static str> {
+pub(crate) fn read_json(req: &mut Request) -> Result<Value, &'static str> {
     let mut buf = Vec::new();
     if req
         .as_reader()
@@ -444,7 +444,7 @@ fn reject_body(req: Request, error: &str) -> Result<(), ()> {
 }
 
 /// A browser sends `Origin` with every POST a page makes; the app's own client never does.
-fn from_web_page(req: &Request) -> bool {
+pub(crate) fn from_web_page(req: &Request) -> bool {
     req.headers().iter().any(|h| h.field.equiv("Origin"))
 }
 
@@ -466,12 +466,12 @@ fn base_headers() -> Vec<Header> {
         .collect()
 }
 
-fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> {
+pub(crate) fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> {
     let s = serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
     send(req, status, "application/json; charset=utf-8", &s)
 }
 
-fn send(req: Request, status: u16, ctype: &str, body: &[u8]) -> Result<(), ()> {
+pub(crate) fn send(req: Request, status: u16, ctype: &str, body: &[u8]) -> Result<(), ()> {
     let mut headers = base_headers();
     if let Ok(h) = Header::from_bytes(&b"content-type"[..], ctype.as_bytes()) {
         headers.push(h);
