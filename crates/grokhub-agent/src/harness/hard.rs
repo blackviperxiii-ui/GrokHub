@@ -2812,10 +2812,15 @@ fn ships(words: &[String], head: usize, depth: u8, own: Own) -> bool {
             if !own(verb) {
                 return true;
             }
+            // In lower case, as `args` are: grep's `-O` is `-o` here.
             let options = GIT_COMMAND_OPTIONS
                 .iter()
                 .find(|(name, _)| *name == verb)
-                .is_some_and(|(_, opts)| git_option_values(args, opts).into_iter().any(runs));
+                .is_some_and(|(_, opts)| {
+                    let opts: Vec<String> = opts.iter().map(|o| o.to_ascii_lowercase()).collect();
+                    let opts: Vec<&str> = opts.iter().map(String::as_str).collect();
+                    git_option_values(args, &opts).into_iter().any(runs)
+                });
             options
                 || match verb {
                     // `git subtree push`, `git lfs push`

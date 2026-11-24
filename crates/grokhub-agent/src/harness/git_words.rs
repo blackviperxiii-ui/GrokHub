@@ -193,10 +193,8 @@ pub fn git_runs_own(verb: &str) -> bool {
 /// The values `args` gives the options in `opts`, as git's option parser
 /// reads them: `--opt=<value>`, `--opt <value>`, the start of a long option
 /// (`--upload=<value>`), `-X<value>`, `-X <value>`, and `-X` at the end of
-/// a cluster of short options (`-nO<value>`). A short option matches in
-/// either case, since the hard class reads a command in lower case (`-O`
-/// is `-o` there). A word taken that git would read otherwise is only read
-/// too, never let through.
+/// a cluster of short options (`-nO<value>`). A word taken that git would
+/// read otherwise is only read too, never let through.
 pub fn git_option_values<'a>(args: &'a [String], opts: &[&str]) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut k = 0;
@@ -234,9 +232,7 @@ pub fn git_option_values<'a>(args: &'a [String], opts: &[&str]) -> Vec<&'a str> 
         let short = cluster.char_indices().find(|&(_, c)| {
             opts.iter().any(|o| {
                 let mut chars = o.chars();
-                chars.next() == Some('-')
-                    && chars.next().is_some_and(|f| f.eq_ignore_ascii_case(&c))
-                    && chars.next().is_none()
+                chars.next() == Some('-') && chars.next() == Some(c) && chars.next().is_none()
             })
         });
         if let Some((at, c)) = short {
@@ -286,9 +282,10 @@ mod tests {
             git_option_values(&words("-n -Ovim -e x"), pager),
             vec!["vim"]
         );
+        // `-o` is grep's --only-matching, not `-O`.
         assert_eq!(
-            git_option_values(&words("-n -ovim -e x"), pager),
-            vec!["vim"]
+            git_option_values(&words("-n -o -e x"), pager),
+            Vec::<&str>::new()
         );
         assert_eq!(git_shell_value("!git push"), "git push");
         assert_eq!(git_shell_value("vim"), "vim");

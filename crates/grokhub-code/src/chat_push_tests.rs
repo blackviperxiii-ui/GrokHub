@@ -200,6 +200,7 @@ fn a_git_word_that_isnt_gits_own_command_is_refused() {
         "git config user.name \"Some User\"",
         "EDITOR='code --wait' git commit",
         "git grep -n -e agent",
+        "git grep -o -e \"git push --force\" -- src",
         "git fetch --upload-pack=git-upload-pack origin",
         "git commit -m \"git ship: refuse an alias\"",
         "ls /usr/lib/git-core",
