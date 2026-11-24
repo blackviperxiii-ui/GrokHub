@@ -85,10 +85,11 @@ pub fn run_stdio() -> i32 {
     0
 }
 
-/// Spike-2a: `grokhub --mcp-cua`. The cabin's gate proxy in front of a
-/// `cua-driver mcp` child (Linux only, `cuaDriver` flag). Every call goes
-/// through `harness::decide` before it is forwarded; the child starts on the
-/// first call that may use it, so with the flag or the switch off none starts.
+/// Spike-2a: `grokhub --mcp-cua`. The cabin's gate proxy in front of
+/// `cua-driver serve` plus `cua-driver mcp` (Linux/macOS, `cuaDriver` flag).
+/// Every call goes through `harness::decide` before it is forwarded; both
+/// start on the first call that may use them, so with the flag or the switch
+/// off none starts.
 pub fn run_cua_stdio() -> i32 {
     use grokhub_agent::harness as hx;
     let started = process_started_ms();
