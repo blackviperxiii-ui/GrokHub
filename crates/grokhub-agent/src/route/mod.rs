@@ -552,6 +552,11 @@ pub struct RouteInput<'a> {
     /// estimate, the warm model takes the turn by default
     /// ([`sizing::warm_local_default`]).
     pub local_warm: bool,
+    /// The typed ask is light chat the device answers as well: a greeting,
+    /// a quick fact, everyday talk, a story or an explanation, with nothing
+    /// at stake. Not research (it needs the web), code or reasoning. Only
+    /// such a turn may take the warm-local default online.
+    pub light_chat: bool,
     /// Failover PR 3's quota ledger, as last detected: the scorer's hard
     /// filters read it, so a closed, spent or benched route is never
     /// picked in the first place (failover PR 6).
@@ -1288,6 +1293,31 @@ impl Router {
                 fit
             }
         };
+        let throttled = matches!(
+            input.local.capacity.level,
+            grokhub_core::local_governor::Level::Throttle
+        );
+        // Online the device takes only background work, except a light
+        // typed chat while its model is already loaded (the warm-local
+        // default below): the gate then admits it as it would offline.
+        // The turn's ladder hasn't climbed (no trouble, no "try again", no
+        // "think hard"): a fresh pick at its start is the ordinary case.
+        let calm = input.steer != ladder::Steer::Harder
+            && input
+                .pick
+                .as_ref()
+                .is_none_or(|p| p.moved != ladder::Move::Up);
+        let warm_chat = input.local_warm
+            && input.light_chat
+            && (!input.needs_image || input.local.sees_pictures)
+            && input.episode_model.is_none()
+            && calm
+            && local::fits_by_trimming(input.class)
+            && sizing::warm_local_default(input.size.map(|s| s.size), throttled);
+        let warm_gate = local::LocalGate {
+            offline: true,
+            ..input.local.clone()
+        };
         let ids: Vec<&str> = reg
             .models
             .keys()
@@ -1296,6 +1326,7 @@ impl Router {
             .filter(|id| {
                 !local::is_local(id)
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
+                    || (warm_chat && local::admits(&warm_gate, id, input.class, input.ctx_tokens))
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
@@ -1473,20 +1504,17 @@ impl Router {
         // Failover PR 5, the warm-local rule (corrected 2026-11-07): a model
         // already loaded on the device takes a less challenging turn by
         // default — no cloud spend, no cold start — unless the turn is
-        // pinned to an episode model or carries an explicit pick. The gate
+        // pinned to an episode model or its ladder climbed (`calm`). Typed
+        // chat takes it only when light (`warm_chat`). The gate
         // admitted the tier into `ids` already, so class eligibility and
         // the governor's say are spent (at Unload nothing is admitted);
         // sizing adds only the size line and, under throttle, tiny only.
         // A cloud candidate must exist for the default to be a choice at
         // all: with no cloud route the device is a fallback, and the
         // fallback paths below own the pick (and its cabin note).
-        let throttled = matches!(
-            input.local.capacity.level,
-            grokhub_core::local_governor::Level::Throttle
-        );
         let warm_local = if input.local_warm
             && input.episode_model.is_none()
-            && input.pick.is_none()
+            && calm
             && ids.iter().any(|id| !local::is_local(id))
             && sizing::warm_local_default(input.size.map(|s| s.size), throttled)
         {
@@ -1969,6 +1997,8 @@ mod r2b_tests;
 
 #[cfg(test)]
 mod r3b_tests;
+#[cfg(test)]
+mod matrix_tests;
 
 #[cfg(test)]
 mod sizing_tests;

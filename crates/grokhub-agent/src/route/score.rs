@@ -50,6 +50,7 @@ use grokhub_core::model_registry::{Credential, ModelRecord, Registry, Route};
 use super::goal::Goal;
 use super::policy;
 use super::sizing::{SizeEstimate, TaskSize};
+use super::table::SpeedQuality;
 
 /// A free model stops being routed this many days before its announced
 /// expiry (card §3.8); inside the wider window it only carries a risk.
@@ -157,11 +158,7 @@ fn bar(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> Option<&'static str> {
         // Failed its tryout: out of routing until its retry two weeks on.
         return Some("score:probation:failed");
     }
-    if card.probation
-        && ctx
-            .size
-            .is_some_and(|s| matches!(s.size, TaskSize::Medium | TaskSize::Long))
-    {
+    if card.probation && matches!(ladder_size(ctx), Some(TaskSize::Medium | TaskSize::Long)) {
         // A model on tryout takes tiny and short turns only: its probes,
         // its canary turns and its own small work (see super::trial).
         return Some("score:probation");
@@ -275,13 +272,31 @@ fn quality(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> f64 {
     // Quality is quality *for this task*: past what a task this size
     // can use, a stronger card is not a better pick — the excess does
     // not outrank a cheaper adequate model or the table's order.
-    let ceiling = match ctx.size.map(|s| s.size) {
+    let ceiling = match ladder_size(ctx) {
         Some(TaskSize::Tiny) => 0.88,
         Some(TaskSize::Short) => 0.92,
         Some(TaskSize::Medium) => 0.96,
         _ => 1.0,
     };
     q.min(ceiling).clamp(0.0, 1.0)
+}
+
+/// Plan, design, a multi-file change, debugging, math and the other lanes
+/// the table serves for quality ([`SpeedQuality::Quality`]).
+fn hard_lane(lane: &str) -> bool {
+    SpeedQuality::of(lane) == SpeedQuality::Quality
+}
+
+/// The size the ladder treats the turn as: a hard lane is never below
+/// medium work. A short ask for a schema or a proof is not easy work, so
+/// the free and cheap tiers don't lead it, a strong card isn't capped
+/// at what tiny work can use, and a model on tryout stays off it.
+fn ladder_size(ctx: &ScoreCtx<'_>) -> Option<TaskSize> {
+    let size = ctx.size?.size;
+    Some(match size {
+        TaskSize::Tiny | TaskSize::Short if hard_lane(ctx.lane) => TaskSize::Medium,
+        other => other,
+    })
 }
 
 fn is_code_lane(lane: &str) -> bool {
@@ -375,9 +390,12 @@ fn weights(ctx: &ScoreCtx<'_>) -> (f64, f64, f64, f64, f64) {
         Some(Goal::Quality) | Some(Goal::Care) => (0.55, 0.10, 0.20, 0.05, 0.20),
         Some(Goal::Speed) => (0.25, 0.40, 0.15, 0.10, 0.20),
         Some(Goal::Cost) => (0.25, 0.10, 0.15, 0.40, 0.20),
+        // Hard work with no goal named leans on quality: a wrong plan or
+        // fix costs more than the price gap between two capable models.
+        _ if hard_lane(ctx.lane) => (0.60, 0.05, 0.20, 0.05, 0.20),
         _ => (0.40, 0.15, 0.20, 0.15, 0.20),
     };
-    match ctx.size.map(|s| s.size) {
+    match ladder_size(ctx) {
         Some(TaskSize::Long) => {
             r = r.max(0.30);
             if ctx.goal != Some(Goal::Cost) {
@@ -423,7 +441,7 @@ fn cheap(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> bool {
 /// turn keeps the order it came with.
 fn tier(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> u8 {
     let route = rec.route();
-    let size = ctx.size.map(|s| s.size).unwrap_or(TaskSize::Short);
+    let size = ladder_size(ctx).unwrap_or(TaskSize::Short);
     match size {
         TaskSize::Tiny | TaskSize::Short => match route {
             Route::OpenRouterFree => 0,
@@ -439,8 +457,10 @@ fn tier(rec: &ModelRecord, ctx: &ScoreCtx<'_>) -> u8 {
         },
         TaskSize::Medium => match route {
             Route::Xai => 0,
+            // On hard work a cheap model doesn't lead the paid routes;
+            // the weighed score settles them.
             Route::Anthropic | Route::OpenRouterPaid => {
-                if cheap(rec, ctx) {
+                if cheap(rec, ctx) && !hard_lane(ctx.lane) {
                     1
                 } else {
                     2

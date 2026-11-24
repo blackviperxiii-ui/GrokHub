@@ -777,7 +777,9 @@ mod tests {
             model: "grok-4.7",
             episode: "ep-ub-1",
             session: "s-ub-1",
-            text: "explain routing",
+            // A coding ask: light chat would go to the warm device by
+            // default, and this test is about the bench, not that rule.
+            text: "rename the routing helper in route.rs",
             ..super::super::live::RouteCall::default()
         };
 
