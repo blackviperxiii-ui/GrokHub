@@ -129,6 +129,35 @@ fn fetch_and_pull_that_name_a_program_or_transport_are_not_routine() {
     }
 }
 
+/// The shell expands a glob into the workspace's file names before git sees
+/// it, and a file can be named `--upload-pack=<program>`.
+#[test]
+fn fetch_and_pull_words_the_shell_expands_are_not_routine() {
+    for cmd in [
+        "git fetch *",
+        "git fetch origin *",
+        "git fetch .[!.]*",
+        "git fetch [-]-upload-pack=x",
+        "git pull ?*",
+        "git pull origin main*",
+        "git fetch ssh://[-]oProxyCommand=x/repo",
+        "git fetch --depth *",
+        "git fetch -j [0-9]*",
+        "git fetch --depth=*",
+        "git fetch origin feature/*:feature/*",
+    ] {
+        assert!(!git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+    // A refspec pattern expands, if at all, to words that start with `refs/`.
+    for cmd in [
+        "git fetch origin +refs/heads/*:refs/remotes/origin/*",
+        "git fetch origin refs/heads/*:refs/remotes/origin/*",
+        "git fetch --refmap refs/heads/*:refs/remotes/mine/* origin",
+    ] {
+        assert!(git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+}
+
 #[test]
 fn everyday_fetch_and_pull_stay_routine() {
     for cmd in [

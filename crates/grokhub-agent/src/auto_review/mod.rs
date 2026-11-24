@@ -1790,6 +1790,56 @@ mod tests {
         )));
     }
 
+    /// The shell expands `git fetch *` into the workspace's file names, and
+    /// a cloned repo can hold one named `--upload-pack=<program>`: the glob
+    /// goes to the judge, and the program never runs.
+    #[test]
+    fn unattended_auto_loop_sends_a_glob_fetch_to_the_judge() {
+        let dir = workspace("glob-fetch");
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(dir.join("--upload-pack=touch PWNED"), "").unwrap();
+        let marker = dir.join("PWNED");
+        let fake = LoopFake {
+            turns: Mutex::new(vec![
+                Turn {
+                    text: String::new(),
+                    calls: vec![call(
+                        "g",
+                        "run_terminal_command",
+                        &serde_json::json!({ "command": "git fetch *", "timeout": 10000 })
+                            .to_string(),
+                    )],
+                    usage: Usage::default(),
+                },
+                done(),
+            ]),
+            judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+            judge_usage: Usage::default(),
+            judge_err: false,
+            seen: Mutex::new(Vec::new()),
+        };
+        let permits = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+        let ran = marker.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(judge_calls(&fake), 1);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 0);
+        assert!(!ran, "the --upload-pack program a file name spelled ran");
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { output, .. }
+                if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+        )));
+    }
+
     #[test]
     fn upload_pack_fetch_and_pull_go_to_the_judge() {
         let client = scripted(
@@ -1855,6 +1905,12 @@ mod tests {
             "GIT_CONFIG_PARAMETERS=\"'core.sshCommand'='touch PWNED'\" git pull",
             "git clone --upload-pack=touch . copy",
             "git push --receive-pack=touch .",
+            "git fetch *",
+            "git fetch origin *",
+            "git fetch .[!.]*",
+            "git pull ?*",
+            "git fetch --depth *",
+            "bash -c 'git fetch *'",
         ] {
             assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
         }

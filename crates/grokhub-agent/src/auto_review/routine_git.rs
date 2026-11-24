@@ -128,11 +128,14 @@ const FETCH_SCHEMES: &[&str] = &["https", "http", "ssh", "git", "file", "git+ssh
 fn is_routine_fetch(args: &[String]) -> bool {
     let mut it = args.iter().map(String::as_str);
     while let Some(word) = it.next() {
+        if shell_may_expand(word) {
+            return false;
+        }
         if FETCH_BENIGN_FLAGS.contains(&word) {
             continue;
         }
         if FETCH_VALUE_FLAGS.contains(&word) {
-            if it.next().is_none() {
+            if it.next().is_none_or(shell_may_expand) {
                 return false;
             }
             continue;
@@ -152,6 +155,14 @@ fn is_routine_fetch(args: &[String]) -> bool {
         }
     }
     true
+}
+
+/// A glob the shell expands into the workspace's file names before git sees
+/// them, and a cloned repo can hold a file named `--upload-pack=<program>`.
+/// A refspec pattern (`+refs/heads/*:refs/remotes/origin/*`) stays: whatever
+/// it matches starts with `refs/`, never with `-`.
+fn shell_may_expand(word: &str) -> bool {
+    word.contains(['*', '?', '[']) && !word.strip_prefix('+').unwrap_or(word).starts_with("refs/")
 }
 
 /// A remote name, a refspec, a local path, or the address of a transport git
