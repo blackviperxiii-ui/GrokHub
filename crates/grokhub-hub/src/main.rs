@@ -113,9 +113,15 @@ fn main() {
             use grokhub_hub::update::{advice, install_kind};
             let exe = env::current_exe().unwrap_or_default();
             let appimage = env::var("APPIMAGE").ok();
+            let config = grokhub_core::paths::config_dir();
             println!(
                 "{}",
-                advice(install_kind(env::consts::OS, &exe, appimage.as_deref()))
+                advice(install_kind(
+                    env::consts::OS,
+                    &exe,
+                    appimage.as_deref(),
+                    Some(config.as_path()),
+                ))
             );
         }
         Launch::BenchLocal => {

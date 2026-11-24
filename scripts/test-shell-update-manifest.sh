@@ -47,10 +47,15 @@ PY
 }
 
 if check "assert m['version'] == '$ver-beta.7', m['version']"; then ok "version is the tag without v"; else bad "version is the tag without v"; fi
-if check "assert sorted(m['platforms']) == ['linux-x86_64-appimage', 'linux-x86_64-deb', 'windows-x86_64-nsis'], sorted(m['platforms'])"; then
-  ok "the AppImage, .deb and NSIS installer (no macOS build, no macOS entry)"
+if check "assert sorted(m['platforms']) == ['linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-deb', 'windows-x86_64-nsis'], sorted(m['platforms'])"; then
+  ok "the AppImage (plus plain linux-x86_64 alias), .deb and NSIS installer (no macOS build, no macOS entry)"
 else
-  bad "the AppImage, .deb and NSIS installer (no macOS build, no macOS entry)"
+  bad "the AppImage (plus plain linux-x86_64 alias), .deb and NSIS installer (no macOS build, no macOS entry)"
+fi
+if check "assert m['platforms']['linux-x86_64'] == m['platforms']['linux-x86_64-appimage']"; then
+  ok "linux-x86_64 aliases the AppImage entry"
+else
+  bad "linux-x86_64 aliases the AppImage entry"
 fi
 if check "assert m['platforms']['linux-x86_64-deb']['url'] == 'https://github.com/blackviperxiii-ui/GrokHub/releases/download/v$ver-beta.7/$deb'"; then
   ok ".deb URL is the tag's release asset"
@@ -69,7 +74,7 @@ else
 fi
 
 # The signature field decodes back to a .minisig that verifies the asset.
-for pair in "linux-x86_64-appimage:$app" "linux-x86_64-deb:$deb" "windows-x86_64-nsis:$exe"; do
+for pair in "linux-x86_64-appimage:$app" "linux-x86_64:$app" "linux-x86_64-deb:$deb" "windows-x86_64-nsis:$exe"; do
   key="${pair%%:*}"
   f="${pair#*:}"
   python3 -c 'import json,sys,base64; m=json.load(open(sys.argv[1])); sys.stdout.buffer.write(base64.b64decode(m["platforms"][sys.argv[2]]["signature"]))' "$d/latest.json" "$key" > "$TMP/back.minisig"
