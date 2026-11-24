@@ -189,6 +189,7 @@ pub mod voice;
 mod voice_live;
 mod vstack_sync;
 pub mod wake_word;
+pub mod web_chats;
 pub mod workboard;
 
 use std::collections::HashMap;
@@ -2818,7 +2819,8 @@ async fn run_automation(
     state: State<'_, ShellState>,
     id: String,
 ) -> Result<automations::RunResult, String> {
-    let result = run_automation_now(state, id.clone()).await;
+    let settings = current(&state);
+    let result = run_automation_now(state, id.clone(), settings).await;
     #[cfg(desktop)]
     if result.is_ok() {
         let name = automations::load(&app.state::<ShellState>().config_dir)
@@ -2833,12 +2835,13 @@ async fn run_automation(
     result
 }
 
-/// [`run_automation`] without the notification, as a paired browser runs it.
+/// [`run_automation`] without the notification, with the settings of who
+/// started it: the window's own, or [`web_settings`] for a paired browser.
 async fn run_automation_now(
     state: State<'_, ShellState>,
     id: String,
+    settings: ShellSettings,
 ) -> Result<automations::RunResult, String> {
-    let settings = current(&state);
     let config_dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
@@ -4480,10 +4483,16 @@ fn start_card_queue(app: AppHandle) {
 }
 
 /// Sessions board facts from live chats, inbox waits, and transcript PR links.
-fn sessions_board_facts(state: &ShellState) -> Vec<sessions_board::SessionFact> {
+/// A tile shows its chat's title and last line, so a paired browser (`web`)
+/// gets only the chats a browser started, never the window's.
+fn sessions_board_facts(state: &ShellState, web: bool) -> Vec<sessions_board::SessionFact> {
     use sessions_board::{RunStatus, SessionFact};
     let dir = &state.config_dir;
-    let rows = history::list(dir);
+    let mut rows = history::list(dir);
+    if web {
+        let started = web_chats::all(dir);
+        rows.retain(|row| started.contains(&row.id));
+    }
     let waiting: std::collections::HashSet<String> = {
         let mut set: std::collections::HashSet<String> = inbox::decisions(dir)
             .into_iter()
@@ -4573,10 +4582,20 @@ async fn get_sessions_board(
     filter: Option<String>,
     query: Option<String>,
 ) -> Result<sessions_board::Page, String> {
+    sessions_board_get(&state, false, filter, query).await
+}
+
+/// [`get_sessions_board`], for a paired browser when `web`.
+async fn sessions_board_get(
+    state: &ShellState,
+    web: bool,
+    filter: Option<String>,
+    query: Option<String>,
+) -> Result<sessions_board::Page, String> {
     let filter = sessions_board::PersonalFilter::parse(filter.as_deref().unwrap_or("everyone"));
     let query = query.unwrap_or_default();
     let dir = state.config_dir.clone();
-    let facts = sessions_board_facts(&state);
+    let facts = sessions_board_facts(state, web);
     off_main(move || Ok(sessions_board::page_from(&dir, facts, filter, &query))).await?
 }
 
@@ -4594,10 +4613,22 @@ async fn sessions_board_pin(
     filter: Option<String>,
     query: Option<String>,
 ) -> Result<sessions_board::Page, String> {
+    sessions_board_pin_for(&state, false, id, column_id, filter, query).await
+}
+
+/// [`sessions_board_pin`], for a paired browser when `web`.
+async fn sessions_board_pin_for(
+    state: &ShellState,
+    web: bool,
+    id: String,
+    column_id: String,
+    filter: Option<String>,
+    query: Option<String>,
+) -> Result<sessions_board::Page, String> {
     let filter = sessions_board::PersonalFilter::parse(filter.as_deref().unwrap_or("everyone"));
     let query = query.unwrap_or_default();
     let dir = state.config_dir.clone();
-    let facts = sessions_board_facts(&state);
+    let facts = sessions_board_facts(state, web);
     off_main(move || {
         let mut spec = sessions_board::load(&dir);
         sessions_board::set_pin(&mut spec, &id, &column_id)?;
@@ -4615,10 +4646,21 @@ async fn sessions_board_reshape(
     filter: Option<String>,
     query: Option<String>,
 ) -> Result<sessions_board::ReshapeResult, String> {
+    sessions_board_reshape_for(&state, false, instruction, filter, query).await
+}
+
+/// [`sessions_board_reshape`], for a paired browser when `web`.
+async fn sessions_board_reshape_for(
+    state: &ShellState,
+    web: bool,
+    instruction: String,
+    filter: Option<String>,
+    query: Option<String>,
+) -> Result<sessions_board::ReshapeResult, String> {
     let filter = sessions_board::PersonalFilter::parse(filter.as_deref().unwrap_or("everyone"));
     let query = query.unwrap_or_default();
     let dir = state.config_dir.clone();
-    let facts = sessions_board_facts(&state);
+    let facts = sessions_board_facts(state, web);
     off_main(move || {
         let mut spec = sessions_board::load(&dir);
         let note = sessions_board::reshape(&mut spec, &instruction)?;
@@ -4711,7 +4753,8 @@ async fn workboard_recur(
 ) -> Result<workboard::Page, String> {
     let dir = state.config_dir.clone();
     let clock = now_clock(clock);
-    off_main(move || workboard::make_recurring(&dir, &id, choice, clock)).await?
+    off_main(move || workboard::make_recurring(&dir, &id, choice, clock, automations::Author::Here))
+        .await?
 }
 
 #[tauri::command]
@@ -7817,18 +7860,54 @@ fn out<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|err| err.to_string())
 }
 
+/// The settings a paired browser's chat or run goes with: the window's, with
+/// desktop control off. Web chats and the runs a browser starts never get
+/// the desktop tools, even when the window has them on.
+fn web_settings(settings: ShellSettings) -> ShellSettings {
+    ShellSettings {
+        desktop_control: false,
+        ..settings
+    }
+}
+
+/// Whether a paired browser may take chat `id`: one it holds already, or one
+/// the window doesn't, which is neither open here (`open_here`) nor started
+/// in the window (`web_chats`), open or closed.
+fn web_may_take(
+    web: &remote::WebAccess,
+    config_dir: &Path,
+    open_here: impl Fn(&str) -> bool,
+    id: &str,
+) -> Result<(), String> {
+    if web.owns(id) {
+        return Ok(());
+    }
+    if open_here(id) || web_chats::the_windows(config_dir, id) {
+        return Err(remote::NOT_YOURS.into());
+    }
+    Ok(())
+}
+
+/// The browser takes chat `id`, kept on file as a browser's so it stays the
+/// web's once this pairing ends.
+fn web_take(web: &remote::WebAccess, config_dir: &Path, id: &str) -> Result<(), String> {
+    if !web.adopt(id) {
+        return Err(remote::NOT_YOURS.into());
+    }
+    web_chats::note(config_dir, id)
+}
+
 /// A browser's send, read in full before it takes the chat, so a send that
-/// is refused keeps no chat id and starts no worker. `taken` says whether a
-/// chat with that id is open on this computer.
+/// is refused keeps no chat id and starts no worker. `open_here` says
+/// whether a chat with that id is open on this computer.
 fn web_send(
     web: &remote::WebAccess,
-    taken: impl Fn(&str) -> bool,
+    config_dir: &Path,
+    open_here: impl Fn(&str) -> bool,
     args: &Value,
 ) -> Result<(String, Turn), String> {
     let conversation_id: String = arg(args, "conversationId")?;
-    if taken(&conversation_id) && !web.owns(&conversation_id) {
-        return Err(remote::NOT_YOURS.into());
-    }
+    web_may_take(web, config_dir, open_here, &conversation_id)?;
     let turn = Turn {
         text: arg(args, "text")?,
         mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
@@ -7839,9 +7918,7 @@ fn web_send(
     if turn.text.trim().is_empty() && turn.attachments.is_empty() {
         return Err("Type a message first.".into());
     }
-    if !web.adopt(&conversation_id) {
-        return Err(remote::NOT_YOURS.into());
-    }
+    web_take(web, config_dir, &conversation_id)?;
     Ok((conversation_id, turn))
 }
 
@@ -7885,6 +7962,12 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             Err(remote::NOT_YOURS.into())
         }
     };
+    // A chat the window has open now.
+    let open_here = |id: &str| {
+        let state = app.state::<ShellState>();
+        let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+        chats.contains_key(id)
+    };
     // Steering a reply or answering its asks: not while the computer drives
     // the desktop in that chat.
     let drive = |args: &Value| -> Result<String, String> {
@@ -7899,18 +7982,8 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_settings" => out(view(&current(&state))),
         "get_profile" => out(profile_now(&state.config_dir)),
         "send_chat" => {
-            let taken = |id: &str| {
-                state
-                    .chats
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains_key(id)
-            };
-            let (conversation_id, turn) = web_send(&web, taken, args)?;
-            let settings = ShellSettings {
-                desktop_control: false,
-                ..current(&state)
-            };
+            let (conversation_id, turn) = web_send(&web, &state.config_dir, open_here, args)?;
+            let settings = web_settings(current(&state));
             out(block_on(chat_turn(
                 app.clone(),
                 &state,
@@ -7922,21 +7995,15 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         // A paste or drop in the web app; the body cap keeps it under 1 MB.
         "stage_attachment" => {
             let conversation_id: String = arg(args, "conversationId")?;
-            let taken = state
-                .chats
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains_key(&conversation_id);
-            if taken && !web.owns(&conversation_id) {
-                return Err(remote::NOT_YOURS.into());
-            }
+            web_may_take(&web, &state.config_dir, open_here, &conversation_id)?;
+            let config_dir = state.config_dir.clone();
             let staged = stage_attachment(
                 state,
                 conversation_id.clone(),
                 arg(args, "name")?,
                 arg(args, "data")?,
             )?;
-            web.adopt(&conversation_id);
+            web_take(&web, &config_dir, &conversation_id)?;
             out(staged)
         }
         "remove_attachment" => {
@@ -7980,18 +8047,23 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "taskId")?,
         ))?),
         "list_automations" => out(list_automations(state, arg(args, "clock")?)?),
-        "add_automation" => out(add_automation(
-            state,
-            arg(args, "text")?,
-            arg(args, "clock")?,
-        )?),
+        // A job a browser writes never gets the desktop tools.
+        "add_automation" => {
+            let clock = now_clock(arg(args, "clock")?);
+            let text: String = arg(args, "text")?;
+            let by = automations::Author::Web;
+            let list = automations::add_by(&state.config_dir, &text, clock, by)?;
+            out(automations::rows(&list, clock))
+        }
         "list_suggested_automations" => out(list_suggested_automations(state)),
         "list_automation_blueprints" => out(list_automation_blueprints()),
-        "add_suggested_automation" => out(add_suggested_automation(
-            state,
-            arg(args, "seed")?,
-            arg(args, "clock")?,
-        )?),
+        "add_suggested_automation" => {
+            let clock = now_clock(arg(args, "clock")?);
+            let seed: String = arg(args, "seed")?;
+            let by = automations::Author::Web;
+            let list = suggested::add_suggested_by(&state.config_dir, &seed, clock, by)?;
+            out(automations::rows(&list, clock))
+        }
         "set_automation_enabled" => out(set_automation_enabled(
             state,
             arg(args, "id")?,
@@ -8003,13 +8075,17 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "id")?,
             arg(args, "clock")?,
         )?),
-        "edit_automation" => out(edit_automation(
-            state,
-            arg(args, "id")?,
-            arg(args, "text")?,
-            arg(args, "clock")?,
-        )?),
-        "run_automation" => out(block_on(run_automation_now(state, arg(args, "id")?))?),
+        "edit_automation" => {
+            let clock = now_clock(arg(args, "clock")?);
+            let (id, text): (String, String) = (arg(args, "id")?, arg(args, "text")?);
+            let by = automations::Author::Web;
+            let list = automations::edit_by(&state.config_dir, &id, &text, clock, by)?;
+            out(automations::rows(&list, clock))
+        }
+        "run_automation" => {
+            let (id, settings) = (arg(args, "id")?, web_settings(current(&state)));
+            out(block_on(run_automation_now(state, id, settings))?)
+        }
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
             state,
@@ -8066,12 +8142,6 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
         "get_chat_archive" => out(get_chat_archive()),
         "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
-        "mcp_app_initialize" => out(mcp_app_initialize()),
-        "mcp_app_call_tool" => out(block_on(mcp_app_call_tool(
-            arg(args, "server")?,
-            arg(args, "name")?,
-            arg::<Option<Value>>(args, "arguments")?,
-        ))?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -8166,21 +8236,25 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         ))?),
         "home_catalog" => out(block_on(home_catalog(state))?),
         "set_home_layout" => out(block_on(set_home_layout(state, arg(args, "pick")?))?),
-        "get_sessions_board" => out(block_on(get_sessions_board(
-            state,
+        // A browser's board shows only the chats a browser started.
+        "get_sessions_board" => out(block_on(sessions_board_get(
+            &state,
+            true,
             arg(args, "filter")?,
             arg(args, "query")?,
         ))?),
         "sessions_board_stamp" => out(block_on(sessions_board_stamp(state))?),
-        "sessions_board_pin" => out(block_on(sessions_board_pin(
-            state,
+        "sessions_board_pin" => out(block_on(sessions_board_pin_for(
+            &state,
+            true,
             arg(args, "id")?,
             arg(args, "columnId")?,
             arg(args, "filter")?,
             arg(args, "query")?,
         ))?),
-        "sessions_board_reshape" => out(block_on(sessions_board_reshape(
-            state,
+        "sessions_board_reshape" => out(block_on(sessions_board_reshape_for(
+            &state,
+            true,
             arg(args, "instruction")?,
             arg(args, "filter")?,
             arg(args, "query")?,
@@ -8199,12 +8273,14 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             out(block_on(workboard_act(state, arg(args, "id")?, act))?)
         }
         "workboard_work" => out(block_on(workboard_work(state, arg(args, "id")?))?),
-        "workboard_recur" => out(block_on(workboard_recur(
-            state,
-            arg(args, "id")?,
-            arg(args, "choice")?,
-            arg(args, "clock")?,
-        ))?),
+        "workboard_recur" => {
+            let (dir, clock) = (state.config_dir.clone(), now_clock(arg(args, "clock")?));
+            let (id, choice): (String, usize) = (arg(args, "id")?, arg(args, "choice")?);
+            let by = automations::Author::Web;
+            out(block_on(off_main(move || {
+                workboard::make_recurring(&dir, &id, choice, clock, by)
+            }))??)
+        }
         "workboard_stamp" => out(block_on(workboard_stamp(state))?),
         "workboard_log" => out(block_on(workboard_log(state, arg(args, "id")?))?),
         "workboard_delete_archived" => out(block_on(workboard_delete_archived(
@@ -10254,11 +10330,15 @@ mod web_command_tests {
     #[test]
     fn a_refused_send_takes_no_chat() {
         use serde_json::json;
+        let dir = temp_dir("refused-send");
+        let dir = dir.as_path();
         let web = crate::remote::WebAccess::default();
         let free = |_: &str| false;
         let open_here = |_: &str| true;
         let refused = |taken: &dyn Fn(&str) -> bool, args: serde_json::Value| {
-            super::web_send(&web, taken, &args).map(|_| ()).unwrap_err()
+            super::web_send(&web, dir, taken, &args)
+                .map(|_| ())
+                .unwrap_err()
         };
         // Nothing to send.
         assert_eq!(
@@ -10293,9 +10373,13 @@ mod web_command_tests {
         );
         assert!(!web.owns("desk-1"));
 
-        let (id, turn) =
-            super::web_send(&web, free, &json!({ "conversationId": "a1", "text": "hi" }))
-                .expect("a message sends");
+        let (id, turn) = super::web_send(
+            &web,
+            dir,
+            free,
+            &json!({ "conversationId": "a1", "text": "hi" }),
+        )
+        .expect("a message sends");
         assert_eq!(id, "a1");
         assert_eq!(turn.text, "hi");
         assert_eq!(turn.attachments, Vec::<String>::new());
@@ -10304,6 +10388,7 @@ mod web_command_tests {
         // it is open here.
         let (id, turn) = super::web_send(
             &web,
+            dir,
             free,
             &json!({ "conversationId": "a2", "text": "", "attachments": ["/tmp/a.txt"] }),
         )
@@ -10313,6 +10398,7 @@ mod web_command_tests {
         assert!(web.owns("a2"));
         let again = super::web_send(
             &web,
+            dir,
             open_here,
             &json!({ "conversationId": "a1", "text": "more" }),
         );
@@ -10323,17 +10409,330 @@ mod web_command_tests {
     }
 
     /// A file that was refused claims no chat. A source check: the arm
-    /// needs the running app, so this only reads the order of its two calls
-    /// and that a refusal returns before the second.
+    /// needs the running app, so this only reads the order of its calls: the
+    /// same check as a send first, then the file, then the chat is taken.
     #[test]
     fn the_stage_arm_takes_the_chat_only_after_the_file_is_staged() {
         let body = remote_call_src();
         let stage = arm(&body, "stage_attachment");
+        let checked = stage.find("web_may_take(").expect("checks the chat");
         let staged = stage.find("stage_attachment(").expect("the staging call");
-        let adopted = stage.find("web.adopt(").expect("adopts the chat");
-        assert!(staged < adopted, "{stage}");
+        let adopted = stage.find("web_take(").expect("takes the chat");
+        assert!(checked < staged && staged < adopted, "{stage}");
         let between = &stage[staged..adopted];
         assert!(between.trim_end().ends_with(")?;"), "{stage}");
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-shell-web-{name}-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// The app's state over `dir`, as `run` manages it.
+    fn state_at(dir: &std::path::Path) -> super::ShellState {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        super::ShellState {
+            config_dir: dir.to_path_buf(),
+            settings: Mutex::new(crate::settings::load(dir)),
+            chats: Mutex::new(HashMap::new()),
+            global_halt: std::sync::atomic::AtomicBool::new(false),
+            trays: crate::attach::Trays::default(),
+            chip_rows: Mutex::new(crate::chips::Rows::default()),
+            sign_in: std::sync::Arc::default(),
+            saves: crate::export::Saves::default(),
+            turn_reads: crate::turns::Reads::default(),
+            #[cfg(desktop)]
+            notified: crate::os_extras::Pending::default(),
+            auto: Mutex::default(),
+            card_carry: Mutex::default(),
+            code_sessions: crate::code_sessions::Folders::open(dir.to_path_buf()),
+            #[cfg(desktop)]
+            focus_help: Mutex::new(crate::focus_help::FocusHelp::default()),
+            game_session: Mutex::default(),
+        }
+    }
+
+    /// A chat the window started, then closed there (or the app restarted):
+    /// no worker holds it, but its turns are saved. A browser that names it
+    /// is refused, so its turns never reach the browser's reply. A chat a
+    /// browser started stays the web's, in a new pairing too.
+    #[test]
+    fn a_browser_cannot_continue_a_chat_the_window_started() {
+        use serde_json::json;
+        let dir = temp_dir("desk-chat");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        crate::agent::save_bench_exchange(
+            "shell-desk-1",
+            "/home/user",
+            "my locker code is 4321",
+            "Noted.",
+        )
+        .unwrap();
+        let closed = |_: &str| false;
+        let send = |web: &crate::remote::WebAccess, id: &str| {
+            super::web_send(
+                web,
+                &dir,
+                closed,
+                &json!({ "conversationId": id, "text": "repeat what I told you earlier" }),
+            )
+            .map(|(id, _)| id)
+        };
+        let web = crate::remote::WebAccess::default();
+        let not_yours = Err("That chat isn't open in this browser.".to_string());
+        assert_eq!(send(&web, "shell-desk-1"), not_yours);
+        assert!(!web.owns("shell-desk-1"));
+        // A pasted file takes the chat through the same check.
+        assert_eq!(
+            super::web_may_take(&web, &dir, closed, "shell-desk-1"),
+            Err("That chat isn't open in this browser.".to_string())
+        );
+
+        // The browser's own chat, saved once its turn ran.
+        assert_eq!(send(&web, "shell-web-1"), Ok("shell-web-1".to_string()));
+        crate::agent::save_bench_exchange("shell-web-1", "/home/user", "hi", "Hello.").unwrap();
+        // A new pairing (a restart, or the code renewed) goes on with it,
+        // and still not with the window's.
+        let next = crate::remote::WebAccess::default();
+        assert_eq!(send(&next, "shell-web-1"), Ok("shell-web-1".to_string()));
+        assert_eq!(send(&next, "shell-desk-1"), not_yours);
+        assert!(!next.owns("shell-desk-1"));
+    }
+
+    /// The Agents page's tiles carry each chat's title and last line, so a
+    /// browser's board lists only the chats a browser started.
+    #[test]
+    fn a_browsers_sessions_board_lists_only_the_chats_a_browser_started() {
+        let dir = temp_dir("board");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        crate::agent::save_bench_exchange(
+            "shell-desk-1",
+            "/home/user",
+            "my locker code is 4321",
+            "Noted.",
+        )
+        .unwrap();
+        crate::agent::save_bench_exchange("shell-web-1", "/home/user", "hi", "Hello.").unwrap();
+        crate::web_chats::note(&dir, "shell-web-1").unwrap();
+        let state = state_at(&dir);
+        let ids = |web: bool| {
+            let mut ids: Vec<String> = super::sessions_board_facts(&state, web)
+                .into_iter()
+                .map(|fact| fact.id)
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(ids(true), ["shell-web-1"]);
+        assert_eq!(ids(false), ["shell-desk-1", "shell-web-1"]);
+        // The web's arms ask for the browser's board.
+        let body = remote_call_src();
+        for name in [
+            "get_sessions_board",
+            "sessions_board_pin",
+            "sessions_board_reshape",
+        ] {
+            assert!(
+                arm(&body, name).contains("(\n            &state,\n            true,\n"),
+                "{name}"
+            );
+        }
+    }
+
+    /// Asks for one screenshot on its first turn with tools, then is done.
+    #[derive(Default)]
+    struct Screenshots {
+        asked: std::sync::Mutex<Vec<grokhub_agent::ResponsesRequest>>,
+    }
+
+    impl grokhub_agent::ModelClient for Screenshots {
+        fn stream(
+            &self,
+            req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            let main = |r: &grokhub_agent::ResponsesRequest| {
+                r.tools.iter().any(|t| t["name"] == "read_file")
+            };
+            let mut asked = self.asked.lock().unwrap();
+            let first = main(req) && !asked.iter().any(main);
+            asked.push(req.clone());
+            if first {
+                return Ok(grokhub_agent::TurnOutput {
+                    calls: vec![grokhub_agent::FunctionCall {
+                        call_id: "shot".into(),
+                        name: "screenshot".into(),
+                        arguments: "{}".into(),
+                    }],
+                    ..grokhub_agent::TurnOutput::default()
+                });
+            }
+            sink(grokhub_agent::StreamEvent::TextDelta("done".into()));
+            Ok(grokhub_agent::TurnOutput {
+                text: "done".into(),
+                ..grokhub_agent::TurnOutput::default()
+            })
+        }
+    }
+
+    /// What a Run now of `id` behind `gate` got back from its screenshot.
+    fn screenshot_result(
+        dir: &std::path::Path,
+        id: &str,
+        gate: crate::unattended::RunGate,
+    ) -> String {
+        let model = std::sync::Arc::new(Screenshots::default());
+        crate::automations::run_now(dir, id, model.clone(), "grok-4.7", dir.to_path_buf(), gate)
+            .unwrap();
+        let asked = model.asked.lock().unwrap();
+        asked
+            .iter()
+            .flat_map(|r| r.input.iter())
+            .find_map(|item| match item {
+                grokhub_agent::InputItem::FunctionCallOutput { call_id, output }
+                    if call_id == "shot" =>
+                {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| "<no screenshot>".into())
+    }
+
+    /// Points chat at a loopback model while it lives, so `route` builds a
+    /// client; nothing is sent to it.
+    struct LoopbackModel;
+
+    impl LoopbackModel {
+        fn set() -> Self {
+            // SAFETY: tests run one per process (nextest) or one at a time
+            // (RUST_TEST_THREADS=1), and the var goes again on drop.
+            unsafe {
+                std::env::set_var(
+                    crate::credential::TEST_URL_ENV,
+                    "http://127.0.0.1:9/v1/responses",
+                )
+            };
+            Self
+        }
+    }
+
+    impl Drop for LoopbackModel {
+        fn drop(&mut self) {
+            // SAFETY: as in `set`.
+            unsafe { std::env::remove_var(crate::credential::TEST_URL_ENV) };
+        }
+    }
+
+    /// A paired browser's Run now goes with the window's settings minus
+    /// desktop control, as its chats do, so its run gets no desktop tools.
+    #[test]
+    fn a_browsers_run_now_gets_no_desktop_tools() {
+        use crate::unattended::RunGate;
+        use grokhub_agent::PermMode;
+        let dir = temp_dir("run-now");
+        grokhub_agent::harness::use_key_store_for(
+            &dir,
+            std::sync::Arc::new(grokhub_agent::harness::MemoryKeyStore::new()),
+        );
+        let _model = LoopbackModel::set();
+        let window = crate::settings::ShellSettings {
+            desktop_control: true,
+            approvals: crate::settings::Approvals::Always,
+            workspace: dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        // What `run_automation_now` builds from the settings it is handed.
+        let gate = |settings: &crate::settings::ShellSettings| {
+            super::run_gate(&super::route(settings, super::agent::SessionMode::Chat, &dir).unwrap())
+        };
+        assert_eq!(
+            gate(&window),
+            RunGate {
+                mode: PermMode::Always,
+                desktop: true
+            }
+        );
+        let web = gate(&super::web_settings(window.clone()));
+        assert_eq!(
+            web,
+            RunGate {
+                mode: PermMode::Always,
+                desktop: false
+            }
+        );
+        let clock = grokhub_core::LocalClock::at_offset(grokhub_core::now_ms(), 0);
+        let id = crate::automations::add(&dir, "every day at 9am take a screenshot", clock)
+            .unwrap()[0]
+            .id
+            .clone();
+        assert_eq!(
+            screenshot_result(&dir, &id, web),
+            *grokhub_core::desktop_mcp::OFF_MSG
+        );
+
+        // The web's arm hands it those settings; the window's hands its own.
+        let body = remote_call_src();
+        let run = arm(&body, "run_automation");
+        assert!(
+            run.contains("web_settings(current(&state))")
+                && run.contains("run_automation_now(state, id, settings)"),
+            "{run}"
+        );
+        let send = arm(&body, "send_chat");
+        assert!(send.contains("web_settings(current(&state))"), "{send}");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src
+            .find("async fn run_automation_now(")
+            .expect("run_automation_now");
+        let now = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(!now.contains("current("), "{now}");
+        let start = src
+            .find("async fn run_automation(")
+            .expect("run_automation");
+        let window_run = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            window_run.contains("let settings = current(&state);")
+                && window_run.contains("run_automation_now(state, id.clone(), settings)"),
+            "{window_run}"
+        );
+    }
+
+    /// A job a browser writes gets no desktop tools when it runs later on
+    /// its own: each web arm that writes a job's words says so.
+    #[test]
+    fn the_web_arms_that_write_a_job_mark_it_as_the_browsers() {
+        let body = remote_call_src();
+        for name in [
+            "add_automation",
+            "add_suggested_automation",
+            "edit_automation",
+            "workboard_recur",
+        ] {
+            assert!(
+                arm(&body, name).contains("let by = automations::Author::Web;"),
+                "{name}"
+            );
+        }
+    }
+
+    /// MCP App tool calls skip the approvals a chat's tool call gets, so they
+    /// stay off the web: no arm for them, and not on the list.
+    #[test]
+    fn mcp_app_calls_stay_on_the_computer() {
+        let body = remote_call_src();
+        for name in ["mcp_app_initialize", "mcp_app_call_tool"] {
+            assert!(!body.contains(&format!("\"{name}\"")), "{name}");
+            assert!(!crate::remote::web_command(name), "{name}");
+        }
     }
 }
 

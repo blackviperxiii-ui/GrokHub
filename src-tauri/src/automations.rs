@@ -4,7 +4,8 @@
 //! shell's scheduler (`scheduler.rs`) does. Jobs gated by a check command run
 //! the check first, then fire only when it passes. "Run now" and scheduled
 //! runs go unattended in Ask mode, so a job can read but every tool that
-//! changes something is refused without a card.
+//! changes something is refused without a card. A job whose words a paired
+//! browser wrote never gets the desktop tools ([`Author::Web`]).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,8 @@ use grokhub_core::{Automation, LocalClock};
 use serde::{Deserialize, Serialize};
 
 pub const FILE: &str = "automations.json";
+/// The ids of the jobs whose words a paired browser wrote.
+const WEB_FILE: &str = "automations-web.json";
 /// The cabin's own cap: bigger means the file is not an automations list.
 const STORE_CAP: u64 = 4 * 1024 * 1024;
 
@@ -163,10 +166,77 @@ fn save(config_dir: &Path, list: &[Automation]) -> Result<(), String> {
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
+/// Who wrote a job's words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Author {
+    /// Someone at this computer: the window, a slash command, the agent.
+    Here,
+    /// A paired browser (remote.rs). Like a web chat, its job never gets the
+    /// desktop tools, however its run starts, until its words are saved again
+    /// at this computer.
+    Web,
+}
+
+/// One change to [`WEB_FILE`] at a time.
+static WEB_STORE: Mutex<()> = Mutex::new(());
+
+/// The jobs a paired browser wrote. No file is none; one that can't be read
+/// is an error, so a run treats its job as the browser's.
+fn web_ids(config_dir: &Path) -> Result<Vec<String>, String> {
+    match std::fs::read_to_string(config_dir.join(WEB_FILE)) {
+        Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("{WEB_FILE}: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Marks job `id` as a browser's (`web`) or as this computer's.
+fn note_author(config_dir: &Path, id: &str, web: bool) -> Result<(), String> {
+    let _web = WEB_STORE.lock().unwrap_or_else(|err| err.into_inner());
+    let mut ids = web_ids(config_dir)?;
+    if ids.iter().any(|kept| kept == id) == web {
+        return Ok(());
+    }
+    ids.retain(|kept| kept != id);
+    if web {
+        ids.push(id.to_string());
+    }
+    let raw = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
+    grokhub_core::pulse_writer::write_atomic(&config_dir.join(WEB_FILE), &raw)
+}
+
+/// Whether a paired browser wrote job `id`'s words.
+pub fn web_wrote(config_dir: &Path, id: &str) -> bool {
+    web_ids(config_dir).map_or(true, |ids| ids.iter().any(|kept| kept == id))
+}
+
+/// The gate a run of job `id` goes behind: `gate`, with no desktop when a
+/// paired browser wrote the job.
+pub fn gate_for(config_dir: &Path, id: &str, gate: RunGate) -> RunGate {
+    if web_wrote(config_dir, id) {
+        RunGate {
+            desktop: false,
+            ..gate
+        }
+    } else {
+        gate
+    }
+}
+
 pub const ADD_HINT: &str =
     "Say when, like \"every weekday at 9am summarize my inbox\" or \"heartbeat every 30 min check the build\".";
 
 pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Automation>, String> {
+    add_by(config_dir, text, clock, Author::Here)
+}
+
+/// [`add`], with the words from `by`.
+pub fn add_by(
+    config_dir: &Path,
+    text: &str,
+    clock: LocalClock,
+    by: Author,
+) -> Result<Vec<Automation>, String> {
     let mut a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if a.name.trim().is_empty() {
         return Err(ADD_HINT.into());
@@ -175,19 +245,24 @@ pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Autom
         a.check_command = words.command;
         a.gate = words.gate;
     }
-    add_parsed(config_dir, a, clock)
+    add_parsed(config_dir, a, clock, by)
 }
 
 /// Save an automation already parsed (a Suggested tile's seed), with a new
-/// id and its next run.
+/// id and its next run. A browser's job is marked before it is saved, so no
+/// tick ever finds it unmarked.
 pub fn add_parsed(
     config_dir: &Path,
     mut a: Automation,
     clock: LocalClock,
+    by: Author,
 ) -> Result<Vec<Automation>, String> {
     let _store = store();
     let mut list = load_unlocked(config_dir)?;
     a.id = grokhub_core::uid("auto");
+    if by == Author::Web {
+        note_author(config_dir, &a.id, true)?;
+    }
     list.push(grokhub_core::ensure_automation_schedule(a, clock));
     save(config_dir, &list)?;
     Ok(list)
@@ -242,12 +317,28 @@ pub fn edit(
     text: &str,
     clock: LocalClock,
 ) -> Result<Vec<Automation>, String> {
+    edit_by(config_dir, id, text, clock, Author::Here)
+}
+
+/// [`edit`], with the words from `by`. A browser's words are marked before
+/// they are saved, and this computer's unmark the job only once saved, so no
+/// run between the two has a browser's words and the desktop.
+pub fn edit_by(
+    config_dir: &Path,
+    id: &str,
+    text: &str,
+    clock: LocalClock,
+    by: Author,
+) -> Result<Vec<Automation>, String> {
     let parsed = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if parsed.name.trim().is_empty() {
         return Err(ADD_HINT.into());
     }
     let words = grokhub_core::automation_check::script_words(text);
-    change(config_dir, id, |list, at| {
+    if by == Author::Web {
+        note_author(config_dir, id, true)?;
+    }
+    let list = change(config_dir, id, |list, at| {
         let old = &list[at];
         let (check_command, gate) = match words {
             // Same command: keep what it printed last, for the next diff.
@@ -276,7 +367,12 @@ pub fn edit(
             ..parsed
         };
         list[at] = grokhub_core::ensure_automation_schedule(next, clock);
-    })
+    })?;
+    if by == Author::Here {
+        // A failed unmark leaves the job without the desktop: the safe side.
+        let _ = note_author(config_dir, id, false);
+    }
+    Ok(list)
 }
 
 pub fn remove(config_dir: &Path, id: &str) -> Result<Vec<Automation>, String> {
@@ -361,6 +457,7 @@ fn run_on_board(
     why: &str,
 ) -> RunResult {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+    let gate = gate_for(config_dir, &job.id, gate);
     let started = grokhub_core::now_ms();
     let session_id = format!("shell-auto-{}-{started}", job.id);
     let card = board_run_start(config_dir, job, &session_id, model, gate, started, why);
@@ -1229,5 +1326,101 @@ mod tests {
             Some(InterruptCause::Restart)
         );
         assert!(interrupt_board_orphans(&dir).is_empty());
+    }
+
+    /// Asks for one screenshot, then is done.
+    #[derive(Default)]
+    struct Screenshots {
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl ModelClient for Screenshots {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            let mut requests = self.requests.lock().expect("requests");
+            requests.push(req.clone());
+            if requests.len() == 1 {
+                return Ok(TurnOutput {
+                    calls: vec![FunctionCall {
+                        call_id: "shot".into(),
+                        name: "screenshot".into(),
+                        arguments: "{}".into(),
+                    }],
+                    ..TurnOutput::default()
+                });
+            }
+            Ok(TurnOutput {
+                text: "done".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    /// A job's words from a paired browser: added, or a job made here edited
+    /// there. Its runs get no desktop, however they start, until its words
+    /// are saved again here.
+    #[test]
+    fn a_job_a_browser_wrote_runs_without_the_desktop() {
+        let dir = temp_dir("web-job");
+        let on = RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        let off = RunGate::scheduled(grokhub_agent::PermMode::Always, false, None);
+        let web = add_by(
+            &dir,
+            "every day at 9am take a screenshot",
+            tuesday_8am(),
+            Author::Web,
+        )
+        .expect("web job")[0]
+            .id
+            .clone();
+        let here = add(&dir, "every day at 10am take a screenshot", tuesday_8am()).expect("job")[1]
+            .id
+            .clone();
+        assert_eq!(gate_for(&dir, &web, on), off);
+        assert_eq!(gate_for(&dir, &here, on), on);
+
+        // The scheduler's run of the browser's job, with desktop control on.
+        let job = load(&dir).expect("jobs")[0].clone();
+        let client = Arc::new(Screenshots::default());
+        let ws = temp_dir("web-job-ws");
+        execute(&dir, &job, client.clone(), "grok-4.7", ws, on);
+        let requests = client.requests.lock().expect("requests");
+        let shot = requests[1].input.iter().find_map(|item| match item {
+            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        });
+        assert_eq!(shot.as_deref(), Some(*grokhub_core::desktop_mcp::OFF_MSG));
+        drop(requests);
+
+        // A browser's edit of the job made here takes the desktop away, and
+        // saving its words here gives it back.
+        edit_by(
+            &dir,
+            &here,
+            "every day at 10am click Send",
+            tuesday_8am(),
+            Author::Web,
+        )
+        .expect("web edit");
+        assert_eq!(gate_for(&dir, &here, on), off);
+        edit(
+            &dir,
+            &here,
+            "every day at 10am take a screenshot",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        assert_eq!(gate_for(&dir, &here, on), on);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(WEB_FILE)).expect("web file"),
+            format!(r#"["{web}"]"#)
+        );
+        // A file that can't be read leaves every job without the desktop.
+        std::fs::write(dir.join(WEB_FILE), "[not json").expect("broken");
+        assert_eq!(gate_for(&dir, &here, on), off);
     }
 }

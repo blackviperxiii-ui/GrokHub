@@ -823,11 +823,13 @@ pub fn start_playbook_card(
 
 /// Make it recurring: a new automation from the card's title on one of
 /// [`wt::RECUR_CHOICES`], which then owns the card. Its runs report here.
+/// `by` is who asked, and so whose words the job is.
 pub fn make_recurring(
     config_dir: &Path,
     id: &str,
     choice: usize,
     clock: grokhub_core::LocalClock,
+    by: crate::automations::Author,
 ) -> Result<Page, String> {
     let cards = read_board(&path(config_dir))?;
     let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
@@ -835,7 +837,7 @@ pub fn make_recurring(
         return Err("An automation already owns this card.".into());
     }
     let seed = wt::recurring_seed(choice, c).ok_or("Pick a schedule.")?;
-    let list = crate::automations::add(config_dir, &seed, clock)?;
+    let list = crate::automations::add_by(config_dir, &seed, clock, by)?;
     let added = list.last().ok_or("The automation was not saved.")?;
     let (auto_id, name) = (added.id.clone(), added.name.clone());
     let owned = change(config_dir, |cards| {
@@ -1873,6 +1875,7 @@ mod tests {
 
     #[test]
     fn make_it_recurring_files_an_automation_that_owns_the_card() {
+        use crate::automations::Author;
         let config = temp_dir("recur");
         cabin_writes(&config, &[board_card("a", BoardStatus::Todo)]);
         let clock = crate::automations::Clock {
@@ -1881,8 +1884,8 @@ mod tests {
             minute: 0,
         }
         .at(grokhub_core::now_ms());
-        assert!(make_recurring(&config, "a", 9, clock).is_err());
-        let page = make_recurring(&config, "a", 0, clock).unwrap();
+        assert!(make_recurring(&config, "a", 9, clock, Author::Here).is_err());
+        let page = make_recurring(&config, "a", 0, clock, Author::Here).unwrap();
         let list = crate::automations::load(&config).unwrap();
         assert_eq!(list.len(), 1);
         let card = &lane(&page, Lane::Todo)[0];
@@ -1891,7 +1894,7 @@ mod tests {
         let saved = on_disk(&config);
         assert_eq!(saved[0].automation.as_deref(), Some(list[0].id.as_str()));
         assert!(
-            make_recurring(&config, "a", 1, clock).is_err(),
+            make_recurring(&config, "a", 1, clock, Author::Here).is_err(),
             "one automation owns a card"
         );
         assert_eq!(crate::automations::load(&config).unwrap().len(), 1);

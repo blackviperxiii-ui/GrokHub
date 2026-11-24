@@ -58,6 +58,16 @@ pub fn add_suggested(
     seed: &str,
     clock: LocalClock,
 ) -> Result<Vec<Automation>, String> {
+    add_suggested_by(config_dir, seed, clock, crate::automations::Author::Here)
+}
+
+/// [`add_suggested`], with the seed's words from `by`.
+pub fn add_suggested_by(
+    config_dir: &Path,
+    seed: &str,
+    clock: LocalClock,
+    by: crate::automations::Author,
+) -> Result<Vec<Automation>, String> {
     let a = automation_from_seed(seed)
         .ok_or_else(|| "That suggestion has no schedule to save.".to_string())?;
     let running = crate::automations::load(config_dir)?;
@@ -65,7 +75,7 @@ pub fn add_suggested(
         dismiss(config_dir, seed);
         return Err(format!("{} is already an automation.", a.name.trim()));
     }
-    let list = crate::automations::add_parsed(config_dir, a, clock)?;
+    let list = crate::automations::add_parsed(config_dir, a, clock, by)?;
     dismiss(config_dir, seed);
     Ok(list)
 }

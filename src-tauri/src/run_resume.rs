@@ -133,6 +133,11 @@ pub fn prepare(
     if auto && automation.as_ref().is_some_and(|a| !a.enabled) {
         return Err("Its automation is off.".into());
     }
+    // A job a paired browser wrote resumes without the desktop, as it ran.
+    let gate = match &automation {
+        Some(job) => crate::automations::gate_for(config_dir, &job.id, gate),
+        None => gate,
+    };
     let live = Live::claim(id, &card.title, others)?;
     let running = match &automation {
         Some(job) => Some(Running::claim(&job.id)?),

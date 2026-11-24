@@ -8,13 +8,16 @@
 //! scheduled or resumed run takes your Approvals. Ask stays a read-only
 //! session, so an allow rule cannot turn a refused write into one that runs.
 //! Desktop tools come only while desktop control is on and no game holds it,
-//! and each desktop step still asks the game guard itself.
+//! and each desktop step still asks the game guard itself. Each desktop step
+//! also reads the saved switch again ([`SavedSwitch`]), so turning desktop
+//! control off stops a running job's next step.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use grokhub_agent::{
-    AuthKind, CancelToken, Gate, ModelClient, PermMode, UnattendedDone, UnattendedRun,
+    AuthKind, CancelToken, DesktopOps, Gate, ModelClient, PermMode, ToolOutput, UnattendedDone,
+    UnattendedRun,
 };
 use grokhub_core::wire::PermissionMode;
 
@@ -104,7 +107,14 @@ pub fn run(job: Job) -> UnattendedDone {
     let set = grokhub_agent::tool_set_from_job(job.tools_from.as_deref().unwrap_or(&job.prompt));
     let _set = grokhub_agent::bind_job_tool_set(job.session_id.clone(), set);
     let gate = job.gate.gate();
-    let desktop_ops = gate.desktop.then(crate::agent::native_desktop);
+    // The folder whose settings hold the switch: the caller pins it.
+    let config_dir = grokhub_agent::perm::config_dir();
+    let desktop_ops = gate.desktop.then(|| {
+        Box::new(SavedSwitch {
+            inner: crate::agent::native_desktop(),
+            config_dir,
+        }) as Box<dyn DesktopOps>
+    });
     let system = crate::agent::system_prompt(&job.workspace, gate.desktop, "");
     grokhub_agent::run_unattended(UnattendedRun {
         client: job.client,
@@ -124,6 +134,50 @@ pub fn run(job: Job) -> UnattendedDone {
         desktop_ops,
         resume: job.resume,
     })
+}
+
+/// The desktop behind the Settings switch as it is saved now. The gate reads
+/// the switch once, when the run starts; this reads it again for every step,
+/// in this app or in the background service, so a step after the switch went
+/// off is refused and reads nothing off the screen.
+struct SavedSwitch {
+    inner: Box<dyn DesktopOps>,
+    config_dir: PathBuf,
+}
+
+impl SavedSwitch {
+    fn on(&self) -> bool {
+        crate::settings::load(&self.config_dir).desktop_control
+    }
+}
+
+impl DesktopOps for SavedSwitch {
+    fn halted(&self) -> bool {
+        self.inner.halted()
+    }
+
+    fn locked(&self) -> bool {
+        self.inner.locked()
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> ToolOutput {
+        if !self.on() {
+            return ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG);
+        }
+        self.inner.call(name, args)
+    }
+
+    fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        if !self.on() {
+            return args.clone();
+        }
+        self.inner.hint(name, args)
+    }
+
+    /// A look needs no desktop control, so it passes with the switch off.
+    fn look(&self, args: &serde_json::Value) -> ToolOutput {
+        self.inner.look(args)
+    }
 }
 
 #[cfg(test)]

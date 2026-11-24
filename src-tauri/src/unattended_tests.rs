@@ -177,3 +177,141 @@ fn a_resumed_automation_keeps_the_tools_its_instructions_declare() {
     assert!(lean.iter().all(|n| allowed.allows(n)), "{lean:?}");
     assert!(lean.len() < full.len(), "{} vs {}", lean.len(), full.len());
 }
+
+/// Counts the desktop calls that reach the screen.
+#[derive(Default)]
+struct CountingDesktop {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl DesktopOps for CountingDesktop {
+    fn halted(&self) -> bool {
+        false
+    }
+
+    fn locked(&self) -> bool {
+        false
+    }
+
+    fn call(&self, name: &str, _args: &serde_json::Value) -> ToolOutput {
+        self.calls.lock().expect("calls").push(name.to_string());
+        ToolOutput::ok("clicked")
+    }
+}
+
+fn save_desktop_control(config: &std::path::Path, on: bool) {
+    crate::settings::save(
+        config,
+        &crate::settings::ShellSettings {
+            desktop_control: on,
+            ..crate::settings::ShellSettings::default()
+        },
+    )
+    .expect("settings");
+}
+
+#[test]
+fn each_desktop_step_reads_the_saved_switch_again() {
+    let config = temp_dir("saved-switch");
+    save_desktop_control(&config, true);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let desk = SavedSwitch {
+        inner: Box::new(CountingDesktop {
+            calls: Arc::clone(&calls),
+        }),
+        config_dir: config.clone(),
+    };
+    let args = serde_json::json!({ "x": 10, "y": 10 });
+    assert_eq!(desk.call("click", &args).text, "clicked");
+    // Settings turns desktop control off while the job runs.
+    save_desktop_control(&config, false);
+    let off = desk.call("click", &args);
+    assert!(off.failed);
+    assert_eq!(off.text, *grokhub_core::desktop_mcp::OFF_MSG);
+    assert_eq!(desk.hint("click", &args), args);
+    assert_eq!(*calls.lock().expect("calls"), ["click"]);
+    // And back on: the next step goes through again.
+    save_desktop_control(&config, true);
+    assert_eq!(desk.call("screenshot", &args).text, "clicked");
+    assert_eq!(*calls.lock().expect("calls"), ["click", "screenshot"]);
+}
+
+/// Runs `before` on the first turn (the user's action mid-run), asks for
+/// `calls`, then says done.
+struct Flips {
+    requests: Mutex<Vec<ResponsesRequest>>,
+    calls: Vec<(&'static str, &'static str)>,
+    before: Box<dyn Fn() + Send + Sync>,
+}
+
+impl ModelClient for Flips {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        let mut requests = self.requests.lock().expect("requests");
+        requests.push(req.clone());
+        if requests.len() == 1 {
+            (self.before)();
+            return Ok(TurnOutput {
+                calls: self
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, args))| FunctionCall {
+                        call_id: format!("c{i}"),
+                        name: (*name).into(),
+                        arguments: (*args).into(),
+                    })
+                    .collect(),
+                ..TurnOutput::default()
+            });
+        }
+        Ok(TurnOutput {
+            text: "ok".into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+/// A scheduled or Run now job started with desktop control on, and the
+/// switch went off mid-run: its later desktop steps are refused.
+#[cfg(target_os = "linux")]
+#[test]
+fn switching_desktop_control_off_stops_a_running_jobs_next_desktop_steps() {
+    let (config, workspace) = (temp_dir("flip-cfg"), temp_dir("flip-ws"));
+    let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+    save_desktop_control(&config, true);
+    let flip = config.clone();
+    let client = Arc::new(Flips {
+        requests: Mutex::new(Vec::new()),
+        calls: vec![("click", r#"{"x":10,"y":10}"#), ("screenshot", "{}")],
+        // As save_settings writes it.
+        before: Box::new(move || save_desktop_control(&flip, false)),
+    });
+    let done = run(Job {
+        client: client.clone(),
+        model: "grok-4.7".into(),
+        workspace,
+        session_id: format!("shell-unattended-test-flip-{}", std::process::id()),
+        prompt: "click at 10,10 then take a screenshot".into(),
+        tools_from: None,
+        gate: RunGate::scheduled(PermMode::Always, true, None),
+        cancel: CancelToken::new(),
+        resume: false,
+    });
+    assert_eq!(done.stop_reason, "end_turn", "{}", done.error);
+    let requests = client.requests.lock().expect("requests");
+    let outputs: Vec<String> = requests[1]
+        .input
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .collect();
+    let off = grokhub_core::desktop_mcp::OFF_MSG.to_string();
+    assert_eq!(outputs, [off.clone(), off]);
+}
