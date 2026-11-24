@@ -287,7 +287,7 @@ pub use ask_offers::{
     WINDOW_MS as ASK_OFFER_WINDOW_MS,
 };
 pub use at_context::{
-    expand_at_context, find_at_refs, AtKind, AtRef, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
+    find_at_refs, AtKind, AtRef, Typed, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
     FOLDER_ENTRY_CAP, GIT_COMMIT_CAP,
 };
 pub use attach::{

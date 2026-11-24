@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use grokhub_agent::route::intent::{self, TurnCx, TurnRoute};
+use grokhub_core::Typed;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -32,6 +33,67 @@ impl Reads {
             .get(conversation_id)
             .is_some_and(|(ask, took)| *took == TurnRoute::Chat && intent::casual_turn(ask))
     }
+}
+
+/// Messages the app hands the window to send back with `send_chat` (a
+/// Workboard card's message, an ask paused for a model), by chat, each with
+/// the words in it the person typed.
+#[derive(Default)]
+pub struct SendBack(Mutex<HashMap<String, (String, Typed)>>);
+
+impl SendBack {
+    /// `text` goes back to `chat` next, and of it the person typed `typed`.
+    pub(crate) fn expect(&self, chat: &str, text: &str, typed: Typed) {
+        let mut back = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        back.insert(chat.to_string(), (text.to_string(), typed));
+    }
+
+    /// The words the person typed in `sent`, a message the window sent in
+    /// `chat`: those noted when the app wrote it, else [`typed_words`].
+    pub(crate) fn typed(&self, chat: &str, sent: &Typed) -> Typed {
+        let mut back = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if back
+            .get(chat)
+            .is_some_and(|(text, _)| text == sent.as_str())
+        {
+            if let Some((_, typed)) = back.remove(chat) {
+                return typed;
+            }
+        }
+        typed_words(sent)
+    }
+}
+
+/// The words the person typed in `sent`, a message as the window sent it:
+/// all of it, less a told side answer's answer, which a model wrote
+/// ([`intent::person_words`]).
+pub(crate) fn typed_words(sent: &Typed) -> Typed {
+    sent.keep(intent::person_words)
+}
+
+/// A message the window sent, as its turn runs it: after the report of the
+/// Pulse card its chat opened from (`carry`), and after a Focus help line
+/// before that (`focus`, given the text so far). Neither is the person's
+/// typing, so the typed words are `typed` whatever they add.
+pub(crate) fn composed(
+    sent: &Typed,
+    typed: Typed,
+    carry: Option<&str>,
+    focus: impl FnOnce(&str) -> Option<String>,
+) -> (String, Typed) {
+    let text = match carry {
+        Some(context) => format!(
+            "{}{}",
+            grokhub_core::card_report::card_carry(context),
+            sent.as_str()
+        ),
+        None => sent.as_str().to_string(),
+    };
+    let text = match focus(&text) {
+        Some(line) => format!("{line}\n{text}"),
+        None => text,
+    };
+    (text, typed)
 }
 
 /// The route for a message sent while nothing runs. A plan still waiting
@@ -130,14 +192,14 @@ pub async fn side_chat(
     state: State<'_, ShellState>,
     conversation_id: String,
     side_id: String,
-    question: String,
+    question: Typed,
     ask: Option<String>,
     so_far: Option<String>,
 ) -> Result<String, String> {
     if !side_of(&side_id, &conversation_id) {
         return Err("That side answer isn't for this chat.".into());
     }
-    if question.trim().is_empty() {
+    if question.as_str().trim().is_empty() {
         return Err("Type a message first.".into());
     }
     // A side answer would run on the app's own models, not the plan the
@@ -197,14 +259,14 @@ pub async fn side_chat(
 /// `@file:` in it stays text; only the question's references expand.
 pub(crate) fn ask_side(
     session: &agent::Session,
-    question: &str,
+    question: &Typed,
     ask: &str,
     so_far: &str,
     route: agent::Route,
     emit: Box<dyn FnMut(agent::UiEvent) + Send>,
 ) -> Result<String, String> {
-    let prompt = intent::side_prompt(question, ask, so_far);
-    session.prompt_typed(&prompt, question, Vec::new(), route, emit)
+    let prompt = intent::side_prompt(question.as_str(), ask, so_far);
+    session.prompt_typed(&prompt, question.clone(), Vec::new(), route, emit)
 }
 
 /// What **Tell the main task** did with a side answer.

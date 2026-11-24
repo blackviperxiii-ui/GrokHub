@@ -3,7 +3,7 @@
 //! Plus-button attach stays in [`crate::attach`]. This module only expands
 //! typed `@file:` / `@folder:` / `@diff` / `@staged` / `@git:N` / `@url:` tokens
 //! and appends their bodies under an attached-context section. A token a
-//! model wrote stays text ([`attach_at_context`]), `@file:` reads only a
+//! model wrote stays text ([`Typed`]), `@file:` reads only a
 //! regular file, and the git tokens run no program the repository's config
 //! names.
 
@@ -192,19 +192,44 @@ fn split_file_lines(raw: &str) -> Option<(String, Option<(usize, usize)>)> {
     Some((raw.to_string(), None))
 }
 
-/// Expand every found reference and append bodies under [`ATTACHED_CONTEXT_HEADER`].
-/// Leaves the message unchanged when there are no `@` tokens. For a message
-/// only part of which the person typed, use [`attach_at_context`].
-pub fn expand_at_context(text: &str, cwd: &Path) -> String {
-    attach_at_context(text, text, cwd)
+/// Words a person typed, the only text whose `@` references
+/// [`attach_at_context`] reads. One comes only from the app's boundary: the
+/// composer's or a side question's text as the window sends it (it
+/// deserializes from that string), or the part of another kept with
+/// [`Typed::keep`]. Text a model wrote or a card carried has no way in, so
+/// its references stay as written.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Typed(String);
+
+impl Typed {
+    /// No typed words: a message the app, a card or a model composed.
+    pub fn nothing() -> Self {
+        Self::default()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The part of these words that `pick` returns. It can only narrow them:
+    /// a result that is not a part of them keeps nothing.
+    pub fn keep(&self, pick: impl FnOnce(&str) -> &str) -> Self {
+        let kept = pick(&self.0);
+        let start = kept.as_ptr().addr().wrapping_sub(self.0.as_ptr().addr());
+        self.0
+            .get(start..start.wrapping_add(kept.len()))
+            .map_or_else(Self::nothing, |part| Self(part.to_string()))
+    }
 }
 
 /// `text` with the bodies of the references in `typed`, the part of it the
 /// person typed, under [`ATTACHED_CONTEXT_HEADER`]. A reference anywhere else
-/// in `text` (a reply a model wrote, quoted in) stays as written and nothing
-/// it names is read. Leaves `text` unchanged when `typed` has no `@` tokens.
-pub fn attach_at_context(text: &str, typed: &str, cwd: &Path) -> String {
-    let refs = find_at_refs(typed);
+/// in `text` (a reply a model wrote, a card's report) stays as written and
+/// nothing it names is read. Leaves `text` unchanged when `typed` has no `@`
+/// tokens.
+pub fn attach_at_context(text: &str, typed: &Typed, cwd: &Path) -> String {
+    let refs = find_at_refs(typed.as_str());
     if refs.is_empty() {
         return text.to_string();
     }
@@ -324,6 +349,13 @@ fn read_file(cwd: &Path, path: &str, lines: Option<(usize, usize)>) -> String {
 /// for a FIFO's writer, and the check reads the opened handle, so a pipe,
 /// socket or device swapped in after a look at the path is still refused.
 fn open_regular(path: &Path) -> Result<fs::File, String> {
+    let file =
+        open_nonblocking(path).map_err(|err| format!("can't open {}: {err}", path.display()))?;
+    regular(file).map_err(|err| format!("can't read {}: {err}", path.display()))
+}
+
+/// `path` opened for reading without waiting for a FIFO's writer.
+fn open_nonblocking(path: &Path) -> io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -331,13 +363,15 @@ fn open_regular(path: &Path) -> Result<fs::File, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = options
-        .open(path)
-        .map_err(|err| format!("can't open {}: {err}", path.display()))?;
-    match file.metadata() {
-        Ok(meta) if meta.is_file() => Ok(file),
-        Ok(_) => Err(format!("can't read {}: not a regular file", path.display())),
-        Err(err) => Err(format!("can't read {}: {err}", path.display())),
+    options.open(path)
+}
+
+/// `file` when the opened handle is a regular file.
+fn regular(file: fs::File) -> io::Result<fs::File> {
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(io::Error::other("not a regular file"))
     }
 }
 
@@ -536,16 +570,29 @@ const OWN_GIT_DIRS: &str = "at-diff";
 /// `@diff` removes it. No diff takes so long.
 const OWN_GIT_DIR_KEEP: Duration = Duration::from_secs(60 * 60);
 
-/// The `info/attributes` of an [`OwnGitDir`]. git reads that file after every
-/// `.gitattributes`, so no path has a filter driver, under any name the
-/// config gives one, whenever it was added.
-const NO_FILTERS: &str = "* -filter\n";
+/// The line that ends an [`OwnGitDir`]'s `info/attributes`. git reads that
+/// file after every `.gitattributes`, and the last line that sets an
+/// attribute wins, so no path has a filter driver, under any name the config
+/// gives one, whenever it was added. A macro can't set `filter` back: git
+/// fills an attribute once, from the last line that names it.
+const NO_FILTERS: &[u8] = b"* -filter\n";
 
-/// A git dir of the app's own for one `@diff` of the repository at `cwd`:
-/// copies of its config and index beside [`NO_FILTERS`], read with the
-/// repository's objects and work tree. It sits in the app's config folder,
-/// which a sandboxed command can't write, and is removed when dropped. git
-/// writes a refreshed index to the copy, never to the repository.
+/// The most of the repository's own `info/attributes` an [`OwnGitDir`]
+/// takes. git drops a whole attributes file of 100 MB or more, and with it
+/// [`NO_FILTERS`], so a bigger one fails `@diff` instead.
+const REPO_ATTRIBUTES_CAP: u64 = 1024 * 1024;
+
+/// A git dir of the app's own for one `@diff` of the repository at `cwd`,
+/// read with the repository's objects (and their alternates) and work tree.
+/// Its config holds the repository's format and includes the repository's
+/// config, so relative includes and `config.worktree` still apply. Its index
+/// is a copy of the repository's, with the shared index a split index names
+/// and the sparse-checkout patterns beside it. Its `info/attributes` is the
+/// repository's followed by [`NO_FILTERS`]. It has no `commondir`, since git
+/// reads `info/attributes` from the common dir. It sits in the app's config
+/// folder, which a sandboxed command can't write, and is removed when
+/// dropped. git writes a refreshed index to the copy, never to the
+/// repository.
 struct OwnGitDir {
     dir: PathBuf,
     top: PathBuf,
@@ -554,30 +601,21 @@ struct OwnGitDir {
 
 impl OwnGitDir {
     fn new(cwd: &Path) -> Result<Self, String> {
-        let out = git_cmd::git()
-            .current_dir(cwd)
-            .args(["rev-parse", "--show-toplevel"])
-            .args(["--git-path", "objects", "--git-path", "index"])
-            .args(["--git-path", "config", "--git-path", "config.worktree"])
-            .output()
-            .map_err(|err| format!("git failed: {err}"))?;
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            return Err(if err.is_empty() {
-                "git produced no output".into()
-            } else {
-                err
-            });
-        }
-        let paths: Vec<PathBuf> = out
-            .stdout
-            .split(|b| *b == b'\n')
-            .filter(|line| !line.is_empty())
-            .map(|line| cwd.join(path_from_git(line)))
-            .collect();
-        let [top, objects, index, config, worktree_config] = &paths[..] else {
+        let paths = git_paths(
+            git_cmd::git()
+                .current_dir(cwd)
+                .args(["rev-parse", "--show-toplevel"])
+                .args(["--git-path", "objects", "--git-path", "index"])
+                .args(["--git-path", "config", "--git-path", "config.worktree"])
+                .args(["--git-path", "info/attributes"])
+                .args(["--git-path", "info/sparse-checkout"]),
+            cwd,
+        )?;
+        let [top, objects, index, config, worktree_config, attributes, sparse] = &paths[..] else {
             return Err("git didn't say where the repository is".into());
         };
+        let format = repository_format(cwd, config)?;
+        let attributes = own_attributes(attributes)?;
         let root = crate::paths::config_dir().join(OWN_GIT_DIRS);
         sweep_old(&root);
         let failed = |err: io::Error| format!("can't set up @diff in {}: {err}", root.display());
@@ -592,27 +630,208 @@ impl OwnGitDir {
         fs::create_dir(own.dir.join("refs")).map_err(failed)?;
         fs::create_dir(own.dir.join("info")).map_err(failed)?;
         fs::write(own.dir.join("HEAD"), "ref: refs/heads/main\n").map_err(failed)?;
-        fs::write(own.dir.join("info").join("attributes"), NO_FILTERS).map_err(failed)?;
+        fs::write(own.dir.join("info").join("attributes"), attributes).map_err(failed)?;
+        let mut own_config = format;
+        own_config.extend_from_slice(&config_include(config));
+        fs::write(own.dir.join("config"), own_config).map_err(failed)?;
+        if worktree_config.is_file() {
+            fs::write(
+                own.dir.join("config.worktree"),
+                config_include(worktree_config),
+            )
+            .map_err(failed)?;
+        }
+        let uncopied =
+            |from: &Path, err: io::Error| format!("can't copy {} for @diff: {err}", from.display());
+        let own_index = own.dir.join("index");
         for (from, to) in [
-            (config, "config"),
-            (worktree_config, "config.worktree"),
-            (index, "index"),
+            (index, &own_index),
+            (sparse, &own.dir.join("info").join("sparse-checkout")),
         ] {
-            match copy_with_mtime(from, &own.dir.join(to)) {
+            match copy_with_mtime(from, to) {
                 Ok(()) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(failed(err)),
+                Err(err) => return Err(uncopied(from, err)),
+            }
+        }
+        // A split index names its shared index, which git looks for in the
+        // git dir: ask for the one the copy names, and copy it beside it.
+        if own_index.is_file() {
+            let shared = git_paths(
+                git_cmd::git()
+                    .current_dir(cwd)
+                    .env("GIT_INDEX_FILE", &own_index)
+                    .args(["rev-parse", "--shared-index-path"]),
+                cwd,
+            )?;
+            if let Some(shared) = shared.first() {
+                let name = shared.file_name().ok_or("git named no shared index file")?;
+                copy_with_mtime(shared, &own.dir.join(name))
+                    .map_err(|err| uncopied(shared, err))?;
             }
         }
         Ok(own)
     }
 }
 
+/// The paths a `git rev-parse` prints, one a line, from `cwd`.
+fn git_paths(cmd: &mut Command, cwd: &Path) -> Result<Vec<PathBuf>, String> {
+    let out = cmd.output().map_err(|err| format!("git failed: {err}"))?;
+    if !out.status.success() {
+        return Err(git_error(&out.stderr));
+    }
+    Ok(out
+        .stdout
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| cwd.join(path_from_git(line)))
+        .collect())
+}
+
+fn git_error(stderr: &[u8]) -> String {
+    let err = String::from_utf8_lossy(stderr).trim().to_string();
+    if err.is_empty() {
+        "git produced no output".into()
+    } else {
+        err
+    }
+}
+
+/// The repository's format as config lines: its version and `extensions.*`,
+/// which git reads from the git dir's own config file, not from an include.
+/// `extensions.refStorage` stays out: the own dir keeps its one ref in files.
+fn repository_format(cwd: &Path, config: &Path) -> Result<Vec<u8>, String> {
+    let out = git_cmd::git()
+        .current_dir(cwd)
+        .arg("config")
+        .arg("--file")
+        .arg(config)
+        .args([
+            "--null",
+            "--get-regexp",
+            r"^(core\.repositoryformatversion|extensions\..*)$",
+        ])
+        .output()
+        .map_err(|err| format!("git failed: {err}"))?;
+    // 1: none of those keys is set.
+    match out.status.code() {
+        Some(0) => {}
+        Some(1) if out.stdout.is_empty() => return Ok(Vec::new()),
+        _ => return Err(git_error(&out.stderr)),
+    }
+    let mut core = Vec::new();
+    let mut extensions = Vec::new();
+    for entry in out.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let (key, value) = match entry.iter().position(|b| *b == b'\n') {
+            Some(at) => (&entry[..at], Some(&entry[at + 1..])),
+            None => (entry, None),
+        };
+        let (section, name) = if key == b"core.repositoryformatversion" {
+            (&mut core, &key[b"core.".len()..])
+        } else if let Some(name) = key.strip_prefix(b"extensions.") {
+            if name == b"refstorage" {
+                continue;
+            }
+            (&mut extensions, name)
+        } else {
+            continue;
+        };
+        if !name.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-') {
+            return Err("git named a repository format setting it can't have".into());
+        }
+        section.push(b'\t');
+        section.extend_from_slice(name);
+        if let Some(value) = value {
+            section.extend_from_slice(b" = ");
+            section.extend_from_slice(&config_quote(value));
+        }
+        section.push(b'\n');
+    }
+    let mut out = Vec::new();
+    for (header, lines) in [
+        (&b"[core]\n"[..], core),
+        (&b"[extensions]\n"[..], extensions),
+    ] {
+        if !lines.is_empty() {
+            out.extend_from_slice(header);
+            out.extend_from_slice(&lines);
+        }
+    }
+    Ok(out)
+}
+
+/// A config section that includes the config file at `path`.
+fn config_include(path: &Path) -> Vec<u8> {
+    let mut out = b"[include]\n\tpath = ".to_vec();
+    out.extend_from_slice(&config_quote(&path_bytes(path)));
+    out.push(b'\n');
+    out
+}
+
+/// `value` as a quoted config value: git reads it back byte for byte.
+fn config_quote(value: &[u8]) -> Vec<u8> {
+    let mut out = vec![b'"'];
+    for &b in value {
+        match b {
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\x08' => out.extend_from_slice(b"\\b"),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'"');
+    out
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().into_owned().into_bytes()
+}
+
+/// The repository's `info/attributes` (none when it has none), then
+/// [`NO_FILTERS`] on a line of its own. A file that isn't a regular file, or
+/// is over [`REPO_ATTRIBUTES_CAP`], fails `@diff`: git would read it, and
+/// leaving it out would show what it hides from diffs.
+fn own_attributes(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    match fs::symlink_metadata(path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("can't read {}: {err}", path.display())),
+        Ok(_) => {
+            open_regular(path)?
+                .take(REPO_ATTRIBUTES_CAP + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|err| format!("can't read {}: {err}", path.display()))?;
+            if bytes.len() as u64 > REPO_ATTRIBUTES_CAP {
+                return Err(format!(
+                    "@diff can't use {}: it is over 1 MiB",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    bytes.extend_from_slice(NO_FILTERS);
+    Ok(bytes)
+}
+
 /// `from` copied to a new `to` with its modified time: git reads an index
 /// entry as unchanged when its stat data matches and the index file is newer
 /// than the work tree file, so a copy dated now would hide a fresh edit.
+/// Only a regular file is copied, so a pipe planted in its place can't hold
+/// `@diff` up.
 fn copy_with_mtime(from: &Path, to: &Path) -> io::Result<()> {
-    let mut src = fs::File::open(from)?;
+    let mut src = regular(open_nonblocking(from)?)?;
     let modified = src.metadata()?.modified()?;
     let mut dst = fs::OpenOptions::new()
         .write(true)
@@ -702,6 +921,11 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// `text` expanded as if the person typed all of it.
+    fn expand(text: &str, cwd: &Path) -> String {
+        attach_at_context(text, &Typed(text.into()), cwd)
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "grokhub-at-context-{name}-{}-{}",
@@ -757,7 +981,7 @@ mod tests {
         fs::create_dir_all(dir.join("sub")).unwrap();
         fs::write(dir.join("sub/a.rs"), "fn a() {}\n").unwrap();
         let msg = "Review @file:note.txt:2-2 and list @folder:sub";
-        let out = expand_at_context(msg, &dir);
+        let out = expand(msg, &dir);
         assert!(out.contains(ATTACHED_CONTEXT_HEADER), "{out}");
         assert!(out.contains("### file:note.txt:2"), "{out}");
         assert!(out.contains("two"), "{out}");
@@ -771,14 +995,14 @@ mod tests {
     fn plus_button_style_message_without_at_is_unchanged() {
         let dir = temp_dir("noop");
         let msg = "File notes.md is on this computer at /tmp/notes.md. Read it yourself.";
-        assert_eq!(expand_at_context(msg, &dir), msg);
+        assert_eq!(expand(msg, &dir), msg);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn refuses_sensitive_paths() {
         let dir = temp_dir("safe");
-        let out = expand_at_context("leak @file:~/.ssh/id_ed25519", &dir);
+        let out = expand("leak @file:~/.ssh/id_ed25519", &dir);
         assert!(out.contains("forbidden path"), "{out}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -805,7 +1029,7 @@ mod tests {
         assert!(run(&["add", "a.txt"]).status.success());
         assert!(run(&["commit", "-q", "-m", "one"]).status.success());
         fs::write(dir.join("a.txt"), "v2\n").unwrap();
-        let out = expand_at_context("What changed? @diff", &dir);
+        let out = expand("What changed? @diff", &dir);
         assert!(out.contains(ATTACHED_CONTEXT_HEADER), "{out}");
         assert!(out.contains("### diff"), "{out}");
         assert!(
@@ -841,9 +1065,9 @@ mod tests {
         );
         fs::write(repo.join("a.txt"), "a2\n").unwrap();
         fs::write(dir.join("wt/sub/b.txt"), "b2\n").unwrap();
-        let main = body_of(&expand_at_context("@diff", &repo), "diff");
-        let main_sub = body_of(&expand_at_context("@diff", &repo.join("sub")), "diff");
-        let linked = body_of(&expand_at_context("@diff", &dir.join("wt/sub")), "diff");
+        let main = body_of(&expand("@diff", &repo), "diff");
+        let main_sub = body_of(&expand("@diff", &repo.join("sub")), "diff");
+        let linked = body_of(&expand("@diff", &dir.join("wt/sub")), "diff");
         let sha256 = dir.join("sha256");
         fs::create_dir_all(&sha256).unwrap();
         assert!(git_in(&sha256, &["init", "-q", "--object-format=sha256"])
@@ -855,10 +1079,10 @@ mod tests {
             .status
             .success());
         fs::write(sha256.join("c.txt"), "c2\n").unwrap();
-        let sha256_body = body_of(&expand_at_context("@diff", &sha256), "diff");
+        let sha256_body = body_of(&expand("@diff", &sha256), "diff");
         let plain = dir.join("plain");
         fs::create_dir_all(&plain).unwrap();
-        let none = body_of(&expand_at_context("@diff", &plain), "diff");
+        let none = body_of(&expand("@diff", &plain), "diff");
         let _ = fs::remove_dir_all(&dir);
         assert!(
             main.contains("+++ b/a.txt\n@@ -1 +1 @@\n-a1\n+a2\n"),
@@ -908,15 +1132,211 @@ mod tests {
         fs::write(&file, "v2\n").unwrap();
         stamp(&file);
         stamp(&repo.join(".git/index"));
-        let out = expand_at_context("What changed? @diff", &repo);
+        let out = expand("What changed? @diff", &repo);
         let _ = fs::remove_dir_all(&dir);
         assert!(body_of(&out, "diff").contains("\n-v1\n+v2\n"), "{out}");
+    }
+
+    /// `git args` in `repo`, which must work.
+    fn plain_git(repo: &Path, args: &[&str]) {
+        let out = git_in(repo, args);
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A repository at `dir/name` with `files` committed, then each
+    /// rewritten with `2` in place of `1`.
+    fn edited_repo(dir: &Path, name: &str, files: &[&str]) -> PathBuf {
+        let repo = dir.join(name);
+        fs::create_dir_all(&repo).unwrap();
+        plain_git(&repo, &["init", "-q"]);
+        for file in files {
+            let path = repo.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, format!("{}1\n", file.replace('/', "-"))).unwrap();
+        }
+        plain_git(&repo, &["add", "-A"]);
+        plain_git(&repo, &["commit", "-q", "-m", "one"]);
+        for file in files {
+            fs::write(repo.join(file), format!("{}2\n", file.replace('/', "-"))).unwrap();
+        }
+        repo
+    }
+
+    /// A split index keeps its entries in `.git/sharedindex.<hash>`, and
+    /// `.git/info/attributes` holds the person's own attributes. `@diff`
+    /// reads both: a path marked `-diff`, by a macro or by `binary` shows as
+    /// binary, and the repository's index files stay as they were.
+    #[test]
+    fn at_diff_reads_a_split_index_and_the_repo_info_attributes() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = temp_dir("split-attributes");
+        let repo = edited_repo(&dir, "repo", &["a.txt", "d1/x.txt", "b.dat", "open.txt"]);
+        plain_git(&repo, &["update-index", "--split-index"]);
+        fs::write(
+            repo.join(".git/info/attributes"),
+            "a.txt -diff\n[attr]secret -diff -text\nd1/x.txt secret\nb.dat binary",
+        )
+        .unwrap();
+        let shared: Vec<PathBuf> = fs::read_dir(repo.join(".git"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("sharedindex."))
+            })
+            .collect();
+        let read_all = || -> Vec<Vec<u8>> {
+            [repo.join(".git/index")]
+                .iter()
+                .chain(&shared)
+                .map(|path| fs::read(path).unwrap())
+                .collect()
+        };
+        let before = read_all();
+        let body = body_of(&expand("@diff", &repo), "diff");
+        let after = read_all();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(shared.len(), 1, "{shared:?}");
+        for binary in ["a.txt", "d1/x.txt", "b.dat"] {
+            assert!(
+                body.contains(&format!("Binary files a/{binary} and b/{binary} differ\n")),
+                "{binary}: {body}"
+            );
+        }
+        assert!(
+            body.contains("+++ b/open.txt\n@@ -1 +1 @@\n-open.txt1\n+open.txt2\n"),
+            "{body}"
+        );
+        for hidden in ["+a.txt2", "+d1-x.txt2", "+b.dat2"] {
+            assert!(!body.contains(hidden), "{hidden}: {body}");
+        }
+        assert!(after == before, "@diff wrote the repository's index files");
+    }
+
+    /// An `info/attributes` too big for git to read with the line that
+    /// switches filters off after it fails `@diff`, and says why.
+    #[test]
+    fn an_oversized_info_attributes_fails_at_diff() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = temp_dir("big-attributes");
+        let repo = edited_repo(&dir, "repo", &["a.txt"]);
+        let attributes = repo.join(".git/info/attributes");
+        fs::write(&attributes, "# a note\n".repeat(120_000)).unwrap();
+        let body = body_of(&expand("@diff", &repo), "diff");
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            body,
+            format!("@diff can't use {}: it is over 1 MiB", attributes.display())
+        );
+    }
+
+    /// `@diff` in a sparse checkout with a sparse index, in a clone that
+    /// borrows its objects (`clone --shared`), with a relative
+    /// `include.path` in the repository's config, and with a submodule
+    /// checked out at another commit.
+    #[test]
+    fn at_diff_reads_a_sparse_index_alternates_includes_and_a_submodule() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = temp_dir("repo-shapes");
+        let sparse = edited_repo(&dir, "sparse", &["in/i.txt", "out/o.txt", "top.txt"]);
+        plain_git(&sparse, &["checkout", "-q", "--", "."]);
+        plain_git(
+            &sparse,
+            &["sparse-checkout", "set", "--cone", "--sparse-index", "in"],
+        );
+        fs::write(sparse.join("in/i.txt"), "in-i.txt2\n").unwrap();
+        let sparse_body = body_of(&expand("@diff", &sparse), "diff");
+
+        let shared = dir.join("shared");
+        let source = edited_repo(&dir, "source", &["s.txt"]);
+        plain_git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                "--shared",
+                source.to_str().unwrap(),
+                "shared",
+            ],
+        );
+        fs::write(shared.join("s.txt"), "s.txt2\n").unwrap();
+        let shared_body = body_of(&expand("@diff", &shared), "diff");
+        let borrows = shared.join(".git/objects/info/alternates").is_file();
+
+        let included = edited_repo(&dir, "included", &["c.txt"]);
+        fs::write(
+            included.join(".git/extra.inc"),
+            "[diff]\n\tmnemonicPrefix = true\n",
+        )
+        .unwrap();
+        plain_git(&included, &["config", "include.path", "extra.inc"]);
+        let included_body = body_of(&expand("@diff", &included), "diff");
+
+        let sub_src = edited_repo(&dir, "sub-src", &["s.txt"]);
+        plain_git(&sub_src, &["commit", "-q", "-am", "two"]);
+        let sup = dir.join("sup");
+        fs::create_dir_all(&sup).unwrap();
+        plain_git(&sup, &["init", "-q"]);
+        plain_git(
+            &sup,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                sub_src.to_str().unwrap(),
+                "sub",
+            ],
+        );
+        plain_git(&sup, &["commit", "-q", "-m", "sub"]);
+        let ids = |repo: &Path| {
+            let out = git_in(repo, &["rev-parse", "HEAD", "HEAD~1"]).stdout;
+            String::from_utf8(out).unwrap()
+        };
+        let sub_ids = ids(&sup.join("sub"));
+        let (now, before) = sub_ids.trim().split_once('\n').unwrap();
+        plain_git(&sup.join("sub"), &["checkout", "-q", before]);
+        let sub_body = body_of(&expand("@diff", &sup), "diff");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            sparse_body.contains("+++ b/in/i.txt\n@@ -1 +1 @@\n-in-i.txt1\n+in-i.txt2\n"),
+            "{sparse_body}"
+        );
+        assert!(!sparse_body.contains("out/"), "{sparse_body}");
+        assert!(borrows, "the clone has no alternates");
+        assert!(
+            shared_body.contains("+++ b/s.txt\n@@ -1 +1 @@\n-s.txt1\n+s.txt2\n"),
+            "{shared_body}"
+        );
+        assert!(
+            included_body.contains("--- i/c.txt\n+++ w/c.txt\n@@ -1 +1 @@\n-c.txt1\n+c.txt2\n"),
+            "{included_body}"
+        );
+        assert!(
+            sub_body.contains(&format!(
+                "-Subproject commit {now}\n+Subproject commit {before}\n"
+            )),
+            "{sub_body}"
+        );
     }
 
     #[test]
     fn public_http_url_gate_blocks_loopback_urls_without_dialing() {
         let dir = temp_dir("url");
-        let out = expand_at_context("grab @url:http://127.0.0.1/secret", &dir);
+        let out = expand("grab @url:http://127.0.0.1/secret", &dir);
         assert!(out.contains("not a public"), "{out}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1031,11 +1451,11 @@ mod tests {
             }
             ran
         };
-        let diff = expand_at_context("What changed? @diff", &repo);
+        let diff = expand("What changed? @diff", &repo);
         let after_diff = ran();
-        let staged = expand_at_context("staged? @staged", &repo);
+        let staged = expand("staged? @staged", &repo);
         let after_staged = ran();
-        let log = expand_at_context("history @git:1", &repo);
+        let log = expand("history @git:1", &repo);
         let after_git = ran();
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(after_diff, Vec::<String>::new(), "@diff");
@@ -1044,6 +1464,136 @@ mod tests {
         assert!(body_of(&diff, "diff").contains("\n-v1\n+v2\n"), "{diff}");
         assert_eq!(body_of(&staged, "staged"), "(no changes)");
         assert!(body_of(&log, "git:1").contains("\n    signed\n"), "{log}");
+    }
+
+    /// The program settings reach the repository's config through a relative
+    /// `include.path` and an `includeIf "gitdir:"` that matches any git dir,
+    /// and `.git/info/attributes` turns filters on for every path, also
+    /// through a macro: a process filter, a diff command, a pager, an
+    /// fsmonitor and a hook that runs when the index is written. `@diff`,
+    /// `@staged` and `@git:N` run none of them, though plain `git diff` in the
+    /// same repository runs the first it meets.
+    #[cfg(unix)]
+    #[test]
+    fn no_program_an_include_or_info_attributes_names_runs() {
+        let dir = temp_dir("include-programs");
+        let markers = dir.join("markers");
+        let hooks = dir.join("hooks");
+        fs::create_dir_all(&markers).unwrap();
+        fs::create_dir_all(&hooks).unwrap();
+        let names = [
+            "external",
+            "command",
+            "textconv",
+            "clean",
+            "smudge",
+            "process",
+            "pclean",
+            "pager",
+            "fsmonitor",
+            "hook",
+            "git-hook",
+        ];
+        for name in names {
+            marker_script(&dir.join(format!("{name}.sh")), &markers.join(name));
+        }
+        let script = |name: &str| dir.join(format!("{name}.sh")).display().to_string();
+        let repo = edited_repo(&dir, "repo", &["a.txt", "b.txt"]);
+        fs::write(repo.join(".gitattributes"), "*.txt diff=x\n").unwrap();
+        fs::write(
+            repo.join(".git/info/attributes"),
+            "[attr]evil filter=f diff=x\n* evil\nb.txt filter=p\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.join(".git/programs.inc"),
+            format!(
+                "[diff]\n\texternal = {}\n[diff \"x\"]\n\tcommand = {}\n\ttextconv = {}\n\
+                 [filter \"f\"]\n\tclean = {}\n\tsmudge = {}\n\tprocess = {}\n\trequired = true\n\
+                 [core]\n\tpager = {}\n[pager]\n\tdiff = {}\n\tlog = {}\n",
+                script("external"),
+                script("command"),
+                script("textconv"),
+                script("clean"),
+                script("smudge"),
+                script("process"),
+                script("pager"),
+                script("pager"),
+                script("pager"),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("gitdir.inc"),
+            format!(
+                "[core]\n\tfsmonitor = {}\n\thooksPath = {}\n[filter \"p\"]\n\tclean = {}\n\trequired = true\n",
+                script("fsmonitor"),
+                hooks.display(),
+                script("pclean"),
+            ),
+        )
+        .unwrap();
+        plain_git(&repo, &["config", "include.path", "programs.inc"]);
+        plain_git(
+            &repo,
+            &[
+                "config",
+                "includeIf.gitdir:/.path",
+                dir.join("gitdir.inc").to_str().unwrap(),
+            ],
+        );
+        for (hook, name) in [
+            (hooks.join("post-index-change"), "hook"),
+            (repo.join(".git/hooks/post-index-change"), "git-hook"),
+        ] {
+            fs::copy(dir.join(format!("{name}.sh")), hook).unwrap();
+        }
+        let ran = || {
+            let mut ran: Vec<String> = fs::read_dir(&markers)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            ran.sort();
+            for name in &ran {
+                let _ = fs::remove_file(markers.join(name));
+            }
+            ran
+        };
+        let diff = expand("What changed? @diff", &repo);
+        let after_diff = ran();
+        let staged = expand("staged? @staged", &repo);
+        let after_staged = ran();
+        let log = expand("history @git:1", &repo);
+        let after_git = ran();
+        let plain = Command::new("git")
+            .current_dir(&repo)
+            .args(["diff", "--stat"])
+            .output()
+            .unwrap();
+        let after_plain = ran();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(after_diff, Vec::<String>::new(), "@diff: {diff}");
+        assert_eq!(after_staged, Vec::<String>::new(), "@staged: {staged}");
+        assert_eq!(after_git, Vec::<String>::new(), "@git:1: {log}");
+        assert!(
+            body_of(&diff, "diff").contains("+++ b/a.txt\n@@ -1 +1 @@\n-a.txt1\n+a.txt2\n"),
+            "{diff}"
+        );
+        assert!(
+            body_of(&diff, "diff").contains("+++ b/b.txt\n@@ -1 +1 @@\n-b.txt1\n+b.txt2\n"),
+            "{diff}"
+        );
+        assert_eq!(body_of(&staged, "staged"), "(no changes)");
+        assert!(body_of(&log, "git:1").contains("\n    one\n"), "{log}");
+        // Plain git queries the fsmonitor, then fails on the first file's
+        // process filter, which isn't a real one.
+        assert_eq!(
+            after_plain,
+            ["fsmonitor", "process"],
+            "plain git diff: {}",
+            String::from_utf8_lossy(&plain.stderr)
+        );
     }
 
     /// A repository with `a.txt` committed under `attributes` and changed
@@ -1076,7 +1626,7 @@ mod tests {
         assert!(git_in(&repo, &["config", "filter.a=b.clean", &clean])
             .status
             .success());
-        let out = expand_at_context("What changed? @diff", &repo);
+        let out = expand("What changed? @diff", &repo);
         let ran = marker.exists();
         let _ = fs::remove_dir_all(&dir);
         assert!(!ran, "the filter ran: {out}");
@@ -1098,7 +1648,7 @@ mod tests {
         config.extend_from_slice(b"\n\trequired = true\n");
         fs::write(repo.join(".git/config"), config).unwrap();
         let index = fs::read(repo.join(".git/index")).unwrap();
-        let out = expand_at_context("What changed? @diff", &repo);
+        let out = expand("What changed? @diff", &repo);
         let ran = marker.exists();
         let index_after = fs::read(repo.join(".git/index")).unwrap();
         let _ = fs::remove_dir_all(&dir);
@@ -1144,7 +1694,7 @@ mod tests {
             })
         };
         let bodies: Vec<String> = (0..100)
-            .map(|_| body_of(&expand_at_context("What changed? @diff", &repo), "diff"))
+            .map(|_| body_of(&expand("What changed? @diff", &repo), "diff"))
             .collect();
         stop.store(true, Ordering::Relaxed);
         swapper.join().unwrap();
@@ -1203,11 +1753,58 @@ mod tests {
         ));
         fs::write(&sub_config, config).unwrap();
         fs::write(repo.join("sub/s.txt"), "s2\n").unwrap();
-        let out = expand_at_context("What changed? @diff", &repo);
+        let out = expand("What changed? @diff", &repo);
         let ran = marker.exists();
         let _ = fs::remove_dir_all(&dir);
         assert!(!ran, "the submodule's clean filter ran: {out}");
         assert_eq!(body_of(&out, "diff"), "(no changes)");
+    }
+
+    /// A pipe planted where `@diff` reads the repository's attributes or
+    /// index is refused at once instead of holding the turn.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_the_git_dir_fails_at_diff_without_blocking() {
+        let dir = temp_dir("git-dir-fifo");
+        let repo = edited_repo(&dir, "repo", &["a.txt"]);
+        let attributes = repo.join(".git/info/attributes");
+        let index = repo.join(".git/index");
+        let mut bodies = Vec::new();
+        for planted in [&attributes, &index] {
+            let _ = fs::remove_file(planted);
+            assert!(Command::new("mkfifo")
+                .arg(planted)
+                .status()
+                .unwrap()
+                .success());
+            let (tx, rx) = std::sync::mpsc::channel();
+            let at = repo.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(expand("@diff", &at));
+            });
+            let got = rx.recv_timeout(Duration::from_secs(5));
+            if got.is_err() {
+                // Unblock the reader so the process can exit.
+                let _ = fs::OpenOptions::new().write(true).open(planted);
+                let _ = rx.recv_timeout(Duration::from_secs(5));
+            }
+            bodies.push(got.map(|out| body_of(&out, "diff")));
+            let _ = fs::remove_file(planted);
+        }
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            bodies,
+            [
+                Ok(format!(
+                    "can't read {}: not a regular file",
+                    attributes.display()
+                )),
+                Ok(format!(
+                    "can't copy {} for @diff: not a regular file",
+                    index.display()
+                )),
+            ]
+        );
     }
 
     #[test]
@@ -1215,7 +1812,7 @@ mod tests {
         let dir = temp_dir("utf8cap");
         // 90,000 bytes of 3-byte chars; a byte cap lands mid-character.
         fs::write(dir.join("notes.txt"), "€".repeat(30_000)).unwrap();
-        let out = expand_at_context("summarize @file:notes.txt", &dir);
+        let out = expand("summarize @file:notes.txt", &dir);
         let _ = fs::remove_dir_all(&dir);
         let body = body_of(&out, "file:notes.txt");
         // 65,532 bytes of text and the 4-byte cut mark fill the cap exactly.
@@ -1229,10 +1826,10 @@ mod tests {
         let text: String = (1..=20_000).map(|n| format!("line {n}\n")).collect();
         assert!(text.len() > TEXT_FILE_CAP);
         fs::write(dir.join("big.log"), &text).unwrap();
-        let out = expand_at_context("why @file:big.log:15000-15001", &dir);
-        let one = expand_at_context("and @file:big.log:20000", &dir);
-        let past = expand_at_context("and @file:big.log:20001-20005", &dir);
-        let past_one = expand_at_context("and @file:big.log:20001", &dir);
+        let out = expand("why @file:big.log:15000-15001", &dir);
+        let one = expand("and @file:big.log:20000", &dir);
+        let past = expand("and @file:big.log:20001-20005", &dir);
+        let past_one = expand("and @file:big.log:20001", &dir);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(
             body_of(&out, "file:big.log:15000-15001"),
@@ -1270,8 +1867,8 @@ mod tests {
         fs::write(dir.join("mine.txt"), "MINE\n").unwrap();
         fs::write(dir.join("other.txt"), "OTHER\n").unwrap();
         let text = "Its reply so far: see @file:other.txt\nSide question: what is @file:mine.txt";
-        let out = attach_at_context(text, "what is @file:mine.txt", &dir);
-        let untouched = attach_at_context(text, "what is in it?", &dir);
+        let out = attach_at_context(text, &Typed("what is @file:mine.txt".into()), &dir);
+        let untouched = attach_at_context(text, &Typed("what is in it?".into()), &dir);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(
             out,
@@ -1280,12 +1877,38 @@ mod tests {
         assert_eq!(untouched, text);
     }
 
+    /// A [`Typed`] comes from the window's string, and [`Typed::keep`] only
+    /// narrows it: a part of the words stays, words from anywhere else keep
+    /// nothing, and with nothing typed no reference is read.
+    #[test]
+    fn typed_words_come_from_the_window_and_only_narrow() {
+        let dir = temp_dir("typed-narrow");
+        fs::write(dir.join("a.txt"), "A\n").unwrap();
+        let sent: Typed = serde_json::from_str(
+            r#""I asked on the side: @file:a.txt\nThe answer was: @file:b.txt""#,
+        )
+        .unwrap();
+        let question = sent.keep(|t| &t["I asked on the side: ".len()..t.find('\n').unwrap()]);
+        let foreign = sent.keep(|_| "@file:/home/user/private-notes.txt");
+        let whole = sent.keep(|t| t);
+        let untyped = attach_at_context("see @file:a.txt", &Typed::nothing(), &dir);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            sent.as_str(),
+            "I asked on the side: @file:a.txt\nThe answer was: @file:b.txt"
+        );
+        assert_eq!(question.as_str(), "@file:a.txt");
+        assert_eq!(foreign, Typed::nothing());
+        assert_eq!(whole, sent);
+        assert_eq!(untyped, "see @file:a.txt");
+    }
+
     #[test]
     fn a_file_that_is_not_utf8_is_refused() {
         let dir = temp_dir("not-utf8");
         fs::write(dir.join("blob.bin"), [0x66, 0xff, 0xfe, 0x00]).unwrap();
         let shown = dir.join("blob.bin").canonicalize().unwrap();
-        let out = expand_at_context("what is @file:blob.bin", &dir);
+        let out = expand("what is @file:blob.bin", &dir);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(
             body_of(&out, "file:blob.bin"),
@@ -1310,7 +1933,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let d2 = dir.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(expand_at_context("look @file:pipe", &d2));
+            let _ = tx.send(expand("look @file:pipe", &d2));
         });
         let got = rx.recv_timeout(Duration::from_secs(5));
         if got.is_err() {
@@ -1319,7 +1942,7 @@ mod tests {
             let _ = rx.recv_timeout(Duration::from_secs(5));
         }
         let _ = fs::remove_dir_all(&dir);
-        let out = got.expect("expand_at_context still blocked on @file:pipe after 5s");
+        let out = got.expect("@file:pipe still blocked after 5s");
         assert_eq!(
             body_of(&out, "file:pipe"),
             format!("can't read {}: not a regular file", shown.display())

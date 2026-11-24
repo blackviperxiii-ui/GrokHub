@@ -237,6 +237,9 @@ struct ShellState {
     /// A Pulse card's report, by its chat, for that chat's next message to
     /// carry unseen.
     card_carry: Mutex<HashMap<String, String>>,
+    /// Messages the window sends back for the app, with what of them the
+    /// person typed.
+    send_back: turns::SendBack,
     /// The folder each Code tab session works in.
     code_sessions: code_sessions::Folders,
     /// Focus help: the app the user was just in (chip + one context line).
@@ -1061,7 +1064,7 @@ async fn send_chat(
     app: AppHandle,
     state: State<'_, ShellState>,
     conversation_id: String,
-    text: String,
+    text: grokhub_core::Typed,
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
     clock: Option<automations::Clock>,
@@ -1082,35 +1085,39 @@ async fn send_chat(
             grokhub_core::now_ms(),
         );
     });
+    // Only the words the window sent can hold the person's typing; what is
+    // put before them below can't.
+    let typed = state.send_back.typed(&conversation_id, &text);
     // A chat opened from a Pulse card: its first message carries the card.
     let carry = state
         .card_carry
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&conversation_id);
-    let text = match carry {
-        Some(context) => format!("{}{text}", grokhub_core::card_report::card_carry(&context)),
-        None => text,
-    };
     // Focus help: one context line on the next turn after returning from an app.
     // A `/deep-research` line keeps its command first, so the line waits.
-    #[cfg(desktop)]
-    let text = {
-        let on = pc_helpers::read(&state.config_dir).focus_help
-            && !grokhub_agent::research::is_command(&text)
-            && grokhub_agent::route::user_bench::parse_chat_command(&text).is_none();
-        let focus = state
-            .focus_help
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take_context(on);
-        match focus {
-            Some(line) => format!("{line}\n{text}"),
-            None => text,
+    let focus = |text: &str| -> Option<String> {
+        #[cfg(desktop)]
+        {
+            let on = pc_helpers::read(&state.config_dir).focus_help
+                && !grokhub_agent::research::is_command(text)
+                && grokhub_agent::route::user_bench::parse_chat_command(text).is_none();
+            state
+                .focus_help
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take_context(on)
+        }
+        #[cfg(not(desktop))]
+        {
+            let _ = text;
+            None
         }
     };
+    let (text, typed) = turns::composed(&text, typed, carry.as_deref(), focus);
     let turn = Turn {
         text,
+        typed,
         mode,
         attachments: attachments.unwrap_or_default(),
         clock,
@@ -1122,6 +1129,8 @@ async fn send_chat(
 /// (paths from `stage_attachment`).
 struct Turn {
     text: String,
+    /// The words in `text` the person typed: only their `@` references expand.
+    typed: grokhub_core::Typed,
     /// `/plan` or a follow-up chip names it; otherwise the app reads the
     /// message and picks Chat or Plan (`turns::pick_mode`).
     mode: Option<agent::SessionMode>,
@@ -1160,6 +1169,7 @@ async fn chat_turn(
 ) -> Result<String, String> {
     let Turn {
         text,
+        typed,
         mode,
         attachments,
         clock,
@@ -1198,6 +1208,7 @@ async fn chat_turn(
         }
     }
     let asked = text.clone();
+    let asked_typed = typed.clone();
     // A card's chat shows Stop on its card while this turn runs.
     card_chat::turn_began(&conversation_id);
     let (ended_dir, ended_chat) = (state.config_dir.clone(), conversation_id.clone());
@@ -1262,8 +1273,9 @@ async fn chat_turn(
             })
         });
         let resume_to = app.clone();
-        let stop = session.prompt(
+        let stop = session.prompt_typed(
             &text,
+            typed,
             files,
             route,
             Box::new(move |event| {
@@ -1314,8 +1326,12 @@ async fn chat_turn(
     let card = card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
     // No model in your plan answered: the chat waits and sends again on its
     // own. A card's chat does not: its card settled already.
+    // The window sends the ask back as it was, and only what the person
+    // typed in it counts as typed again.
     if let (Err(err), false) = (&stop, card) {
-        model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms());
+        if model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms()) {
+            state.send_back.expect(&ended_chat, &asked, asked_typed);
+        }
     }
     if coding {
         let why = match &stop {
@@ -4413,11 +4429,19 @@ fn start_auto_resume(app: AppHandle) {
 async fn workboard_say(
     state: State<'_, ShellState>,
     id: String,
-    text: String,
+    text: grokhub_core::Typed,
     conversation_id: String,
 ) -> Result<card_chat::Say, String> {
     let dir = state.config_dir.clone();
-    off_main(move || card_chat::say(&dir, &id, &text, &conversation_id)).await?
+    let typed = text.clone();
+    let said =
+        off_main(move || card_chat::say(&dir, &id, text.as_str(), &conversation_id)).await??;
+    // The message holds the card's work prompt and notes: of it, the person
+    // typed only `text`.
+    state
+        .send_back
+        .expect(&said.conversation_id, &said.message, typed);
+    Ok(said)
 }
 
 /// The Workboard's queue, while the cabin is closed: once a second, the
@@ -4466,8 +4490,10 @@ fn start_card_queue(app: AppHandle) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 let state = app.state::<ShellState>();
+                // A queued card's work prompt: no one typed it.
                 let turn = Turn {
                     text: start.message,
+                    typed: grokhub_core::Typed::nothing(),
                     mode: None,
                     attachments: Vec::new(),
                     clock: None,
@@ -7829,8 +7855,10 @@ fn web_send(
     if taken(&conversation_id) && !web.owns(&conversation_id) {
         return Err(remote::NOT_YOURS.into());
     }
+    let text: grokhub_core::Typed = arg(args, "text")?;
     let turn = Turn {
-        text: arg(args, "text")?,
+        text: text.as_str().to_string(),
+        typed: turns::typed_words(&text),
         mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
         attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
         clock: arg::<Option<automations::Clock>>(args, "clock")?,
@@ -8921,6 +8949,7 @@ pub fn run() {
                 notified: os_extras::Pending::default(),
                 auto: Mutex::default(),
                 card_carry: Mutex::default(),
+                send_back: turns::SendBack::default(),
                 code_sessions,
                 #[cfg(desktop)]
                 focus_help: Mutex::new(focus_help::FocusHelp::default()),

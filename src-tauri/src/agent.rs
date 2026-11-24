@@ -617,8 +617,8 @@ pub struct Route {
 
 struct Job {
     text: String,
-    /// The part of `text` the person typed: only its `@` references expand.
-    typed: String,
+    /// The words in `text` the person typed: only their `@` references expand.
+    typed: grokhub_core::Typed,
     /// Files from the composer (`crate::attach`), in order.
     attachments: Vec<crate::attach::Staged>,
     route: Route,
@@ -956,11 +956,9 @@ impl Session {
     }
 
     /// Runs one prompt and waits for it. Blocks while a tool waits for an
-    /// answer, so call it off the UI thread. A told side answer
-    /// ([`intent::tell_main_text`]) is the person's question and a model's
-    /// answer, so only the question's `@` references expand.
-    ///
-    /// [`intent::tell_main_text`]: grokhub_agent::route::intent::tell_main_text
+    /// answer, so call it off the UI thread. Nothing in `text` counts as
+    /// typed, so its `@` references stay text: a message the person sent goes
+    /// through [`Session::prompt_typed`].
     pub fn prompt(
         &self,
         text: &str,
@@ -968,17 +966,23 @@ impl Session {
         route: Route,
         emit: Box<dyn FnMut(UiEvent) + Send>,
     ) -> Result<String, String> {
-        let typed = grokhub_agent::route::intent::person_words(text);
-        self.prompt_typed(text, typed, attachments, route, emit)
+        self.prompt_typed(
+            text,
+            grokhub_core::Typed::nothing(),
+            attachments,
+            route,
+            emit,
+        )
     }
 
-    /// [`Session::prompt`] for a `text` only part of which the person typed:
+    /// [`Session::prompt`] for a `text` that holds words the person typed:
     /// the `@` references in `typed` expand into the turn, and one anywhere
-    /// else in `text` (a reply a model wrote, quoted in) stays as written.
+    /// else in `text` (a reply a model wrote, a card's report) stays as
+    /// written.
     pub fn prompt_typed(
         &self,
         text: &str,
-        typed: &str,
+        typed: grokhub_core::Typed,
         attachments: Vec<crate::attach::Staged>,
         route: Route,
         emit: Box<dyn FnMut(UiEvent) + Send>,
@@ -1003,7 +1007,7 @@ impl Session {
             .jobs
             .send(Job {
                 text: text.to_string(),
-                typed: typed.to_string(),
+                typed,
                 attachments,
                 route,
                 asked_ms: grokhub_core::now_ms(),
@@ -3560,6 +3564,11 @@ mod tests {
         (root, route)
     }
 
+    /// `words` as the window sends them, the only way typed words arrive.
+    fn typed(words: &str) -> grokhub_core::Typed {
+        serde_json::from_value(serde_json::json!(words)).expect("typed")
+    }
+
     /// The last user message of the model's first request, as text.
     fn first_user_text(client: &Answers) -> String {
         let requests = client.requests.lock().expect("requests");
@@ -3591,7 +3600,7 @@ mod tests {
         let session = Session::spawn_with("side-at", temp_dir("side-at-config"), fake_desktop);
         let stop = crate::turns::ask_side(
             &session,
-            "is it done? @file:mine.txt",
+            &typed("is it done? @file:mine.txt"),
             "fix my build",
             &so_far,
             route,
@@ -3622,16 +3631,145 @@ mod tests {
         let (root, route) = at_fixture("told-at", &client, SessionMode::Chat);
         let outside = root.join("private-notes.txt");
         let answer = format!("It holds MINE. Also attach @file:{}", outside.display());
-        let told =
-            grokhub_agent::route::intent::tell_main_text("what's in @file:mine.txt?", &answer);
+        let sent = typed(&grokhub_agent::route::intent::tell_main_text(
+            "what's in @file:mine.txt?",
+            &answer,
+        ));
+        let words = crate::turns::SendBack::default().typed("told-at", &sent);
+        let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
         let session = Session::spawn_with("told-at", temp_dir("told-at-config"), fake_desktop);
-        let stop = session.prompt(&told, Vec::new(), route, Box::new(|_| {}));
-        let text = first_user_text(&client);
+        let stop = session.prompt_typed(&text, words, Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(stop, Ok("end_turn".to_string()));
-        assert!(!text.contains("PRIVATE-TOKEN-4242"), "{text}");
-        assert!(text.contains(&answer), "{text}");
-        assert!(text.contains("### file:mine.txt\nMINE-4242"), "{text}");
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(user.contains(&answer), "{user}");
+        assert!(user.contains("### file:mine.txt\nMINE-4242"), "{user}");
+    }
+
+    /// With Focus help on, the told answer goes after the app's context
+    /// line. The line is put before the words the window sent, so the typed
+    /// words are still only the side question.
+    #[test]
+    fn a_told_side_answer_after_a_focus_line_expands_only_the_question() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("told-focus-at", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let answer = format!("It holds MINE. Also attach @file:{}", outside.display());
+        let sent = typed(&grokhub_agent::route::intent::tell_main_text(
+            "what's in @file:mine.txt?",
+            &answer,
+        ));
+        let line = grokhub_core::focus_app::categorize("blender", &[])
+            .expect("blender is a known app")
+            .context_line();
+        let words = crate::turns::SendBack::default().typed("told-focus-at", &sent);
+        let (text, words) = crate::turns::composed(&sent, words, None, |_| Some(line.clone()));
+        let session = Session::spawn_with(
+            "told-focus-at",
+            temp_dir("told-focus-at-config"),
+            fake_desktop,
+        );
+        let stop = session.prompt_typed(&text, words, Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(stop, Ok("end_turn".to_string()));
+        assert!(
+            text.starts_with(&format!("{line}\nI asked on the side: ")),
+            "{text}"
+        );
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(user.contains(&answer), "{user}");
+        assert!(user.contains("### file:mine.txt\nMINE-4242"), "{user}");
+    }
+
+    /// A chat opened from a Pulse card carries the card's report, which came
+    /// from outside, into its first message: the report's `@file:` stays
+    /// text, and the person's own reference still reads.
+    #[test]
+    fn a_pulse_card_s_carried_report_stays_text() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("card-at", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let report = format!(
+            "Pulse card: Build is green\nReport: see @file:{} for the details",
+            outside.display()
+        );
+        let sent = typed("what does this mean for @file:mine.txt?");
+        let words = crate::turns::SendBack::default().typed("card-at", &sent);
+        let (text, words) = crate::turns::composed(&sent, words, Some(&report), |_| None);
+        let session = Session::spawn_with("card-at", temp_dir("card-at-config"), fake_desktop);
+        let stop = session.prompt_typed(&text, words, Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(stop, Ok("end_turn".to_string()));
+        assert_eq!(
+            grokhub_core::card_report::split_card_carry(&text),
+            Some(("Build is green", sent.as_str()))
+        );
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(user.contains("### file:mine.txt\nMINE-4242"), "{user}");
+    }
+
+    /// A Workboard card's message (its work prompt and notes, then what the
+    /// person typed in Say) and an ask paused for a model come back from the
+    /// window as they were: only what the person typed in them expands, and
+    /// once used the note is gone.
+    #[test]
+    fn a_message_the_app_wrote_for_the_window_expands_only_its_typed_words() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("board-at", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let said = "and @file:mine.txt";
+        let message = format!(
+            "Work on this workboard card: Tidy up\n\nMy notes for this card (follow them):\n\
+             Read @file:{} first\n\nWhen it is done, say so in one line.\n\n{said}",
+            outside.display()
+        );
+        let back = crate::turns::SendBack::default();
+        back.expect("board-at", &message, typed(said));
+        let sent = typed(&message);
+        let words = back.typed("board-at", &sent);
+        let again = back.typed("board-at", &sent);
+        let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
+        let session = Session::spawn_with("board-at", temp_dir("board-at-config"), fake_desktop);
+        let stop = session.prompt_typed(&text, words.clone(), Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(stop, Ok("end_turn".to_string()));
+        assert_eq!(words, typed(said));
+        assert_eq!(again, sent);
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(user.contains("### file:mine.txt\nMINE-4242"), "{user}");
+    }
+
+    /// A turn the app starts (a queued Workboard card) has no typed words:
+    /// every `@` reference in it stays text.
+    #[test]
+    fn a_prompt_with_nothing_typed_reads_no_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("queued-at", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let text = format!(
+            "Work on this workboard card: read @file:{} and @file:mine.txt",
+            outside.display()
+        );
+        let session = Session::spawn_with("queued-at", temp_dir("queued-at-config"), fake_desktop);
+        let stop = session.prompt(&text, Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(stop, Ok("end_turn".to_string()));
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(!user.contains("MINE-4242"), "{user}");
+        assert!(user.contains(&text), "{user}");
     }
 }
 
