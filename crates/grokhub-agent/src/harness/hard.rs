@@ -2540,6 +2540,147 @@ fn command_class(cmd: &str) -> Option<HardClass> {
     None
 }
 
+/// git's own commands that never push. git runs its own command before any
+/// alias or `git-<name>` program of the same name, so one of these words
+/// after `git` is always that command. Any other word may be an alias (set
+/// on the line with `-c alias.<name>=`, in a config file or through the
+/// environment) or a program on PATH, and either may push anything:
+/// [`ships`] reads it as a push, and the Code tab's chat push guard refuses
+/// it. [`GIT_RUNNERS`] are in this list too.
+pub const GIT_OWN_COMMANDS: &[&str] = &[
+    "add",
+    "am",
+    "annotate",
+    "apply",
+    "archive",
+    "backfill",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "checkout-index",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "column",
+    "commit",
+    "commit-graph",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "describe",
+    "diagnose",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-tree",
+    "difftool",
+    "fast-export",
+    "fast-import",
+    "fetch",
+    "filter-branch",
+    "fmt-merge-msg",
+    "for-each-ref",
+    "for-each-repo",
+    "format-patch",
+    "fsck",
+    "gc",
+    "grep",
+    "hash-object",
+    "help",
+    "hook",
+    "index-pack",
+    "init",
+    "interpret-trailers",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "mailinfo",
+    "mailsplit",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-tree",
+    "mergetool",
+    "mktag",
+    "mktree",
+    "multi-pack-index",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "pack-refs",
+    "patch-id",
+    "prune",
+    "pull",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "reflog",
+    "refs",
+    "remote",
+    "repack",
+    "replace",
+    "replay",
+    "request-pull",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-ref",
+    "sparse-checkout",
+    "stage",
+    "stash",
+    "status",
+    "stripspace",
+    "submodule",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "unpack-objects",
+    "update-index",
+    "update-ref",
+    "var",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+];
+
+/// git's own commands that run a command they are given: `rebase -x`,
+/// `submodule foreach`, `bisect run`, `hook run`, `for-each-repo`, a
+/// difftool or mergetool command, a `filter-branch` filter.
+pub const GIT_RUNNERS: &[&str] = &[
+    "bisect",
+    "difftool",
+    "filter-branch",
+    "for-each-repo",
+    "hook",
+    "mergetool",
+    "rebase",
+    "submodule",
+];
+
 /// git's own options before the verb that take the next word as their value
 /// (lower case, as [`command_class`] reads the command).
 const GIT_VALUE_OPTIONS: &[&str] = &[
@@ -2587,9 +2728,10 @@ const SHIP_DEPTH: u8 = 6;
 /// `stdbuf`, `flock` and `eval`, and into a script given to `bash -c`,
 /// `sh -lc` and the like. `commit`, `commit-tree` and `update-ref` are not
 /// here: the person chose that an agent's plain commit stays as it is, and
-/// the push gates refuse to push a commit the app did not make. An alias
-/// from a config file or a script file still passes; the gates in
-/// `grokhub-code`'s `push.rs` are what hold.
+/// the push gates refuse to push a commit the app did not make. A git word
+/// that isn't one of git's own commands ([`GIT_OWN_COMMANDS`]) may be an
+/// alias from a config file, so it is read as a push. A script file still
+/// passes; the gates in `grokhub-code`'s `push.rs` are what hold.
 fn ships_cmd(cmd: &str, depth: u8) -> bool {
     if depth > SHIP_DEPTH {
         return true;
@@ -2686,7 +2828,9 @@ fn words_ship(words: &[String], depth: u8) -> bool {
 /// request. Read by words, not by prefix, so git's global options (`-C
 /// <dir>`, `-c <k=v>`, `--git-dir`, `--no-pager`, …) and gh's (`-R <repo>`)
 /// before the verb don't hide it. An alias given with `-c alias.<name>=`
-/// is read as what it names.
+/// is read as what it names, and any other word that isn't one of git's own
+/// commands as a push. A command git runs is read too: a `-c` value
+/// (`core.editor=<command>`) and what one of [`GIT_RUNNERS`] is given.
 fn ships(words: &[String], head: usize, depth: u8) -> bool {
     let at = |i: usize| words.get(i).map(String::as_str);
     match leaf(&words[head]) {
@@ -2711,6 +2855,15 @@ fn ships(words: &[String], head: usize, depth: u8) -> bool {
                     };
                     aliases.push(set);
                 }
+                // `-c core.editor='<command>'`: a command git may run.
+                let runs = value
+                    .filter(|_| w == "-c")
+                    .and_then(|v| v.split_once('='))
+                    .map(|(_, runs)| runs);
+                if runs.is_some_and(|r| r.contains(char::is_whitespace) && ships_cmd(r, depth + 1))
+                {
+                    return true;
+                }
                 i += if GIT_VALUE_OPTIONS.contains(&w) { 2 } else { 1 };
             }
             let Some(verb) = at(i) else {
@@ -2729,13 +2882,21 @@ fn ships(words: &[String], head: usize, depth: u8) -> bool {
                 return ships_cmd(&line, depth + 1);
             }
             match verb {
-                "push" | "send-pack" => true,
+                "push" | "send-pack" | "http-push" => true,
                 // `git subtree push`, `git lfs push`
                 "subtree" | "lfs" => args
                     .iter()
                     .find(|w| !w.starts_with('-'))
                     .is_some_and(|w| w == "push"),
-                _ => false,
+                // `rebase -x '<script>'`, `submodule foreach git push`,
+                // `for-each-repo --config=<key> push`
+                _ if GIT_RUNNERS.contains(&verb) => args.iter().enumerate().any(|(k, w)| {
+                    matches!(w.as_str(), "push" | "send-pack")
+                        || (w.contains(char::is_whitespace) && ships_cmd(w, depth + 1))
+                        || (leaf(w) == "git" && ships(args, k, depth + 1))
+                }),
+                // An alias from a config file, or a `git-<name>` program.
+                _ => !GIT_OWN_COMMANDS.contains(&verb),
             }
         }
         "git-push" | "git-send-pack" => true,
@@ -4923,6 +5084,48 @@ mod tests {
             "gh repo create my-app --private",
             "stdbuf -o0 cargo test",
             "cat docs/git-push.md",
+        ] {
+            assert_eq!(shell(cmd), None, "{cmd}");
+        }
+    }
+
+    /// An alias from a config file, or a `git-<name>` program, can push
+    /// anything, so a git word that isn't one of git's own commands is a
+    /// Ship card, and so is a push in a command git's own runners run.
+    #[test]
+    fn a_git_word_that_isnt_gits_own_command_or_a_push_its_runners_run_is_hard_class_ship() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        for cmd in [
+            "git config alias.ship push && git ship --force origin main",
+            "git ship --force origin main",
+            "env git ship --force origin main",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0=push git ship",
+            "git http-push https://example.invalid/r.git main",
+            "git rebase -x 'git push --force origin main' main",
+            "git rebase --exec 'git ship' main",
+            "git submodule foreach git push origin x",
+            "git bisect run sh -c 'git push -f origin main'",
+            "git for-each-repo --config=maintenance.repo push -f origin main",
+            "git -c core.editor='git push -f origin main' commit",
+            "git checkout -q main && git commit -qam agent && git push origin HEAD",
+            "git push origin code/fix:heads/main",
+        ] {
+            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
+        }
+        for cmd in [
+            "git config alias.ship push",
+            "git rebase -i main",
+            "git rebase -x 'cargo test' main",
+            "git submodule update --init",
+            "git submodule foreach git pull",
+            "git -c core.editor=true commit",
+            "git lfs pull",
+            "git --no-pager diff",
         ] {
             assert_eq!(shell(cmd), None, "{cmd}");
         }

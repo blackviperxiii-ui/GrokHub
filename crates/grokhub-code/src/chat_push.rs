@@ -7,12 +7,21 @@
 //! force (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`,
 //! `+refspec`), `--mirror`, `--delete`, `--all`, `--tags`, `--prune`, a
 //! remote other than origin, `git -C`/`-c` and anything the reader can't
-//! follow is refused. The guard then refuses main, the default branch and
-//! any protected branch, in every mode. What it lets through still asks:
-//! an agent's push is hard class `ship`, which no mode skips.
+//! follow is refused. A destination git would match as `refs/heads/<name>`
+//! (`heads/main`) is read as that branch, and `HEAD` is read as the
+//! checked-out branch only when nothing before the push in the same
+//! command could switch it. A git word that isn't one of git's own commands
+//! (an alias, from the command, a config file or the environment, or a
+//! `git-<name>` program) may push anything, so it is refused too, and so is
+//! a push in a command one of git's runners is given (`rebase -x`,
+//! `submodule foreach`, `-c core.editor=…`). The guard then refuses main,
+//! the default branch and any protected branch, in every mode. What it lets
+//! through still asks: an agent's push is hard class `ship`, which no mode
+//! skips.
 
 use crate::activity::{self as code_activity, Entry, Kind as ActKind};
 use crate::ship::{self, Blocked, CodeShip, Go, Probe};
+use grokhub_agent::harness::{GIT_OWN_COMMANDS, GIT_RUNNERS};
 use std::path::Path;
 
 pub const FORCE: &str =
@@ -21,6 +30,7 @@ pub const DELETE: &str = "Deleting a branch on the remote isn't allowed from cha
 pub const NAME_IT: &str = "Name the branch: git push origin <branch>.";
 pub const UNCLEAR: &str = "This command pushes in a way the push guard can't read. Run git push origin <branch> on its own.";
 pub const ONE_BRANCH: &str = "Push one branch at a time: git push origin <branch>.";
+pub const HEAD_MAY_MOVE: &str = "A command before git push origin HEAD may switch the branch. Name the branch: git push origin <branch>.";
 
 /// Where one `git push` goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,8 +69,48 @@ const PLAIN_FLAGS: &[&str] = &[
     "--no-verify",
 ];
 
-/// git's own options before the subcommand that move where it works.
-const MOVING_GIT_OPTIONS: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
+/// git's own options before the subcommand that move where it works, or
+/// what it reads and runs.
+const MOVING_GIT_OPTIONS: &[&str] = &[
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--exec-path",
+];
+
+/// git's own options before the subcommand that take the next word as their
+/// value when it isn't joined with `=`.
+const GIT_VALUE_OPTIONS: &[&str] = &[
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--attr-source",
+];
+
+/// git's own commands other than `push` that push. The reader doesn't
+/// follow them.
+const OTHER_PUSHES: &[&str] = &["send-pack", "http-push"];
+
+/// git's own commands that can leave HEAD on another branch.
+const SWITCHES_BRANCH: &[&str] = &[
+    "checkout",
+    "switch",
+    "branch",
+    "symbolic-ref",
+    "stash",
+    "update-ref",
+];
+
+fn not_gits_own(verb: &str) -> String {
+    format!(
+        "git {verb} isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+    )
+}
 
 fn is_git(word: &str) -> bool {
     let leaf = word.rsplit(['/', '\\']).next().unwrap_or(word);
@@ -159,7 +209,20 @@ fn target_of(refspec: &str) -> Result<Target, String> {
         None if refspec == "HEAD" => return Ok(Target::Current),
         None => refspec,
     };
-    let name = dst.strip_prefix("refs/heads/").unwrap_or(dst);
+    let name = if let Some(name) = dst.strip_prefix("refs/heads/") {
+        name
+    } else if let Some(name) = dst.strip_prefix("heads/") {
+        // git matches a short destination on origin as `refs/<dst>` too, so
+        // `heads/main` updates main.
+        name
+    } else if ["refs/", "tags/", "remotes/"]
+        .iter()
+        .any(|p| dst.starts_with(p))
+    {
+        return Err(UNCLEAR.into());
+    } else {
+        dst
+    };
     if name.starts_with("refs/") || name == "HEAD" || ship::branch_ok(name).is_err() {
         return Err(UNCLEAR.into());
     }
@@ -200,6 +263,29 @@ fn read_push(args: &[String]) -> Result<Target, String> {
     }
 }
 
+/// A quoted word that may be a command git runs pushes, or can't be read:
+/// a script one of git's runners is given, or a value before git's verb
+/// (`core.editor=<command>`, `GIT_CONFIG_VALUE_0=<command>`).
+fn hides_a_push(word: &str) -> bool {
+    if !word.contains(char::is_whitespace) {
+        return false;
+    }
+    let script = match word.split_once('=') {
+        Some((key, value)) if !key.contains(char::is_whitespace) => value,
+        _ => word,
+    };
+    read(script) != Read::NoPush
+}
+
+/// The words one of git's runners is given hold a push, or a command the
+/// reader can't follow: a quoted script, or a git command among them
+/// (`submodule foreach git push`).
+fn runs_a_push(args: &[String]) -> bool {
+    args.iter()
+        .enumerate()
+        .any(|(k, w)| hides_a_push(w) || (is_git(w) && read(&args[k..].join(" ")) != Read::NoPush))
+}
+
 /// Every `git push` in `command`, or why it is refused.
 pub fn read(command: &str) -> Read {
     let mut pushes = Vec::new();
@@ -210,6 +296,10 @@ pub fn read(command: &str) -> Read {
             .first()
             .is_some_and(|w| ["cd", "pushd", "popd"].contains(&w.as_str()))
     });
+    // `git push origin HEAD` is read as the branch checked out now, so
+    // nothing before it in the command may switch the branch: a script or
+    // another program may, as may git's own `checkout`, `switch` and kin.
+    let mut switched = false;
     for seg in segs {
         let words = &seg.words;
         // Every word, a quoted one split again: `bash -c "git push …"`.
@@ -231,33 +321,55 @@ pub fn read(command: &str) -> Read {
             if says_push && says_git {
                 return Read::Refused(UNCLEAR.into());
             }
+            switched = true;
             continue;
         }
         if words[..at].iter().any(|w| w.starts_with("GIT_")) && says_push {
             return Read::Refused(UNCLEAR.into());
         }
         let mut i = at + 1;
-        while let Some(w) = words.get(i) {
-            if !w.starts_with('-') {
-                break;
+        let mut moved = false;
+        while let Some(w) = words.get(i).filter(|w| w.starts_with('-')) {
+            let name = w.split_once('=').map_or(w.as_str(), |(name, _)| name);
+            // Sets any config, an alias or an editor too, from a variable
+            // the reader can't see.
+            if name == "--config-env" {
+                return Read::Refused(UNCLEAR.into());
             }
-            if MOVING_GIT_OPTIONS
-                .iter()
-                .any(|o| w == o || w.starts_with(&format!("{o}=")))
-            {
-                if says_push {
-                    return Read::Refused(UNCLEAR.into());
-                }
-                break;
-            }
-            i += 1;
+            moved |= MOVING_GIT_OPTIONS.contains(&name);
+            i += if GIT_VALUE_OPTIONS.contains(&w.as_str()) {
+                2
+            } else {
+                1
+            };
         }
-        if words.get(i).map(String::as_str) != Some("push") {
+        let before_verb = &words[..i.min(words.len())];
+        if (moved && says_push) || before_verb.iter().any(|w| hides_a_push(w)) {
+            return Read::Refused(UNCLEAR.into());
+        }
+        let Some(verb) = words.get(i).map(String::as_str) else {
             continue;
-        }
-        match read_push(&words[i + 1..]) {
-            Ok(t) => pushes.push(t),
-            Err(why) => return Read::Refused(why),
+        };
+        let args = &words[i + 1..];
+        if verb == "push" {
+            match read_push(args) {
+                Ok(Target::Current) if switched => {
+                    return Read::Refused(HEAD_MAY_MOVE.into());
+                }
+                Ok(t) => pushes.push(t),
+                Err(why) => return Read::Refused(why),
+            }
+        } else if OTHER_PUSHES.contains(&verb) {
+            return Read::Refused(UNCLEAR.into());
+        } else if GIT_RUNNERS.contains(&verb) {
+            if says_push || runs_a_push(args) {
+                return Read::Refused(UNCLEAR.into());
+            }
+            switched = true;
+        } else if GIT_OWN_COMMANDS.contains(&verb) {
+            switched |= SWITCHES_BRANCH.contains(&verb);
+        } else {
+            return Read::Refused(not_gits_own(verb));
         }
     }
     if pushes.is_empty() {

@@ -123,6 +123,102 @@ fn only_the_plain_form_reaches_the_guard() {
     }
 }
 
+#[test]
+fn a_git_word_that_isnt_gits_own_command_is_refused() {
+    assert_eq!(
+        refused("git config alias.ship push && git ship --force origin main"),
+        "git ship isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+    );
+    assert_eq!(
+        refused("git -c alias.p=push p origin main"),
+        "git p isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+    );
+    assert_eq!(
+        refused("git lfs push origin main"),
+        "git lfs isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+    );
+    // git's own commands that run a command: refused when it pushes or
+    // can't be read.
+    for command in [
+        "git rebase -x 'git push --force origin main' HEAD~1",
+        "git rebase --exec 'git ship' HEAD~1",
+        "git submodule foreach git push --force origin main",
+        "git bisect run sh -c 'git push -f origin main'",
+        "git for-each-repo --config=maintenance.repo push -f origin main",
+        "git -c core.editor='git ship' commit",
+        "git send-pack ../origin.git main",
+    ] {
+        assert_eq!(
+            refused(command),
+            "This command pushes in a way the push guard can't read. Run git push origin <branch> on its own.",
+            "{command}"
+        );
+    }
+    for command in [
+        "git config alias.ship push",
+        "git rebase -x 'cargo test' HEAD~1",
+        "git submodule foreach git pull",
+        "git -c color.ui=never log --oneline && git --no-pager diff",
+        "git -C ../other status",
+        "git -c \"user.name=a b\" commit -m x",
+        "git help push",
+    ] {
+        assert_eq!(read(command), Read::NoPush, "{command}");
+    }
+}
+
+#[test]
+fn a_destination_git_reads_as_a_branch_is_that_branch() {
+    assert_eq!(
+        read("git push origin code/fix:heads/main"),
+        Read::Pushes(vec![branch("main")])
+    );
+    assert_eq!(
+        read("git push origin heads/main"),
+        Read::Pushes(vec![branch("main")])
+    );
+    assert_eq!(
+        read("git push origin HEAD:heads/main"),
+        Read::Pushes(vec![branch("main")])
+    );
+    // A full name is taken as written: this is refs/heads/heads/x.
+    assert_eq!(
+        read("git push origin HEAD:refs/heads/heads/x"),
+        Read::Pushes(vec![branch("heads/x")])
+    );
+    for command in [
+        "git push origin code/x:tags/v1",
+        "git push origin remotes/origin/main",
+    ] {
+        assert_eq!(
+            refused(command),
+            "This command pushes in a way the push guard can't read. Run git push origin <branch> on its own.",
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn head_is_read_only_when_nothing_before_the_push_can_switch_the_branch() {
+    assert_eq!(
+        read("git add -A && git commit -m x && git push origin HEAD"),
+        Read::Pushes(vec![Target::Current])
+    );
+    for command in [
+        "git checkout main && git push origin HEAD",
+        "git switch -q main; git push origin HEAD",
+        "git branch -m main && git push origin HEAD",
+        "git symbolic-ref HEAD refs/heads/main && git push -u origin HEAD",
+        "./switch.sh && git push origin HEAD",
+    ] {
+        assert_eq!(
+            refused(command),
+            "A command before git push origin HEAD may switch the branch. Name the branch: git push origin <branch>.",
+            "{command}"
+        );
+    }
+}
+
 #[cfg(unix)]
 mod repo {
     use super::*;
@@ -273,6 +369,83 @@ mod repo {
             log.contains("From chat: main is the main or default branch."),
             "{log}"
         );
+    }
+
+    /// An alias set on the line, in the environment or in the repo's config
+    /// can push anything, so it is refused before it runs.
+    #[test]
+    fn a_push_through_a_git_alias_is_refused_and_origin_main_stays() {
+        let f = fixture("alias");
+        let before = origin_sha(&f, "main").unwrap();
+        std::fs::write(f.work.join("a.txt"), "agent\n").unwrap();
+        sh_git(&f.work, &["commit", "-am", "agent"]);
+        let alias = "git ship isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>.";
+        for cfg in [CodeShip::default(), auto()] {
+            for command in [
+                "git config alias.ship push && git ship --force origin main",
+                "git -c alias.ship=push ship --force origin main",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0=push git ship --force origin main",
+            ] {
+                assert_eq!(
+                    agent_runs(&f, &cfg, command, true),
+                    Some(Verdict::Refuse(alias.into())),
+                    "{command}"
+                );
+            }
+        }
+        // Set in the repo's config by an earlier command.
+        sh_git(&f.work, &["config", "alias.ship", "push"]);
+        assert_eq!(
+            agent_runs(&f, &auto(), "git ship --force origin main", true),
+            Some(Verdict::Refuse(alias.into()))
+        );
+        assert_eq!(origin_sha(&f, "main"), Some(before));
+    }
+
+    #[test]
+    fn a_push_to_heads_main_is_refused_like_main_and_origin_main_stays() {
+        let f = fixture("heads");
+        let before = origin_sha(&f, "main").unwrap();
+        sh_git(&f.work, &["checkout", "-b", "code/fix"]);
+        std::fs::write(f.work.join("a.txt"), "agent\n").unwrap();
+        sh_git(&f.work, &["commit", "-am", "agent"]);
+        let main =
+            "main is the main or default branch. The app never pushes to it; make a branch first.";
+        for cfg in [CodeShip::default(), auto()] {
+            for command in [
+                "git push origin code/fix:heads/main",
+                "git push origin HEAD:heads/main",
+                "git push origin heads/main",
+            ] {
+                assert_eq!(
+                    agent_runs(&f, &cfg, command, true),
+                    Some(Verdict::Refuse(main.into())),
+                    "{command}"
+                );
+            }
+        }
+        assert_eq!(origin_sha(&f, "main"), Some(before));
+    }
+
+    /// `HEAD` is read before the command runs, so a switch to main earlier
+    /// in the same command would push main.
+    #[test]
+    fn a_push_of_head_after_a_switch_to_main_is_refused_and_origin_main_stays() {
+        let f = fixture("switch");
+        let before = origin_sha(&f, "main").unwrap();
+        let made = ship::new_branch(&f.config, &f.work, &CodeShip::default(), "code/fix").unwrap();
+        assert_eq!(made, "code/fix");
+        let command = "git checkout -q main && echo agent > a.txt && git -c user.name=t -c user.email=t@example.invalid commit -qam agent && git push origin HEAD";
+        for cfg in [auto(), CodeShip::default()] {
+            assert_eq!(
+                agent_runs(&f, &cfg, command, true),
+                Some(Verdict::Refuse(HEAD_MAY_MOVE.into())),
+                "{}",
+                cfg.mode.id()
+            );
+        }
+        assert_eq!(origin_sha(&f, "main"), Some(before));
+        assert_eq!(ship::current_branch(&f.work).as_deref(), Some("code/fix"));
     }
 
     #[test]
