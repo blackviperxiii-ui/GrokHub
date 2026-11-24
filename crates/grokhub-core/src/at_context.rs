@@ -7,10 +7,10 @@
 //! regular file, and the git tokens run no program the repository's config
 //! names.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use crate::attach::{bound_scan, TEXT_FILE_CAP};
@@ -257,14 +257,29 @@ fn resolve_one(kind: &AtKind, cwd: &Path) -> String {
     match kind {
         AtKind::File { path, lines } => read_file(cwd, path, *lines),
         AtKind::Folder { path } => list_folder(cwd, path),
-        AtKind::Diff => git_diff(cwd, &["diff"]),
-        AtKind::Staged => git_diff(cwd, &["diff", "--staged"]),
+        AtKind::Diff => work_tree_diff(cwd),
+        AtKind::Staged => git_diff(in_dir(cwd), &["diff", "--staged"]),
+        // `--pretty=medium` over a `format.pretty` whose `%G?` would check
+        // signatures with the `gpg.program` the config names.
         AtKind::Git { count } => git_diff(
-            cwd,
-            &["log", &format!("-n{count}"), "-p", "--no-show-signature"],
+            in_dir(cwd),
+            &[
+                "log",
+                &format!("-n{count}"),
+                "-p",
+                "--no-show-signature",
+                "--pretty=medium",
+            ],
         ),
         AtKind::Url { url } => fetch_url(url),
     }
+}
+
+/// [`git_cmd::git`] in `cwd`.
+fn in_dir(cwd: &Path) -> Command {
+    let mut cmd = git_cmd::git();
+    cmd.current_dir(cwd);
+    cmd
 }
 
 fn path_blocked(path: &str) -> Option<&'static str> {
@@ -464,20 +479,13 @@ const DIFF_OPTS: [&str; 5] = [
     "--ignore-submodules=dirty",
 ];
 
-/// A git diff or log of `cwd` that runs no program the repository's config
-/// names. [`git_cmd::git`] keeps hooks and fsmonitor off, [`DIFF_OPTS`] the
-/// diff programs, and [`filters_off`] the clean filter git runs on a work
-/// tree file it reads. A partial clone doesn't fetch what it lacks.
-fn git_diff(cwd: &Path, args: &[&str]) -> String {
-    let filters = match filters_off(cwd) {
-        Ok(filters) => filters,
-        Err(why) => return why.into(),
-    };
-    let out = match git_cmd::git()
-        .current_dir(cwd)
+/// A git diff or log that runs no program the repository's config names.
+/// [`git_cmd::git`] keeps hooks and fsmonitor off and [`DIFF_OPTS`] the diff
+/// programs. A partial clone doesn't fetch what it lacks.
+fn git_diff(mut cmd: Command, args: &[&str]) -> String {
+    let out = match cmd
         .env("GIT_NO_LAZY_FETCH", "1")
         .arg("--no-pager")
-        .args(&filters)
         .args(args)
         .args(DIFF_OPTS)
         .arg("--")
@@ -502,36 +510,164 @@ fn git_diff(cwd: &Path, args: &[&str]) -> String {
     }
 }
 
-/// `-c` pairs that switch off every filter driver the config of `cwd` names.
-/// `Err` when a driver's name holds `=`, which `-c` can't spell: git would
-/// read `-c filter.a=b.clean=` as setting `filter.a`.
-fn filters_off(cwd: &Path) -> Result<Vec<String>, &'static str> {
-    // Reading config runs nothing; exit 1 only means no filter is set.
-    let listed = git_cmd::git()
-        .current_dir(cwd)
-        .args(["config", "-z", "--name-only", "--get-regexp", r"^filter\."])
-        .output()
-        .map(|out| out.stdout)
-        .unwrap_or_default();
-    let names: BTreeSet<String> = listed
-        .split(|b| *b == 0)
-        .filter_map(|key| {
-            let key = String::from_utf8_lossy(key);
-            let (name, _var) = key.strip_prefix("filter.")?.rsplit_once('.')?;
-            Some(name.to_string())
-        })
-        .collect();
-    if names.iter().any(|name| name.contains('=')) {
-        return Err("the repository's config names a filter that can't be switched off");
+/// `@diff`: the work tree against the index. It is the one git call here
+/// that reads work tree files, and git reads them through the clean filter
+/// a `.gitattributes` names, so it runs on an [`OwnGitDir`] that switches
+/// every filter off. `@staged` and `@git:N` read only objects.
+fn work_tree_diff(cwd: &Path) -> String {
+    let own = match OwnGitDir::new(cwd) {
+        Ok(own) => own,
+        Err(why) => return why,
+    };
+    let mut cmd = git_cmd::git();
+    cmd.current_dir(cwd)
+        .env_remove("GIT_COMMON_DIR")
+        .env("GIT_DIR", &own.dir)
+        .env("GIT_WORK_TREE", &own.top)
+        .env("GIT_OBJECT_DIRECTORY", &own.objects)
+        .env("GIT_INDEX_FILE", own.dir.join("index"));
+    git_diff(cmd, &["diff"])
+}
+
+/// Where [`OwnGitDir`]s go, under the app's config folder.
+const OWN_GIT_DIRS: &str = "at-diff";
+
+/// How long an [`OwnGitDir`] a crash left behind stays before the next
+/// `@diff` removes it. No diff takes so long.
+const OWN_GIT_DIR_KEEP: Duration = Duration::from_secs(60 * 60);
+
+/// The `info/attributes` of an [`OwnGitDir`]. git reads that file after every
+/// `.gitattributes`, so no path has a filter driver, under any name the
+/// config gives one, whenever it was added.
+const NO_FILTERS: &str = "* -filter\n";
+
+/// A git dir of the app's own for one `@diff` of the repository at `cwd`:
+/// copies of its config and index beside [`NO_FILTERS`], read with the
+/// repository's objects and work tree. It sits in the app's config folder,
+/// which a sandboxed command can't write, and is removed when dropped. git
+/// writes a refreshed index to the copy, never to the repository.
+struct OwnGitDir {
+    dir: PathBuf,
+    top: PathBuf,
+    objects: PathBuf,
+}
+
+impl OwnGitDir {
+    fn new(cwd: &Path) -> Result<Self, String> {
+        let out = git_cmd::git()
+            .current_dir(cwd)
+            .args(["rev-parse", "--show-toplevel"])
+            .args(["--git-path", "objects", "--git-path", "index"])
+            .args(["--git-path", "config", "--git-path", "config.worktree"])
+            .output()
+            .map_err(|err| format!("git failed: {err}"))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(if err.is_empty() {
+                "git produced no output".into()
+            } else {
+                err
+            });
+        }
+        let paths: Vec<PathBuf> = out
+            .stdout
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| cwd.join(path_from_git(line)))
+            .collect();
+        let [top, objects, index, config, worktree_config] = &paths[..] else {
+            return Err("git didn't say where the repository is".into());
+        };
+        let root = crate::paths::config_dir().join(OWN_GIT_DIRS);
+        sweep_old(&root);
+        let failed = |err: io::Error| format!("can't set up @diff in {}: {err}", root.display());
+        fs::create_dir_all(&root).map_err(failed)?;
+        let dir = root.join(crate::uid("diff"));
+        private_dir(&dir).map_err(failed)?;
+        let own = Self {
+            dir,
+            top: top.clone(),
+            objects: objects.clone(),
+        };
+        fs::create_dir(own.dir.join("refs")).map_err(failed)?;
+        fs::create_dir(own.dir.join("info")).map_err(failed)?;
+        fs::write(own.dir.join("HEAD"), "ref: refs/heads/main\n").map_err(failed)?;
+        fs::write(own.dir.join("info").join("attributes"), NO_FILTERS).map_err(failed)?;
+        for (from, to) in [
+            (config, "config"),
+            (worktree_config, "config.worktree"),
+            (index, "index"),
+        ] {
+            match copy_with_mtime(from, &own.dir.join(to)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(failed(err)),
+            }
+        }
+        Ok(own)
     }
-    Ok(names
-        .iter()
-        .flat_map(|name| {
-            ["clean=", "smudge=", "process=", "required=false"]
-                .map(|setting| ["-c".to_string(), format!("filter.{name}.{setting}")])
-        })
-        .flatten()
-        .collect())
+}
+
+/// `from` copied to a new `to` with its modified time: git reads an index
+/// entry as unchanged when its stat data matches and the index file is newer
+/// than the work tree file, so a copy dated now would hide a fresh edit.
+fn copy_with_mtime(from: &Path, to: &Path) -> io::Result<()> {
+    let mut src = fs::File::open(from)?;
+    let modified = src.metadata()?.modified()?;
+    let mut dst = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(to)?;
+    io::copy(&mut src, &mut dst)?;
+    dst.set_modified(modified)
+}
+
+impl Drop for OwnGitDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A path line `git rev-parse` printed.
+#[cfg(unix)]
+fn path_from_git(line: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(line))
+}
+
+#[cfg(not(unix))]
+fn path_from_git(line: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(line).trim_end_matches('\r'))
+}
+
+/// A new folder only this user can read. An existing name is an error.
+#[cfg(unix)]
+fn private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().mode(0o700).create(dir)
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &Path) -> io::Result<()> {
+    fs::create_dir(dir)
+}
+
+/// Removes the folders under `root` made more than [`OWN_GIT_DIR_KEEP`] ago.
+fn sweep_old(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|made| made.elapsed().ok())
+            .is_some_and(|age| age >= OWN_GIT_DIR_KEEP);
+        if old {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 fn fetch_url(url: &str) -> String {
@@ -679,6 +815,104 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// `@diff` runs on a git dir of its own, which still finds the index,
+    /// objects and config of a linked worktree, from a subfolder, in a
+    /// SHA-256 repository, and says plainly when there is no repository.
+    #[test]
+    fn at_diff_finds_a_linked_worktree_a_subfolder_and_a_sha256_repo() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = temp_dir("own-git-dir");
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join("sub")).unwrap();
+        assert!(git_in(&repo, &["init", "-q"]).status.success());
+        fs::write(repo.join("a.txt"), "a1\n").unwrap();
+        fs::write(repo.join("sub/b.txt"), "b1\n").unwrap();
+        assert!(git_in(&repo, &["add", "-A"]).status.success());
+        assert!(git_in(&repo, &["commit", "-q", "-m", "one"])
+            .status
+            .success());
+        let added = git_in(&repo, &["worktree", "add", "-q", "--detach", "../wt"]);
+        assert!(
+            added.status.success(),
+            "{}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+        fs::write(repo.join("a.txt"), "a2\n").unwrap();
+        fs::write(dir.join("wt/sub/b.txt"), "b2\n").unwrap();
+        let main = body_of(&expand_at_context("@diff", &repo), "diff");
+        let main_sub = body_of(&expand_at_context("@diff", &repo.join("sub")), "diff");
+        let linked = body_of(&expand_at_context("@diff", &dir.join("wt/sub")), "diff");
+        let sha256 = dir.join("sha256");
+        fs::create_dir_all(&sha256).unwrap();
+        assert!(git_in(&sha256, &["init", "-q", "--object-format=sha256"])
+            .status
+            .success());
+        fs::write(sha256.join("c.txt"), "c1\n").unwrap();
+        assert!(git_in(&sha256, &["add", "c.txt"]).status.success());
+        assert!(git_in(&sha256, &["commit", "-q", "-m", "one"])
+            .status
+            .success());
+        fs::write(sha256.join("c.txt"), "c2\n").unwrap();
+        let sha256_body = body_of(&expand_at_context("@diff", &sha256), "diff");
+        let plain = dir.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        let none = body_of(&expand_at_context("@diff", &plain), "diff");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            main.contains("+++ b/a.txt\n@@ -1 +1 @@\n-a1\n+a2\n"),
+            "{main}"
+        );
+        assert!(!main.contains("b.txt"), "{main}");
+        assert_eq!(main_sub, main);
+        assert!(
+            linked.contains("+++ b/sub/b.txt\n@@ -1 +1 @@\n-b1\n+b2\n"),
+            "{linked}"
+        );
+        assert!(!linked.contains("a.txt"), "{linked}");
+        assert!(
+            sha256_body.contains("+++ b/c.txt\n@@ -1 +1 @@\n-c1\n+c2\n"),
+            "{sha256_body}"
+        );
+        assert!(none.contains("not a git repository"), "{none}");
+    }
+
+    /// An edit that keeps the size and the modified time matches its index
+    /// entry's stat data. git still reads it, because the index file is no
+    /// newer than the entry ("racily clean"), and the copy `@diff` reads
+    /// keeps the index's modified time so git still does.
+    #[cfg(unix)]
+    #[test]
+    fn at_diff_sees_an_edit_the_stat_data_hides() {
+        let dir = temp_dir("racy");
+        let repo = dir.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        assert!(git_in(&repo, &["init", "-q"]).status.success());
+        assert!(git_in(&repo, &["config", "core.trustctime", "false"])
+            .status
+            .success());
+        let then = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let stamp = |path: &Path| {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(then)
+                .unwrap();
+        };
+        let file = repo.join("a.txt");
+        fs::write(&file, "v1\n").unwrap();
+        stamp(&file);
+        assert!(git_in(&repo, &["add", "a.txt"]).status.success());
+        fs::write(&file, "v2\n").unwrap();
+        stamp(&file);
+        stamp(&repo.join(".git/index"));
+        let out = expand_at_context("What changed? @diff", &repo);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(body_of(&out, "diff").contains("\n-v1\n+v2\n"), "{out}");
+    }
+
     #[test]
     fn public_http_url_gate_blocks_loopback_urls_without_dialing() {
         let dir = temp_dir("url");
@@ -724,7 +958,8 @@ mod tests {
 
     /// What a sandboxed command in the workspace could plant in `.git/config`:
     /// an external diff, a text conversion, a clean filter and a signature
-    /// check. `@diff`, `@staged` and `@git:N` run none of them.
+    /// check, asked for by `log.showSignature` or a `%G?` in `format.pretty`.
+    /// `@diff`, `@staged` and `@git:N` run none of them.
     #[cfg(unix)]
     #[test]
     fn diff_staged_and_git_run_no_program_the_repo_config_names() {
@@ -777,6 +1012,7 @@ mod tests {
             ("filter.f.smudge", script("smudge")),
             ("filter.f.required", "true".into()),
             ("log.showSignature", "true".into()),
+            ("format.pretty", "%H %G?%n%s".into()),
             ("gpg.program", script("gpg")),
         ] {
             assert!(git_in(&repo, &["config", key, &value]).status.success());
@@ -810,35 +1046,114 @@ mod tests {
         assert!(body_of(&log, "git:1").contains("\n    signed\n"), "{log}");
     }
 
-    /// `-c filter.a=b.clean=` would set `filter.a`, not switch `a=b` off.
+    /// A repository with `a.txt` committed under `attributes` and changed
+    /// since, in `dir/repo`.
     #[cfg(unix)]
-    #[test]
-    fn a_filter_name_git_cannot_switch_off_fails_the_diff() {
-        let dir = temp_dir("filter-eq");
-        let marker = dir.join("clean-ran");
-        marker_script(&dir.join("clean.sh"), &marker);
+    fn filtered_repo(dir: &Path, attributes: &[u8]) -> PathBuf {
         let repo = dir.join("repo");
         fs::create_dir_all(&repo).unwrap();
         assert!(git_in(&repo, &["init", "-q"]).status.success());
         fs::write(repo.join("a.txt"), "v1\n").unwrap();
-        fs::write(repo.join(".gitattributes"), "*.txt filter=a=b\n").unwrap();
+        fs::write(repo.join(".gitattributes"), attributes).unwrap();
         assert!(git_in(&repo, &["add", "-A"]).status.success());
         assert!(git_in(&repo, &["commit", "-q", "-m", "one"])
             .status
             .success());
+        fs::write(repo.join("a.txt"), "v2\n").unwrap();
+        repo
+    }
+
+    /// `-c filter.a=b.clean=` would set `filter.a`, not switch `a=b` off, so
+    /// no filter is switched off by its name.
+    #[cfg(unix)]
+    #[test]
+    fn a_filter_named_with_an_equals_sign_does_not_run() {
+        let dir = temp_dir("filter-eq");
+        let marker = dir.join("clean-ran");
+        marker_script(&dir.join("clean.sh"), &marker);
+        let repo = filtered_repo(&dir, b"*.txt filter=a=b\n");
         let clean = dir.join("clean.sh").display().to_string();
         assert!(git_in(&repo, &["config", "filter.a=b.clean", &clean])
             .status
             .success());
-        fs::write(repo.join("a.txt"), "v2\n").unwrap();
         let out = expand_at_context("What changed? @diff", &repo);
         let ran = marker.exists();
         let _ = fs::remove_dir_all(&dir);
         assert!(!ran, "the filter ran: {out}");
-        assert_eq!(
-            body_of(&out, "diff"),
-            "the repository's config names a filter that can't be switched off"
+        assert!(body_of(&out, "diff").contains("\n-v1\n+v2\n"), "{out}");
+    }
+
+    /// A driver named in bytes that aren't UTF-8 stays off too, and the
+    /// repository's own index is left as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_filter_whose_name_is_not_utf8_does_not_run() {
+        let dir = temp_dir("filter-bytes");
+        let marker = dir.join("clean-ran");
+        marker_script(&dir.join("clean.sh"), &marker);
+        let repo = filtered_repo(&dir, b"*.txt filter=x\xff\n");
+        let mut config = fs::read(repo.join(".git/config")).unwrap();
+        config.extend_from_slice(b"[filter \"x\xff\"]\n\tclean = ");
+        config.extend_from_slice(dir.join("clean.sh").display().to_string().as_bytes());
+        config.extend_from_slice(b"\n\trequired = true\n");
+        fs::write(repo.join(".git/config"), config).unwrap();
+        let index = fs::read(repo.join(".git/index")).unwrap();
+        let out = expand_at_context("What changed? @diff", &repo);
+        let ran = marker.exists();
+        let index_after = fs::read(repo.join(".git/index")).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        assert!(!ran, "the filter ran: {out}");
+        assert!(body_of(&out, "diff").contains("\n-v1\n+v2\n"), "{out}");
+        assert!(index_after == index, "@diff wrote the repository's index");
+    }
+
+    /// A filter that shows up in `.git/config` while `@diff` runs (a command
+    /// left running in the sandbox keeps rewriting it) stays off: nothing
+    /// reads the config first to learn which filters to switch off.
+    #[cfg(unix)]
+    #[test]
+    fn a_filter_added_while_at_diff_runs_stays_off() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let dir = temp_dir("filter-race");
+        let marker = dir.join("clean-ran");
+        marker_script(&dir.join("clean.sh"), &marker);
+        let repo = filtered_repo(&dir, b"*.txt filter=f\n");
+        let config = repo.join(".git/config");
+        let without = fs::read(&config).unwrap();
+        let mut with = without.clone();
+        with.extend_from_slice(
+            format!(
+                "[filter \"f\"]\n\tclean = {}\n",
+                dir.join("clean.sh").display()
+            )
+            .as_bytes(),
         );
+        let stop = Arc::new(AtomicBool::new(false));
+        let swapper = {
+            let (stop, config) = (Arc::clone(&stop), config.clone());
+            let next = config.with_extension("next");
+            std::thread::spawn(move || {
+                let mut flip = false;
+                while !stop.load(Ordering::Relaxed) {
+                    flip = !flip;
+                    fs::write(&next, if flip { &with } else { &without }).unwrap();
+                    fs::rename(&next, &config).unwrap();
+                    std::thread::sleep(Duration::from_micros(300));
+                }
+            })
+        };
+        let bodies: Vec<String> = (0..100)
+            .map(|_| body_of(&expand_at_context("What changed? @diff", &repo), "diff"))
+            .collect();
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+        let ran = marker.exists();
+        let _ = fs::remove_dir_all(&dir);
+        assert!(!ran, "the clean filter ran");
+        for body in &bodies {
+            assert!(body.contains("\n-v1\n+v2\n"), "{body}");
+        }
     }
 
     /// A submodule with changes of its own keeps its config's programs too.

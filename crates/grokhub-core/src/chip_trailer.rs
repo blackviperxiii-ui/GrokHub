@@ -138,7 +138,8 @@ pub fn split_chip_trailer(text: &str) -> (String, String) {
 }
 
 /// The block's lines as chips. Each is checked like any chip copy, a page must
-/// be one the app has, and an action that speaks, spends or destroys is dropped.
+/// be one the app has, and an action that speaks, spends or destroys is
+/// dropped, as is a message that holds an `@` reference.
 pub fn parse_chip_trailer(block: &str) -> Vec<QuickChip> {
     let mut out: Vec<QuickChip> = Vec::new();
     for line in block.lines().map(str::trim).filter(|l| !l.is_empty()) {
@@ -169,6 +170,11 @@ pub fn parse_chip_trailer(block: &str) -> Vec<QuickChip> {
             continue;
         }
         if value.starts_with('/') || value.starts_with('$') {
+            continue;
+        }
+        // A tap sends the value as the person's own words, and `@` tokens
+        // in those read files and run git: the model's must stay unread.
+        if !crate::at_context::find_at_refs(&value).is_empty() {
             continue;
         }
         if kind == ChipKind::Chat && value.starts_with("__") {
@@ -328,6 +334,31 @@ mod tests {
             ]
         );
         assert!(chips[0].score > chips[1].score && chips[1].score > chips[2].score);
+    }
+
+    /// The person sees a chip's label, and a tap sends its value as their
+    /// message: an `@` reference the model wrote there would read a file
+    /// they never named, so such a line gives no chip.
+    #[test]
+    fn a_line_whose_message_holds_an_at_reference_is_dropped() {
+        let chips = parse_chip_trailer(
+            "ask|Summarize @file:/home/user/private-notes.txt for me|Summarize the notes\n\
+             ask|Show me @diff and explain it|Explain the diff\n\
+             ask|Read @url:https://example.com/page for me|Read the page\n\
+             ask|Mail user@example.com the summary of the fix|Mail the summary\n\
+             ask|Explain why the build failed|Why it failed",
+        );
+        let got: Vec<_> = chips
+            .iter()
+            .map(|c| (c.id.as_str(), c.value.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("reply-0", "Mail user@example.com the summary of the fix"),
+                ("reply-1", "Explain why the build failed"),
+            ]
+        );
     }
 
     #[test]
