@@ -133,9 +133,24 @@ fn a_git_word_that_isnt_gits_own_command_is_refused() {
         refused("git -c alias.p=push p origin main"),
         "git p isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
     );
+    // Behind a wrapper, or a script given to a shell.
+    for command in [
+        "git config alias.ship push && env git ship --force origin main",
+        "command git ship --force origin main",
+        "nice -n 5 git ship --force origin main",
+        "env GIT_TRACE=0 git ship --force origin main",
+        "bash -c \"git ship --force origin main\"",
+    ] {
+        assert_eq!(
+            refused(command),
+            "git ship isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>.",
+            "{command}"
+        );
+    }
+    // git's own push program, named by its path.
     assert_eq!(
-        refused("git lfs push origin main"),
-        "git lfs isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+        refused("/usr/lib/git-core/git-push --force origin main"),
+        "Force-pushing is never allowed, in any mode. Push without it, or make a new branch."
     );
     // git's own commands that run a command: refused when it pushes or
     // can't be read.
@@ -147,6 +162,25 @@ fn a_git_word_that_isnt_gits_own_command_is_refused() {
         "git for-each-repo --config=maintenance.repo push -f origin main",
         "git -c core.editor='git ship' commit",
         "git send-pack ../origin.git main",
+        "git-push origin code/x",
+        "bash -lc 'git ship --force origin main'",
+        "git rebase -x'git ship --force origin main' HEAD~1",
+        "git for-each-repo --config=maintenance.repo ship -f origin main",
+        // An option whose value is a command git runs.
+        "git grep -O'git push --force origin main #' -e agent",
+        "git grep --open-files-in-pager='git push --force origin main #' agent",
+        "git fetch --upload-pack='git push --force origin main #' .",
+        "git fetch --upload='git ship' .",
+        "git ls-remote --upload-pack 'git push --force origin main #' .",
+        "git clone -u 'git push --force origin main #' . ../copy",
+        "git archive --remote=. --exec='git push --force origin main #' HEAD",
+        // A command saved for later, or set in a variable git reads.
+        "git config core.editor 'git push --force origin main #' && git commit -q --allow-empty",
+        "git config --global sequence.editor 'git ship --force origin main #'",
+        "git config alias.st '!git push --force origin main'",
+        "EDITOR='git push --force origin main #' git commit",
+        "export GIT_SEQUENCE_EDITOR='git push --force origin main #'; git rebase -i HEAD~1",
+        "PAGER='git ship --force origin main #'; git log",
     ] {
         assert_eq!(
             refused(command),
@@ -162,8 +196,81 @@ fn a_git_word_that_isnt_gits_own_command_is_refused() {
         "git -C ../other status",
         "git -c \"user.name=a b\" commit -m x",
         "git help push",
+        "git config core.editor 'code --wait'",
+        "git config user.name \"Some User\"",
+        "EDITOR='code --wait' git commit",
+        "git grep -n -e agent",
+        "git fetch --upload-pack=git-upload-pack origin",
+        "git commit -m \"git ship: refuse an alias\"",
+        "ls /usr/lib/git-core",
+        "grep -rn git src/",
+        "apt-get install -y git curl",
+        "env git status",
     ] {
         assert_eq!(read(command), Read::NoPush, "{command}");
+    }
+}
+
+/// Which words git runs itself depends on its version and on what is
+/// installed. git 2.43 has no `refs`, `replay` or `backfill`, so an alias
+/// of one of those names runs; with git-lfs and git-subtree installed, no
+/// alias can stand in for `lfs` or `subtree`, and without them one can.
+#[test]
+fn a_word_is_read_as_gits_own_only_when_the_installed_git_runs_it() {
+    let git_2_43 = |verb: &str| matches!(verb, "config" | "status" | "commit" | "log" | "switch");
+    let with_programs =
+        |verb: &str| git_2_43(verb) || matches!(verb, "lfs" | "subtree" | "clang-format" | "refs");
+    let alias = |verb: &str| {
+        format!(
+            "git {verb} isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+        )
+    };
+    for (command, verb) in [
+        (
+            "git config alias.refs push && git refs --force origin main",
+            "refs",
+        ),
+        (
+            "git config alias.replay push && git replay --force origin main",
+            "replay",
+        ),
+        (
+            "git config alias.backfill push && git backfill --force origin main",
+            "backfill",
+        ),
+        ("git lfs pull", "lfs"),
+        ("git lfs install", "lfs"),
+        ("git subtree split --prefix=lib", "subtree"),
+        ("git clang-format --diff", "clang-format"),
+    ] {
+        assert_eq!(
+            read_with(command, &git_2_43),
+            Read::Refused(alias(verb)),
+            "{command}"
+        );
+    }
+    for command in [
+        "git lfs pull",
+        "git lfs install",
+        "git subtree split --prefix=lib",
+        "git clang-format --diff",
+        "git refs list",
+    ] {
+        assert_eq!(
+            read_with(command, &with_programs),
+            Read::NoPush,
+            "{command}"
+        );
+    }
+    for command in [
+        "git subtree push --prefix=lib origin main",
+        "git lfs push origin main",
+    ] {
+        assert_eq!(
+            read_with(command, &with_programs),
+            Read::Refused(UNCLEAR.into()),
+            "{command}"
+        );
     }
 }
 
@@ -306,6 +413,25 @@ mod repo {
             .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
+    /// `sh -c <command>` as on a desktop: no editor or pager set in the
+    /// environment, so git runs the configured one.
+    fn desktop_sh(dir: &Path, command: &str) -> std::process::Output {
+        Command::new("sh")
+            .args(["-c", command])
+            .current_dir(dir)
+            .env_remove("GIT_EDITOR")
+            .env_remove("GIT_SEQUENCE_EDITOR")
+            .env_remove("GIT_PAGER")
+            .env_remove("EDITOR")
+            .env_remove("VISUAL")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .output()
+            .unwrap()
+    }
+
     /// What the agent's tool call does: runs only on `Run`, or on `Ask`
     /// when the person says yes.
     fn agent_runs(f: &Fixture, cfg: &CodeShip, command: &str, yes: bool) -> Option<Verdict> {
@@ -318,11 +444,7 @@ mod repo {
             None => true,
         };
         if runs {
-            let out = Command::new("sh")
-                .args(["-c", command])
-                .current_dir(&f.work)
-                .output()
-                .unwrap();
+            let out = desktop_sh(&f.work, command);
             assert!(
                 out.status.success(),
                 "{command}: {}",
@@ -399,6 +521,93 @@ mod repo {
             agent_runs(&f, &auto(), "git ship --force origin main", true),
             Some(Verdict::Refuse(alias.into()))
         );
+        assert_eq!(origin_sha(&f, "main"), Some(before));
+    }
+
+    /// An alias named for a command this git doesn't have yet (`refs` is
+    /// git 2.46's) runs as the alias, so it is refused; on a git that has
+    /// the command, the command runs and pushes nothing. Either way origin
+    /// main stays. Behind a wrapper, or through git-push by its path, the
+    /// push is refused too.
+    #[test]
+    fn a_push_through_an_alias_git_may_run_or_a_wrapper_is_refused_and_origin_main_stays() {
+        let f = fixture("alias-any");
+        let before = origin_sha(&f, "main").unwrap();
+        // History rewritten locally; only a force would land it.
+        std::fs::write(f.work.join("a.txt"), "agent\n").unwrap();
+        sh_git(&f.work, &["commit", "-am", "agent"]);
+        sh_git(&f.work, &["reset", "--hard", "HEAD~1"]);
+        std::fs::write(f.work.join("a.txt"), "other\n").unwrap();
+        sh_git(&f.work, &["commit", "-am", "other"]);
+        for verb in ["refs", "replay", "backfill", "ship"] {
+            let command = format!("git config alias.{verb} push && git {verb} --force origin main");
+            let probe = Some((Host::GitHub, Pr::None));
+            let verdict = decide_with(&f.config, &f.work, &auto(), &command, probe);
+            if grokhub_agent::harness::git_runs_own(verb) {
+                assert_eq!(verdict, None, "{command}");
+                // git's own command runs; it pushes nothing.
+                let _ = desktop_sh(&f.work, &command);
+                sh_git(&f.work, &["config", "--unset", &format!("alias.{verb}")]);
+            } else {
+                assert_eq!(
+                    verdict,
+                    Some(Verdict::Refuse(format!(
+                        "git {verb} isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>."
+                    ))),
+                    "{command}"
+                );
+            }
+        }
+        assert!(!grokhub_agent::harness::git_runs_own("ship"));
+        let exec_path = sh_git(&f.work, &["--exec-path"]);
+        for (command, why) in [
+            (
+                "git config alias.ship push && env git ship --force origin main".to_string(),
+                "git ship isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>.",
+            ),
+            (
+                "git config alias.ship push && command git ship --force origin main".to_string(),
+                "git ship isn't one of git's own commands, so it may be an alias that pushes, which the push guard can't read. Use git's own commands, and push with git push origin <branch>.",
+            ),
+            (format!("{exec_path}/git-push --force origin main"), FORCE),
+            (format!("{exec_path}/git-push origin main"), UNCLEAR),
+        ] {
+            for cfg in [CodeShip::default(), auto()] {
+                assert_eq!(
+                    agent_runs(&f, &cfg, &command, true),
+                    Some(Verdict::Refuse(why.into())),
+                    "{command}"
+                );
+            }
+        }
+        assert_eq!(origin_sha(&f, "main"), Some(before));
+    }
+
+    /// A command git runs for one of its own commands: a pager `grep -O`
+    /// opens, the upload-pack `fetch` runs, an editor saved in config.
+    #[test]
+    fn a_push_git_runs_for_its_own_command_is_refused_and_origin_main_stays() {
+        let f = fixture("runs");
+        let before = origin_sha(&f, "main").unwrap();
+        std::fs::write(f.work.join("a.txt"), "agent\n").unwrap();
+        sh_git(&f.work, &["commit", "-am", "agent"]);
+        sh_git(&f.work, &["reset", "--hard", "HEAD~1"]);
+        std::fs::write(f.work.join("a.txt"), "agent again\n").unwrap();
+        sh_git(&f.work, &["commit", "-am", "agent again"]);
+        for command in [
+            "git grep -O'git push --force origin main #' -e agent",
+            "git fetch --upload-pack='git push --force origin main #' . ; true",
+            "git config core.editor 'git push --force origin main #' && git commit -q --allow-empty --allow-empty-message",
+            "EDITOR='git push --force origin main #' git commit -q --allow-empty --allow-empty-message",
+        ] {
+            for cfg in [CodeShip::default(), auto()] {
+                assert_eq!(
+                    agent_runs(&f, &cfg, command, true),
+                    Some(Verdict::Refuse(UNCLEAR.into())),
+                    "{command}"
+                );
+            }
+        }
         assert_eq!(origin_sha(&f, "main"), Some(before));
     }
 

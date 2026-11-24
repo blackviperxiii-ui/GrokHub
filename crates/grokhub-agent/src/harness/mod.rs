@@ -70,6 +70,7 @@ mod egress;
 #[cfg(test)]
 mod egress_coverage;
 mod evidence;
+mod git_words;
 mod hard;
 mod ladder;
 mod mindcheck;
@@ -159,12 +160,15 @@ pub use egress::{
 pub use evidence::{
     evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
 };
+pub use git_words::{
+    git_option_values, git_runs_own, git_shell_value, GIT_COMMAND_OPTIONS, GIT_RUNNERS,
+};
 pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class,
-    click_target_in, creates_automation, credential_action, credential_field, credential_hint,
-    delete_files_action, delete_targets, desk_classify, hard_class, hard_floor, needs_window,
-    set_mod_roots, ClickRule, ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY,
-    GB_DENY_GAPS, GIT_OWN_COMMANDS, GIT_RUNNERS, HEADLESS_DENY_RULES, NO_BIN_HINT, TARGET_HINT,
+    click_target_in, command_head, creates_automation, credential_action, credential_field,
+    credential_hint, delete_files_action, delete_targets, desk_classify, hard_class, hard_floor,
+    needs_window, set_mod_roots, ClickRule, ClickTarget, HardClass, HardFloor, HardHit,
+    BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES, NO_BIN_HINT, TARGET_HINT,
 };
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
 pub use mindcheck::{

