@@ -49,7 +49,8 @@ fn names() -> &'static [&'static str] {
 }
 
 /// Where the installers put `claude` when the app (started from the desktop)
-/// doesn't see the shell's `PATH`.
+/// doesn't see the shell's `PATH`. Includes Claude Desktop's versioned
+/// `claude-code` / `claude-code-vm` folders (newest first; host before VM).
 fn usual_dirs(home: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![
         home.join(".local").join("bin"),
@@ -58,6 +59,77 @@ fn usual_dirs(home: &Path) -> Vec<PathBuf> {
     if cfg!(target_os = "macos") {
         dirs.push(PathBuf::from("/opt/homebrew/bin"));
         dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+    dirs.extend(desktop_version_dirs(home));
+    dirs
+}
+
+/// Claude Desktop user-data roots. Platform preference first; the others are
+/// checked too so a test home with `.config/Claude` works on every CI OS.
+fn desktop_claude_roots(home: &Path) -> Vec<PathBuf> {
+    let linux = home.join(".config").join("Claude");
+    let macos = home.join("Library").join("Application Support").join("Claude");
+    let windows = home.join("AppData").join("Roaming").join("Claude");
+    if cfg!(windows) {
+        vec![windows, linux, macos]
+    } else if cfg!(target_os = "macos") {
+        vec![macos, linux, windows]
+    } else {
+        vec![linux, macos, windows]
+    }
+}
+
+/// Numeric parts of a version folder name (`"2.1.330"` → `[2, 1, 330]`).
+fn version_key(name: &str) -> Vec<u64> {
+    name.split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect()
+}
+
+/// Version folders under one Desktop kind dir, newest first. Each version
+/// directory is included; so is any immediate child that holds a `claude`
+/// binary (covers a nested layout under `<ver>/…/claude`).
+fn version_dirs_newest_first(kind_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(kind_dir) else {
+        return Vec::new();
+    };
+    let mut vers: Vec<(Vec<u64>, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            (version_key(&name), e.path())
+        })
+        .collect();
+    vers.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut dirs = Vec::with_capacity(vers.len());
+    for (_, path) in vers {
+        dirs.push(path.clone());
+        if let Ok(children) = std::fs::read_dir(&path) {
+            for child in children.filter_map(|c| c.ok()) {
+                if !child.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let child_path = child.path();
+                if names().iter().any(|n| child_path.join(n).is_file()) {
+                    dirs.push(child_path);
+                }
+            }
+        }
+    }
+    dirs
+}
+
+/// Desktop-managed Claude Code install dirs: `claude-code/<ver>/…` then
+/// `claude-code-vm/<ver>/…`, newest version first within each kind.
+fn desktop_version_dirs(home: &Path) -> Vec<PathBuf> {
+    const KINDS: &[&str] = &["claude-code", "claude-code-vm"];
+    let mut dirs = Vec::new();
+    for root in desktop_claude_roots(home) {
+        for kind in KINDS {
+            dirs.extend(version_dirs_newest_first(&root.join(kind)));
+        }
     }
     dirs
 }
@@ -258,6 +330,91 @@ mod tests {
             Some(on_path.join(name))
         );
         assert_eq!(find_in([PathBuf::from("bin")], None), None);
+    }
+
+    /// Empty `PATH` dirs so only home-based usual / Desktop dirs can match.
+    fn empty_path() -> [PathBuf; 0] {
+        []
+    }
+
+    fn touch_cli(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let cli = dir.join(names()[0]);
+        std::fs::write(&cli, "").unwrap();
+        cli
+    }
+
+    #[test]
+    fn finds_desktop_claude_code_under_config_claude() {
+        let home = scratch("desktop-code").join("home");
+        let ver = home
+            .join(".config")
+            .join("Claude")
+            .join("claude-code")
+            .join("2.1.330");
+        let cli = touch_cli(&ver);
+        assert_eq!(find_in(empty_path(), Some(&home)), Some(cli));
+    }
+
+    #[test]
+    fn finds_desktop_claude_code_vm_when_host_kind_is_absent() {
+        let home = scratch("desktop-vm").join("home");
+        let ver = home
+            .join(".config")
+            .join("Claude")
+            .join("claude-code-vm")
+            .join("2.1.330");
+        let cli = touch_cli(&ver);
+        assert_eq!(find_in(empty_path(), Some(&home)), Some(cli));
+    }
+
+    #[test]
+    fn prefers_newer_desktop_claude_code_version() {
+        let home = scratch("desktop-newer").join("home");
+        let base = home.join(".config").join("Claude").join("claude-code");
+        let _old = touch_cli(&base.join("2.1.325"));
+        let newer = touch_cli(&base.join("2.1.330"));
+        assert_eq!(find_in(empty_path(), Some(&home)), Some(newer));
+    }
+
+    #[test]
+    fn prefers_desktop_claude_code_over_claude_code_vm() {
+        let home = scratch("desktop-prefer").join("home");
+        let root = home.join(".config").join("Claude");
+        let host = touch_cli(&root.join("claude-code").join("2.1.325"));
+        let _vm = touch_cli(&root.join("claude-code-vm").join("2.1.330"));
+        assert_eq!(find_in(empty_path(), Some(&home)), Some(host));
+    }
+
+    #[test]
+    fn finds_desktop_claude_nested_one_level_under_the_version() {
+        let home = scratch("desktop-nested").join("home");
+        let nested = home
+            .join(".config")
+            .join("Claude")
+            .join("claude-code")
+            .join("2.1.330")
+            .join("linux-x64");
+        let cli = touch_cli(&nested);
+        assert_eq!(find_in(empty_path(), Some(&home)), Some(cli));
+    }
+
+    #[test]
+    fn path_still_wins_over_a_desktop_claude_install() {
+        let root = scratch("desktop-path");
+        let on_path = root.join("bin");
+        let home = root.join("home");
+        let desktop = home
+            .join(".config")
+            .join("Claude")
+            .join("claude-code")
+            .join("2.1.330");
+        let path_cli = touch_cli(&on_path);
+        let _desktop_cli = touch_cli(&desktop);
+        assert_eq!(
+            find_in([on_path.clone()], Some(&home)),
+            Some(path_cli)
+        );
     }
 
     #[cfg(unix)]
