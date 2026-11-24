@@ -74,6 +74,8 @@ else
 fi
 
 # The signature field decodes back to a .minisig that verifies the asset.
+# linux-x86_64 and linux-x86_64-appimage share one AppImage file: restore after
+# each tamper so the alias check still sees the signed bytes.
 for pair in "linux-x86_64-appimage:$app" "linux-x86_64:$app" "linux-x86_64-deb:$deb" "windows-x86_64-nsis:$exe"; do
   key="${pair%%:*}"
   f="${pair#*:}"
@@ -83,12 +85,14 @@ for pair in "linux-x86_64-appimage:$app" "linux-x86_64:$app" "linux-x86_64-deb:$
   else
     bad "$key signature verifies"
   fi
+  cp "$d/$f" "$TMP/asset.bak"
   printf 'tampered\n' >> "$d/$f"
   if minisign -V -q -p "$TMP/key.pub" -m "$d/$f" -x "$TMP/back.minisig" 2>/dev/null; then
     bad "$key signature rejects a changed asset"
   else
     ok "$key signature rejects a changed asset"
   fi
+  mv "$TMP/asset.bak" "$d/$f"
 done
 
 mv "$d/$exe.minisig" "$TMP/exe.minisig.bak"
@@ -114,6 +118,21 @@ if bash "$script" "$d" "v$ver" "blackviperxiii-ui/GrokHub" >/dev/null &&
 else
   bad "a macOS build adds darwin-aarch64-app"
 fi
+# Same signature check as Linux/Windows: the plugin swaps this .app.tar.gz in place.
+python3 -c 'import json,sys,base64; m=json.load(open(sys.argv[1])); sys.stdout.buffer.write(base64.b64decode(m["platforms"]["darwin-aarch64-app"]["signature"]))' "$d/latest.json" > "$TMP/mac.minisig"
+if minisign -V -q -p "$TMP/key.pub" -m "$d/$mac" -x "$TMP/mac.minisig"; then
+  ok "darwin-aarch64-app signature verifies"
+else
+  bad "darwin-aarch64-app signature verifies"
+fi
+cp "$d/$mac" "$TMP/mac.bak"
+printf 'tampered\n' >> "$d/$mac"
+if minisign -V -q -p "$TMP/key.pub" -m "$d/$mac" -x "$TMP/mac.minisig" 2>/dev/null; then
+  bad "darwin-aarch64-app signature rejects a changed asset"
+else
+  ok "darwin-aarch64-app signature rejects a changed asset"
+fi
+mv "$TMP/mac.bak" "$d/$mac"
 rm -f "$d/$mac" "$d/$mac.minisig"
 
 mv "$d/$app" "$TMP/app.bak"
