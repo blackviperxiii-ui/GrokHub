@@ -26,10 +26,6 @@ export function chipSlotOf(event: { altKey: boolean; ctrlKey: boolean; metaKey: 
   return slot < CHIP_ROW_MAX ? slot : null;
 }
 
-/** Id prefix of the starter chips (`SEED_PREFIX` in grokhub-core's chips.rs):
- * game and life asks such as "Fix my stutter", which a coding agent never wants. */
-export const SEED_CHIP_PREFIX = "seed-";
-
 /** One row of quick chips: the same look on every page. Each chip has its
  * tap and its ×, Left and Right move along the row, and Alt+1 to Alt+3 tap
  * a chip while the row is on screen (`keys`). */

@@ -267,7 +267,8 @@ export interface QuickChip {
 }
 
 /** The composer's row, Home's row and the empty palette's, as the log names them. */
-export type ChipSurface = "composer" | "home" | "palette";
+/** Where a chip row shows; "code" is the Code agent's composer, with coding starters. */
+export type ChipSurface = "composer" | "code" | "home" | "palette";
 
 /** The row for the open chat and its draft, or Home's. Empty with Settings →
  * Behavior → Suggestions off. */

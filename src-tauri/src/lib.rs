@@ -2510,11 +2510,12 @@ fn chip_row(
     let surface = match surface {
         chips::HOME => chips::HOME,
         chips::PALETTE => chips::PALETTE,
+        chips::CODE => chips::CODE,
         _ => chips::COMPOSER,
     };
     let dir = &state.config_dir;
     let (chat, ups) = match (&conversation_id, surface) {
-        (Some(id), chips::COMPOSER) => chip_chat(dir, id),
+        (Some(id), chips::COMPOSER | chips::CODE) => chip_chat(dir, id),
         _ => (Vec::new(), None),
     };
     let follow = ups.map(|u| u.chips).unwrap_or_default();
@@ -2545,10 +2546,11 @@ fn chip_row(
         remote,
         local.now_ms,
     );
-    let extra: Vec<grokhub_core::QuickChip> = if surface == chips::COMPOSER {
-        game_extra.into_iter().chain(focus_extra).collect()
-    } else {
-        game_extra
+    // The Code agent's row gets no game or focus chips.
+    let extra: Vec<grokhub_core::QuickChip> = match surface {
+        chips::COMPOSER => game_extra.into_iter().chain(focus_extra).collect(),
+        chips::CODE => Vec::new(),
+        _ => game_extra,
     };
     chips::row(
         dir,
@@ -2556,7 +2558,7 @@ fn chip_row(
         chips::RowAsk {
             surface,
             chat: &chat,
-            draft: if surface == chips::COMPOSER {
+            draft: if matches!(surface, chips::COMPOSER | chips::CODE) {
                 draft
             } else {
                 ""
