@@ -162,21 +162,60 @@ pub fn scope_refusal(scope: &Scope, home: Option<&Path>) -> Option<String> {
     };
     let d = dir.replace('\\', "/");
     let d = d.trim_end_matches('/');
-    if d.is_empty() || !(d.starts_with('/') || d.as_bytes().get(1) == Some(&b':')) {
+    // `/…`, `//server/share`, or a drive with its root (`C:`, `C:/…`); a
+    // drive-relative `C:Users` is not one folder.
+    let drive = matches!(d.as_bytes(), [l, b':'] | [l, b':', b'/', ..] if l.is_ascii_alphabetic());
+    if d.is_empty() || !(d.starts_with('/') || drive) {
         return Some("files: needs one absolute folder".into());
     }
+    let d = folded_parts(d);
     if let Some(home) = home {
-        let h = home.display().to_string().replace('\\', "/");
-        let h = h.trim_end_matches('/');
-        // The home folder itself, or any folder that holds it (`/home`).
-        if d == h || h.starts_with(&format!("{d}/")) {
+        // The home folder itself, or any folder that holds it (`/home`),
+        // however either is spelled (`/home/user/.`, `/home//user`, `C:\Users`).
+        if folded_parts(&home.display().to_string()).starts_with(&d) {
             return Some("files: one folder at a time, never all of your home folder".into());
         }
     }
-    if scope_excluded(d) {
+    if scope_excluded(&d.join("/")) {
         return Some("files: that folder is always excluded".into());
     }
     None
+}
+
+/// An absolute path's parts for comparing: the root first (`""`, or a drive
+/// such as `c:`), `\` read as `/`, a Windows `\\?\` or `\\.\` prefix
+/// dropped, no empty or `.` parts, each `..` stepping back, in lowercase,
+/// and each part without trailing dots and blanks, which Windows drops when
+/// it opens a path (`C:\Users\User.` opens `C:\Users\User`, `.. ` steps
+/// back). Windows and macOS homes are case-blind; on Linux this refuses a
+/// little more, which fails closed.
+fn folded_parts(path: &str) -> Vec<String> {
+    let path = path.replace('\\', "/").to_lowercase();
+    let path = match path
+        .strip_prefix("//?/")
+        .or_else(|| path.strip_prefix("//./"))
+    {
+        Some(rest) => rest
+            .strip_prefix("unc/")
+            .map_or_else(|| rest.to_string(), |share| format!("//{share}")),
+        None => path,
+    };
+    let mut split = path.split('/');
+    let mut parts = vec![split.next().unwrap_or("").to_string()];
+    for part in split {
+        match part.trim_end_matches(['.', ' ']) {
+            // Only dots and blanks: `..` (or `.. `) steps back; `.`, `. `
+            // and an empty part stay put.
+            "" if part.matches('.').count() >= 2 => {
+                if parts.len() > 1 {
+                    parts.pop();
+                }
+            }
+            "" => {}
+            part => parts.push(part.to_string()),
+        }
+    }
+    parts
 }
 
 /// The folded ledger: one current line per grant id.
@@ -568,6 +607,91 @@ mod tests {
             None,
             "the screen stays the desktop switch"
         );
+    }
+
+    /// The home folder is refused however it is spelled, and an excluded
+    /// folder however its path is spelled.
+    #[test]
+    fn the_home_folder_is_refused_however_it_is_spelled() {
+        let whole = Some("files: one folder at a time, never all of your home folder");
+        let refused =
+            |dir: &str, home: &str| scope_refusal(&Scope::Files(dir.into()), Some(Path::new(home)));
+        for spelled in [
+            "/home/user/.",
+            "/home/user/./",
+            "/home//user",
+            "/home/user/../user",
+            "/home/user/docs/..",
+            "/HOME/USER",
+            "/home/./",
+        ] {
+            assert_eq!(
+                refused(spelled, "/home/user").as_deref(),
+                whole,
+                "{spelled}"
+            );
+        }
+        assert_eq!(refused("/home/user", "/home/user/").as_deref(), whole);
+        for spelled in [
+            r"c:\users\user",
+            "C:/Users/User/",
+            r"C:\Users\.\User",
+            r"\\?\C:\Users\User",
+            r"\\.\c:\users",
+            "C:",
+            // Windows drops a trailing dot or blank from each part.
+            r"C:\Users\User.",
+            "C:\\Users\\User ",
+            r"C:\Users\User.\",
+            r"C:\Users.\User. .",
+            r"C:\Users\User\Documents\.. ",
+        ] {
+            assert_eq!(
+                refused(spelled, r"C:\Users\User").as_deref(),
+                whole,
+                "{spelled}"
+            );
+        }
+        assert_eq!(
+            refused(r"C:Users\User", r"C:\Users\User").as_deref(),
+            Some("files: needs one absolute folder")
+        );
+        assert_eq!(refused(r"C:\Users\User\Documents", r"C:\Users\User"), None);
+        // The grant itself is refused too, and nothing reaches the ledger.
+        let (d, _g) = dir("home-spelled");
+        let home = Some(Path::new("/home/user"));
+        assert_eq!(
+            grant_scope(
+                &d,
+                &Scope::Files("/home//user/.".into()),
+                home,
+                UserClick::from_click()
+            )
+            .unwrap_err(),
+            "files: one folder at a time, never all of your home folder"
+        );
+        assert_eq!(ConsentLedger::load(&d).active().count(), 0);
+        assert_eq!(refused("/home/user/./docs", "/home/user"), None);
+        assert_eq!(refused("/home/user/docs/../notes", "/home/user"), None);
+        for excluded in [
+            "/home/user//.ssh",
+            "/home/user/.config//GrokHub",
+            "/home/user/x/../.aws",
+        ] {
+            assert_eq!(
+                refused(excluded, "/home/user").as_deref(),
+                Some("files: that folder is always excluded"),
+                "{excluded}"
+            );
+        }
+        for excluded in [r"C:\Users\User\.ssh.", r"C:\Users\User\.ssh \keys"] {
+            assert_eq!(
+                refused(excluded, r"C:\Users\User").as_deref(),
+                Some("files: that folder is always excluded"),
+                "{excluded}"
+            );
+        }
+        assert_eq!(refused(r"C:\Users\User\Documents.", r"C:\Users\User"), None);
     }
 
     #[test]

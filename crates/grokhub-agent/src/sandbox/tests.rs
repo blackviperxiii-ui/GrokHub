@@ -247,22 +247,49 @@ fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
     assert!(held(true).enforced());
 }
 
+/// Only a command that is one privilege raise leaves the sandbox: its
+/// password dialog stands for all of it. A raise inside a longer command
+/// used to take every other part out with it, dialog or not (a sudo that
+/// never runs asks nothing), so those now stay in. So does a `sudo` that
+/// is not the system's: one run from a path (`./sudo`), found through a
+/// `PATH=` the command sets, or a program renamed with `exec -a sudo`, and
+/// so does anything set or wrapped around the raise.
 #[test]
-fn privilege_raising_commands_are_spotted_wherever_they_start() {
+fn a_privilege_raise_counts_only_when_it_is_the_whole_command() {
     for cmd in [
         "sudo apt update",
         "/usr/bin/sudo -n true",
-        "cd /x && sudo make install",
-        "echo hi; pkexec ls",
-        "FOO=1 doas reboot",
-        "env -i sudo ls",
-        "x=$(sudo cat /etc/shadow)",
+        "doas reboot",
+        "pkexec ls",
+        "\"sudo\" ls",
         "su -c id",
         "run0 systemctl restart foo",
+        "sudo ls > /dev/null 2>&1",
     ] {
         assert!(raises_privileges(cmd), "{cmd}");
     }
     for cmd in [
+        "./sudo",
+        "./sudo apt update",
+        "bin/sudo true",
+        "/tmp/sudo true",
+        "/usr/bin/../../tmp/sudo true",
+        "PATH=/work:/usr/bin:/bin sudo true",
+        "FOO=1 doas reboot",
+        "LD_PRELOAD=/work/x.so run0 true",
+        "env -i sudo ls",
+        "env PATH=/work sudo ls",
+        "nohup sudo make install",
+        "exec -a sudo bash -c 'echo out > /tmp/x'",
+        "command sudo ls",
+        "cd /x && sudo make install",
+        "echo hi; pkexec ls",
+        "x=$(sudo cat /etc/shadow)",
+        "false && sudo true; echo out > /tmp/x",
+        "sudo true > /home/user/.bashrc",
+        "sudo ls $(touch /tmp/x)",
+        "sudo ls | tee x",
+        "sudo ls &",
         "cargo build",
         "echo sudo",
         "grep -r sudo .",
@@ -828,4 +855,216 @@ fn a_failed_connection_in_its_own_network_gets_a_note_and_nothing_else_does() {
         ..open.clone()
     };
     assert!(network_note(Some(&no_proxy), true, refused).is_none());
+}
+
+/// A sudo that never runs (`false && sudo true; …`) takes nothing out of
+/// the sandbox: the rest of the command is held like any other, so its
+/// write outside the workspace is refused. Always mode still runs it.
+#[test]
+fn a_sudo_that_never_runs_keeps_the_rest_of_the_command_in_the_sandbox() {
+    let config = scratch("sudo-dodge-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("sudo-dodge-ws");
+    let outside = scratch("sudo-dodge-out");
+    let dodge = format!(
+        "false && sudo true; echo out > {}/dodge.txt",
+        outside.display()
+    );
+    let args = json!({ "command": dodge });
+    assert!(!runs_outside("run_terminal_command", &args));
+    assert!(plan_for_call("run_terminal_command", &args, &ws).is_some());
+    let always = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let policy = crate::perm::Policy::empty();
+    assert_eq!(
+        crate::gate::decide_with(
+            &always,
+            "run_terminal_command",
+            &args.to_string(),
+            false,
+            None,
+            &ws,
+            Some(&policy)
+        ),
+        crate::gate::Decision::Run
+    );
+    #[cfg(target_os = "linux")]
+    if landlock::abi().is_some() {
+        let out = crate::tools::shell::run(&ws, &args, &|| false);
+        assert!(out.failed, "{}", out.text);
+        assert!(out.text.contains("Permission denied"), "{}", out.text);
+        assert!(!outside.join("dodge.txt").exists(), "{}", out.text);
+    }
+    for dir in [&config, &ws, &outside] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A `sudo` the model left in the workspace, one a `PATH=` in the command
+/// finds, or a program renamed `sudo` with `exec -a` raises nothing and
+/// shows no password dialog, so it stays in the sandbox: its write outside
+/// the workspace is refused, in Always mode too.
+#[test]
+fn a_planted_or_renamed_sudo_stays_in_the_sandbox() {
+    let config = scratch("planted-sudo-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("planted-sudo-ws");
+    let outside = scratch("planted-sudo-out");
+    let planted = outside.join("planted.txt");
+    std::fs::write(
+        ws.join("sudo"),
+        format!("#!/bin/sh\necho out > {}\n", planted.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(ws.join("sudo"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let always = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let policy = crate::perm::Policy::empty();
+    let renamed = outside.join("argv0.txt");
+    for (cmd, target) in [
+        ("./sudo".to_string(), &planted),
+        (
+            format!("PATH={}:/usr/bin:/bin sudo true", ws.display()),
+            &planted,
+        ),
+        (
+            format!("exec -a sudo sh -c 'echo out > {}'", renamed.display()),
+            &renamed,
+        ),
+    ] {
+        let args = json!({ "command": cmd });
+        assert!(!raises_privileges(&cmd), "{cmd}");
+        assert!(!runs_outside("run_terminal_command", &args), "{cmd}");
+        assert!(
+            plan_for_call("run_terminal_command", &args, &ws).is_some(),
+            "{cmd}"
+        );
+        assert_eq!(
+            crate::gate::decide_with(
+                &always,
+                "run_terminal_command",
+                &args.to_string(),
+                false,
+                None,
+                &ws,
+                Some(&policy)
+            ),
+            crate::gate::Decision::Run,
+            "{cmd}"
+        );
+        #[cfg(target_os = "linux")]
+        if landlock::abi().is_some() {
+            let out = crate::tools::shell::run(&ws, &args, &|| false);
+            assert!(out.failed, "{cmd}: {}", out.text);
+            assert!(
+                out.text.contains("Permission denied"),
+                "{cmd}: {}",
+                out.text
+            );
+            assert!(!target.exists(), "{cmd}: {}", out.text);
+        }
+    }
+    for dir in [&config, &ws, &outside] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A raise the sandbox refused gets a note to run it on its own.
+#[test]
+fn a_refused_privilege_raise_gets_a_note_to_run_it_alone() {
+    let plan = Plan {
+        writable: vec![PathBuf::from("/work")],
+        proxy: None,
+        isolation: None,
+        container: None,
+    };
+    let refused =
+        "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.";
+    assert_eq!(
+        network_note(Some(&plan), true, refused),
+        Some("[sandbox] sudo (or pkexec, doas, su, run0) can't raise privileges inside the sandbox. It runs outside only as a command of its own that starts with it, with nothing set, wrapped or chained around it (`sudo apt update`). Run it that way (the password dialog asks), or rerun with outside_sandbox (asks the user).")
+    );
+    assert_eq!(network_note(Some(&plan), false, refused), None);
+    assert_eq!(network_note(None, true, refused), None);
+}
+
+/// With the sandbox off, the floor alone keeps a key path or the consent
+/// ledger out of reach, however the command spells it, in Always and Ask.
+#[test]
+fn with_the_sandbox_off_quoted_and_globbed_key_paths_are_refused() {
+    let config = scratch("rail-off-cfg");
+    std::fs::write(config.join(CONFIG_NAME), "enabled = false\n").unwrap();
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("rail-off-ws");
+    let always = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let ask = crate::gate::Gate {
+        mode: crate::gate::PermMode::Ask,
+        ..always
+    };
+    let policy = crate::perm::Policy::empty();
+    let ledger = "hard floor: consent ledger (only your click changes it)";
+    for (c, why) in [
+        ("cat ~/.ssh/id_rsa", "forbidden path: ssh keys"),
+        (r#"cat ~/."ssh"/id_rsa"#, "forbidden path: ssh keys"),
+        ("cat ~/.ss?/id_rsa", "forbidden path: ssh keys"),
+        ("cat /etc//shadow", "forbidden path: /etc/shadow"),
+        (
+            concat!("cat ~/.grok//auth", ".json"),
+            "forbidden path: grok login",
+        ),
+        ("echo '{}' >> ~/.config/GrokHub/consent.jsonl", ledger),
+        ("echo '{}' >> ~/.config/GrokHub/consent.json?", ledger),
+        (r#"echo '{}' >> ~/.config/GrokHub/"consent".jsonl"#, ledger),
+        ("cat ~/.[[:alpha:]]sh/id_rsa", "forbidden path: ssh keys"),
+        ("cat /etc/[[:lower:]]hadow", "forbidden path: /etc/shadow"),
+        ("cat ~/.ss\\\nh/id_rsa", "forbidden path: ssh keys"),
+        ("cat ~/.$\"ssh\"/id_rsa", "forbidden path: ssh keys"),
+        ("cat ~/.s{s..s}h/id_rsa", "forbidden path: ssh keys"),
+        ("cd ~ && cat .*/id_rsa", "forbidden path: ssh keys"),
+        (
+            "echo '{}' >> ~/.config/GrokHub/consent.json[[:lower:]]",
+            ledger,
+        ),
+        ("echo '{}' >> ~/.config/GrokHub/consent.json$'l'", ledger),
+        ("echo '{}' >> ~/.config/GrokHub/consent.json{l..l}", ledger),
+        ("cd ~/.config/GrokHub && echo '{}' | tee -a *.jsonl", ledger),
+    ] {
+        let a = json!({"command": c}).to_string();
+        for gate in [&always, &ask] {
+            assert_eq!(
+                crate::gate::decide_with(
+                    gate,
+                    "run_terminal_command",
+                    &a,
+                    false,
+                    None,
+                    &ws,
+                    Some(&policy)
+                ),
+                crate::gate::Decision::Refuse(why.into()),
+                "{c} in {:?}",
+                gate.mode
+            );
+        }
+    }
+    for dir in [&config, &ws] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
