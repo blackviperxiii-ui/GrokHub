@@ -160,11 +160,6 @@ pub async fn side_chat(
     };
     let settings = crate::current(&state);
     let config_dir = state.config_dir.clone();
-    let prompt = intent::side_prompt(
-        &question,
-        ask.as_deref().unwrap_or(""),
-        so_far.as_deref().unwrap_or(""),
-    );
     let id = side_id.clone();
     // A side answer reads the folder its chat works in.
     let own_folder = state.code_sessions.of(&conversation_id);
@@ -174,9 +169,11 @@ pub async fn side_chat(
             route.workspace = dir;
         }
         route.suggestions = false;
-        session.prompt(
-            &prompt,
-            Vec::new(),
+        ask_side(
+            &session,
+            &question,
+            ask.as_deref().unwrap_or(""),
+            so_far.as_deref().unwrap_or(""),
             route,
             Box::new(move |event| {
                 let _ = app.emit(
@@ -193,6 +190,21 @@ pub async fn side_chat(
     .map_err(|e| e.to_string())?;
     crate::drop_worker(&state, &side_id);
     stop
+}
+
+/// Runs `question` on a side `session` with a snapshot of the main work:
+/// the main ask and the reply `so_far`. The reply is a model's text, so an
+/// `@file:` in it stays text; only the question's references expand.
+pub(crate) fn ask_side(
+    session: &agent::Session,
+    question: &str,
+    ask: &str,
+    so_far: &str,
+    route: agent::Route,
+    emit: Box<dyn FnMut(agent::UiEvent) + Send>,
+) -> Result<String, String> {
+    let prompt = intent::side_prompt(question, ask, so_far);
+    session.prompt_typed(&prompt, question, Vec::new(), route, emit)
 }
 
 /// What **Tell the main task** did with a side answer.

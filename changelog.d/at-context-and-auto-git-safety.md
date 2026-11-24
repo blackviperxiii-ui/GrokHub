@@ -1,0 +1,4 @@
+- Auto mode: `git fetch` and `git pull` skip the review only with everyday options and plain remotes. One that names a program to run (such as `--upload-pack`), a merge strategy, an editor, signing or an unusual transport now goes to the review, and to an approval card when that review blocks it.
+- `@diff`, `@staged` and `@git:N` no longer run programs that a repository's settings name (external diff tools, text conversion, filters, signature checks), including the settings of a submodule with changes of its own.
+- A side question no longer opens files that the main reply mentions with `@file:`, and neither does a side answer sent on to the main task: only the words you type expand.
+- `@file:` reads a large file with non-English text up to the size limit instead of refusing it, returns the lines you asked for even far into a big file (or says plainly when they are past its end), and refuses a pipe or device instead of freezing the turn.
