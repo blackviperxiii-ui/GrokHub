@@ -10,6 +10,13 @@
 //! one wider span is a flag's own quoted value made only of value
 //! characters and spaces (`--password "correct horse"`): with no operator
 //! or newline in it, it can only hold arguments, never a command.
+//!
+//! A `--flag`'s value is hidden only when the flag is named for its secret
+//! (its last part is a secret word: `--password`, `--auth-token`): a switch
+//! with a secret word inside its name (`--keep-session-cookies`,
+//! `--password-stdin`) takes no value, so the word after it, often the file
+//! a hook writes, stays on the page. Nor is a word that starts with `-` ever
+//! taken as a flag's value: it is the next flag.
 
 const HIDDEN: &str = "[redacted]";
 
@@ -133,11 +140,21 @@ fn hide_after_colon(text: &str) -> Option<String> {
     Some(format!("{}{shown}{}", &text[..pass], &text[pass + used..]))
 }
 
+fn secret_part(part: &str) -> bool {
+    SECRET_PARTS.contains(&part) || SECRET_ENDS.iter().any(|end| part.ends_with(end))
+}
+
 pub(crate) fn secret_name(name: &str) -> bool {
     let name = name.trim_start_matches('-').to_ascii_lowercase();
-    name.split(['_', '-']).any(|part| {
-        SECRET_PARTS.contains(&part) || SECRET_ENDS.iter().any(|end| part.ends_with(end))
-    })
+    name.split(['_', '-']).any(secret_part)
+}
+
+/// A `--flag` named for the secret it takes: its last part is a secret word
+/// (`--api-key`, `--oauth2-bearer`), not just one of its parts
+/// (`--keep-session-cookies`, `--cookie-jar`, `--password-stdin`).
+fn secret_flag_name(name: &str) -> bool {
+    let name = name.trim_start_matches('-').to_ascii_lowercase();
+    name.rsplit(['_', '-']).next().is_some_and(secret_part)
 }
 
 /// The words of a command line as byte ranges: runs of non-space text, with
@@ -210,7 +227,7 @@ fn secret_flag(name: &str, program: &str) -> Option<Secret> {
         "-u" | "--user" | "--proxy-user" => Some(Secret::AfterColon),
         "-p" if PASSWORD_P.contains(&program) => Some(Secret::Value),
         "-a" if program == "redis-cli" => Some(Secret::Value),
-        _ if name.starts_with("--") && secret_name(name) => Some(Secret::Value),
+        _ if name.starts_with("--") && secret_flag_name(name) => Some(Secret::Value),
         _ => None,
     }
 }
@@ -270,8 +287,11 @@ fn hide_flags(command: &str) -> String {
         out.push_str(&command[last..s]);
         let word = &command[s..e];
         let shown = match pending.take() {
-            Some(secret) => hide_flag_value(secret, word).unwrap_or_else(|| word.to_string()),
-            None => {
+            // `--token -o out.txt`: `-o` is the next flag, not the value.
+            Some(secret) if !word.starts_with('-') => {
+                hide_flag_value(secret, word).unwrap_or_else(|| word.to_string())
+            }
+            _ => {
                 let (shown, next) = flag_word(word, &program);
                 pending = next;
                 shown

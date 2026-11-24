@@ -1,0 +1,6 @@
+- Code tab: the agent's push guard now refuses a push through a git alias or any other command git doesn't ship with, a push to `heads/main`, and `git push origin HEAD` after a command that can switch branches, so force-pushes and pushes to main stay refused in every mode. A push hidden in a command git runs (`rebase -x`, `submodule foreach`, an editor set with `-c`) is refused too, and an alias or unknown git command asks first in every chat.
+- Code tab: two project changes at once no longer drop a project or leave the project list unreadable.
+- Code tab: a project's remote URL no longer shows a password or token from origin's URL or a saved row.
+- Code tab: linking a remote whose folder already holds a clone of it opens that folder instead of cloning a second copy; a folder holding another repo still gets a new name.
+- Code tab: a clean turn clears the last error from where a session left off, even with no plan or to-dos.
+- Hooks: a switch with a secret word in its name, like `--keep-session-cookies`, no longer hides the next argument, so the file a hook writes stays visible.

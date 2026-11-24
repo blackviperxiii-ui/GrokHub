@@ -128,7 +128,11 @@ pub fn read(config_dir: &Path, conversation_id: &str) -> Option<LeftOff> {
 
 /// Writes the checkpoint from the saved plan and the session's to-dos.
 /// `blocker` is `Some` when the turn failed; `None` clears a previous blocker.
+/// With nothing left to keep, the old checkpoint is removed.
 pub fn record(config_dir: &Path, conversation_id: &str, blocker: Option<&str>) {
+    let Some(dir) = code_sessions::session_dir(config_dir, conversation_id) else {
+        return;
+    };
     let plan = lead::read_plan(config_dir, conversation_id).unwrap_or_default();
     let todos = grokhub_agent::todos_for(conversation_id);
     let pairs: Vec<(&str, &str)> = todos
@@ -136,9 +140,7 @@ pub fn record(config_dir: &Path, conversation_id: &str, blocker: Option<&str>) {
         .map(|todo| (todo.status.as_str(), todo.content.as_str()))
         .collect();
     let Some(left) = left_off(&plan, &pairs, blocker.unwrap_or("")) else {
-        return;
-    };
-    let Some(dir) = code_sessions::session_dir(config_dir, conversation_id) else {
+        let _ = std::fs::remove_file(dir.join(CHECKPOINT_FILE));
         return;
     };
     if std::fs::create_dir_all(&dir).is_err() {
@@ -218,6 +220,26 @@ mod tests {
             .contains("ghp_abcdefghijklmnopqrstuvwxyz012345"));
         assert!(left.blocker.contains("[redacted]"));
         assert!(resume_prompt(&left).contains("Blocker: "));
+    }
+
+    #[test]
+    fn a_clean_turn_clears_the_blocker_when_the_session_has_no_plan() {
+        let cfg = temp_dir("clear");
+        // No plan and no to-dos: a turn errors, then a clean turn.
+        record(&cfg, "code-keep-clear", Some("disk full"));
+        let after_error = read(&cfg, "code-keep-clear");
+        record(&cfg, "code-keep-clear", None);
+        let after_clean = read(&cfg, "code-keep-clear");
+        let _ = std::fs::remove_dir_all(&cfg);
+        assert_eq!(
+            after_error,
+            Some(LeftOff {
+                goal: String::new(),
+                next: String::new(),
+                blocker: "disk full".into(),
+            })
+        );
+        assert_eq!(after_clean, None);
     }
 
     #[test]
