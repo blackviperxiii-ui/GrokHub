@@ -40,11 +40,10 @@ fn call(tool: &str, args: Value) -> String {
         .to_string()
 }
 
-/// Lines the child logged: its argv/env line, then what it received.
-fn child_log(dir: &Path) -> Vec<Value> {
-    let path = format!("{}.log", hx::cua_socket_path(dir).display());
+/// Lines a log file held: wait until it has content.
+fn read_jsonl(path: &str) -> Vec<Value> {
     for _ in 0..200 {
-        if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Ok(text) = std::fs::read_to_string(path) {
             if !text.is_empty() {
                 return text
                     .lines()
@@ -55,6 +54,28 @@ fn child_log(dir: &Path) -> Vec<Value> {
         std::thread::sleep(Duration::from_millis(10));
     }
     Vec::new()
+}
+
+/// Lines the mcp child logged: its argv/env line, then what it received.
+fn child_log(dir: &Path) -> Vec<Value> {
+    read_jsonl(&format!("{}.log", hx::cua_socket_path(dir).display()))
+}
+
+/// The serve daemon's first argv/env/screen line.
+fn serve_log(dir: &Path) -> Value {
+    read_jsonl(&format!("{}.serve.log", hx::cua_socket_path(dir).display()))
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null)
+}
+
+fn bounded_env(dir: &Path) -> Value {
+    let manifest = hx::cua_manifest_path(dir).display().to_string();
+    json!({
+        "CUA_DRIVER_PERMISSION_MODE": "bounded",
+        "CUA_DRIVER_CAPABILITY_MANIFEST_FILE": manifest,
+        "CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED": "1",
+    })
 }
 
 /// A child started for the Bot Desktop gets its screen, with Wayland's
@@ -88,14 +109,17 @@ fn a_child_on_the_bot_desktop_gets_that_screen() {
         )
         .unwrap();
     assert!(out.contains("click done"), "{out}");
-    assert_eq!(
-        child_log(&dir)[0]["screen"],
-        json!({
-            "DISPLAY": ":93",
-            "XAUTHORITY": "/home/user/.config/GrokHub/bot-desktop/bot-desktop-93.xauth",
-            "XDG_SESSION_TYPE": "x11",
-        })
-    );
+    let screen = json!({
+        "DISPLAY": ":93",
+        "XAUTHORITY": "/home/user/.config/GrokHub/bot-desktop/bot-desktop-93.xauth",
+        "XDG_SESSION_TYPE": "x11",
+    });
+    let sock = hx::cua_socket_path(&dir).display().to_string();
+    let serve = serve_log(&dir);
+    assert_eq!(serve["argv"], json!(["serve", "--socket", sock]));
+    assert_eq!(serve["env"], bounded_env(&dir));
+    assert_eq!(serve["screen"], screen);
+    assert_eq!(child_log(&dir)[0]["screen"], screen);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -137,25 +161,15 @@ fn fake_child_gets_the_bounded_env_one_soft_click_and_nothing_after_a_halt() {
         .unwrap();
     assert!(out.contains(*grokhub_core::desktop_mcp::HALT_MSG), "{out}");
 
+    let sock = hx::cua_socket_path(&dir).display().to_string();
+    let serve = serve_log(&dir);
+    assert_eq!(serve["argv"], json!(["serve", "--socket", &sock]));
+    assert_eq!(serve["env"], bounded_env(&dir));
     let log = child_log(&dir);
     let head = &log[0];
     let manifest = hx::cua_manifest_path(&dir).display().to_string();
-    assert_eq!(
-        head["argv"],
-        json!([
-            "mcp",
-            "--socket",
-            hx::cua_socket_path(&dir).display().to_string()
-        ])
-    );
-    assert_eq!(
-        head["env"],
-        json!({
-            "CUA_DRIVER_PERMISSION_MODE": "bounded",
-            "CUA_DRIVER_CAPABILITY_MANIFEST_FILE": manifest,
-            "CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED": "1",
-        })
-    );
+    assert_eq!(head["argv"], json!(["mcp", "--socket", sock]));
+    assert_eq!(head["env"], bounded_env(&dir));
     assert_eq!(
         std::fs::read_to_string(&manifest).unwrap(),
         hx::cua_manifest()
