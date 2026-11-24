@@ -241,7 +241,7 @@ pub fn dispatch_for_job(
     }
     if crate::self_manage::self_tool(name).is_some() {
         // Path E: the loop already asked `harness::decide` (via `decide_with`).
-        return crate::self_manage::run_native(name, &args);
+        return crate::self_manage::run_native(name, &args, ctx.session);
     }
     if let Some(output) = crate::mcp::try_dispatch(name, &args, ctx.stop) {
         return output;
@@ -253,7 +253,7 @@ pub fn dispatch_for_job(
         "kill_command_or_subagent" => control::kill(ctx.tasks.as_ref(), &args),
         control::MERGE_WORK => control::merge(ctx, &args),
         "monitor" => control::monitor(ctx, &args),
-        "scheduler_create" => control::scheduler_create(&args),
+        "scheduler_create" => control::scheduler_create(&args, ctx.session),
         "scheduler_delete" => control::scheduler_delete(&args),
         run_routine::NAME => run_routine::run(ctx, &args),
         save_routine::NAME => save_routine::run(ctx, &args),

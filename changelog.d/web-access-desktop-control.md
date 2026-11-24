@@ -1,3 +1,3 @@
-- Web access: Run now from a paired browser no longer gets desktop control, and an automation a browser adds or edits never gets it, even when it runs later on its own. Save its words again on the computer to give it back.
+- Web access: Run now from a paired browser no longer gets desktop control, and an automation a browser adds or edits never gets it, even when it runs later on its own. That includes a job a browser's chat creates or rewrites with its scheduler tools. Save its words again on the computer to give it back.
 - Turning desktop control off now stops a running automation's next desktop step, in the app and in the background service.
-- Web access: a paired browser can no longer pick up a chat the computer's window started after it is closed there, and the browser's Agents page lists only the chats a browser started.
+- Web access: a paired browser can no longer pick up a chat the computer's window started after it is closed there, the browser's Agents page lists only the chats a browser started, and a browser's Reflect reads only a chat a browser started, never one of the window's.

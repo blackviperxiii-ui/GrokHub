@@ -7889,12 +7889,37 @@ fn web_may_take(
 }
 
 /// The browser takes chat `id`, kept on file as a browser's so it stays the
-/// web's once this pairing ends.
+/// web's once this pairing ends. A job the chat's agent writes from now on
+/// is the browser's too, so it never runs with the desktop.
 fn web_take(web: &remote::WebAccess, config_dir: &Path, id: &str) -> Result<(), String> {
     if !web.adopt(id) {
         return Err(remote::NOT_YOURS.into());
     }
+    grokhub_agent::web_jobs::set_web_chat(id);
     web_chats::note(config_dir, id)
+}
+
+/// Reflect from a browser with no chat named: the window's last chat is
+/// not the browser's to read.
+const WEB_REFLECT_NEEDS_CHAT: &str =
+    "A browser reflects only its own chats. Reflect the window's chats on your computer.";
+
+/// The chat a browser's Reflect reads: one it holds or a browser started,
+/// never one the window started, open or closed, and never the window's
+/// last chat for want of an id. Reflect hands back the chat's lines.
+fn web_reflect_chat(
+    web: &remote::WebAccess,
+    config_dir: &Path,
+    id: Option<String>,
+) -> Result<String, String> {
+    let id = id
+        .filter(|id| !id.is_empty())
+        .ok_or(WEB_REFLECT_NEEDS_CHAT)?;
+    if web.owns(&id) || web_chats::started_on_web(config_dir, &id) {
+        Ok(id)
+    } else {
+        Err(remote::NOT_YOURS.into())
+    }
 }
 
 /// A browser's send, read in full before it takes the chat, so a send that
@@ -8134,7 +8159,10 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "base")?,
         )?),
         "restore_memory_file" => out(restore_memory_file(arg(args, "name")?)?),
-        "reflect_memory" => out(reflect_memory(state, arg(args, "conversationId")?)?),
+        "reflect_memory" => {
+            let id = web_reflect_chat(&web, &state.config_dir, arg(args, "conversationId")?)?;
+            out(reflect_memory(state, Some(id))?)
+        }
         "tidy_memory_ledger" => out(tidy_memory_ledger()?),
         "apply_memory_raw_tidy" => out(apply_memory_raw_tidy()?),
         "dismiss_memory_raw_tidy" => out(dismiss_memory_raw_tidy()?),
@@ -10733,6 +10761,214 @@ mod web_command_tests {
             assert!(!body.contains(&format!("\"{name}\"")), "{name}");
             assert!(!crate::remote::web_command(name), "{name}");
         }
+    }
+
+    /// A chat's model that loads the scheduler, then rewrites job `id`.
+    struct Rewrites {
+        id: String,
+        asked: std::sync::Mutex<Vec<grokhub_agent::ResponsesRequest>>,
+    }
+
+    impl grokhub_agent::ModelClient for Rewrites {
+        fn stream(
+            &self,
+            req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            let mut asked = self.asked.lock().unwrap();
+            let with_tools = asked.iter().filter(|r| !r.tools.is_empty()).count();
+            asked.push(req.clone());
+            let call = |call_id: &str, name: &str, args: serde_json::Value| {
+                Ok(grokhub_agent::TurnOutput {
+                    calls: vec![grokhub_agent::FunctionCall {
+                        call_id: call_id.into(),
+                        name: name.into(),
+                        arguments: args.to_string(),
+                    }],
+                    ..grokhub_agent::TurnOutput::default()
+                })
+            };
+            match (req.tools.is_empty(), with_tools) {
+                (false, 0) => call(
+                    "load",
+                    "load_tool_schema",
+                    serde_json::json!({ "name": "scheduler_create" }),
+                ),
+                (false, 1) => call(
+                    "up",
+                    "scheduler_create",
+                    serde_json::json!({
+                        "interval": "1h",
+                        "prompt": "take a screenshot and click the Send button in Mail",
+                        "task_id": self.id,
+                    }),
+                ),
+                _ => {
+                    sink(grokhub_agent::StreamEvent::TextDelta("done".into()));
+                    Ok(grokhub_agent::TurnOutput {
+                        text: "done".into(),
+                        ..grokhub_agent::TurnOutput::default()
+                    })
+                }
+            }
+        }
+    }
+
+    /// Runs one message in chat `chat` whose model rewrites job `id`, with the
+    /// route a browser's send gets (the window's approvals, no desktop), and
+    /// returns what the scheduler tool said.
+    fn rewrite_in_chat(dir: &std::path::Path, chat: &str, id: &str) -> String {
+        let model = std::sync::Arc::new(Rewrites {
+            id: id.to_string(),
+            asked: std::sync::Mutex::default(),
+        });
+        let route = crate::agent::Route {
+            client: model.clone(),
+            auth_kind: grokhub_agent::AuthKind::ApiKey,
+            workspace: temp_dir(&format!("{chat}-ws")),
+            mode: grokhub_agent::PermMode::Always,
+            desktop: false,
+            session: crate::agent::SessionMode::Chat,
+            voice: String::new(),
+            voice_session: None,
+            suggestions: false,
+            lead: false,
+        };
+        let session = crate::agent::Session::spawn(chat, dir.to_path_buf());
+        let _ = session.prompt(
+            "make that job click Send instead",
+            Vec::new(),
+            route,
+            Box::new(|_| {}),
+        );
+        let asked = model.asked.lock().unwrap();
+        asked
+            .iter()
+            .flat_map(|r| r.input.iter())
+            .find_map(|item| match item {
+                grokhub_agent::InputItem::FunctionCallOutput { call_id, output }
+                    if call_id == "up" =>
+                {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| "<no scheduler call>".into())
+    }
+
+    /// A browser that asks its chat to rewrite a job gets the same job as
+    /// one it edits on the Automations page: one that never runs with the
+    /// desktop. A window chat's rewrite leaves its job as it was.
+    #[test]
+    fn a_job_a_browsers_chat_rewrites_runs_without_the_desktop() {
+        use crate::unattended::RunGate;
+        use grokhub_agent::PermMode;
+        let dir = temp_dir("chat-rewrite");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        let clock = grokhub_core::LocalClock::at_offset(grokhub_core::now_ms(), 0);
+        crate::automations::add(&dir, "every day at 9am summarize my inbox", clock).unwrap();
+        let list =
+            crate::automations::add(&dir, "every day at 10am summarize the board", clock).unwrap();
+        let (web_job, desk_job) = (list[0].id.clone(), list[1].id.clone());
+        let on = RunGate::scheduled(PermMode::Always, true, None);
+        let off = RunGate::scheduled(PermMode::Always, false, None);
+
+        // What send_chat does before the browser's turn runs.
+        let web = crate::remote::WebAccess::default();
+        super::web_take(&web, &dir, "shell-web-rw-1").unwrap();
+        assert_eq!(
+            rewrite_in_chat(&dir, "shell-web-rw-1", &web_job),
+            format!("updated {web_job}\nevery 60 min")
+        );
+        assert_eq!(
+            rewrite_in_chat(&dir, "shell-desk-rw-1", &desk_job),
+            format!("updated {desk_job}\nevery 60 min")
+        );
+        let jobs = crate::automations::load(&dir).unwrap();
+        assert_eq!(
+            [jobs[0].instructions.as_str(), jobs[1].instructions.as_str()],
+            ["take a screenshot and click the Send button in Mail"; 2]
+        );
+        assert_eq!(crate::automations::gate_for(&dir, &web_job, on), off);
+        assert_eq!(crate::automations::gate_for(&dir, &desk_job, on), on);
+
+        // The scheduler's run of the browser's job, with the window's
+        // desktop control saved on, never reaches the desktop.
+        crate::settings::save(
+            &dir,
+            &crate::settings::ShellSettings {
+                desktop_control: true,
+                ..crate::settings::ShellSettings::default()
+            },
+        )
+        .unwrap();
+        let model = std::sync::Arc::new(Screenshots::default());
+        let ws = temp_dir("chat-rewrite-run");
+        crate::automations::execute(&dir, &jobs[0], model.clone(), "grok-4.7", ws, on);
+        let shot = model
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|r| r.input.iter())
+            .find_map(|item| match item {
+                grokhub_agent::InputItem::FunctionCallOutput { call_id, output }
+                    if call_id == "shot" =>
+                {
+                    Some(output.clone())
+                }
+                _ => None,
+            });
+        assert_eq!(shot.as_deref(), Some(*grokhub_core::desktop_mcp::OFF_MSG));
+    }
+
+    /// Reflect hands back a chat's lines and saves them to shared memory, so
+    /// a browser reflects only a chat it holds or a browser started: never a
+    /// saved chat the window started, and never the window's last chat when
+    /// it names none.
+    #[test]
+    fn a_browser_reflects_only_its_own_chats() {
+        let dir = temp_dir("reflect");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        crate::agent::save_bench_exchange(
+            "shell-desk-1",
+            "/home/user",
+            "my locker code is 4321",
+            "Noted.",
+        )
+        .unwrap();
+        let web = crate::remote::WebAccess::default();
+        let refused = Err("That chat isn't open in this browser.".to_string());
+        let no_chat = Err(
+            "A browser reflects only its own chats. Reflect the window's chats on your computer."
+                .to_string(),
+        );
+        let reflect = |web: &crate::remote::WebAccess, id: Option<&str>| {
+            super::web_reflect_chat(web, &dir, id.map(str::to_string))
+        };
+        assert_eq!(reflect(&web, Some("shell-desk-1")), refused);
+        assert_eq!(reflect(&web, None), no_chat);
+        assert_eq!(reflect(&web, Some("")), no_chat);
+
+        super::web_take(&web, &dir, "shell-web-1").unwrap();
+        assert_eq!(reflect(&web, Some("shell-web-1")), Ok("shell-web-1".into()));
+        // A new pairing still reflects a chat a browser started.
+        let next = crate::remote::WebAccess::default();
+        assert_eq!(
+            reflect(&next, Some("shell-web-1")),
+            Ok("shell-web-1".into())
+        );
+        assert_eq!(reflect(&next, Some("shell-desk-1")), refused);
+
+        // The arm reflects only the chat the check handed back.
+        let body = remote_call_src();
+        let arm = arm(&body, "reflect_memory");
+        let checked = arm.find("web_reflect_chat(").expect("checks the chat");
+        let reflected = arm
+            .find("reflect_memory(state, Some(id))")
+            .expect("reflects that chat");
+        assert!(checked < reflected, "{arm}");
     }
 }
 

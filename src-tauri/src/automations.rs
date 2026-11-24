@@ -18,8 +18,6 @@ use grokhub_core::{Automation, LocalClock};
 use serde::{Deserialize, Serialize};
 
 pub const FILE: &str = "automations.json";
-/// The ids of the jobs whose words a paired browser wrote.
-const WEB_FILE: &str = "automations-web.json";
 /// The cabin's own cap: bigger means the file is not an automations list.
 const STORE_CAP: u64 = 4 * 1024 * 1024;
 
@@ -177,43 +175,16 @@ pub enum Author {
     Web,
 }
 
-/// One change to [`WEB_FILE`] at a time.
-static WEB_STORE: Mutex<()> = Mutex::new(());
-
-/// The jobs a paired browser wrote. No file is none; one that can't be read
-/// is an error, so a run treats its job as the browser's.
-fn web_ids(config_dir: &Path) -> Result<Vec<String>, String> {
-    match std::fs::read_to_string(config_dir.join(WEB_FILE)) {
-        Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("{WEB_FILE}: {e}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// Marks job `id` as a browser's (`web`) or as this computer's.
+/// Marks job `id` as a browser's (`web`) or as this computer's, in the
+/// file the agent's job writer marks too ([`grokhub_agent::web_jobs`]).
 fn note_author(config_dir: &Path, id: &str, web: bool) -> Result<(), String> {
-    let _web = WEB_STORE.lock().unwrap_or_else(|err| err.into_inner());
-    let mut ids = web_ids(config_dir)?;
-    if ids.iter().any(|kept| kept == id) == web {
-        return Ok(());
-    }
-    ids.retain(|kept| kept != id);
-    if web {
-        ids.push(id.to_string());
-    }
-    let raw = serde_json::to_string(&ids).map_err(|e| e.to_string())?;
-    grokhub_core::pulse_writer::write_atomic(&config_dir.join(WEB_FILE), &raw)
-}
-
-/// Whether a paired browser wrote job `id`'s words.
-pub fn web_wrote(config_dir: &Path, id: &str) -> bool {
-    web_ids(config_dir).map_or(true, |ids| ids.iter().any(|kept| kept == id))
+    grokhub_agent::web_jobs::note(config_dir, id, web)
 }
 
 /// The gate a run of job `id` goes behind: `gate`, with no desktop when a
-/// paired browser wrote the job.
+/// paired browser wrote the job, on a page or through its chat's agent.
 pub fn gate_for(config_dir: &Path, id: &str, gate: RunGate) -> RunGate {
-    if web_wrote(config_dir, id) {
+    if grokhub_agent::web_jobs::web_wrote(config_dir, id) {
         RunGate {
             desktop: false,
             ..gate
@@ -1416,11 +1387,11 @@ mod tests {
         .expect("edit");
         assert_eq!(gate_for(&dir, &here, on), on);
         assert_eq!(
-            std::fs::read_to_string(dir.join(WEB_FILE)).expect("web file"),
+            std::fs::read_to_string(dir.join(grokhub_agent::web_jobs::FILE)).expect("web file"),
             format!(r#"["{web}"]"#)
         );
         // A file that can't be read leaves every job without the desktop.
-        std::fs::write(dir.join(WEB_FILE), "[not json").expect("broken");
+        std::fs::write(dir.join(grokhub_agent::web_jobs::FILE), "[not json").expect("broken");
         assert_eq!(gate_for(&dir, &here, on), off);
     }
 }
