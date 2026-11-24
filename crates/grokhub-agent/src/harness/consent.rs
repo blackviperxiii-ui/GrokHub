@@ -184,9 +184,11 @@ pub fn scope_refusal(scope: &Scope, home: Option<&Path>) -> Option<String> {
 
 /// An absolute path's parts for comparing: the root first (`""`, or a drive
 /// such as `c:`), `\` read as `/`, a Windows `\\?\` or `\\.\` prefix
-/// dropped, no empty or `.` parts, each `..` stepping back, in lowercase.
-/// Windows and macOS homes are case-blind; on Linux this refuses a little
-/// more, which fails closed.
+/// dropped, no empty or `.` parts, each `..` stepping back, in lowercase,
+/// and each part without trailing dots and blanks, which Windows drops when
+/// it opens a path (`C:\Users\User.` opens `C:\Users\User`, `.. ` steps
+/// back). Windows and macOS homes are case-blind; on Linux this refuses a
+/// little more, which fails closed.
 fn folded_parts(path: &str) -> Vec<String> {
     let path = path.replace('\\', "/").to_lowercase();
     let path = match path
@@ -201,13 +203,15 @@ fn folded_parts(path: &str) -> Vec<String> {
     let mut split = path.split('/');
     let mut parts = vec![split.next().unwrap_or("").to_string()];
     for part in split {
-        match part {
-            "" | "." => {}
-            ".." => {
+        match part.trim_end_matches(['.', ' ']) {
+            // Only dots and blanks: `..` (or `.. `) steps back; `.`, `. `
+            // and an empty part stay put.
+            "" if part.matches('.').count() >= 2 => {
                 if parts.len() > 1 {
                     parts.pop();
                 }
             }
+            "" => {}
             part => parts.push(part.to_string()),
         }
     }
@@ -635,6 +639,12 @@ mod tests {
             r"\\?\C:\Users\User",
             r"\\.\c:\users",
             "C:",
+            // Windows drops a trailing dot or blank from each part.
+            r"C:\Users\User.",
+            "C:\\Users\\User ",
+            r"C:\Users\User.\",
+            r"C:\Users.\User. .",
+            r"C:\Users\User\Documents\.. ",
         ] {
             assert_eq!(
                 refused(spelled, r"C:\Users\User").as_deref(),
@@ -674,6 +684,14 @@ mod tests {
                 "{excluded}"
             );
         }
+        for excluded in [r"C:\Users\User\.ssh.", r"C:\Users\User\.ssh \keys"] {
+            assert_eq!(
+                refused(excluded, r"C:\Users\User").as_deref(),
+                Some("files: that folder is always excluded"),
+                "{excluded}"
+            );
+        }
+        assert_eq!(refused(r"C:\Users\User\Documents.", r"C:\Users\User"), None);
     }
 
     #[test]

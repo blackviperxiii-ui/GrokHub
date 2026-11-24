@@ -250,15 +250,17 @@ fn only_a_plan_that_holds_writes_and_the_network_counts_as_enforced() {
 /// Only a command that is one privilege raise leaves the sandbox: its
 /// password dialog stands for all of it. A raise inside a longer command
 /// used to take every other part out with it, dialog or not (a sudo that
-/// never runs asks nothing), so those now stay in.
+/// never runs asks nothing), so those now stay in. So does a `sudo` that
+/// is not the system's: one run from a path (`./sudo`), found through a
+/// `PATH=` the command sets, or a program renamed with `exec -a sudo`, and
+/// so does anything set or wrapped around the raise.
 #[test]
 fn a_privilege_raise_counts_only_when_it_is_the_whole_command() {
     for cmd in [
         "sudo apt update",
         "/usr/bin/sudo -n true",
-        "FOO=1 doas reboot",
-        "env -i sudo ls",
-        "nohup sudo make install",
+        "doas reboot",
+        "pkexec ls",
         "\"sudo\" ls",
         "su -c id",
         "run0 systemctl restart foo",
@@ -267,6 +269,19 @@ fn a_privilege_raise_counts_only_when_it_is_the_whole_command() {
         assert!(raises_privileges(cmd), "{cmd}");
     }
     for cmd in [
+        "./sudo",
+        "./sudo apt update",
+        "bin/sudo true",
+        "/tmp/sudo true",
+        "/usr/bin/../../tmp/sudo true",
+        "PATH=/work:/usr/bin:/bin sudo true",
+        "FOO=1 doas reboot",
+        "LD_PRELOAD=/work/x.so run0 true",
+        "env -i sudo ls",
+        "env PATH=/work sudo ls",
+        "nohup sudo make install",
+        "exec -a sudo bash -c 'echo out > /tmp/x'",
+        "command sudo ls",
         "cd /x && sudo make install",
         "echo hi; pkexec ls",
         "x=$(sudo cat /etc/shadow)",
@@ -889,6 +904,83 @@ fn a_sudo_that_never_runs_keeps_the_rest_of_the_command_in_the_sandbox() {
     }
 }
 
+/// A `sudo` the model left in the workspace, one a `PATH=` in the command
+/// finds, or a program renamed `sudo` with `exec -a` raises nothing and
+/// shows no password dialog, so it stays in the sandbox: its write outside
+/// the workspace is refused, in Always mode too.
+#[test]
+fn a_planted_or_renamed_sudo_stays_in_the_sandbox() {
+    let config = scratch("planted-sudo-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("planted-sudo-ws");
+    let outside = scratch("planted-sudo-out");
+    let planted = outside.join("planted.txt");
+    std::fs::write(
+        ws.join("sudo"),
+        format!("#!/bin/sh\necho out > {}\n", planted.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(ws.join("sudo"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let always = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let policy = crate::perm::Policy::empty();
+    let renamed = outside.join("argv0.txt");
+    for (cmd, target) in [
+        ("./sudo".to_string(), &planted),
+        (
+            format!("PATH={}:/usr/bin:/bin sudo true", ws.display()),
+            &planted,
+        ),
+        (
+            format!("exec -a sudo sh -c 'echo out > {}'", renamed.display()),
+            &renamed,
+        ),
+    ] {
+        let args = json!({ "command": cmd });
+        assert!(!raises_privileges(&cmd), "{cmd}");
+        assert!(!runs_outside("run_terminal_command", &args), "{cmd}");
+        assert!(
+            plan_for_call("run_terminal_command", &args, &ws).is_some(),
+            "{cmd}"
+        );
+        assert_eq!(
+            crate::gate::decide_with(
+                &always,
+                "run_terminal_command",
+                &args.to_string(),
+                false,
+                None,
+                &ws,
+                Some(&policy)
+            ),
+            crate::gate::Decision::Run,
+            "{cmd}"
+        );
+        #[cfg(target_os = "linux")]
+        if landlock::abi().is_some() {
+            let out = crate::tools::shell::run(&ws, &args, &|| false);
+            assert!(out.failed, "{cmd}: {}", out.text);
+            assert!(
+                out.text.contains("Permission denied"),
+                "{cmd}: {}",
+                out.text
+            );
+            assert!(!target.exists(), "{cmd}: {}", out.text);
+        }
+    }
+    for dir in [&config, &ws, &outside] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// A raise the sandbox refused gets a note to run it on its own.
 #[test]
 fn a_refused_privilege_raise_gets_a_note_to_run_it_alone() {
@@ -902,7 +994,7 @@ fn a_refused_privilege_raise_gets_a_note_to_run_it_alone() {
         "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.";
     assert_eq!(
         network_note(Some(&plan), true, refused),
-        Some("[sandbox] sudo (or pkexec, doas, su, run0) can't raise privileges inside the sandbox, and it stays inside when it is part of a longer command. Run the privileged command on its own (the password dialog asks), or rerun with outside_sandbox (asks the user).")
+        Some("[sandbox] sudo (or pkexec, doas, su, run0) can't raise privileges inside the sandbox. It runs outside only as a command of its own that starts with it, with nothing set, wrapped or chained around it (`sudo apt update`). Run it that way (the password dialog asks), or rerun with outside_sandbox (asks the user).")
     );
     assert_eq!(network_note(Some(&plan), false, refused), None);
     assert_eq!(network_note(None, true, refused), None);
@@ -940,6 +1032,19 @@ fn with_the_sandbox_off_quoted_and_globbed_key_paths_are_refused() {
         ("echo '{}' >> ~/.config/GrokHub/consent.jsonl", ledger),
         ("echo '{}' >> ~/.config/GrokHub/consent.json?", ledger),
         (r#"echo '{}' >> ~/.config/GrokHub/"consent".jsonl"#, ledger),
+        ("cat ~/.[[:alpha:]]sh/id_rsa", "forbidden path: ssh keys"),
+        ("cat /etc/[[:lower:]]hadow", "forbidden path: /etc/shadow"),
+        ("cat ~/.ss\\\nh/id_rsa", "forbidden path: ssh keys"),
+        ("cat ~/.$\"ssh\"/id_rsa", "forbidden path: ssh keys"),
+        ("cat ~/.s{s..s}h/id_rsa", "forbidden path: ssh keys"),
+        ("cd ~ && cat .*/id_rsa", "forbidden path: ssh keys"),
+        (
+            "echo '{}' >> ~/.config/GrokHub/consent.json[[:lower:]]",
+            ledger,
+        ),
+        ("echo '{}' >> ~/.config/GrokHub/consent.json$'l'", ledger),
+        ("echo '{}' >> ~/.config/GrokHub/consent.json{l..l}", ledger),
+        ("cd ~/.config/GrokHub && echo '{}' | tee -a *.jsonl", ledger),
     ] {
         let a = json!({"command": c}).to_string();
         for gate in [&always, &ask] {

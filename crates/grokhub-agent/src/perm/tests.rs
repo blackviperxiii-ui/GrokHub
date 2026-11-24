@@ -20,6 +20,15 @@ fn gate(mode: PermMode, attended: bool) -> Gate {
     }
 }
 
+/// The command left once wrappers and assignments are peeled, when the
+/// script is one plain command.
+fn peeled_primary(script: &str) -> Option<String> {
+    match analyze(script).segments?.as_slice() {
+        [seg] => Some(seg.command.clone()),
+        _ => None,
+    }
+}
+
 fn policy_of(rules: &[(&str, Action)], grants: &[&str]) -> Policy {
     let mut policy = Policy::empty();
     for (text, action) in rules {
@@ -1869,6 +1878,40 @@ fn webfetch_rules_match_the_host_the_fetch_dials() {
     // A deny glob also matches the URL as written: it only widens.
     let deny_text = policy_of(&[("WebFetch(*evil*)", Action::Deny)], &[]);
     assert_eq!(fetch(&always, "https://ok.test/evil", &deny_text), refused);
+    // web_fetch trims blanks around the host and always dials https, so a
+    // URL glob reads the host trimmed and http as https.
+    let padded = [
+        "https:// evil.test/x",
+        "https://evil.test /x",
+        "https://\u{a0}evil.test/x",
+    ];
+    for rule in [
+        "WebFetch(https://evil.test/*)",
+        "WebFetch(https://evil.test)",
+    ] {
+        let deny = policy_of(&[(rule, Action::Deny)], &[]);
+        for url in ["http://evil.test/x", "HTTP://evil.test/x"]
+            .into_iter()
+            .chain(padded)
+        {
+            assert_eq!(fetch(&always, url, &deny), refused, "{rule} {url}");
+        }
+    }
+    let deny = policy_of(&[("WebFetch(evil.test/*)", Action::Deny)], &[]);
+    for url in padded {
+        assert_eq!(fetch(&always, url, &deny), refused, "{url}");
+    }
+    let deny = policy_of(&[("WebFetch(http://evil.test/*)", Action::Deny)], &[]);
+    assert_eq!(fetch(&always, "https://evil.test/x", &deny), refused);
+    let docs = policy_of(&[("WebFetch(https://docs.rs/*)", Action::Allow)], &[]);
+    assert_eq!(
+        fetch(&ask_gate, "http://docs.rs/serde", &docs),
+        Decision::Run
+    );
+    assert_eq!(
+        fetch(&ask_gate, "ftp://docs.rs/serde", &docs),
+        Decision::Ask
+    );
 }
 
 fn shell_url(url: &str) -> String {

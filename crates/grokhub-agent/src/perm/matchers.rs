@@ -93,13 +93,25 @@ fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-/// The host of an authority (`[::1]:80` gives `::1`), `%` escapes decoded.
+/// The host of an authority (`[::1]:80` gives `::1`), `%` escapes decoded
+/// and blanks around it trimmed, as web_fetch trims them before it dials
+/// (`https:// evil.test/` dials `evil.test`).
 fn host_part(authority: &str) -> String {
+    let authority = authority.trim();
     let host = match authority.strip_prefix('[') {
         Some(inner) => inner.split(']').next().unwrap_or(""),
         None => authority.split(':').next().unwrap_or(""),
     };
-    percent_decode(host)
+    percent_decode(host).trim().to_string()
+}
+
+/// The scheme a fetch dials: web_fetch sends an `http` URL as `https`.
+fn dialed_scheme(scheme: &str) -> &str {
+    if scheme == "http" {
+        "https"
+    } else {
+        scheme
+    }
 }
 
 fn percent_decode(text: &str) -> String {
@@ -126,8 +138,9 @@ fn percent_decode(text: &str) -> String {
 }
 
 /// A URL glob (`*.github.com`, `https://*.github.com/*`, `docs.rs/serde/*`)
-/// against the URL a fetch dials: the pattern's host part against the host
-/// it dials (and its port, when the pattern names one), the rest against the
+/// against the URL a fetch dials: the pattern's scheme against the scheme
+/// it dials (`http` is sent as `https`), its host part against the host it
+/// dials (and its port, when the pattern names one), the rest against the
 /// path. So a `*` in the host part never reaches past the host.
 pub fn url_glob_matches(pattern: &str, url: &str) -> bool {
     let want = url_parts(pattern.trim());
@@ -138,16 +151,16 @@ pub fn url_glob_matches(pattern: &str, url: &str) -> bool {
     let scheme_hit = want.scheme.as_deref().is_none_or(|scheme| {
         got.scheme
             .as_deref()
-            .is_some_and(|have| glob_match(scheme, have, false))
+            .is_some_and(|have| glob_match(dialed_scheme(scheme), dialed_scheme(have), false))
     });
     if !scheme_hit {
         return false;
     }
     let host = host.trim_end_matches('.').to_lowercase();
-    let want_host = want.authority.trim_end_matches('.').to_lowercase();
+    let want_host = want.authority.trim().trim_end_matches('.').to_lowercase();
     let host_hit = match want_host.rsplit_once(':') {
         Some((name, port)) if !want_host.starts_with('[') || name.ends_with(']') => {
-            let have_port = got.authority.rsplit_once(':').map(|(_, p)| p);
+            let have_port = got.authority.rsplit_once(':').map(|(_, p)| p.trim());
             glob_match(name.trim_matches(['[', ']']), &host, false)
                 && have_port.is_some_and(|p| glob_match(port, p, false))
         }

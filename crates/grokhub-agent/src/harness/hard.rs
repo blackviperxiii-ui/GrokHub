@@ -3577,8 +3577,43 @@ mod tests {
                 "cd ~/.config/GrokHub/routines && cp x.json consent.js?n",
                 ledger.clone(),
             ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json[[:lower:]]",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json$'l'",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json$\"l\"",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.js\\\nonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json{l..l}",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub && echo '{}' | tee -a *.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub/routines && cp x.json *.json",
+                ledger.clone(),
+            ),
+            ("cat ~/.s{s..s}h/id_rsa", floor("forbidden path: ssh keys")),
+            (
+                "cd ~/.config/GrokHub && sed -i 's/x/y/' *",
+                floor("forbidden path: app secrets"),
+            ),
             ("wc -l logs/*.jsonl", None),
             ("wc -l /home/user/GrokHub/logs/*.jsonl", None),
+            ("cd /home/user/GrokHub && wc -l logs/*.jsonl", None),
+            ("cd ~/.config/GrokHub && ls logs", None),
             ("cat */*.json", None),
             ("ls src/consent.*", None),
         ] {

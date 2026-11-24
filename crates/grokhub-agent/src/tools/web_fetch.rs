@@ -537,6 +537,19 @@ mod tests {
             assert_eq!(parse_public_url(u).unwrap().host, "evil.test", "{u}");
             assert!(webfetch_matches(&deny, u), "{u}");
         }
+        // A URL glob too: web_fetch trims the host and dials https for http.
+        let glob = parse_rule("WebFetch(https://evil.test/*)", Action::Deny).unwrap();
+        for u in [
+            "http://evil.test/x",
+            "HTTP://evil.test/x",
+            "https:// evil.test/x",
+            "https://evil.test /x",
+            "https://\u{a0}evil.test/x",
+        ] {
+            let dialed = parse_public_url(u).unwrap();
+            assert_eq!(dialed.display(), "https://evil.test/x", "{u}");
+            assert!(webfetch_matches(&glob, u), "{u}");
+        }
     }
 
     /// With no network installed, web fetch and web search name no sign-in:

@@ -11,9 +11,11 @@
 //! `doas`, `su`, `run0`, which no-new-privileges would break; the OS
 //! password dialog still asks), or the gate classed it hard (the user
 //! approved it on a hard card), which includes a call that sets
-//! `outside_sandbox`. A raise inside a longer command (`cd x && sudo y`)
-//! stays in the sandbox, where it fails: nothing else rides along on its
-//! dialog.
+//! `outside_sandbox`. A raise inside a longer command (`cd x && sudo y`),
+//! with something set or wrapped around it (`PATH=… sudo`, `env sudo`,
+//! `exec -a sudo …`), or from a path that is not a system bin folder
+//! (`./sudo`) stays in the sandbox, where it fails or was never a raise:
+//! nothing rides along on a dialog that never shows.
 //!
 //! Loadout's config folder stays read-only to commands: it holds the
 //! permission policy and the consent ledger, so a command that could write it
@@ -370,9 +372,9 @@ fn isolation(_: &Path, _: &Path, _: Option<&Path>, _: Option<&str>) -> Option<Is
 /// The note for a host the proxy refused.
 const PROXY_ONLY: &str = "[sandbox] The proxy only lets sandboxed commands reach package registries, code hosts, model hosts and hosts your WebFetch allow rules name. For another host, rerun with outside_sandbox (asks the user).";
 
-/// The note for a privilege raise that ran inside the sandbox, as part of a
-/// longer command (see [`raises_privileges`]).
-const RAISE_ALONE: &str = "[sandbox] sudo (or pkexec, doas, su, run0) can't raise privileges inside the sandbox, and it stays inside when it is part of a longer command. Run the privileged command on its own (the password dialog asks), or rerun with outside_sandbox (asks the user).";
+/// The note for a privilege raise that ran inside the sandbox, because it
+/// was not a command of its own (see [`raises_privileges`]).
+const RAISE_ALONE: &str = "[sandbox] sudo (or pkexec, doas, su, run0) can't raise privileges inside the sandbox. It runs outside only as a command of its own that starts with it, with nothing set, wrapped or chained around it (`sudo apt update`). Run it that way (the password dialog asks), or rerun with outside_sandbox (asks the user).";
 
 /// After a failed sandboxed command: when a privilege raise was refused, a
 /// note to run it on its own; when the output reads like a connection that
@@ -556,25 +558,29 @@ pub fn runs_outside(tool: &str, args: &Value) -> bool {
 
 /// Heads that raise privileges; no-new-privileges would make them fail.
 const PRIVILEGE_HEADS: &[&str] = &["sudo", "pkexec", "doas", "su", "run0"];
-/// Wrappers skipped to find the real head of a segment.
-const WRAPPERS: &[&str] = &["env", "nice", "nohup", "time", "command", "exec", "stdbuf"];
 
 /// Whether the whole command is one program run through a privilege raise
 /// (`sudo apt update`): one plain command, with no other command, command
-/// substitution or file redirect beside it, whose head is a privilege head.
-/// Only then does the password dialog stand for all of it.
+/// substitution or file redirect beside it and nothing set or wrapped
+/// around it ([`crate::perm::bare_command`]: no `PATH=…`, `env`, `exec -a`
+/// or `nohup` before it), whose head is the system's own privilege program:
+/// a bare name or one straight in a system bin folder, never `./sudo` or
+/// `/tmp/sudo`. Only then does the password dialog stand for all of it.
 pub fn raises_privileges(command: &str) -> bool {
-    let Some(segs) = crate::perm::analyze(command).segments else {
+    let Some(words) = crate::perm::bare_command(command) else {
         return false;
     };
-    let [seg] = segs.as_slice() else {
+    let Some(head) = words.first() else {
         return false;
     };
-    let head = seg.words.iter().find(|w| {
-        let leaf = w.rsplit('/').next().unwrap_or(w);
-        !WRAPPERS.contains(&leaf) && !w.starts_with('-')
-    });
-    head.is_some_and(|w| PRIVILEGE_HEADS.contains(&w.rsplit('/').next().unwrap_or(w)))
+    // Windows names are case-blind and may end in `.exe`; elsewhere `SUDO`
+    // is another program.
+    let name = if cfg!(windows) {
+        crate::perm::program_name(head)
+    } else {
+        head.rsplit('/').next().unwrap_or(head).to_string()
+    };
+    PRIVILEGE_HEADS.contains(&name.as_str()) && crate::perm::trusted_head(head)
 }
 
 /// Folders the tool caches write to, under the home folder. Only the data

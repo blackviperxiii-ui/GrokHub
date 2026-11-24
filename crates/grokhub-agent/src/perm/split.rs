@@ -61,15 +61,13 @@ pub fn analyze_with(script: &str, powershell: bool) -> Facts {
     analyze_depth(script, powershell, 0)
 }
 
-/// The peeled command when the script is one plain segment. `None` when it does not peel cleanly.
-pub fn peeled_primary(script: &str) -> Option<String> {
-    let facts = analyze(script);
-    let segs = facts.segments?;
-    if segs.len() == 1 {
-        Some(segs[0].command.clone())
-    } else {
-        None
-    }
+/// The words of `script` when it is one plain command run as written: one
+/// segment, with no `NAME=value` before it and no wrapper (`env`, `nice`,
+/// `timeout`, …) peeled off it. `None` otherwise.
+pub fn bare_command(script: &str) -> Option<Vec<String>> {
+    let [seg] = <[Seg; 1]>::try_from(analyze(script).segments?).ok()?;
+    let [raw] = <[RawSeg; 1]>::try_from(split_words(script, cfg!(windows))?).ok()?;
+    (raw.words == seg.words).then_some(seg.words)
 }
 
 /// `words` as one command that reads back as the same words, in sh and in

@@ -1,10 +1,11 @@
 //! Host rails. YOLO skips the prompt, not these.
 //!
 //! A command names a guarded path when any way a shell could read it names
-//! the path (see [`shell_readings`]): quotes and backslash escapes taken
-//! out, `$'…'` decoded, brace lists expanded, and repeated slashes, `.`
-//! parts and `..` steps folded. A glob counts when it could match the path
-//! (see [`glob_names`]).
+//! the path (see [`shell_readings`]): quotes, line continuations and
+//! backslash escapes taken out, `$'…'` decoded, brace lists and sequences
+//! expanded, repeated slashes, `.` parts and `..` steps folded, and words
+//! after a `cd` read inside its folder. A glob counts when it could match
+//! the path (see [`glob_names`]).
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -92,20 +93,34 @@ fn ends_word(c: char) -> bool {
 
 /// The ways a shell could read `cmd`, lowercased: as written with `\` as
 /// `/` (a Windows path), with the quotes taken out (`~/."ssh"`), and with
-/// backslash escapes and `$'…'` decoded (`~/.s\sh`, `$'\x2essh'`). Each
-/// also comes with its brace lists expanded (`.{ssh,x}`) and its paths
-/// folded: repeated slashes, `.` parts and `..` steps (`/etc//shadow`).
+/// line continuations, backslash escapes, `$"…"` and `$'…'` decoded
+/// (`~/.s\sh`, `$'\x2essh'`); on Windows also as PowerShell reads it, a
+/// backtick escaping the next character (`` .s`sh ``). Each also comes with
+/// its brace lists and sequences expanded (`.{ssh,x}`, `.s{s..s}h`) and its
+/// paths folded: repeated slashes, `.` parts and `..` steps (`/etc//shadow`),
+/// and on Windows the trailing dots it drops (`.ssh.`). When the command
+/// changes folder, each also comes read from there ([`after_cd`]).
 pub fn shell_readings(cmd: &str) -> Vec<String> {
+    readings(cmd, cfg!(windows))
+}
+
+/// [`shell_readings`] for Windows (`windows`) or a POSIX shell.
+fn readings(cmd: &str, windows: bool) -> Vec<String> {
     let lower = cmd.to_ascii_lowercase();
     let written = lower.replace('\\', "/");
     let unquoted = written.replace(['\'', '"'], "");
-    let unescaped = unescape(&lower);
+    let unescaped = unescape(cmd);
+    let mut base = vec![written];
+    if windows {
+        base.push(unbacktick(&unquoted));
+    }
+    base.extend([unquoted, unescaped]);
     let mut out: Vec<String> = Vec::new();
-    for reading in [written, unquoted, unescaped] {
+    for reading in base {
         let folded = map_words(&reading, |word| {
             expand_braces(word)
                 .iter()
-                .map(|w| fold_path(w))
+                .map(|w| fold_path(w, windows))
                 .collect::<Vec<_>>()
                 .join(" ")
         });
@@ -114,6 +129,185 @@ pub fn shell_readings(cmd: &str) -> Vec<String> {
                 out.push(r);
             }
         }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let moved: Vec<String> = out
+        .iter()
+        .filter_map(|r| after_cd(r, windows, &mut seen))
+        .collect();
+    out.extend(moved);
+    out
+}
+
+/// Characters that end a word where a shell splits a command.
+fn splits_words(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '`')
+}
+
+/// The words after a `cd <folder>` (or `pushd`, `chdir`, `Set-Location`,
+/// `sl`) in `reading`, each read inside that folder the way the shell opens
+/// it: `cd ~ && cat .*/id_rsa` gives `~/.*/id_rsa`. A word already rooted
+/// (`/x`, `~/x`, `$HOME/x`, `C:/x`) is left out, and so is a plain word
+/// that can't end a guarded path (no `/`, `.`, glob or brace, and not
+/// `shadow` or `sudoers`); in `--opt=value` the value is read. A bare `cd`
+/// goes home. Each word comes once, joined by blanks, and only when no
+/// earlier reading gave it (`seen`); `None` when no word is left.
+fn after_cd(
+    reading: &str,
+    windows: bool,
+    seen: &mut std::collections::HashSet<String>,
+) -> Option<String> {
+    const CD: &[&str] = &["cd", "pushd", "chdir", "set-location", "sl"];
+    let rooted = |w: &str| {
+        w.is_empty() || w.starts_with(['/', '~', '$', '%']) || w.as_bytes().get(1) == Some(&b':')
+    };
+    let mut cwd = Folder::default();
+    let mut moved = false;
+    let mut want_dir = false;
+    let mut out = String::new();
+    let mut word = String::new();
+    // A trailing blank flushes the last word.
+    for c in reading.chars().chain([' ']) {
+        if !splits_words(c) {
+            word.push(c);
+            continue;
+        }
+        if !word.is_empty() {
+            let w = std::mem::take(&mut word);
+            if want_dir && !w.starts_with('-') {
+                cwd.enter(&w, rooted(&w), windows);
+                want_dir = false;
+            } else if CD.contains(&w.as_str()) {
+                want_dir = true;
+                moved = true;
+            } else if moved {
+                let (name, value) = match w.split_once('=') {
+                    Some((name, value)) => (format!("{name}="), value),
+                    None => (String::new(), w.as_str()),
+                };
+                if !rooted(value) && may_end_a_guarded_path(value) {
+                    let read = format!(
+                        "{name}{}",
+                        fold_path(&format!("{}/{value}", cwd.tail()), windows)
+                    );
+                    if seen.insert(read.clone()) {
+                        out.push_str(&read);
+                        out.push(' ');
+                    }
+                }
+            }
+        }
+        if want_dir && matches!(c, ';' | '|' | '&' | '(' | ')' | '`' | '\n' | '\r') {
+            cwd.enter("~", true, windows);
+            want_dir = false;
+        }
+    }
+    out.pop();
+    (!out.is_empty()).then_some(out)
+}
+
+/// Whether a word read inside a folder could end a guarded path: it has a
+/// `/`, `.`, glob or brace in it, or is the last part of one (`shadow`).
+fn may_end_a_guarded_path(word: &str) -> bool {
+    word.contains(['/', '.', '*', '?', '[', '{'])
+        || GLOB_GUARDED
+            .iter()
+            .any(|(path, _)| path.last() == Some(&word))
+}
+
+/// The folder a command `cd`ed to, as path parts (`["", "etc"]` for
+/// `/etc`, `["~", ".config"]`), folded as it goes. Only its last parts are
+/// ever read ([`Folder::tail`]).
+#[derive(Default)]
+struct Folder {
+    parts: Vec<String>,
+}
+
+impl Folder {
+    /// `cd dir`: from the root when `rooted`, else from where it is.
+    fn enter(&mut self, dir: &str, rooted: bool, windows: bool) {
+        if rooted {
+            self.parts.clear();
+        }
+        for (i, part) in dir.split('/').enumerate() {
+            let part = opened_part(part, windows);
+            match part {
+                "" if i == 0 && self.parts.is_empty() => self.parts.push(String::new()),
+                "" | "." => {}
+                // Like `fold_path`: `..` steps back over a plain name, and
+                // the root is its own parent.
+                ".." => match self.parts.last() {
+                    Some(p) if p.is_empty() => {}
+                    Some(p) if p != ".." && !p.starts_with(['~', '$', '%']) => {
+                        self.parts.pop();
+                    }
+                    _ => self.parts.push(part.into()),
+                },
+                part => self.parts.push(squash(part)),
+            }
+        }
+    }
+
+    /// The last three parts, more than a guarded path that ends in the word
+    /// (three parts at most, one of them the word's) or the home folder
+    /// before a dot name (two) needs: `/` for the root, `.` for a folder not
+    /// known (`cd .`).
+    fn tail(&self) -> String {
+        let from = self.parts.len().saturating_sub(3);
+        match self.parts.as_slice() {
+            [] => ".".into(),
+            [root] if root.is_empty() => "/".into(),
+            parts => parts[from..].join("/"),
+        }
+    }
+}
+
+/// A folder part kept short: no guarded name or home marker is longer than
+/// 16 bytes, so a longer plain name reads as `_` (`~_` for a `~user`), and
+/// a longer glob as `*` (`.*` for a dot glob), which reaches every name it
+/// could.
+fn squash(part: &str) -> String {
+    if part.len() <= 16 {
+        return part.to_string();
+    }
+    match (part.contains(['*', '?', '[']), part.starts_with('.')) {
+        (true, true) => ".*".into(),
+        (true, false) => "*".into(),
+        _ if part.starts_with('~') => "~_".into(),
+        _ => "_".into(),
+    }
+}
+
+/// A PowerShell reading of `text` (lowercase, quotes out): a backtick
+/// escapes the next character (`` .s`sh `` reads `.ssh`), and `` `u{73} ``
+/// is that character.
+fn unbacktick(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '`' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        if chars.get(i + 1) == Some(&'u') && chars.get(i + 2) == Some(&'{') {
+            let close = (i + 3..chars.len().min(i + 12)).find(|&j| chars[j] == '}');
+            let ch = close.and_then(|close| {
+                let hex: String = chars[i + 3..close].iter().collect();
+                u32::from_str_radix(&hex, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|ch| (ch.to_ascii_lowercase(), close + 1))
+            });
+            if let Some((ch, next)) = ch {
+                out.push(ch);
+                i = next;
+                continue;
+            }
+        }
+        out.extend(chars.get(i + 1));
+        i += 2;
     }
     out
 }
@@ -125,7 +319,7 @@ fn map_words(text: &str, f: impl Fn(&str) -> String) -> String {
     let mut out = String::with_capacity(text.len());
     let mut word = String::new();
     for c in text.chars() {
-        if c.is_whitespace() || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '`') {
+        if splits_words(c) {
             if !word.is_empty() {
                 out.push_str(&f(&word));
                 word.clear();
@@ -141,10 +335,11 @@ fn map_words(text: &str, f: impl Fn(&str) -> String) -> String {
     out
 }
 
-/// Quotes out and backslash escapes decoded, the way POSIX shells read them,
-/// plus `\xHH` and octal escapes wherever they appear (`$'\x2e'`, and what
-/// `printf` or `echo -e` would print). Reading more than a shell would only
-/// finds more.
+/// `cmd` lowercased with its quotes out (`$"…"` and `$'…'` too), line
+/// continuations dropped and backslash escapes decoded, the way POSIX
+/// shells read them, plus `\xHH`, `\uHHHH`, `\UHHHHHHHH` and octal escapes
+/// wherever they appear (`$'\x2e'`, and what `printf` or `echo -e` would
+/// print). Reading more than a shell would only finds more.
 fn unescape(cmd: &str) -> String {
     let chars: Vec<char> = cmd.chars().collect();
     let mut out = String::with_capacity(cmd.len());
@@ -156,10 +351,10 @@ fn unescape(cmd: &str) -> String {
                 out.extend(ch);
                 i = next;
             }
-            '$' if chars.get(i + 1) == Some(&'\'') => i += 2,
+            '$' if matches!(chars.get(i + 1), Some('\'' | '"')) => i += 2,
             '\'' | '"' => i += 1,
             c => {
-                out.push(c);
+                out.push(c.to_ascii_lowercase());
                 i += 1;
             }
         }
@@ -167,8 +362,9 @@ fn unescape(cmd: &str) -> String {
     out
 }
 
-/// The character a backslash at `chars[i - 1]` stands for, and where the
-/// text goes on.
+/// The character a backslash at `chars[i - 1]` stands for, lowercased, and
+/// where the text goes on. A backslash before a newline continues the line:
+/// the shell drops both.
 fn escaped(chars: &[char], i: usize) -> (Option<char>, usize) {
     let Some(&c) = chars.get(i) else {
         return (None, i);
@@ -186,17 +382,21 @@ fn escaped(chars: &[char], i: usize) -> (Option<char>, usize) {
             .map(|ch| (Some(ch.to_ascii_lowercase()), end))
     };
     let decoded = match c {
+        '\n' => return (None, i + 1),
         'x' => digits(i + 1, 16, 2),
+        'u' => digits(i + 1, 16, 4),
+        'U' => digits(i + 1, 16, 8),
         '0'..='7' => digits(i, 8, 3),
         _ => None,
     };
-    decoded.unwrap_or((Some(c), i + 1))
+    decoded.unwrap_or((Some(c.to_ascii_lowercase()), i + 1))
 }
 
-/// A word with its first brace list expanded, and so on in each result
-/// (`.{ssh,x}` gives `.ssh` and `.x`). At most 64 words, and only for a word
-/// of up to 64 KiB; past that, the word as written and with each brace list
-/// as `*` ([`star_braces`]), a glob that still matches every expansion.
+/// A word with its first brace list or sequence expanded, and so on in each
+/// result (`.{ssh,x}` gives `.ssh` and `.x`, `.s{r..t}h` gives `.srh`,
+/// `.ssh` and `.sth`). At most 64 words, and only for a word of up to
+/// 64 KiB; past that, the word as written and with each brace list as `*`
+/// ([`star_braces`]), a glob that still matches every expansion.
 fn expand_braces(word: &str) -> Vec<String> {
     let too_big = || vec![word.to_string(), star_braces(word)];
     if word.len() > 1 << 16 {
@@ -205,25 +405,90 @@ fn expand_braces(word: &str) -> Vec<String> {
     let mut done = Vec::new();
     let mut todo = vec![word.to_string()];
     while let Some(w) = todo.pop() {
-        match brace_list(&w) {
-            Some((open, close, commas)) if done.len() + todo.len() < 64 => {
-                let mut cuts = vec![open];
-                cuts.extend(commas);
-                cuts.push(close);
-                for pair in cuts.windows(2) {
-                    todo.push(format!(
-                        "{}{}{}",
-                        &w[..open],
-                        &w[pair[0] + 1..pair[1]],
-                        &w[close + 1..]
-                    ));
-                }
-            }
-            Some(_) => return too_big(),
-            None => done.push(w),
+        let (open, close, items) = if let Some((open, close, commas)) = brace_list(&w) {
+            let mut cuts = vec![open];
+            cuts.extend(commas);
+            cuts.push(close);
+            let items: Vec<String> = cuts
+                .windows(2)
+                .map(|pair| w[pair[0] + 1..pair[1]].to_string())
+                .collect();
+            (open, close, items)
+        } else if let Some(seq) = brace_seq(&w) {
+            seq
+        } else {
+            done.push(w);
+            continue;
+        };
+        if items.is_empty() || done.len() + todo.len() + items.len() > 64 {
+            return too_big();
+        }
+        for item in items {
+            todo.push(format!("{}{item}{}", &w[..open], &w[close + 1..]));
         }
     }
     done
+}
+
+/// The first brace sequence in `word` (`{a..e}`, `{1..9..2}`, letters or
+/// whole numbers): where it opens and closes, and its items. No items when
+/// there would be more than 64.
+fn brace_seq(word: &str) -> Option<(usize, usize, Vec<String>)> {
+    let mut open = None;
+    for (j, b) in word.bytes().enumerate() {
+        match b {
+            b'{' => open = Some(j),
+            b'}' => {
+                if let Some(items) = open
+                    .take()
+                    .and_then(|at| seq_items(&word[at + 1..j]).map(|items| (at, items)))
+                {
+                    return Some((items.0, j, items.1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The items of a sequence body such as `a..e` or `9..1..2`; `None` when it
+/// is not one, no items past 64.
+fn seq_items(body: &str) -> Option<Vec<String>> {
+    let mut parts = body.split("..");
+    let (from, to) = (parts.next()?, parts.next()?);
+    let step = match parts.next() {
+        Some(step) => step.parse::<i64>().ok()?.unsigned_abs().max(1),
+        None => 1,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    let letter = |text: &str| match text.as_bytes() {
+        [b] if b.is_ascii_alphabetic() => Some(i128::from(*b)),
+        _ => None,
+    };
+    let (a, b, letters) = match (from.parse::<i64>(), to.parse::<i64>()) {
+        (Ok(a), Ok(b)) => (i128::from(a), i128::from(b), false),
+        _ => (letter(from)?, letter(to)?, true),
+    };
+    let count = (b - a).unsigned_abs() / u128::from(step) + 1;
+    if count > 64 {
+        return Some(Vec::new());
+    }
+    let step = if b < a {
+        -i128::from(step)
+    } else {
+        i128::from(step)
+    };
+    let items = (0..count as i128)
+        .map(|k| a + k * step)
+        .map(|v| match u8::try_from(v) {
+            Ok(byte) if letters => char::from(byte).to_string(),
+            _ => v.to_string(),
+        })
+        .collect();
+    Some(items)
 }
 
 /// The first `{…}` in `word` that holds a top-level comma: where it opens,
@@ -273,13 +538,15 @@ fn star_braces(word: &str) -> String {
 }
 
 /// A path word without empty or `.` parts, each `..` stepping back over a
-/// plain name: `/etc//shadow` and `/etc/x/../shadow` read `/etc/shadow`.
-fn fold_path(word: &str) -> String {
+/// plain name: `/etc//shadow` and `/etc/x/../shadow` read `/etc/shadow`. On
+/// Windows (`windows`) each part also loses the trailing dots it drops when
+/// it opens a path (`.ssh.` opens `.ssh`).
+fn fold_path(word: &str, windows: bool) -> String {
     if !word.contains('/') {
-        return word.to_string();
+        return opened_part(word, windows).to_string();
     }
     let mut parts: Vec<&str> = Vec::new();
-    for part in word.split('/') {
+    for part in word.split('/').map(|part| opened_part(part, windows)) {
         match part {
             "" | "." => {}
             ".." if parts
@@ -296,6 +563,15 @@ fn fold_path(word: &str) -> String {
         format!("/{body}")
     } else {
         body
+    }
+}
+
+/// A path part as the system opens it: on Windows without its trailing
+/// dots (`.ssh.` opens `.ssh`), except a part made only of dots.
+fn opened_part(part: &str, windows: bool) -> &str {
+    match part.trim_end_matches('.') {
+        trimmed if windows && !trimmed.is_empty() => trimmed,
+        _ => part,
     }
 }
 
@@ -332,21 +608,25 @@ pub fn glob_names(reading: &str, path: &[&str]) -> bool {
 
 /// Whether a glob `part` writes out some of `name`, not only wildcards: past
 /// the dot of a dot name (`.ss?`, `.s*`, not `.*`), or before the first dot
-/// of any other name (`consent.json?`, `c*.jsonl`, not `*.jsonl`).
+/// of any other name (`consent.json?`, `c*.jsonl`, not `*.jsonl` or
+/// `[[:alpha:]]*.jsonl`).
 fn pins(part: &str, name: &str) -> bool {
     if name.starts_with('.') {
         return specific_dot_glob(part);
     }
-    let mut class = false;
-    for c in part.chars() {
-        match c {
-            ']' if class => class = false,
-            _ if class => {}
-            '[' => class = true,
+    let chars: Vec<char> = part.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '[' => match class_end(&chars, i) {
+                Some(end) => i = end,
+                None => return true,
+            },
             '.' => return false,
             '*' | '?' => {}
             _ => return true,
         }
+        i += 1;
     }
     false
 }
@@ -380,7 +660,8 @@ fn in_home(before: &[&str]) -> bool {
 }
 
 /// Shell glob match: `*`, `?` and `[…]` classes (`!` or `^` negates, `a-z`
-/// ranges). A `[` without its `]` is a plain character.
+/// ranges, `[:alpha:]` and the other named classes). A `[` without its `]`
+/// is a plain character.
 fn glob_match(pat: &[char], name: &[char]) -> bool {
     let (mut p, mut n) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
@@ -416,7 +697,8 @@ fn glob_match(pat: &[char], name: &[char]) -> bool {
 }
 
 /// Where the class that opens at `pat[open]` closes. A `]` right after the
-/// `[` (or after `[!`) is part of the class.
+/// `[` (or after `[!`) is part of the class, and so is the `]` of a
+/// `[:alpha:]`, `[=a=]` or `[.a.]` inside it.
 fn class_end(pat: &[char], open: usize) -> Option<usize> {
     let mut i = open + 1;
     if matches!(pat.get(i), Some('!' | '^')) {
@@ -425,7 +707,41 @@ fn class_end(pat: &[char], open: usize) -> Option<usize> {
     if pat.get(i) == Some(&']') {
         i += 1;
     }
-    (i..pat.len()).find(|&j| pat[j] == ']')
+    while i < pat.len() {
+        match pat[i] {
+            ']' => return Some(i),
+            '[' => i = inner_end(pat, i).map_or(i + 1, |end| end + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Where a `[:name:]`, `[=c=]` or `[.c.]` that opens at `pat[at]` closes.
+fn inner_end(pat: &[char], at: usize) -> Option<usize> {
+    let kind = *pat.get(at + 1).filter(|c| matches!(c, ':' | '=' | '.'))?;
+    (at + 2..pat.len().saturating_sub(1))
+        .find(|&j| pat[j] == kind && pat[j + 1] == ']')
+        .map(|j| j + 1)
+}
+
+/// Whether the named class (`alpha`, `digit`, …) holds `c`. The reading is
+/// lowercase, so `upper` reads as letters too; a name the floor doesn't
+/// know holds everything.
+fn named_class_has(name: &str, c: char) -> bool {
+    match name {
+        "alpha" | "upper" | "lower" => c.is_ascii_alphabetic(),
+        "alnum" => c.is_ascii_alphanumeric(),
+        "word" => c.is_ascii_alphanumeric() || c == '_',
+        "digit" => c.is_ascii_digit(),
+        "xdigit" => c.is_ascii_hexdigit(),
+        "punct" => c.is_ascii_punctuation(),
+        "space" | "blank" => c.is_whitespace(),
+        "cntrl" => c.is_control(),
+        "graph" => !c.is_control() && !c.is_whitespace(),
+        "print" => !c.is_control(),
+        _ => true,
+    }
 }
 
 /// Whether `c` is in the class body between `[` and `]`.
@@ -437,6 +753,15 @@ fn class_has(body: &[char], c: char) -> bool {
     let mut hit = false;
     let mut i = 0;
     while i < body.len() {
+        if let Some(end) = (body[i] == '[').then(|| inner_end(body, i)).flatten() {
+            let inner: String = body[i + 2..end - 1].iter().collect();
+            hit |= match body[i + 1] {
+                ':' => named_class_has(&inner, c),
+                _ => inner.contains(c),
+            };
+            i = end + 1;
+            continue;
+        }
         if body.get(i + 1) == Some(&'-') && i + 2 < body.len() {
             hit |= (body[i]..=body[i + 2]).contains(&c);
             i += 3;
@@ -1203,6 +1528,10 @@ fn take_cmd_token(rest: &str) -> Option<(&str, &str)> {
 }
 
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
+    forbidden_reason_in(cmd, cfg!(windows))
+}
+
+fn forbidden_reason_in(cmd: &str, windows: bool) -> Option<&'static str> {
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
     if base64_pipe_shell(&c) {
         return Some("base64|shell rebuild");
@@ -1219,10 +1548,9 @@ pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
             return Some(why);
         }
     }
-    let mut readings = shell_readings(cmd);
-    readings.extend(shell_readings(&d));
-    readings
-        .iter()
+    let mut all = readings(cmd, windows);
+    all.extend(readings(&d, windows));
+    all.iter()
         .find_map(|r| forbidden_on(r).or_else(|| glob_forbidden(r)))
 }
 
@@ -1740,6 +2068,124 @@ mod tests {
         }
     }
 
+    /// The floor reads what a shell reads past bracket classes
+    /// (`[[:alpha:]]`), line continuations, `$"…"` and `$'\u…'` strings,
+    /// brace sequences (`{s..s}`) and a `cd` earlier in the command, which
+    /// a bare glob after it is read inside.
+    #[test]
+    fn the_floor_reads_classes_continuations_sequences_and_cd() {
+        let ssh = Some("forbidden path: ssh keys");
+        for cmd in [
+            "cat ~/.[[:alpha:]]sh/id_rsa",
+            "cat ~/.s[[:lower:]]h/id_rsa",
+            "cat ~/.s[[:upper:]]h/id_rsa",
+            "cat ~/.[![:digit:]]sh/id_rsa",
+            "cat ~/.ss\\\nh/id_rsa",
+            "cat ~/.$\"ssh\"/id_rsa",
+            "cat ~/$'.ssh'/id_rsa",
+            r"cat ~/$'\u002essh'/id_rsa",
+            r"cat ~/$'\U0000002essh'/id_rsa",
+            r"cat ~/$'.\x53sh'/id_rsa",
+            "cat ~/.s{s..s}h/id_rsa",
+            "cat ~/.s{a..z}h/id_rsa",
+            "cat ~/.s{a..z..2}h/id_rsa",
+            "cat ~/.s{t..r}h/id_rsa",
+            "cat ~/.s{1..999}h/id_rsa",
+            "cd ~ && cat .*/id_rsa",
+            "cd && cat .*/id_rsa",
+            "cd /home/user; cp -r .* /tmp/x",
+            "cd ~/.config && cd .. && cat .*/id_rsa",
+            "pushd $HOME && tar czf /tmp/x.tgz .*",
+            concat!(
+                "cd /home/a-user-name-longer-than-sixteen-bytes",
+                " && cat .*/id_rsa"
+            ),
+        ] {
+            assert_eq!(forbidden_reason(cmd), ssh, "{cmd}");
+        }
+        for (cmd, why) in [
+            ("cat /etc/[[:lower:]]hadow", "forbidden path: /etc/shadow"),
+            ("cat /etc/s{h..h}adow", "forbidden path: /etc/shadow"),
+            ("cd /etc && cat *", "forbidden path: /etc/shadow"),
+            (
+                "cat ~/.grok/auth.jso[[:alpha:]]",
+                "forbidden path: grok login",
+            ),
+            ("cat ~/.grok/auth.js\\\non", "forbidden path: grok login"),
+            (
+                "cd ~/.config/GrokHub && sed -i 's/x/y/' *",
+                "forbidden path: app secrets",
+            ),
+            (
+                "cd ~/.config/GrokHub/logs && cat ../*.json",
+                "forbidden path: app secrets",
+            ),
+            (
+                "cd ~/.config/GrokHub && grep -r x --include=*",
+                "forbidden path: app secrets",
+            ),
+            (
+                "cd ~/.config/GrokHub/a/b/c/d && cd ../../../.. && cat *",
+                "forbidden path: app secrets",
+            ),
+            (
+                concat!(
+                    "cd ~/.config/GrokHub/a-folder-name-longer-than-sixteen",
+                    " && cd .. && cat *"
+                ),
+                "forbidden path: app secrets",
+            ),
+            ("cd /etc && cat shadow", "forbidden path: /etc/shadow"),
+            ("cd ~/.grok && cat auth.json", "forbidden path: grok login"),
+        ] {
+            assert_eq!(forbidden_reason(cmd), Some(why), "{cmd}");
+        }
+        for cmd in [
+            "grep -n '[[:alpha:]]' notes.txt",
+            "grep -E '^[[:space:]]+$' src/main.rs",
+            "cat ~/.s{x..z}h/id_rsa",
+            "echo {1..5}",
+            "cd src && cat *.rs",
+            "cd ~ && ls",
+            "cd ~/my-app && cat .*rc",
+            "cd /home/user/GrokHub && wc -l logs/*.jsonl",
+            "cd ~/.config && ls *",
+            "cd . && cat *.md",
+            "cd ~/.config/GrokHub/a/b/c/d && cd ../.. && cat *",
+        ] {
+            assert_eq!(forbidden_reason(cmd), None, "{cmd}");
+        }
+    }
+
+    /// Where the shell is PowerShell, a backtick escapes the next character
+    /// (`` .s`sh ``), and Windows drops a trailing dot or blank from a path
+    /// part (`.ssh.`), so the floor reads past both there. Elsewhere `.ssh.`
+    /// is another folder.
+    #[test]
+    fn on_windows_the_floor_reads_backticks_and_trailing_dots() {
+        let ssh = Some("forbidden path: ssh keys");
+        for cmd in [
+            r"Get-Content $env:USERPROFILE\.s`sh\id_rsa",
+            r"Get-Content $env:USERPROFILE\`.ssh\id_rsa",
+            r"Get-Content $env:USERPROFILE\.s`u{73}h\id_rsa",
+            r"type %USERPROFILE%\.ssh.\id_rsa",
+            r"type C:\Users\User\.ssh.",
+        ] {
+            assert_eq!(forbidden_reason_in(cmd, true), ssh, "{cmd}");
+        }
+        assert_eq!(
+            forbidden_reason_in(r"type $env:APPDATA\GrokHub\secrets.json.", true),
+            Some("forbidden path: app secrets")
+        );
+        for cmd in [r"type %USERPROFILE%\.ssh.\id_rsa", "cat ~/.ssh./id_rsa"] {
+            assert_eq!(forbidden_reason_in(cmd, false), None, "{cmd}");
+        }
+        assert_eq!(
+            forbidden_reason(r"type %USERPROFILE%\.ssh.\id_rsa"),
+            if cfg!(windows) { ssh } else { None }
+        );
+    }
+
     #[test]
     fn glob_names_matches_a_window_of_parts() {
         let path = ["grokhub", "consent.jsonl"];
@@ -1769,7 +2215,7 @@ mod tests {
         assert_eq!(brace_list("{a,{b,c}}"), Some((0, 8, vec![2])));
         assert_eq!(brace_list("{a}b,c}"), None);
         assert_eq!(
-            shell_readings(r#"cat ~/."ssh"//id_rsa"#),
+            readings(r#"cat ~/."ssh"//id_rsa"#, false),
             [
                 r#"cat ~/."ssh"//id_rsa"#,
                 r#"cat ~/."ssh"/id_rsa"#,
