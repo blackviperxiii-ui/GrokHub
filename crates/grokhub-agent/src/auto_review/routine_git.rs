@@ -31,12 +31,13 @@ pub(super) fn git_words_are_routine(words: &[String]) -> bool {
     }
 }
 
-/// `fetch` and `pull` options that pick what is fetched or how it is merged.
-/// None names a program, a config value or a transport: `--upload-pack` (and
-/// `-u`, which is `--upload-pack` to `clone`), `-s` (it runs
-/// `git-merge-<name>`), `--edit`, `--gpg-sign` and an interactive rebase
-/// fail closed with every other unlisted spelling.
-const FETCH_BENIGN_FLAGS: &[&str] = &[
+/// The only options a routine `fetch` or `pull` may carry, spelled exactly.
+/// None takes a value from the next word, so every word of the command is
+/// read on its own: an option that takes one (`--depth`, `-j`, whose `pull`
+/// value is optional and must be stuck to it), an abbreviation
+/// (`--upload-p`), a cluster (`-pq`), `--`, and every option that names a
+/// program, a merge strategy, an editor or signing go to the review.
+const FETCH_FLAGS: &[&str] = &[
     "-q",
     "--quiet",
     "-v",
@@ -57,8 +58,6 @@ const FETCH_BENIGN_FLAGS: &[&str] = &[
     "--no-prune",
     "-P",
     "--prune-tags",
-    "-m",
-    "--multiple",
     "--atomic",
     "--dry-run",
     "-k",
@@ -102,85 +101,92 @@ const FETCH_BENIGN_FLAGS: &[&str] = &[
     "--signoff",
 ];
 
-/// Options whose value (the next word, or after `=`) is a count, a date, a
-/// revision, a refspec or an option for the merge, never a program.
-const FETCH_VALUE_FLAGS: &[&str] = &[
-    "-j",
-    "--jobs",
-    "--depth",
-    "--deepen",
-    "--shallow-since",
-    "--shallow-exclude",
-    "--negotiation-tip",
-    "--refmap",
-    "--filter",
-    "-X",
-    "--strategy-option",
-];
-
-/// The remote helpers git ships, by URL scheme. Any other `<scheme>://` or
-/// `<transport>::` remote runs a `git-remote-<name>` program.
-const FETCH_SCHEMES: &[&str] = &["https", "http", "ssh", "git", "file", "git+ssh", "ssh+git"];
-
-/// `git fetch` / `git pull` with listed options and plain remote or refspec
-/// operands. `--` fails closed: after it, a word that reads as an option is
-/// an operand.
+/// `git fetch` / `git pull` as `[<flag>...] [<repository> [<refspec>...]]`
+/// with every flag on [`FETCH_FLAGS`], a plain repository and plain
+/// refspecs. Flags and operands may mix, as git allows. `--multiple`, which
+/// reads every operand as a repository, is not listed.
 fn is_routine_fetch(args: &[String]) -> bool {
-    let mut it = args.iter().map(String::as_str);
-    while let Some(word) = it.next() {
-        if shell_may_expand(word) {
-            return false;
-        }
-        if FETCH_BENIGN_FLAGS.contains(&word) {
-            continue;
-        }
-        if FETCH_VALUE_FLAGS.contains(&word) {
-            if it.next().is_none_or(shell_may_expand) {
-                return false;
-            }
-            continue;
-        }
-        if word.starts_with('-') {
-            // `--depth=1`, `--log=5`: a listed option with its value after `=`.
-            let listed = word
-                .split_once('=')
-                .is_some_and(|(flag, _)| FETCH_VALUE_FLAGS.contains(&flag) || flag == "--log");
-            if !listed {
-                return false;
-            }
-            continue;
-        }
-        if !is_plain_fetch_operand(word) {
-            return false;
-        }
-    }
-    true
+    let mut operands = args
+        .iter()
+        .map(String::as_str)
+        .filter(|word| !FETCH_FLAGS.contains(word));
+    operands.next().is_none_or(is_plain_repository) && operands.all(is_plain_refspec)
 }
 
-/// A glob the shell expands into the workspace's file names before git sees
-/// them, and a cloned repo can hold a file named `--upload-pack=<program>`.
-/// A refspec pattern (`+refs/heads/*:refs/remotes/origin/*`) stays: whatever
-/// it matches starts with `refs/`, never with `-`.
-fn shell_may_expand(word: &str) -> bool {
-    word.contains(['*', '?', '[']) && !word.strip_prefix('+').unwrap_or(word).starts_with("refs/")
+/// A remote name or a local path (no `:`, so git reads no transport into
+/// it), an `https://` or `ssh://` URL, or an scp-style `user@host:path`.
+/// Every part starts with a letter, a digit or `_` where ssh would read a
+/// leading `-` as an option, and no word holds a character the shell
+/// expands (`*`, `?`, `[`, `{`, `~`, `$`) or quotes.
+fn is_plain_repository(word: &str) -> bool {
+    if let Some(rest) = word
+        .strip_prefix("https://")
+        .or_else(|| word.strip_prefix("ssh://"))
+    {
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (login, port) = authority.split_once(':').unwrap_or((authority, ""));
+        let (user, host) = login
+            .split_once('@')
+            .map_or((None, login), |(u, h)| (Some(u), h));
+        return user.is_none_or(is_plain_name)
+            && is_plain_host(host)
+            && port.bytes().all(|b| b.is_ascii_digit())
+            && path.bytes().all(path_byte);
+    }
+    if let Some((login, path)) = word.split_once(':') {
+        let Some((user, host)) = login.split_once('@') else {
+            return false;
+        };
+        return is_plain_name(user)
+            && is_plain_host(host)
+            && path
+                .bytes()
+                .next()
+                .is_some_and(|b| b == b'/' || name_start(b))
+            && path.bytes().all(path_byte);
+    }
+    word.bytes()
+        .next()
+        .is_some_and(|b| b == b'.' || b == b'/' || name_start(b))
+        && word.bytes().all(path_byte)
 }
 
-/// A remote name, a refspec, a local path, or the address of a transport git
-/// ships. ssh reads a user, host or port that starts with `-` as an option of
-/// its own, so that fails closed too.
-fn is_plain_fetch_operand(word: &str) -> bool {
-    if word.contains("::") || word.contains(char::is_whitespace) {
-        return false;
+/// `[+]<ref>[:<ref>]`, each ref a `/`-joined list of plain names: no glob,
+/// no `::` or `://` (a URL `--multiple` would read as a repository), no
+/// leading `-` or `.`.
+fn is_plain_refspec(word: &str) -> bool {
+    let spec = word.strip_prefix('+').unwrap_or(word);
+    let is_ref = |r: &str| r.split('/').all(is_plain_name);
+    match spec.split_once(':') {
+        Some((src, dst)) => is_ref(src) && is_ref(dst),
+        None => is_ref(spec),
     }
-    let address = match word.split_once("://") {
-        Some((scheme, rest)) if FETCH_SCHEMES.contains(&scheme) => rest,
-        Some(_) => return false,
-        None => word,
-    };
-    let authority = address.split('/').next().unwrap_or_default();
-    !authority
-        .split(['@', ':'])
-        .any(|part| part.starts_with('-'))
+}
+
+/// A remote, branch, user or path component: a letter, digit or `_`, then
+/// letters, digits, `_`, `.` and `-`.
+fn is_plain_name(name: &str) -> bool {
+    name.bytes().next().is_some_and(name_start)
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+fn is_plain_host(host: &str) -> bool {
+    host.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphanumeric())
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+}
+
+fn name_start(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn path_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'/')
 }
 
 /// Exact spellings only, so clusters (`-qf`) and abbreviations (`--fo`) fail closed.

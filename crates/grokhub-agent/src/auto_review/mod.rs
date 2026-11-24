@@ -1840,6 +1840,69 @@ mod tests {
         )));
     }
 
+    /// `pull`'s `-j`/`--jobs` value is optional and must be stuck to it, so
+    /// the word after a bare `-j` is an option of its own. The fast path
+    /// reads every word on its own, and each spelling here goes to the judge,
+    /// which blocks it: the program never runs.
+    #[test]
+    fn unattended_auto_loop_sends_a_jobs_upload_pack_pull_to_the_judge() {
+        for (tag, spelling) in [
+            ("j", "git pull -j --upload-pack='touch {}' 4 ."),
+            ("jobs", "git pull --jobs --upload-pack='touch {}' 4 ."),
+            (
+                "timeout",
+                "timeout 5 git pull -j --upload-pack='touch {}' 4 .",
+            ),
+            ("abbrev", "git pull --upload-p='touch {}' ."),
+        ] {
+            let dir = workspace(&format!("jobs-upload-pack-{tag}"));
+            assert!(std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .success());
+            let marker = dir.join("PWNED");
+            let cmd = spelling.replace("{}", &marker.display().to_string());
+            let fake = LoopFake {
+                turns: Mutex::new(vec![
+                    Turn {
+                        text: String::new(),
+                        calls: vec![call(
+                            "g",
+                            "run_terminal_command",
+                            &serde_json::json!({ "command": cmd, "timeout": 10000 }).to_string(),
+                        )],
+                        usage: Usage::default(),
+                    },
+                    done(),
+                ]),
+                judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                judge_usage: Usage::default(),
+                judge_err: false,
+                seen: Mutex::new(Vec::new()),
+            };
+            let permits = Answer {
+                answer: PermAnswer::Deny,
+                asks: AtomicUsize::new(0),
+            };
+            let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+            let ran = marker.exists();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(judge_calls(&fake), 1, "{cmd}");
+            assert_eq!(permits.asks.load(Ordering::SeqCst), 0, "{cmd}");
+            assert!(!ran, "the --upload-pack program ran: {cmd}");
+            assert!(
+                history.iter().any(|item| matches!(
+                    item,
+                    InputItem::FunctionCallOutput { output, .. }
+                        if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                )),
+                "{cmd}"
+            );
+        }
+    }
+
     #[test]
     fn upload_pack_fetch_and_pull_go_to_the_judge() {
         let client = scripted(
@@ -1911,6 +1974,16 @@ mod tests {
             "git pull ?*",
             "git fetch --depth *",
             "bash -c 'git fetch *'",
+            "git pull -j --upload-pack='touch PWNED' 4 .",
+            "git pull --jobs --upload-pack='touch PWNED' 4 .",
+            "timeout 5 git pull -j --upload-pack=touch 4 .",
+            "git pull -j -S 4 .",
+            "git fetch -j --upload-pack=touch 4 .",
+            "git pull -X --upload-pack=touch .",
+            "git pull --upload-p=touch .",
+            "git pull origin -- --upload-pack=touch",
+            "git -c alias.sync='!touch PWNED' sync",
+            "git -c alias.pull='!touch PWNED' pull",
         ] {
             assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
         }
