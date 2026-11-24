@@ -187,6 +187,22 @@ impl AskRead {
     pub fn effort_name(&self) -> &'static str {
         rung_name(self.effort)
     }
+
+    /// Light chat the device answers as well as the cloud: a greeting, a
+    /// quick fact, everyday talk, a story or an explanation, with nothing
+    /// at stake. Research needs the web; code and reasoning need the
+    /// stronger model.
+    pub fn light_chat(&self) -> bool {
+        self.stakes == Stakes::None
+            && matches!(
+                self.kind,
+                AskKind::Greeting
+                    | AskKind::QuickFact
+                    | AskKind::Chat
+                    | AskKind::Creative
+                    | AskKind::Explain
+            )
+    }
 }
 
 const NONE: usize = 0;
@@ -520,7 +536,7 @@ const CODE_TOKENS: &[&str] = &[
 const CODE_EXTS: &[&str] = &[
     ".rs", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".java", ".kt", ".cpp", ".cc", ".c", ".h",
     ".hpp", ".cs", ".rb", ".php", ".swift", ".lua", ".sh", ".ps1", ".sql", ".toml", ".yaml",
-    ".yml", ".json", ".html", ".css", ".scss", ".vue", ".svelte", ".zig", ".dart",
+    ".yml", ".json", ".html", ".css", ".scss", ".vue", ".svelte", ".zig", ".dart", ".md",
 ];
 
 const EDIT_VERBS: &[&str] = &[
@@ -666,7 +682,7 @@ const TRACE: &[&str] = &[
     "error[e",
     "exception in thread",
     "at line ",
-    " line ",
+    ", line ",
     "stack backtrace",
     "core dumped",
     "exit code",
