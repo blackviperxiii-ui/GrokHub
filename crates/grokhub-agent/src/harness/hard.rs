@@ -2032,11 +2032,20 @@ fn in_cabin_instructions(parts: &[String]) -> bool {
         }
         _ => parts,
     };
-    if config.is_empty() || parts.len() <= config.len() {
-        return false;
-    }
-    parts.iter().zip(&config).all(|(a, b)| a == b)
-        && matches!(parts[config.len()].as_str(), "skills" | "memory")
+    // `skills` or `memory` right after `root` plus `skip` more parts.
+    let under = |root: &[&str], skip: usize| {
+        !root.is_empty()
+            && parts.len() > root.len() + skip
+            && parts.iter().zip(root).all(|(a, b)| a == b)
+            && matches!(parts[root.len() + skip].as_str(), "skills" | "memory")
+    };
+    // In an agent's turn the config folder is its home: the app's own
+    // folders and every other agent's home stay guarded too.
+    let app = norm_path(&crate::perm::app_config_dir().display().to_string());
+    let app: Vec<&str> = app.split('/').filter(|part| !part.is_empty()).collect();
+    let in_homes =
+        parts.get(app.len()).map(String::as_str) == Some(grokhub_core::agent_team::HOMES_DIR);
+    under(&config, 0) || under(&app, 0) || (in_homes && under(&app, 2))
 }
 
 /// A write, edit or non-read-only command that names the agent's settings.
@@ -4714,6 +4723,54 @@ mod tests {
             HardClass::parse("agent_config"),
             Some(HardClass::AgentConfig)
         );
+    }
+
+    #[test]
+    fn an_agent_cant_write_the_apps_or_another_agents_skills_or_memory() {
+        use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+        let app = std::env::temp_dir().join(format!("gh-hard-agent-{}", std::process::id()));
+        let kid = app.join("agents").join("kid");
+        std::fs::create_dir_all(&kid).unwrap();
+        TeamFile {
+            version: VERSION,
+            agents: vec![
+                Profile::new(Kind::Family, "kid", "Kid"),
+                Profile::new(Kind::Role, "planner", "Planner"),
+            ],
+            teams: vec![],
+        }
+        .save(&app)
+        .unwrap();
+        let _cfg = crate::perm::ConfigGuard::set(&kid);
+        let write = |p: &std::path::Path| {
+            serde_json::json!({ "path": p.display().to_string(), "content": "x" }).to_string()
+        };
+        for path in [
+            kid.join("skills/new/run.sh"),
+            app.join("skills/new/run.sh"),
+            app.join("memory/USER.md"),
+            app.join("agents/planner/skills/x/run.sh"),
+            app.join("agents/planner/memory/notes.txt"),
+        ] {
+            assert_eq!(
+                hard_class("write", &write(&path)),
+                Some(HardClass::AgentConfig),
+                "{}",
+                path.display()
+            );
+        }
+        for path in [
+            kid.join("work/skills.txt"),
+            app.join("agents/planner/work/a.txt"),
+        ] {
+            assert_ne!(
+                hard_class("write", &write(&path)),
+                Some(HardClass::AgentConfig),
+                "{}",
+                path.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&app);
     }
 
     #[test]

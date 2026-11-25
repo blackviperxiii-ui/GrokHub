@@ -19,6 +19,27 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 #[test]
+fn an_agents_home_uses_the_apps_sandbox_settings() {
+    use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+    let app = scratch("agent-settings");
+    let home = app.join("agents").join("kid");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(app.join(CONFIG_NAME), "auto_allow = false\n").unwrap();
+    // Before the team file lists it, the folder is its own (no file: defaults).
+    assert!(settings(&home).auto_allow);
+    TeamFile {
+        version: VERSION,
+        agents: vec![Profile::new(Kind::Family, "kid", "Kid")],
+        teams: vec![],
+    }
+    .save(&app)
+    .unwrap();
+    assert!(!settings(&home).auto_allow);
+    assert!(!settings(&app).auto_allow);
+    let _ = std::fs::remove_dir_all(&app);
+}
+
+#[test]
 fn settings_default_on_and_the_file_can_widen_or_turn_it_off() {
     assert_eq!(parse_file("", None), Settings::default());
     assert!(Settings::default().enabled && Settings::default().network_guard);
