@@ -1,0 +1,1 @@
+- Tests: accepted MCP elicitation never counts as tool-call approval.
