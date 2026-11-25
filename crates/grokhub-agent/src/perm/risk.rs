@@ -444,11 +444,20 @@ fn git_verb_index(words: &[String]) -> Option<usize> {
         if !tok.starts_with('-') {
             return Some(i);
         }
+        // Any folder but `.` may hold a repository of its own (a bare one
+        // is plain files a clone can carry), whose config names programs a
+        // read runs: a text conversion, a signature check, an fsmonitor.
         if tok == "-C" {
+            if words.get(i + 1).map(String::as_str) != Some(".") {
+                return None;
+            }
             i += 2;
             continue;
         }
         if tok.starts_with("-C") && !tok.starts_with("--") && tok.len() > 2 {
+            if tok != "-C." {
+                return None;
+            }
             i += 1;
             continue;
         }

@@ -345,6 +345,10 @@ fn strip_one(words: &[String]) -> Strip {
     }
 }
 
+/// `env`'s wrapped command. Changing the folder it runs in (`-C`), the
+/// path its name is looked up on (`-P`) or the name it runs under (`-a`,
+/// which git reads its command from) makes it a command the words don't
+/// show, so the segment earns no pass, as with an unvetted variable.
 fn strip_env(words: &[String]) -> Strip {
     let mut i = 1usize;
     let mut risk = EnvRisk::Safe;
@@ -400,6 +404,9 @@ fn strip_env(words: &[String]) -> Strip {
                 if words.get(i + 1).is_none() {
                     return Strip::Opaque { payload: None };
                 }
+                if tok != "--unset" {
+                    risk = worse(risk, EnvRisk::Unvetted);
+                }
                 i += 2;
                 continue;
             }
@@ -408,6 +415,9 @@ fn strip_env(words: &[String]) -> Strip {
                 || tok.starts_with("--path=")
                 || tok.starts_with("--argv0=")
             {
+                if !tok.starts_with("--unset=") {
+                    risk = worse(risk, EnvRisk::Unvetted);
+                }
                 i += 1;
                 continue;
             }
@@ -433,6 +443,9 @@ fn strip_env(words: &[String]) -> Strip {
                     return Strip::Opaque { payload };
                 }
                 'u' | 'C' | 'P' | 'a' => {
+                    if chars[idx] != 'u' {
+                        risk = worse(risk, EnvRisk::Unvetted);
+                    }
                     let glued = idx + 1 < chars.len();
                     if glued {
                         i += 1;

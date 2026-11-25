@@ -1903,6 +1903,164 @@ mod tests {
         }
     }
 
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=user", "-c", "user.email=user@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A workspace whose files hold two bare repositories, as plain files a
+    /// clone can carry: `vendor/evil`, whose config names the ssh program a
+    /// fetch from `origin` runs, and `vendor/hist`, whose config and
+    /// attributes name the text conversion `log -p` runs. Each writes its
+    /// marker in the workspace.
+    fn planted_repositories(tag: &str) -> PathBuf {
+        let dir = workspace(tag);
+        git_ok(&dir, &["init", "-q"]);
+        let slashed = |name: &str| dir.join(name).display().to_string().replace('\\', "/");
+        let evil = dir.join("vendor/evil");
+        std::fs::create_dir_all(evil.join("objects")).unwrap();
+        std::fs::create_dir_all(evil.join("refs")).unwrap();
+        std::fs::write(evil.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            evil.join("config"),
+            format!(
+                "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
+                 \tsshCommand = touch '{}' #\n\
+                 [remote \"origin\"]\n\turl = git@example.invalid:x.git\n",
+                slashed("SSH_RAN")
+            ),
+        )
+        .unwrap();
+        let src = dir.join("src-history");
+        std::fs::create_dir_all(&src).unwrap();
+        git_ok(&src, &["init", "-q"]);
+        for n in ["1", "2"] {
+            std::fs::write(src.join("a.txt"), n).unwrap();
+            git_ok(&src, &["add", "a.txt"]);
+            git_ok(&src, &["commit", "-q", "-m", n]);
+        }
+        git_ok(
+            &dir,
+            &["clone", "-q", "--bare", "src-history", "vendor/hist"],
+        );
+        let hist = dir.join("vendor/hist");
+        std::fs::create_dir_all(hist.join("info")).unwrap();
+        std::fs::write(hist.join("info/attributes"), "* diff=x\n").unwrap();
+        let mut config = std::fs::read_to_string(hist.join("config")).unwrap();
+        config.push_str(&format!(
+            "[diff \"x\"]\n\ttextconv = touch '{}'; cat\n",
+            slashed("TEXTCONV_RAN")
+        ));
+        std::fs::write(hist.join("config"), config).unwrap();
+        dir
+    }
+
+    /// A git command pointed at another folder (`git -C`, `env -C`, `env
+    /// --chdir`) reads the repository there, so a bare one the workspace
+    /// carries chooses the programs it runs. Each spelling goes to the
+    /// judge, which blocks it: no card, and neither program runs.
+    #[test]
+    fn unattended_auto_loop_sends_git_pointed_at_another_folder_to_the_judge() {
+        for (tag, cmd) in [
+            ("env-c", "env -C vendor/evil git fetch origin"),
+            ("env-chdir-eq", "env --chdir=vendor/evil git fetch origin"),
+            ("env-chdir", "env --chdir vendor/evil git pull origin main"),
+            ("env-c-glued", "env -Cvendor/evil git fetch origin"),
+            ("git-c-log", "git -C vendor/hist log -p -n1"),
+            ("git-c-show", "git -C vendor/hist show"),
+            ("env-c-log", "env -C vendor/hist git log -p -n1"),
+        ] {
+            let dir = planted_repositories(&format!("pointed-{tag}"));
+            let fake = LoopFake {
+                turns: Mutex::new(vec![
+                    Turn {
+                        text: String::new(),
+                        calls: vec![call(
+                            "g",
+                            "run_terminal_command",
+                            &serde_json::json!({ "command": cmd, "timeout": 10000 }).to_string(),
+                        )],
+                        usage: Usage::default(),
+                    },
+                    done(),
+                ]),
+                judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                judge_usage: Usage::default(),
+                judge_err: false,
+                seen: Mutex::new(Vec::new()),
+            };
+            let permits = Answer {
+                answer: PermAnswer::Deny,
+                asks: AtomicUsize::new(0),
+            };
+            let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+            let ran = ["SSH_RAN", "TEXTCONV_RAN"].map(|marker| dir.join(marker).exists());
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(judge_calls(&fake), 1, "{cmd}");
+            assert_eq!(permits.asks.load(Ordering::SeqCst), 0, "{cmd}");
+            assert_eq!(ran, [false, false], "a planted program ran: {cmd}");
+            assert!(
+                history.iter().any(|item| matches!(
+                    item,
+                    InputItem::FunctionCallOutput { output, .. }
+                        if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                )),
+                "{cmd}"
+            );
+        }
+    }
+
+    /// The gate's read-only pass runs a read with no judge and no card in
+    /// any mode. It stops at a git read pointed at another folder too, so a
+    /// supervised run shows the card; a read that stays put still runs.
+    #[test]
+    fn a_git_read_pointed_at_another_folder_asks_and_one_that_stays_put_runs() {
+        let gate = Gate {
+            mode: PermMode::Ask,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        let policy = Policy::empty();
+        let ws = Path::new("/home/user/my-app");
+        let decide = |cmd: &str| {
+            let args = serde_json::json!({ "command": cmd }).to_string();
+            gate::decide_with(
+                &gate,
+                "run_terminal_command",
+                &args,
+                false,
+                None,
+                ws,
+                Some(&policy),
+            )
+        };
+        for cmd in [
+            "git -C vendor/hist log -p -n1",
+            "git -Cvendor/hist show",
+            "env -C vendor/hist git log -p -n1",
+            "env --chdir=vendor/hist git show",
+            "env -P vendor/bin git status",
+            "env --argv0=git-rm git status",
+        ] {
+            assert_eq!(decide(cmd), Decision::Ask, "{cmd}");
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+        }
+        for cmd in [
+            "git -C . log -p -n1",
+            "git log -p -n1",
+            "env -u PAGER git log -n1",
+        ] {
+            assert_eq!(decide(cmd), Decision::Run, "{cmd}");
+            assert!(command_fast_allows(cmd), "{cmd} should fast-allow");
+        }
+    }
+
     #[test]
     fn upload_pack_fetch_and_pull_go_to_the_judge() {
         let client = scripted(

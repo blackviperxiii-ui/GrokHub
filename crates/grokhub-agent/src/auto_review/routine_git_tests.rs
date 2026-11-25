@@ -286,3 +286,30 @@ fn everyday_fetch_and_pull_stay_routine() {
         assert!(git_words_are_routine(&words(cmd)), "{cmd}");
     }
 }
+
+/// A read pointed at another folder reads that folder's repository, whose
+/// config can name a text conversion or a signature check the read runs.
+/// Only `-C .`, which stays put, keeps the read routine.
+#[test]
+fn a_read_pointed_at_another_folder_is_not_routine() {
+    for cmd in [
+        "git -C vendor/hist log -p -n1",
+        "git -C vendor/hist show",
+        "git -C ../other diff",
+        "git -C /home/user/my-app status",
+        "git -Cvendor/hist log -p",
+        "git --no-pager -C vendor/hist grep needle",
+        "git -C . -C vendor/hist log",
+    ] {
+        assert!(
+            !git_words_are_routine(&words(cmd)),
+            "{cmd} must not be routine"
+        );
+    }
+    for cmd in ["git -C . log -p -n1", "git -C. status", "git log -p -n1"] {
+        assert!(
+            git_words_are_routine(&words(cmd)),
+            "{cmd} should be routine"
+        );
+    }
+}
