@@ -79,7 +79,10 @@ fn a_bundle_of_a_chat_full_of_secrets_holds_none_of_them() {
     assert_eq!(export.turns.len(), 1);
     let all = every_text(&export);
     for secret in LEAKS {
-        assert!(!all.contains(secret), "{secret} leaked into the bundle");
+        assert!(
+            !all.contains(secret),
+            "a secret leaked into the diagnostics bundle"
+        );
     }
     // Redacted, not dropped: the turn is still there with its home path as ~-style /home/user.
     assert!(all.contains("/home/user/notes"), "{all}");
@@ -158,7 +161,10 @@ fn preview_needs_the_mode_and_copy_summary_is_the_cabins_line() {
         shown.summary
     );
     for secret in LEAKS {
-        assert!(!shown.markdown.contains(secret), "{secret}");
+        assert!(
+            !shown.markdown.contains(secret),
+            "a secret leaked into the diagnostics markdown"
+        );
     }
 }
 

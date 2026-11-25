@@ -512,10 +512,7 @@ mod tests {
         assert!(asked.iter().all(|u| !u.contains(KEY)));
         assert!(acct.missing.is_empty());
         assert_eq!(acct.fetched_ms, 5);
-        assert_eq!(
-            acct.account_line(),
-            "2,000 hours played, fractal level 62, WvW rank 1,204. 2 characters, most played a level 80 Guardian. 1,234g 56s 78c, 2,100,000 karma. 2 achievements done. 3 raid bosses cleared this week."
-        );
+        assert!((acct.account_line()) == ("2,000 hours played, fractal level 62, WvW rank 1,204. 2 characters, most played a level 80 Guardian. 1,234g 56s 78c, 2,100,000 karma. 2 achievements done. 3 raid bosses cleared this week."));
     }
 
     #[test]
@@ -532,10 +529,7 @@ mod tests {
         assert_eq!(acct.characters, None);
         assert_eq!(acct.coin, None);
         assert_eq!(acct.missing, vec!["characters", "progression", "wallet"]);
-        assert_eq!(
-            acct.account_line(),
-            "2,000 hours played, fractal level 62, WvW rank 1,204."
-        );
+        assert!((acct.account_line()) == ("2,000 hours played, fractal level 62, WvW rank 1,204."));
         let no_account = r#"{"permissions":["characters"]}"#;
         let (got, _) = run(&[(Endpoint::TokenInfo, Ok(no_account))]);
         assert!(matches!(got, Err(FetchError::BadKey(_))));
