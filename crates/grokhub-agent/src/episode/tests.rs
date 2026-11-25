@@ -41,6 +41,8 @@ enum Act {
     Zoom(&'static str),
     /// Reads this workspace file.
     Read(&'static str),
+    /// Reads two workspace files, then clicks, in one batch.
+    ReadsAndClick(&'static str, &'static str),
     Reads(usize),
     Done,
     /// Done, with a `VERIFY_OK` of its own: no detector finding on a reject.
@@ -219,6 +221,14 @@ impl ModelClient for FakeModel {
             Act::Read(path) => (
                 String::new(),
                 vec![call(n, "read_file", json!({"target_file": path}))],
+            ),
+            Act::ReadsAndClick(a, b) => (
+                String::new(),
+                vec![
+                    call(n, "read_file", json!({"target_file": a})),
+                    call(n + 100, "read_file", json!({"target_file": b})),
+                    call(n + 200, "click", json!({"x": 5, "y": 40})),
+                ],
             ),
             Act::Reads(k) => (
                 String::new(),
@@ -970,9 +980,9 @@ fn an_episode_past_30_minutes_keeps_going() {
     );
 }
 
-/// Gap 8: a stuck episode stops. Clicks that change nothing re-plan after
-/// every 5th; the third re-plan in a row with nothing moved ends it with a
-/// note that names the goal and the reason, before any check runs.
+/// A stuck episode stops. Clicks that change nothing re-plan after every
+/// 5th; the third re-plan in a row with nothing moved ends it with a note
+/// that names the goal and the reason, before any check runs.
 #[test]
 fn clicks_that_change_nothing_replan_twice_then_the_third_ends_with_a_named_note() {
     let mut r = rig("stall", clicks_then_done(20));
@@ -1050,6 +1060,50 @@ fn clicks_that_change_nothing_replan_twice_then_the_third_ends_with_a_named_note
         (EPISODE_TOOL, "end", "unconfirmed")
     );
     assert_eq!(ep.ended, Some(EpisodeEnd::Unconfirmed));
+    assert_eq!(
+        ep.replans,
+        Some((3, "no_progress: 5 steps in a row changed nothing".into()))
+    );
+}
+
+/// Looking is not progress: a still screen with a fresh screenshot every
+/// sixth step re-plans after each five still clicks, and the third
+/// re-plan still ends it.
+#[test]
+fn screenshots_between_still_clicks_do_not_reset_the_replan_count() {
+    let mut r = rig(
+        "stall-shots",
+        Box::new(|n| match n {
+            n if n >= 60 => Act::Done,
+            n if n % 6 == 0 => Act::Shot,
+            n => Act::Click(n as u32),
+        }),
+    );
+    r.desk.still = true;
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Unconfirmed));
+    assert_eq!(
+        out.reply,
+        "Couldn't finish: Turn on Wi-Fi in Settings — stopped after 3 re-plans without progress \
+         (no_progress: 5 steps in a row changed nothing)"
+    );
+    // Shots at calls 0, 6 and 12; still clicks 1-5, 7-11 and 13-17.
+    assert_eq!(r.model.worker_calls.lock().unwrap().len(), 18);
+    assert_eq!(r.desk.count("click"), 15);
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 0);
+    let replans = recoveries(&r.spans());
+    assert_eq!(
+        replans,
+        vec![
+            (
+                "replan".to_string(),
+                "no_progress".to_string(),
+                "no_progress: 5 steps in a row changed nothing".to_string()
+            );
+            2
+        ]
+    );
     assert_eq!(
         ep.replans,
         Some((3, "no_progress: 5 steps in a row changed nothing".into()))
@@ -1282,7 +1336,7 @@ fn zoom_opens_a_fold_into_its_two_children_and_a_step_into_its_raw_span() {
     assert_eq!(r.desk.count("click"), 12);
 }
 
-/// Gap 1: the worker's next steps see a read's head and tail (redacted),
+/// The worker's next steps see a read's head and tail (redacted),
 /// past the 120 chars its step line and span keep. A click leaves it there;
 /// the next read replaces it.
 #[test]
@@ -1351,7 +1405,51 @@ fn a_read_reaches_the_next_steps_head_and_tail_redacted_while_spans_keep_120() {
     assert_eq!(STEP_RESULT_CAP, 120);
 }
 
-/// Gap 1: what `zoom` opens reaches the next step whole, not 120 chars of it.
+/// One batch is one slot: two reads and a click in one turn both reach
+/// the next step, sharing the cap; the next batch's read replaces both.
+#[test]
+fn every_read_of_a_sequential_batch_reaches_the_next_step() {
+    let r = rig(
+        "batch-output",
+        Box::new(|n| match n {
+            0 => Act::ReadsAndClick("a.txt", "b.txt"),
+            1 => Act::Read("a.txt"),
+            _ => Act::Done,
+        }),
+    );
+    std::fs::write(r.dir.join("a.txt"), "alpha line\n").unwrap();
+    let b = format!("{}B-TAIL\n", format!("{}\n", "b".repeat(100)).repeat(30));
+    std::fs::write(r.dir.join("b.txt"), b).unwrap();
+    let mut ep = r.episode("Find the config file");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.desk.count("click"), 1);
+    let nows = nows(&r.model);
+    assert_eq!(nows.len(), 3);
+    assert!(
+        nows[1].contains("Latest output of [s1] read_file:\n1|alpha line\nLatest output of [s2] read_file:\n1|bbb"),
+        "{}",
+        nows[1]
+    );
+    // Each of the two gets half of OUTPUT_PROMPT_CAP: b.txt (3,120 chars
+    // read) is clipped to 2,000 with its tail kept.
+    assert!(
+        nows[1].contains("\n[… 1120 chars clipped …]\n"),
+        "{}",
+        nows[1]
+    );
+    assert!(nows[1].contains("31|B-TAIL\n(Read a smaller part to see what was clipped.)\n"));
+    assert!(!nows[1].contains("[s3]"), "the click holds nothing");
+    assert_eq!(
+        nows[2].matches("Latest output of [").count(),
+        1,
+        "{}",
+        nows[2]
+    );
+    assert!(nows[2].contains("Latest output of [s4] read_file:\n1|alpha line\n"));
+}
+
+/// What `zoom` opens reaches the next step whole, not 120 chars of it.
 #[test]
 fn zoom_output_reaches_the_next_step_whole() {
     let r = rig(
@@ -1537,8 +1635,8 @@ fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
     assert!(new_episode_id(T0).starts_with("ep-1a3185c5000-"));
 }
 
-/// Gap 8: re-plans count up until a step moves or the user steers; a park
-/// is neutral. The third in a row says the episode is stuck.
+/// Re-plans count up until a step moves or the user steers; a park is
+/// neutral. The third in a row says the episode is stuck.
 #[test]
 fn note_replan_ends_on_the_third_with_nothing_moving_and_a_move_or_a_steer_starts_over() {
     assert_eq!(REPLAN_END, 3);
@@ -2242,7 +2340,7 @@ fn a_screenshot_that_fails_on_one_backend_never_pauses_and_no_backend_at_all_pau
     let one = Rig { desk, ..one };
     let mut ep = one.episode("Open the Settings");
     // Six failed captures in a row re-plan at the 2nd, 4th and 6th: the
-    // third re-plan with nothing moved ends the episode (gap 8).
+    // third re-plan with nothing moved ends the episode.
     let out = one.run(&mut ep, &mut EpisodeView::default());
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Unconfirmed));
     assert_eq!(
@@ -2295,8 +2393,8 @@ fn send_clicks(r: &Rig) -> usize {
         .count()
 }
 
-/// Gap 8: a stuck episode ends fail-closed: the card still waiting is
-/// withdrawn and denied with a span, and the Send never runs.
+/// A stuck episode ends fail-closed: the card still waiting is withdrawn
+/// and denied with a span, and the Send never runs.
 #[test]
 fn a_stuck_episode_denies_its_waiting_card_and_never_sends() {
     let mut r = rig(
