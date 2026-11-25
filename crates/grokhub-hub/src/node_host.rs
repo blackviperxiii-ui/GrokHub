@@ -155,7 +155,12 @@ impl Relay {
             lane.polling += 1;
         }
         let got = loop {
-            if let Some(rpc) = lanes.entry(id.to_string()).or_default().queue.pop_front() {
+            // The lane is gone only when the companion was removed: answer
+            // now, so its next poll hears that instead of waiting it out.
+            let Some(lane) = lanes.get_mut(id) else {
+                return Ok(None);
+            };
+            if let Some(rpc) = lane.queue.pop_front() {
                 break Some(rpc);
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -168,9 +173,10 @@ impl Relay {
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
         };
-        let lane = lanes.entry(id.to_string()).or_default();
-        lane.polling = lane.polling.saturating_sub(1);
-        lane.last_poll = Some(Instant::now());
+        if let Some(lane) = lanes.get_mut(id) {
+            lane.polling = lane.polling.saturating_sub(1);
+            lane.last_poll = Some(Instant::now());
+        }
         Ok(got)
     }
 
@@ -358,27 +364,6 @@ fn accept_loop(server: &Server, shared: &Arc<Shared>) {
     }
 }
 
-/// Companions reach the host from the home network, a VPN such as
-/// Tailscale (100.64.0.0/10), or this computer. Nothing from the internet.
-pub fn lan_peer(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || (a == 100 && (64..128).contains(&b))
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return lan_peer(IpAddr::V4(v4));
-            }
-            let first = v6.segments()[0];
-            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
-        }
-    }
-}
-
 fn error(req: Request, status: u16, text: &str) -> Result<(), ()> {
     send_json(req, status, json!({ "ok": false, "error": text }))
 }
@@ -393,7 +378,7 @@ fn handle(shared: &Shared, mut req: Request) -> Result<(), ()> {
     if let Some(id) = rest.strip_prefix("/mcp/") {
         return mcp(shared, req, id, from);
     }
-    if !from.is_some_and(lan_peer) {
+    if !from.is_some_and(nodes::private_address) {
         return error(req, 403, "Companions pair from the same network.");
     }
     // A page in a browser on the network must not pair or poll: only the
@@ -779,8 +764,19 @@ mod tests {
             "{saved}"
         );
 
-        // Removed: the token stops working at once.
+        // Removed: a poll it holds ends at once, and its token stops working.
+        let held = std::thread::spawn({
+            let token = token.clone();
+            move || {
+                let at = Instant::now();
+                (http(port, "GET", "/node/v1/next", &token, ""), at.elapsed())
+            }
+        });
+        std::thread::sleep(Duration::from_millis(200));
         assert!(host.remove("pixel"));
+        let ((status, v), took) = held.join().expect("poll");
+        assert_eq!((status, v.get("rpc")), (200, None));
+        assert!(took < Duration::from_secs(5), "the poll waited {took:?}");
         let (status, _) = http(port, "GET", "/node/v1/next", &token, "");
         assert_eq!(status, 401);
         let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
@@ -1008,7 +1004,7 @@ mod tests {
             "::ffff:192.168.1.5",
         ];
         for ip in ok {
-            assert!(lan_peer(ip.parse().expect("ip")), "{ip}");
+            assert!(nodes::private_address(ip.parse().expect("ip")), "{ip}");
         }
         for ip in [
             "8.8.8.8",
@@ -1016,7 +1012,7 @@ mod tests {
             "2606:4700::1111",
             "::ffff:8.8.8.8",
         ] {
-            assert!(!lan_peer(ip.parse().expect("ip")), "{ip}");
+            assert!(!nodes::private_address(ip.parse().expect("ip")), "{ip}");
         }
     }
 

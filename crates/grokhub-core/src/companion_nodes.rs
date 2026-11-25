@@ -189,18 +189,7 @@ impl Book {
     /// guess from the real token offline.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        crate::state::write_private_synced(&tmp, &bytes)?;
-        std::fs::rename(&tmp, path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            e.to_string()
-        })?;
-        #[cfg(windows)]
-        crate::win_acl::restrict_user_only(path);
-        Ok(())
+        write_private(path, &bytes)
     }
 
     /// A new one-time code for the next companion.
@@ -313,6 +302,75 @@ impl Book {
         let before = self.companions.len();
         self.companions.retain(|c| c.id != id);
         self.companions.len() != before
+    }
+}
+
+/// Write `bytes` to `path` readable by this user only, through a synced
+/// temp file so a crash leaves the old file or the new one.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    crate::state::write_private_synced(&tmp, bytes)?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    #[cfg(windows)]
+    crate::win_acl::restrict_user_only(path);
+    Ok(())
+}
+
+/// Companions and their host talk only over the home network, link-local,
+/// a VPN such as Tailscale (100.64.0.0/10), or this computer.
+pub fn private_address(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || (a == 100 && (64..128).contains(&b))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return private_address(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// The companion's side of a pairing, in its own config dir (0600): where
+/// the host is, the token, and what its person offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeFile {
+    /// `ip:port` of the host.
+    pub host: String,
+    pub host_name: String,
+    pub id: String,
+    pub name: String,
+    pub token: String,
+    #[serde(default)]
+    pub offers: Vec<String>,
+}
+
+/// The companion's file, under its config dir.
+pub const NODE_FILE: &str = "companion-node.json";
+
+impl NodeFile {
+    pub fn load(path: &Path) -> Option<NodeFile> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        write_private(path, &bytes)
     }
 }
 

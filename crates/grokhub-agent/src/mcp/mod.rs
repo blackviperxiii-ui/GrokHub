@@ -188,6 +188,56 @@ pub fn tool_list() -> Vec<ToolInfo> {
         .collect()
 }
 
+/// A connected MCP tool another device may borrow: what a companion lends
+/// when its person offers `mcp` (`grokhub-hub node`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LentTool {
+    /// The `server__tool` name [`call_lent`] takes.
+    pub qualified: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub read_only: bool,
+}
+
+/// Every connected MCP tool with its input schema, for a companion to lend.
+/// Another companion's relay (`/node/v1/mcp/`) is never lent on: that
+/// companion's person allowed this computer, not whoever it lends to.
+pub fn lent_tools() -> Vec<LentTool> {
+    let tools = current_tools();
+    let (slots, _) = load_slots();
+    let relays: Vec<&String> = slots
+        .iter()
+        .filter(|(_, slot)| {
+            matches!(&lock_slot(slot).def.transport,
+                config::TransportDef::Http { url, .. } if url.contains("/node/v1/mcp/"))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    tools
+        .into_iter()
+        .filter(|tool| !relays.contains(&&tool.server))
+        .map(|tool| LentTool {
+            qualified: tool.qualified,
+            description: tool.description,
+            input_schema: tool.schema,
+            read_only: tool.hints.read_only,
+        })
+        .collect()
+}
+
+/// Call a connected MCP tool by its `server__tool` name, the way a chat on
+/// this computer would. `None` when no connected tool has that name. The
+/// answer comes back without this computer's untrusted fence: the app that
+/// borrows the tool fences it as its own MCP output.
+pub fn call_lent(qualified: &str, args: &Value) -> Option<ToolOutput> {
+    if !qualified.contains("__") {
+        return None;
+    }
+    let mut out = try_dispatch(qualified, args, &|| false)?;
+    out.text = crate::tools::fence::display_text(&out.text).into_owned();
+    Some(out)
+}
+
 struct SlotInner {
     name: String,
     def: ServerDef,
