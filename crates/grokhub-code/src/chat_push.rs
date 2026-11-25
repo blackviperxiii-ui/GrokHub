@@ -19,8 +19,11 @@
 //! `HEAD` is the checked-out branch only when nothing before it in the
 //! command could switch it, and a branch named on its own goes where the
 //! repository's `remote.origin.push`, or `push.default=upstream` and the
-//! branch's `branch.<name>.merge`, send it. The guard then refuses main,
-//! the default branch and any protected branch, in every mode.
+//! branch's `branch.<name>.merge`, send it, or else where its symbolic ref
+//! points. A push of a branch named on its own after a command that may
+//! change a symbolic ref, or with `push.default=upstream` an upstream, is
+//! refused as one the guard can't read. The guard then refuses main, the
+//! default branch and any protected branch, in every mode.
 //!
 //! What can push but isn't read as a push here (an alias set on the line,
 //! `-c`, a config write, an editor, `rebase -x`, text fed to `sh`) is left
@@ -123,6 +126,96 @@ fn not_gits_own(verb: &str) -> String {
 struct Push {
     target: Target,
     local: Option<String>,
+    /// A command before it may set a branch's upstream, which
+    /// `push.default=upstream` sends a branch named on its own to.
+    upstream_moved: bool,
+}
+
+/// Whether `git <verb> <args>` may make a branch a symbolic ref, which a
+/// push of it follows (`git symbolic-ref refs/heads/x refs/heads/main`).
+fn moves_refs(verb: &str, args: &[String]) -> bool {
+    let plain = args.iter().filter(|a| !a.starts_with('-')).count();
+    match verb {
+        "symbolic-ref" => plain >= 2 || has_flag(args, &["-d", "--delete"]),
+        "update-ref" => has_flag(args, &["--stdin"]),
+        _ => false,
+    }
+}
+
+/// Whether `git <verb> <args>` may set a branch's upstream: `branch -u`, a
+/// branch made or copied (git sets one from its start), `checkout -b`,
+/// `switch -c`, `worktree add`, `push -u`, `fetch --set-upstream`,
+/// `remote rename`.
+fn moves_upstream(verb: &str, args: &[String]) -> bool {
+    let words = args.iter().filter(|a| !a.starts_with('-')).count();
+    match verb {
+        "branch" => {
+            let shows = has_flag(
+                args,
+                &[
+                    "-d",
+                    "-D",
+                    "--delete",
+                    "-l",
+                    "--list",
+                    "-a",
+                    "--all",
+                    "-r",
+                    "--remotes",
+                    "--show-current",
+                    "--contains",
+                    "--no-contains",
+                    "--merged",
+                    "--no-merged",
+                    "--points-at",
+                    "--edit-description",
+                ],
+            );
+            (words > 0 && !shows)
+                || has_flag(
+                    args,
+                    &[
+                        "-u",
+                        "--set-upstream-to",
+                        "-t",
+                        "--track",
+                        "--set-upstream",
+                        "-c",
+                        "-C",
+                        "--copy",
+                        "-m",
+                        "-M",
+                        "--move",
+                    ],
+                )
+        }
+        "checkout" => has_flag(args, &["-b", "-B", "-t", "--track"]),
+        "switch" => has_flag(
+            args,
+            &["-c", "-C", "--create", "--force-create", "-t", "--track"],
+        ),
+        "worktree" => args.iter().any(|a| a == "add"),
+        "push" => has_flag(args, &["-u", "--set-upstream"]),
+        "fetch" | "pull" => has_flag(args, &["--set-upstream"]),
+        "remote" => args.iter().any(|a| a == "rename"),
+        _ => false,
+    }
+}
+
+/// One of `opts` is among `args`: `--name`, `--name=…`, or a short one in a
+/// cluster (`-qu`).
+fn has_flag(args: &[String], opts: &[&str]) -> bool {
+    args.iter().take_while(|a| *a != "--").any(|a| {
+        let name = a.split_once('=').map_or(a.as_str(), |(n, _)| n);
+        opts.contains(&name)
+            || (a.len() > 2
+                && a.starts_with('-')
+                && !a.starts_with("--")
+                && opts
+                    .iter()
+                    .filter(|o| o.len() == 2 && !o.starts_with("--"))
+                    .any(|o| a[1..].contains(&o[1..])))
+    })
 }
 
 fn target_of(refspec: &str) -> Result<Push, String> {
@@ -144,6 +237,7 @@ fn target_of(refspec: &str) -> Result<Push, String> {
             return Ok(Push {
                 target: Target::Current,
                 local: None,
+                upstream_moved: false,
             })
         }
         None => (refspec, Some(refspec)),
@@ -169,6 +263,7 @@ fn target_of(refspec: &str) -> Result<Push, String> {
         target: Target::Branch(name.to_string()),
         // The local branch a name on its own is: `heads/x` is `x` too.
         local: local.map(|_| name.to_string()),
+        upstream_moved: false,
     })
 }
 
@@ -234,6 +329,11 @@ fn find(command: &str, own: Own) -> Result<Vec<Push>, String> {
     // nothing before it in the command may switch the branch: a script or
     // another program may, as may git's own `checkout`, `switch` and kin.
     let mut switched = false;
+    // A branch named on its own lands where its symbolic ref points, and
+    // with `push.default=upstream` where its upstream does: a command
+    // before the push may change either.
+    let mut refs_moved = false;
+    let mut upstream_moved = false;
     let mut pushes = Vec::new();
     for run in &shell.runs {
         let Some(call) = git_call(run) else {
@@ -267,13 +367,20 @@ fn find(command: &str, own: Own) -> Result<Vec<Push>, String> {
                     _ => UNCLEAR.into(),
                 });
             }
-            let push = read_push(call.args)?;
+            let mut push = read_push(call.args)?;
             if push.target == Target::Current && switched {
                 return Err(HEAD_MAY_MOVE.into());
             }
+            if push.local.is_some() && refs_moved {
+                return Err(UNCLEAR.into());
+            }
+            push.upstream_moved = upstream_moved;
+            upstream_moved |= moves_upstream(verb, call.args);
             pushes.push(push);
             continue;
         }
+        refs_moved |= moves_refs(verb, call.args);
+        upstream_moved |= moves_upstream(verb, call.args);
         if OTHER_PUSHES.contains(&verb) {
             return Err(UNCLEAR.into());
         }
@@ -347,8 +454,10 @@ fn through(src: &str, dst: &str, name: &str) -> Option<String> {
 /// git's `push` maps a name given on its own: the first
 /// `remote.origin.push` refspec that matches it (unless a `^` one does),
 /// else with `push.default` `upstream` the one branch it tracks, else the
-/// same name.
-fn lands_on(dir: &Path, local: &str) -> Result<String, String> {
+/// branch its symbolic ref points to, else the same name. With
+/// `upstream_moved`, a command before the push may set the upstream, so a
+/// push that follows it can't be read.
+fn lands_on(dir: &Path, local: &str, upstream_moved: bool) -> Result<String, String> {
     let branch_of = |dst: &str| match target_of(&format!("HEAD:{dst}")) {
         Ok(Push {
             target: Target::Branch(b),
@@ -386,11 +495,38 @@ fn lands_on(dir: &Path, local: &str) -> Result<String, String> {
         .first()
         .is_some_and(|d| matches!(d.to_ascii_lowercase().as_str(), "upstream" | "tracking"))
     {
+        if upstream_moved {
+            return Err(UNCLEAR.into());
+        }
         if let [merge] = config(dir, &["--get-all", &format!("branch.{local}.merge")]).as_slice() {
             return branch_of(merge);
         }
     }
-    Ok(local.to_string())
+    // git sends a symbolic ref's push where it points: `code/fix` that
+    // points at `main` updates main.
+    match symref_target(dir, &full) {
+        Some(target) => match target.strip_prefix("refs/heads/") {
+            Some(_) => branch_of(&target),
+            None => Err(UNCLEAR.into()),
+        },
+        None => Ok(local.to_string()),
+    }
+}
+
+/// Where the symbolic ref `name` points in `dir`, through every link, as
+/// git reads it; `None` when it isn't one.
+fn symref_target(dir: &Path, name: &str) -> Option<String> {
+    let mut c = grokhub_core::git_cmd::git();
+    c.args(["symbolic-ref", "--quiet", name])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    hide_windows_console(&mut c);
+    let out = c.output().ok()?;
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !line.is_empty()).then_some(line)
 }
 
 /// The verdict for one shell command the agent wants to run in `dir`.
@@ -457,7 +593,7 @@ pub(crate) fn decide_with(
     let mut branches = Vec::new();
     for push in pushes {
         let branch = match (push.target, push.local) {
-            (_, Some(local)) => match lands_on(dir, &local) {
+            (_, Some(local)) => match lands_on(dir, &local, push.upstream_moved) {
                 Ok(b) => b,
                 Err(why) => {
                     blocked(config_dir, cfg, command, &local, &why);

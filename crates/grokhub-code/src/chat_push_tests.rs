@@ -382,6 +382,11 @@ fn ordinary_commands_are_neither_refused_nor_parked() {
         "ls",
         "grep -r push .",
         "find . -name '*.rs'",
+        "git log -1 --format=%s | sed 's/feat/feature/'",
+        "git status --short | awk '{print $2}'",
+        "git diff --name-only | xargs rustfmt --check",
+        "GIT_PAGER=cat git log -3",
+        "GIT_EDITOR=true git rebase --continue",
     ] {
         assert_eq!(read(command), Read::NoPush, "{command}");
         assert_eq!(hard(command), None, "{command}");
@@ -509,6 +514,30 @@ fn head_is_read_only_when_nothing_before_the_push_can_switch_the_branch() {
     }
 }
 
+/// git sends a branch named on its own through a symbolic ref, so after a
+/// command that may point one somewhere else the push can't be read.
+#[test]
+fn a_push_after_a_symbolic_ref_change_is_refused_as_unreadable() {
+    for command in [
+        "git symbolic-ref refs/heads/code/fix refs/heads/main && git push origin code/fix",
+        "git symbolic-ref refs/heads/code/fix refs/heads/main; git push -u origin code/fix",
+        "git update-ref --stdin < refs.txt && git push origin code/fix",
+    ] {
+        assert_eq!(refused(command), UNCLEAR, "{command}");
+    }
+    for command in [
+        "git symbolic-ref --short HEAD && git push origin code/fix",
+        "git checkout -b code/fix && git push -u origin code/fix",
+        "git update-ref refs/heads/code/fix HEAD && git push origin code/fix",
+    ] {
+        assert_eq!(
+            read(command),
+            Read::Pushes(vec![branch("code/fix")]),
+            "{command}"
+        );
+    }
+}
+
 #[cfg(unix)]
 mod repo {
     use super::*;
@@ -613,6 +642,46 @@ mod repo {
             .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
             .output()
             .unwrap()
+    }
+
+    /// `bash -c <command>` with no profile, no editor or pager in the
+    /// environment and nothing on stdin.
+    fn bash_runs(dir: &Path, command: &str) -> std::process::Output {
+        Command::new("bash")
+            .args(["--noprofile", "--norc", "-c", command])
+            .current_dir(dir)
+            .env_remove("GIT_EDITOR")
+            .env_remove("GIT_SEQUENCE_EDITOR")
+            .env_remove("GIT_PAGER")
+            .env_remove("EDITOR")
+            .env_remove("VISUAL")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    fn bash_ok(dir: &Path, command: &str) {
+        let out = bash_runs(dir, command);
+        assert!(
+            out.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Local main one commit past origin main: rewritten (`force`), so only
+    /// a force lands it, or ahead, so a plain push does.
+    fn diverge(f: &Fixture, force: bool) {
+        std::fs::write(f.work.join("a.txt"), "other\n").unwrap();
+        if force {
+            sh_git(&f.work, &["commit", "-q", "--amend", "-am", "other"]);
+        } else {
+            sh_git(&f.work, &["commit", "-qam", "other"]);
+        }
     }
 
     /// What the agent's tool call does: runs on this guard's `Run`, or on
@@ -1014,5 +1083,182 @@ mod repo {
             Some(Verdict::Ask)
         );
         assert_eq!(agent_runs(&f, &auto(), "git status", false), None);
+    }
+
+    /// Each command pushes main past the guard: through text a later shell
+    /// reads, words the shell uses out of text order, git run under another
+    /// name, a variable set by more than `NAME=value`, a hook file the
+    /// command writes, or text bash reads as arithmetic. Through the guard
+    /// each is refused, or parked by the harness, so with no yes on a card
+    /// nothing runs, in either mode.
+    #[test]
+    fn a_push_the_shell_hides_from_the_text_is_refused_or_parked_and_origin_main_stays() {
+        let main =
+            "main is the main or default branch. The app never pushes to it; make a branch first.";
+        let force = Some(Verdict::Refuse(FORCE.into()));
+        // (force only lands it, setup, command, the guard's verdict)
+        let cases: &[(bool, &str, &str, Option<Verdict>)] = &[
+            (true, "", "echo 'gi\"\"t push --force origin main' | sh", None),
+            (true, "", "echo \"g'i't push --force origin main\" | bash", None),
+            (true, "", "cat <<'EOF' | sh\ngi\"\"t push --force origin main\nEOF", None),
+            (true, "", "printf 'set -e\\ngit push --force origin main\\n' | sh", None),
+            (true, "", "echo -e 'cd .\\ngit push --force origin main' | bash", None),
+            (true, "", "printf 'set -e\\ngit push --force origin main\\n' > x.sh; sh x.sh", None),
+            (true, "", "x='gi\"\"t push --force origin main'; eval \"$x\"", None),
+            (true, "", "x='gi\"\"t push --force origin main'; sh -c \"$x\"", None),
+            (true, "", "bash -c \"$(echo 'gi\"\"t push --force origin main')\"", None),
+            (true, "", "trap 'gi\"\"t push --force origin main' EXIT", None),
+            (true, "", "source /dev/stdin <<< 'gi\"\"t push --force origin main'", None),
+            (true, "", "script -qc 'gi\"\"t push --force origin main' /dev/null", None),
+            (true, "", "PS4='$(gi\"\"t push --force origin main >&2)'; set -x; true", None),
+            (
+                true,
+                "",
+                "printf '#!/bin/sh\\ngit push --force origin main\\n' > .git/hooks/post-commit && chmod +x .git/hooks/post-commit && git commit -q --allow-empty -m x",
+                None,
+            ),
+            (true, "", "function f { git push --force origin main; }; f", force.clone()),
+            (
+                true,
+                "",
+                "bash -c 'function f { git push --force origin main; }; f'",
+                Some(Verdict::Refuse(UNCLEAR.into())),
+            ),
+            (true, "", "function f() { git push --force origin main; }; f", force.clone()),
+            (false, "", "function f { git push origin main; }; f", Some(Verdict::Refuse(main.into()))),
+            (true, "", "bash -c '$0 push --force origin main' git", None),
+            (true, "", "sh -c '\"$@\"' sh git push --force origin main", None),
+            (true, "", "while read -r g; do \"$g\" push --force origin main; done <<< git", None),
+            (true, "", "{ read -r g; \"$g\" push --force origin main; } <<< git", None),
+            (true, "", "exec 3<<< git; read -r -u3 g; \"$g\" push --force origin main", None),
+            (true, "", "echo() { \"$1\" push --force origin main; }; echo git", None),
+            (
+                true,
+                "",
+                "git remote add status ../origin.git && exec -a git-push git status +HEAD:main",
+                None,
+            ),
+            (false, "git branch -q -u origin/main", "exec -a git-push git", None),
+            (
+                true,
+                "",
+                "read -r GIT_EDITOR <<< sh; export GIT_EDITOR; git commit -q --allow-empty -e -m 'git push --force origin main'",
+                None,
+            ),
+            (
+                true,
+                "",
+                "printf -v GIT_EDITOR sh; export GIT_EDITOR; git commit -q --allow-empty -e -m 'git push --force origin main'",
+                None,
+            ),
+            (
+                true,
+                "",
+                "printf '[core]\\n\\teditor = sh\\n' >> .git/config && git commit -q --allow-empty -e -m 'git push --force origin main'",
+                None,
+            ),
+            (true, "", "x='a[$(git push --force origin main >&2)]'; echo $((x))", None),
+            (true, "", "x='a[$(git push --force origin main >&2)]'; [[ $x -eq 0 ]]; true", None),
+        ];
+        for (n, (only_force, setup, command, verdict)) in cases.iter().enumerate() {
+            let f = fixture(&format!("hidden-{n}"));
+            diverge(&f, *only_force);
+            if !setup.is_empty() {
+                bash_ok(&f.work, setup);
+            }
+            let before = origin_sha(&f, "main").unwrap();
+            if verdict.is_none() {
+                assert_eq!(hard(command), SHIP, "{command}");
+            }
+            for cfg in [CodeShip::default(), auto()] {
+                assert_eq!(agent_runs(&f, &cfg, command, false), *verdict, "{command}");
+            }
+            assert_eq!(origin_sha(&f, "main"), Some(before), "{command}");
+            // The attack is real: run past the guard with bash 4 and
+            // util-linux `script`, as on Linux, main moves.
+            if cfg!(target_os = "linux") {
+                let g = fixture(&format!("hidden-real-{n}"));
+                diverge(&g, *only_force);
+                if !setup.is_empty() {
+                    bash_ok(&g.work, setup);
+                }
+                let before = origin_sha(&g, "main").unwrap();
+                let local = sh_git(&g.work, &["rev-parse", "refs/heads/main"]);
+                bash_ok(&g.work, command);
+                // origin main now holds the local history: an editor pushes
+                // before its commit lands, a hook after.
+                let after = origin_sha(&g, "main").unwrap();
+                assert_ne!(after, before, "{command}");
+                sh_git(&g.bare, &["merge-base", "--is-ancestor", &local, &after]);
+            }
+        }
+    }
+
+    /// git sends a branch named on its own through a symbolic ref, and with
+    /// `push.default=upstream` onto the branch it tracks. A branch the
+    /// repository already points at main is refused like main; a command
+    /// that may change either before its push is refused as unreadable.
+    /// Past the guard, each push lands on main.
+    #[test]
+    fn a_branch_a_symbolic_ref_or_an_upstream_sends_to_main_is_refused_and_origin_main_stays() {
+        let main =
+            "main is the main or default branch. The app never pushes to it; make a branch first.";
+        let cases = [
+            (
+                "git symbolic-ref refs/heads/code/fix refs/heads/main",
+                "git push origin code/fix",
+                main,
+            ),
+            (
+                "",
+                "git symbolic-ref refs/heads/code/fix refs/heads/main && git push origin code/fix",
+                UNCLEAR,
+            ),
+            (
+                "git config push.default upstream",
+                "git branch -q -u origin/main code/fix && git push origin code/fix",
+                UNCLEAR,
+            ),
+        ];
+        let prepare = |tag: &str, setup: &str| {
+            let f = fixture(tag);
+            diverge(&f, false);
+            let made =
+                ship::new_branch(&f.config, &f.work, &CodeShip::default(), "code/fix").unwrap();
+            assert_eq!(made, "code/fix");
+            if !setup.is_empty() {
+                bash_ok(&f.work, setup);
+            }
+            std::fs::write(f.work.join("b.txt"), "agent\n").unwrap();
+            sh_git(&f.work, &["add", "b.txt"]);
+            sh_git(&f.work, &["commit", "-qm", "agent"]);
+            f
+        };
+        for (n, (setup, command, why)) in cases.into_iter().enumerate() {
+            let f = prepare(&format!("symref-{n}"), setup);
+            let before = origin_sha(&f, "main").unwrap();
+            for cfg in [CodeShip::default(), auto()] {
+                assert_eq!(
+                    agent_runs(&f, &cfg, command, true),
+                    Some(Verdict::Refuse(why.into())),
+                    "{command}"
+                );
+            }
+            assert_eq!(origin_sha(&f, "main"), Some(before), "{command}");
+            let g = prepare(&format!("symref-real-{n}"), setup);
+            let before = origin_sha(&g, "main").unwrap();
+            bash_ok(&g.work, command);
+            assert_ne!(origin_sha(&g, "main"), Some(before), "{command}");
+        }
+        // With neither, the app's branch runs in Auto-beta.
+        let f = prepare("symref-none", "");
+        assert_eq!(
+            agent_runs(&f, &auto(), "git push origin code/fix", false),
+            Some(Verdict::Run)
+        );
+        assert_eq!(
+            origin_sha(&f, "code/fix").as_deref(),
+            Some(sh_git(&f.work, &["rev-parse", "HEAD"]).as_str())
+        );
     }
 }
