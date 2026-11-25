@@ -1,10 +1,11 @@
 name: CI
 
 on:
-  # Push to beta runs the light gate only (changes, fmt, guards, linux;
-  # pii-guard lives in pii-guard.yml). Windows and ui-shots skip on beta
-  # push — PRs already ran them; nightly covers beta. Push to main adds
-  # windows, shell (ubuntu + windows) and deny; macOS jobs run on v* tags,
+  # PRs into beta run the lean gate (changes, fmt, guards, linux; pii-guard
+  # lives in pii-guard.yml), with ui-shots only when ui/ or src-tauri/
+  # changes. Push to beta adds windows and, by paths, phone-android and
+  # shell (ubuntu + windows). PRs into main and push to main add windows,
+  # shell and deny as before; macOS jobs run on v* tags,
   # the nightly schedule (which checks out beta) and manual runs;
   # windows-release runs only on the nightly and manual runs
   # (release.yml builds tags).
@@ -47,11 +48,13 @@ env:
   # Nightly builds beta; every other event checks out its own ref.
   SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
-# PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
-# build) and windows (same, skipped when a PR only touches ui/ or workflows
-# other than this one), plus path-filtered shell (ubuntu only) and
-# phone-android. Push to beta keeps changes/fmt/guards/linux (linux seeds
-# the rust cache) and skips windows/ui-shots. Push to main adds windows,
+# PRs into beta run the lean gate: fmt, guards, changes and linux (clippy
+# and tests in two parallel jobs; tests cover only the crates the PR can
+# reach, see .github/scripts/affected_crates.py), plus ui-shots when ui/ or
+# src-tauri/ changes. Windows, phone-android and shell moved to push to
+# beta (windows always, the other two by paths), so they still run before
+# a promotion. PRs into main keep windows and path-filtered shell and
+# phone-android. Push to main adds windows,
 # deny, shell on ubuntu + windows and path-filtered phone-android. The
 # macOS jobs (cross-check, macOS shell, phone-ios) run on v* tags, nightly
 # (on beta) and manual runs; windows-release only on nightly and manual.
@@ -84,16 +87,18 @@ jobs:
       deny: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && steps.paths.outputs.deny == 'true') }}
       # macOS (cross-check, phone-ios, macOS shell): nightly, manual and tags only.
       cross: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
-      phone_android: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || ((github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.paths.outputs.phone == 'true') }}
+      phone_android: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || (((github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta'))) && steps.paths.outputs.phone == 'true') }}
       phone_ios: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
       # windows-release: nightly and manual only. release.yml's shell-bundles
       # builds the Windows installer for every tag and beta push.
       release: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
-      # windows: skipped on push to beta (PR already ran it; nightly covers
-      # beta). On PRs, skipped when the PR only touches ui/, docs, or
-      # workflows other than this one (still reports, so the required check
-      # passes).
-      windows: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/beta') && (github.event_name != 'pull_request' || steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true') }}
+      # windows: off PRs into beta (a skipped job still reports, so the
+      # required check passes); runs on push to beta, so every beta commit
+      # is built on Windows before a promotion. On PRs into main, skipped
+      # when the PR only touches ui/, docs, or workflows other than this one.
+      windows: ${{ github.event_name != 'pull_request' || (github.base_ref == 'main' && (steps.filter.outputs.windows == 'true' || steps.paths.outputs.ci_workflow == 'true' || steps.paths.outputs.embedded == 'true')) }}
+      # ui-shots: on PRs only when the UI or the shell changes.
+      ui_shots: ${{ github.event_name != 'pull_request' || steps.paths.outputs.ui == 'true' }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -143,7 +148,7 @@ jobs:
       # runs, so add that path here and in the guard by hand.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: paths
-        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta'))
         with:
           filters: |
             deny:
@@ -162,6 +167,10 @@ jobs:
               - 'ui/**'
               - 'src-tauri/**'
               - '.github/workflows/ci.yml'
+            ui:
+              - 'ui/**'
+              - 'src-tauri/**'
+              - '.github/workflows/ci.yml'
             shell:
               - 'ui/**'
               - 'src-tauri/**'
@@ -177,21 +186,22 @@ jobs:
               - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
-      # Shell matrix: PRs run ubuntu only, when shell/UI paths change (the
-      # Windows WebView2 smoke runs on merge_group, push to main, tags, nightly
-      # and manual); push to beta runs none (nightly covers it); tags, nightly
-      # and manual add macOS.
+      # Shell matrix: PRs into beta run none; push to beta runs ubuntu +
+      # windows when shell/UI paths change; PRs into main run ubuntu when
+      # they change. merge_group and push to main run ubuntu + windows;
+      # tags, nightly and manual add macOS.
       - name: Shell matrix
         id: shell
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
+          BASE: ${{ github.base_ref }}
           SHELL_PATHS: ${{ steps.paths.outputs.shell }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest"]'; else os='[]'; fi
+            if [ "$BASE" = main ] && [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest"]'; else os='[]'; fi
           elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/beta ]; then
-            os='[]'
+            if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest","windows-latest"]'; else os='[]'; fi
           elif [ "$EVENT" = merge_group ] || { [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; }; then
             os='["ubuntu-latest","windows-latest"]'
           else
@@ -283,18 +293,17 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/ci-guards.sh
 
-  # Clippy and tests in one job so they share one build and one cache.
-  # A required check that is skipped counts as passed, so when `changes` does
-  # not succeed this job still runs and fails in its first step.
-  linux:
+  # Clippy and tests run side by side in two jobs, each with its own cache,
+  # so the gate waits for the slower of the two instead of their sum.
+  # `linux` is the required check: it fails unless both passed. A required
+  # check that is skipped counts as passed, so when `changes` does not
+  # succeed it still runs and fails in its first step.
+  linux-clippy:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    if: needs.changes.result == 'success' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
-      - name: changes job must succeed
-        if: needs.changes.result != 'success'
-        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
@@ -302,6 +311,38 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: linux-clippy
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+      - name: Native GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libwayland-dev libasound2-dev
+      # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
+      # must be deleted, not allowed. Always the whole workspace.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  linux-tests:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          # A PR checks out its merge commit; its first parent is the base
+          # tip, so HEAD^1..HEAD is exactly what the PR changes.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -315,19 +356,53 @@ jobs:
             pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
-      # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
-      # must be deleted, not allowed.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # PRs test the crates they change plus every workspace crate that
+      # depends on them; anything the script can't place (Cargo files, CI,
+      # assets, data, scripts, ui, src-tauri) runs the whole workspace.
+      # Pushes, nightly, manual runs and merge_group always run everything.
+      - name: Pick test packages
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            cargo metadata --no-deps --format-version 1 --locked > "$RUNNER_TEMP/meta.json"
+            pkgs=$(git diff --name-only HEAD^1 HEAD | python3 .github/scripts/affected_crates.py "$RUNNER_TEMP/meta.json")
+          else
+            pkgs=--workspace
+          fi
+          echo "Testing: $pkgs"
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+      - name: Package picker tests
+        run: python3 .github/scripts/test_affected_crates.py
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: nextest
       # Each test runs in its own process (see .config/nextest.toml), so they
       # run in parallel. nextest skips doctests; `cargo test --doc` runs them.
-      - run: cargo nextest run --workspace --locked --profile ci
-      - run: cargo test --doc --workspace --locked
+      - run: cargo nextest run ${{ steps.pick.outputs.pkgs }} --locked --profile ci
+      - run: cargo test --doc ${{ steps.pick.outputs.pkgs }} --locked
       - run: cargo build -p grokhub-hub
       - name: Hub and shim binaries exist
         run: test -x target/debug/grokhub-hub && test -x target/debug/grokhub
+
+  linux:
+    needs: [changes, linux-clippy, linux-tests]
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - name: clippy and tests both passed
+        env:
+          CLIPPY: ${{ needs.linux-clippy.result }}
+          TESTS: ${{ needs.linux-tests.result }}
+        run: |
+          echo "linux-clippy=$CLIPPY linux-tests=$TESTS"
+          test "$CLIPPY" = success && test "$TESTS" = success
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
@@ -521,14 +596,15 @@ jobs:
           name: smoke-shots-${{ runner.os }}
           path: smoke-shots/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
 
   # LO-UI-1: Vite + stubbed Tauri screenshots and color-share. Non-required —
   # today's amber-accent UI fails the share thresholds until LO-UI-2 lands.
   ui-shots:
     needs: changes
     # Skip on push to beta: not a required check; nightly and PRs cover it.
-    if: needs.changes.outputs.code == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
+    # On PRs, only when ui/ or src-tauri/ changes.
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.ui_shots == 'true' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
     name: ui-shots
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -558,7 +634,7 @@ jobs:
           name: ui-shots
           path: ui/e2e/shots/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
 
   # Phone builds of the shell (cross-platform Phase 4). A smoke build carries
   # the mock model's loopback URL and drives one chat itself
