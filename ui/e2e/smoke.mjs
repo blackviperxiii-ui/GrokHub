@@ -2142,10 +2142,10 @@ async function main() {
 }
 
 // A tool counts as offered when the model gets its schema or, with deferred
-// tools on, its line in load_tool_schema's index ("name — blurb").
+// tools on, its line in the deferred index in tool_search's description
+// ("name — blurb [toolset]").
 function offeredTools(body) {
   const tools = JSON.parse(body).tools ?? [];
-  // Deferred tools are listed in tool_search's description, one per line.
   const index = tools.find((t) => t.name === "tool_search")?.description ?? "";
   const deferred = (index.split("Full deferred index:\n")[1] ?? "")
     .split("\n")

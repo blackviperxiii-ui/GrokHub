@@ -9987,7 +9987,9 @@ mod command_tests {
     fn the_capability_file_claims_a_manifest_only_if_the_build_has_one() {
         // With no app manifest in build.rs, Tauri allows every app command
         // from the app's own page. The capability file must not say otherwise.
-        let has = include_str!("../build.rs").contains("app_manifest");
+        // The app manifest is `tauri_build::AppManifest`; the Windows
+        // manifest build.rs links is another thing.
+        let has = include_str!("../build.rs").contains("AppManifest");
         let says = include_str!("../capabilities/default.json").contains("build manifest");
         assert_eq!(says, has);
     }
