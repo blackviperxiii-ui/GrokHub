@@ -252,6 +252,8 @@ fn pass_hat_k_needs_every_try() {
         round: 0,
         effort_range: ("low", "medium"),
         picks: Vec::new(),
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let tries = vec![
         a("x", true),
@@ -958,6 +960,8 @@ fn the_report_sums_each_probe() {
         round: 0,
         effort_range: ("low", "medium"),
         picks: Vec::new(),
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let tries = vec![
         a(true, SafetyScore::default()),
@@ -1034,6 +1038,8 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         round: 0,
         effort_range: ("low", "medium"),
         picks: Vec::new(),
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let report = |ab: &str, attempts: Vec<Attempt>| LiveReport {
         model: "m".into(),
@@ -1424,6 +1430,8 @@ fn the_routing_score_counts_in_under_over_and_prices_the_flagship() {
         round: 0,
         effort_range: ("low", "medium"),
         picks,
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let tries = vec![
         attempt(true, vec![pick(Some("low")), pick(Some("medium"))]),
@@ -1450,4 +1458,53 @@ fn the_routing_score_counts_in_under_over_and_prices_the_flagship() {
     );
     assert_eq!(s.flagship_ticks, 5 * one);
     assert!(s.reasoning_est < s.reasoning_high_est);
+}
+
+#[test]
+fn the_report_prints_the_malformed_tool_call_rate() {
+    let one = Attempt {
+        task: "edit-fps-cap",
+        set: TaskSet::Capability,
+        recall: false,
+        pass: true,
+        usage: Usage::default(),
+        wall_ms: 1,
+        error: None,
+        arm: None,
+        asks: 0,
+        compactions: 0,
+        calls: 2,
+        safety: None,
+        round: 0,
+        effort_range: ("low", "medium"),
+        picks: Vec::new(),
+        tool_calls: 4,
+        malformed_calls: 1,
+    };
+    let mut report = LiveReport {
+        suite: EvalSuite::Default,
+        model: "local".into(),
+        provider: Provider::Local,
+        ab: None,
+        mde: 0.1,
+        k: 1,
+        attempts: vec![one],
+        spent_ticks: 0,
+        budget_ticks: 1,
+        billed_errors: 0,
+        stopped_by_budget: false,
+        stopped: None,
+        planned: 1,
+        retries: 0,
+        done: true,
+    };
+    let md = render_live(&report);
+    assert!(
+        md.contains("| malformed tool calls | 25.0% (1/4) |"),
+        "{md}"
+    );
+    report.attempts[0].tool_calls = 0;
+    report.attempts[0].malformed_calls = 0;
+    let md = render_live(&report);
+    assert!(md.contains("| malformed tool calls | n/a |"), "{md}");
 }

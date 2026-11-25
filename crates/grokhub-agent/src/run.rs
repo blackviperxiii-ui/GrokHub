@@ -723,6 +723,9 @@ fn run_turn(
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
     let mut bad_args_streak = 0u32;
+    // Local schema misses sent back for one repair. The next miss in this
+    // turn is a plain error and the turn stops.
+    let mut schema_repairs = 0u32;
     // No token cap: a run goes on until the task is done. A run that stops
     // getting anywhere is caught by the stall check instead.
     let mut stall = crate::stall::Stall::default();
@@ -1500,6 +1503,21 @@ fn run_turn(
             .map(|call| repair_shell_lookup(input, call))
             .collect();
         let mut call_i = 0usize;
+        let schema_forced = {
+            #[cfg(test)]
+            {
+                crate::route::live::schema_check_forced()
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+        let local_turn = crate::route::live::step_on_device()
+            || crate::route::local::is_local(input.model)
+            || schema_forced;
+        let mut batch_schema_repair = false;
+        let mut batch_schema_plain = false;
         while call_i < calls.len() {
             let call = &calls[call_i];
             if input.cancel.is_cancelled() {
@@ -1514,6 +1532,28 @@ fn run_turn(
                 push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
+            }
+            if local_turn {
+                let malformed = tools::schema_miss(&last_tools, &call.name, &call.arguments);
+                crate::route::session_metrics::note_local_tool(
+                    &config_dir,
+                    input.conversation_id,
+                    malformed.is_some(),
+                    grokhub_core::now_ms(),
+                );
+                if let Some(why) = malformed {
+                    let msg = tools::schema_message(schema_repairs >= 1, &why);
+                    if schema_repairs >= 1 {
+                        batch_schema_plain = true;
+                    } else {
+                        batch_schema_repair = true;
+                    }
+                    let output = ToolOutput::err(msg);
+                    emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
+                    push_refusal(history, input.conversation_id, call, output);
+                    call_i += 1;
+                    continue;
+                }
             }
             if batched_tools_on {
                 let run_len = tools::batch::batch_run_len(&calls, call_i);
@@ -1860,6 +1900,12 @@ fn run_turn(
                 return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             call_i += 1;
+        }
+        if batch_schema_repair {
+            schema_repairs = schema_repairs.saturating_add(1);
+        }
+        if batch_schema_plain {
+            return finish(input, StopReason::EndTurn, usage, compacted_once, true);
         }
         if let Some(trip) = breaker.record(denied_in_reply.is_some()) {
             if let Some(id) = &denied_in_reply {
@@ -4066,6 +4112,146 @@ mod tests {
                 if role == "assistant"
                     && matches!(&content[0], ContentPart::InputText(t) if t == BAD_ARGS_STOP)
         ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn outputs_of(history: &[InputItem]) -> Vec<&str> {
+        history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn loop_on(
+        client: &dyn ModelClient,
+        dir: &std::path::Path,
+        model: &str,
+        max_turns: u32,
+        force_schema: bool,
+    ) -> (LoopOut, Vec<InputItem>) {
+        let cancel = CancelToken::new();
+        let steer = SteerQueue::new();
+        let halt = NeverHalt;
+        let _schema = force_schema.then(crate::route::live::ForceSchemaCheck::on);
+        let input = LoopIn {
+            client,
+            workspace: dir,
+            model,
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: "schema-repair",
+            max_turns,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &halt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "read note.txt", None, &mut |_| {});
+        (out, history)
+    }
+
+    #[test]
+    fn a_local_malformed_call_is_repaired_once_then_the_file_is_read() {
+        let dir = workspace("schema-repair");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("r1", "read_file", r#"{"limit":1}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::calls(
+                    vec![call("r2", "read_file", r#"{"target_file":"note.txt"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("The note says hello."),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history) = loop_on(&script, &dir, "grok-4.7", 4, true);
+        let outputs = outputs_of(&history);
+        assert!(outputs[0].contains("missing target_file"), "{}", outputs[0]);
+        assert!(outputs[0].contains("once more"), "{}", outputs[0]);
+        assert!(
+            outputs.iter().any(|o| o.contains("hello native")),
+            "{outputs:?}"
+        );
+        assert!(!outputs.contains(&tools::PLAIN_SCHEMA_ERROR), "{outputs:?}");
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_local_malformed_call_is_a_plain_error_and_the_turn_stops() {
+        let dir = workspace("schema-plain");
+        let bad = || {
+            ScriptTurn::calls(
+                vec![call("r", "read_file", r#"{"limit":1}"#)],
+                Usage::default(),
+            )
+        };
+        let script = Script {
+            turns: Mutex::new(vec![bad(), bad(), ScriptTurn::text("never")]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history) = loop_on(&script, &dir, "grok-4.7", 6, true);
+        let outputs = outputs_of(&history);
+        assert_eq!(outputs.len(), 2, "{outputs:?}");
+        assert!(outputs[0].contains("missing target_file"), "{}", outputs[0]);
+        assert!(outputs[0].contains("once more"), "{}", outputs[0]);
+        assert_eq!(outputs[1], tools::PLAIN_SCHEMA_ERROR);
+        assert_eq!(script.seen.lock().unwrap().len(), 2);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cloud_turn_still_runs_a_call_the_local_schema_would_refuse() {
+        let dir = workspace("schema-cloud");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("r1", "read_file", r#"{"limit":1}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history) = loop_on(&script, &dir, "grok-4.7", 4, false);
+        let outputs = outputs_of(&history);
+        assert!(
+            outputs[0].contains("target_file is required"),
+            "{}",
+            outputs[0]
+        );
+        assert!(
+            !outputs[0].contains("do not match the schema"),
+            "{}",
+            outputs[0]
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

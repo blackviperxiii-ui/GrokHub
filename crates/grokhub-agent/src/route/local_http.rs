@@ -1038,6 +1038,40 @@ mod tests {
     }
 
     #[test]
+    fn a_local_tool_call_sends_the_argument_schema_and_not_a_json_reply() {
+        let (base, server) = capture_server(1);
+        let rt = HttpLocalRuntime::new(&base, "t");
+        let req = ResponsesRequest {
+            model: "local".into(),
+            effort: None,
+            input: Vec::new(),
+            conversation_id: "c".into(),
+            tools: vec![json!({
+                "type": "function",
+                "name": "read_file",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"target_file": {"type": "string"}},
+                    "required": ["target_file"],
+                    "additionalProperties": false
+                }
+            })],
+            hosted_search: false,
+            call_timeout: None,
+            text_format: None,
+        };
+        let _ = rt.chat_tools(&req, &CancelToken::new());
+        let bodies = server.join().unwrap();
+        assert_eq!(
+            bodies[0]["tools"][0]["function"]["parameters"]["required"],
+            json!(["target_file"])
+        );
+        assert_eq!(bodies[0].get("response_format"), None);
+        assert_eq!(bodies[0].get("tool_choice"), None);
+    }
+
+    #[test]
     fn background_calls_never_take_the_chats_slot_and_one_slot_pins_nothing() {
         let (base, server) = capture_server(5);
         let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));

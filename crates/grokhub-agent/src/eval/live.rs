@@ -1112,6 +1112,10 @@ pub struct Attempt {
     pub effort_range: (&'static str, &'static str),
     /// Each response call's model, effort and cost.
     pub picks: Vec<Pick>,
+    /// Local tool calls checked against their schema on this try.
+    pub tool_calls: u32,
+    /// Of those, the ones whose arguments missed the schema.
+    pub malformed_calls: u32,
 }
 
 pub struct LiveReport {
@@ -1343,6 +1347,11 @@ fn one_try(
         calls,
         picks,
     } = capped.take_usage();
+    let chat = crate::route::session_metrics::load(&cfg)
+        .chats
+        .remove(&conversation_id);
+    let tool_calls = chat.as_ref().map(|c| c.tool_calls).unwrap_or(0);
+    let malformed_calls = chat.as_ref().map(|c| c.malformed).unwrap_or(0);
     let _ = std::fs::remove_dir_all(&dir);
     Attempt {
         task: task.id,
@@ -1360,6 +1369,8 @@ fn one_try(
         round: n,
         effort_range: task.effort,
         picks,
+        tool_calls,
+        malformed_calls,
     }
 }
 
@@ -1514,6 +1525,11 @@ pub struct AttemptRow {
     pub calls: u32,
     pub safety: Option<SafetyScore>,
     pub picks: Vec<Pick>,
+    /// Local tool calls and schema misses. Old progress files omit both.
+    #[serde(default)]
+    pub tool_calls: u32,
+    #[serde(default)]
+    pub malformed_calls: u32,
 }
 
 impl AttemptRow {
@@ -1535,6 +1551,8 @@ impl AttemptRow {
             calls: a.calls,
             safety: a.safety,
             picks: a.picks.clone(),
+            tool_calls: a.tool_calls,
+            malformed_calls: a.malformed_calls,
         }
     }
 
@@ -1564,6 +1582,8 @@ impl AttemptRow {
             round: self.round,
             effort_range: task.effort,
             picks: self.picks.clone(),
+            tool_calls: self.tool_calls,
+            malformed_calls: self.malformed_calls,
         })
     }
 }
@@ -1840,6 +1860,10 @@ pub fn render_live(report: &LiveReport) -> String {
         format!("{:.1}%", cached as f64 * 100.0 / input as f64)
     };
     let asks: u32 = a.iter().map(|x| x.asks).sum();
+    let tool_calls: u32 = a.iter().map(|x| x.tool_calls).sum();
+    let malformed: u32 = a.iter().map(|x| x.malformed_calls).sum();
+    let malformed_rate = crate::route::session_metrics::malformed_rate(tool_calls, malformed)
+        .unwrap_or_else(|| "n/a".into());
     let mut out = format!(
         "# Live eval\n\nmodel: {}  ·  provider: {}{}  ·  k: {}  ·  spent {} of {}{}\n\n\
          | metric | value |\n|---|---|\n\
@@ -1847,7 +1871,8 @@ pub fn render_live(report: &LiveReport) -> String {
          | capability | {} |\n| regression | {} |\n| recall | {} |\n\
          | input tokens | {} |\n| cached share | {} |\n| output + reasoning tokens | {} |\n\
          | cost | {} |\n| p50 wall | {} ms |\n| gate asks | {} |\n\
-         | billed failures | {} |\n| calls retried | {} |\n\n",
+         | billed failures | {} |\n| calls retried | {} |\n\
+         | malformed tool calls | {} |\n\n",
         report.model,
         report.provider.label(),
         report
@@ -1873,6 +1898,7 @@ pub fn render_live(report: &LiveReport) -> String {
         asks,
         report.billed_errors,
         report.retries,
+        malformed_rate,
     );
     if report.suite == EvalSuite::Coding {
         out.push_str(&super::coding::render_section(&coding_totals(report)));
