@@ -70,6 +70,7 @@ mod egress;
 #[cfg(test)]
 mod egress_coverage;
 mod evidence;
+mod git_words;
 mod hard;
 mod ladder;
 mod mindcheck;
@@ -158,6 +159,10 @@ pub use egress::{
 };
 pub use evidence::{
     evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
+};
+pub use git_words::{
+    command_may_push, git_call, git_compiled_in, git_may_push, git_path_changed, git_runs_own,
+    is_git_name, plain_assignment, read_shell, GitCall, Run, ShellRead, HIDDEN,
 };
 pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class,
