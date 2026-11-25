@@ -30,6 +30,11 @@
 # disk never matches a row. The banned-ask check (`adult_guard.rs` and the
 # agent's route screen) runs in front of these like any other model.
 #
+# `use_case` is the job a row is for, shown in Download models:
+# general-chat, coding, reasoning, vision, image-gen, video-gen, or voice.
+# A video row stays kind = "image" so it downloads beside the picture
+# models; the job tag keeps it off the picture picker.
+
 # `kind` says what a row is for: chat (the default), drafter,
 # vision-projector, image, image-guard, speech-to-text, text-to-speech, embed,
 # rerank, ocr or guard. Only chat rows count toward the 25 standard models
@@ -60,7 +65,7 @@
 # tier's reference GPU, where it fits), `gaming_safe` (light and capable
 # enough to run beside a game) and `estimate` (fields nobody has measured;
 # list one in `measured` once it is). CI fails when they are stale.
-version = 5
+version = 6
 
 [[model]]
 id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
@@ -72,6 +77,7 @@ download_mb = 23379
 quant = "Q4_K_M"
 license = "NVIDIA Open Model License"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "mlasli", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
@@ -89,34 +95,6 @@ min_budget = { gpu = 8192, unified = 24576, cpu = 24576 }
 tok_s = { gpu = 45, unified = 30, cpu = 22 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max"]
-
-[[model]]
-id = "bytedance-seed-oss-36b-heretic-q4_k_m"
-name = "ByteDance Seed-OSS 36B"
-repo = "mradermacher/Seed-OSS-36B-Instruct-heretic-GGUF"
-file = "Seed-OSS-36B-Instruct-heretic.Q4_K_M.gguf"
-sha256 = "ee960faaa814989606c65e62c327273903e67399d3151f487cc71720fb95c9a4"
-download_mb = 20754
-quant = "Q4_K_M"
-license = "Apache-2.0"
-kind = "chat"
-optional = true
-abliterated = { by = "trohrbaugh", method = "heretic" }
-badges = ["tools", "reasoning"]
-skills = { quality = 74, chat = 70, code = 74, reason = 80, write = 70, long = 90, adult = 68 }
-tier = "T4"
-route = "local:small"
-ctx_default = 8192
-params_b = 36
-active_b = 36
-ctx_max = 524_288
-run_mb = 23402   # 20754 weights + 2048 KV (64 layers x 8 KV x hd128 = 256 KiB/tok; approx) + 600
-needs_avx2 = true
-min_budget = { gpu = 12288, unified = 23552 }
-tok_s = { gpu = 9, unified = 7, cpu = 2 }
-gaming_safe = false
-estimate = ["params_b", "active_b", "ctx_max"]
-
 [[model]]
 id = "qwen3.6-35b-a3b-heretic-q4_k_m"
 name = "Qwen3.6 35B-A3B"
@@ -127,6 +105,7 @@ download_mb = 20771
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "llmfan46", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
@@ -144,7 +123,6 @@ tok_s = { gpu = 50, unified = 35, cpu = 20 }
 tok_s_tier = { T4 = 200 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "gemma-4-31b-it-abliterated-q4_k"
 name = "Gemma 4 31B"
@@ -155,6 +133,7 @@ download_mb = 17_821
 quant = "Q4_K"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
 skills = { quality = 76, chat = 82, code = 72, reason = 74, write = 85, long = 76, adult = 82 }
@@ -175,7 +154,6 @@ tok_s = { gpu = 35, unified = 25, cpu = 2 }
 tok_s_tier = { T4 = 32 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "zai-glm4.7-flash-30b-a3b-heretic-q4_k_m"
 name = "Zhipu GLM-4.7-Flash 30B-A3B"
@@ -186,6 +164,7 @@ download_mb = 17293
 quant = "Q4_K_M"
 license = "MIT"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "Olafangensan", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
@@ -203,7 +182,34 @@ tok_s = { gpu = 40, unified = 28, cpu = 16 }
 tok_s_tier = { T4 = 217 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
+[[model]]
+id = "qwen3-coder-30b-a3b-heretic-q4_k_m"
+name = "Qwen3-Coder 30B-A3B"
+repo = "mradermacher/Qwen3-Coder-30B-A3B-Instruct-Heretic-GGUF"
+file = "Qwen3-Coder-30B-A3B-Instruct-Heretic.Q4_K_M.gguf"
+sha256 = "02badbb766b2999da480c2ef9dd60b7124b7426985129b95b74319bdc1de0149"
+download_mb = 17697
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+use_case = "coding"
+optional = true
+abliterated = { by = "dpankros", method = "heretic" }
+badges = ["tools", "moe"]
+skills = { quality = 80, chat = 58, code = 90, reason = 74, write = 52, long = 70, adult = 60 }
+tier = "T4"
+route = "local:small"
+ctx_default = 16384
+params_b = 30.5
+active_b = 3.3
+ctx_max = 262_144
+run_mb = 18997   # 17697 weights + 700 KV (Qwen3-Coder MoE, same budget as Qwen3.6 35B-A3B) + 600
+needs_avx2 = true
+min_budget = { gpu = 8192, unified = 19456, cpu = 19456 }
+tok_s = { gpu = 48, unified = 32, cpu = 18 }
+tok_s_tier = { T4 = 201 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 [[model]]
 id = "qwen3.8-27b-heretic-q4_k_m"
 name = "Qwen3.8 27B"
@@ -214,6 +220,7 @@ download_mb = 16211
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "0bserverx (on trohrbaugh ARA base)", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -231,7 +238,6 @@ tok_s = { gpu = 12, unified = 10, cpu = 3 }
 tok_s_tier = { T4 = 35 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "gemma-4-26b-a4b-it-abliterated-q4_k"
 name = "Gemma 4 26B-A4B"
@@ -242,6 +248,7 @@ download_mb = 16_018
 quant = "Q4_K"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools", "moe"]
 skills = { quality = 72, chat = 78, code = 68, reason = 70, write = 80, long = 72, adult = 78 }
@@ -264,7 +271,6 @@ tok_s = { gpu = 60, unified = 50, cpu = 6 }
 tok_s_tier = { T4 = 172 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "mistral-small3.2-24b-heretic-q4_k_m"
 name = "Mistral Small 3.2 24B"
@@ -275,6 +281,7 @@ download_mb = 13670
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "llmfan46", method = "heretic" }
 badges = ["tools"]
@@ -292,7 +299,34 @@ tok_s = { gpu = 35, unified = 15, cpu = 5 }
 tok_s_tier = { T4 = 41 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
+[[model]]
+id = "devstral-small2-24b-abliterated-q4_k_m"
+name = "Mistral Devstral Small 2 24B"
+repo = "mradermacher/Huihui-Devstral-Small-2-24B-Instruct-2512-abliterated-GGUF"
+file = "Huihui-Devstral-Small-2-24B-Instruct-2512-abliterated.Q4_K_M.gguf"
+sha256 = "de276bac9b034db8695c802537aa6aa5bc35c133db83764d7a2217e66ce443c4"
+download_mb = 13670
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+use_case = "coding"
+optional = true
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools"]
+skills = { quality = 76, chat = 52, code = 88, reason = 68, write = 48, long = 64, adult = 58 }
+tier = "T3"
+route = "local:small"
+ctx_default = 8192
+params_b = 24
+active_b = 24
+ctx_max = 262_144
+run_mb = 15550   # 13670 weights + 1280 KV (Mistral 24B arch, ctx 8192) + 600
+needs_avx2 = true
+min_budget = { gpu = 16384, unified = 16384 }
+tok_s = { gpu = 32, unified = 14, cpu = 4 }
+tok_s_tier = { T4 = 41 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 [[model]]
 id = "openai-gpt-oss-20b-heretic-mxfp4_moe"
 name = "OpenAI gpt-oss 20B"
@@ -303,6 +337,7 @@ download_mb = 11549
 quant = "MXFP4_MOE"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "p-e-w", method = "heretic" }
 badges = ["tools", "moe", "reasoning"]
@@ -320,7 +355,6 @@ tok_s = { gpu = 110, unified = 50, cpu = 25 }
 tok_s_tier = { T3 = 141, T4 = 220 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "nous-hermes4-14b-abliterated-q4_k_m"
 name = "NousResearch Hermes 4 14B"
@@ -331,6 +365,7 @@ download_mb = 8585
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "n0kovo", method = "abliteration" }
 badges = ["tools", "reasoning"]
@@ -348,7 +383,6 @@ tok_s = { gpu = 50, unified = 20, cpu = 8 }
 tok_s_tier = { T3 = 42, T4 = 66 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "mistral-ministral3-14b-reasoning-heretic-q4_k_m"
 name = "Mistral Ministral 3 14B Reasoning"
@@ -359,6 +393,7 @@ download_mb = 7857
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "coder3101", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -377,7 +412,6 @@ tok_s = { gpu = 50, unified = 22, cpu = 9 }
 tok_s_tier = { T3 = 46, T4 = 72 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "gemma-4-12b-it-abliterated-q4_k"
 name = "Gemma 4 12B"
@@ -388,6 +422,7 @@ download_mb = 7_039
 quant = "Q4_K"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
 skills = { quality = 62, chat = 68, code = 58, reason = 60, write = 70, long = 62, adult = 70 }
@@ -408,7 +443,6 @@ tok_s = { gpu = 35, unified = 20, cpu = 3 }
 tok_s_tier = { T3 = 51, T4 = 80 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "deepseek-r1-0528-qwen3-8b-heretic-q4_k_m"
 name = "DeepSeek R1-0528 Qwen3 8B"
@@ -419,6 +453,7 @@ download_mb = 4795
 quant = "Q4_K_M"
 license = "MIT"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -436,7 +471,6 @@ tok_s = { gpu = 80, unified = 35, cpu = 14 }
 tok_s_tier = { T3 = 75, T4 = 117 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "ibm-granite4.2-8b-heretic-q4_k_m"
 name = "IBM Granite 4.2 8B"
@@ -447,6 +481,7 @@ download_mb = 5100
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -465,35 +500,6 @@ tok_s = { gpu = 80, unified = 35, cpu = 14 }
 tok_s_tier = { T3 = 71, T4 = 110 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
-[[model]]
-id = "allenai-olmo3-7b-instruct-heretic-q4_k_s"
-name = "AllenAI OLMo 3 7B Instruct"
-repo = "ChiKoi7/Olmo-3-7B-Instruct-Heretic-GGUF"
-file = "Olmo-3-7B-Instruct-Heretic_Q4_K_S.gguf"
-sha256 = "2c8acaf5333bfc279bd38548f9d93e2498939555f480014eab5c33c47a652215"
-download_mb = 4051
-quant = "Q4_K_S"
-license = "Apache-2.0"
-kind = "chat"
-optional = true
-abliterated = { by = "ChiKoi7", method = "heretic" }
-badges = ["tools"]
-skills = { quality = 50, chat = 54, code = 48, reason = 50, write = 54, long = 42, adult = 48 }
-tier = "T2"
-route = "local:small"
-ctx_default = 8192
-params_b = 7
-active_b = 7
-ctx_max = 65_536
-run_mb = 7211   # 4051 weights + 2560 KV (32 layers MHA 32 KV x hd128; assumes SWA-4096 on 3 of 4 layers (else ~4 GiB); approx) + 600
-needs_avx2 = true
-min_budget = { gpu = 7680, unified = 7680, cpu = 7680 }
-tok_s = { gpu = 85, unified = 40, cpu = 17 }
-tok_s_tier = { T2 = 42, T3 = 89, T4 = 139 }
-gaming_safe = false
-estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "qwen3.5-9b-heretic-q4_k_m"
 name = "Qwen3.5 9B"
@@ -504,6 +510,7 @@ download_mb = 5272
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "llmfan46", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -522,7 +529,6 @@ tok_s = { gpu = 80, unified = 35, cpu = 14 }
 tok_s_tier = { T2 = 32, T3 = 68, T4 = 107 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "nvidia-nemotron3.5-bolt-e4b-heretic-q4_k_xl"
 name = "NVIDIA Nemotron 3.5 Bolt E4B"
@@ -533,6 +539,7 @@ download_mb = 4796
 quant = "Q4_K_XL"
 license = "OpenMDW-1.1"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "grumd0", method = "heretic" }
 badges = ["tools"]
@@ -550,7 +557,6 @@ tok_s = { gpu = 85, unified = 40, cpu = 16 }
 tok_s_tier = { T2 = 64, T3 = 137, T4 = 214 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "gemma-4-e4b-it-abliterated-q4_k"
 name = "Gemma 4 E4B"
@@ -561,6 +567,7 @@ download_mb = 5_057
 quant = "Q4_K"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
 skills = { quality = 54, chat = 60, code = 50, reason = 52, write = 60, long = 46, adult = 60 }
@@ -581,7 +588,34 @@ tok_s = { gpu = 40, unified = 30, cpu = 5 }
 tok_s_tier = { T2 = 61, T3 = 130, T4 = 202 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
+[[model]]
+id = "qwen2.5-coder-7b-heretic-q4_k_m"
+name = "Qwen2.5-Coder 7B"
+repo = "mradermacher/Qwen2.5-Coder-7B-Instruct-heretic-GGUF"
+file = "Qwen2.5-Coder-7B-Instruct-heretic.Q4_K_M.gguf"
+sha256 = "8053aeda222ba79e865a6eddd268332fd4e4dbe406371318d6df1f9beae9502b"
+download_mb = 4466
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+use_case = "coding"
+optional = true
+abliterated = { by = "trohrbaugh", method = "heretic" }
+badges = ["tools"]
+skills = { quality = 64, chat = 42, code = 82, reason = 55, write = 40, long = 48, adult = 52 }
+tier = "T2"
+route = "local:small"
+ctx_default = 8192
+params_b = 7.6
+active_b = 7.6
+ctx_max = 32_768
+run_mb = 5514   # 4466 weights + 448 KV (28 layers x 4 KV x hd128 = 56 KiB/tok at ctx 8192) + 600
+needs_avx2 = true
+min_budget = { gpu = 8192, unified = 8192, cpu = 8192 }
+tok_s = { gpu = 70, unified = 35, cpu = 12 }
+tok_s_tier = { T1 = 24, T2 = 38, T3 = 81, T4 = 126 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 [[model]]
 id = "microsoft-phi4-mini-3.8b-heretic-q4_k_m"
 name = "Microsoft Phi-4-mini 3.8B"
@@ -592,6 +626,7 @@ download_mb = 2378
 quant = "Q4_K_M"
 license = "MIT"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools"]
@@ -609,7 +644,6 @@ tok_s = { gpu = 120, unified = 50, cpu = 24 }
 tok_s_tier = { T1 = 45, T2 = 71, T3 = 152, T4 = 237 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "gemma-4-e2b-it-abliterated-q4_k"
 name = "Gemma 4 E2B"
@@ -620,6 +654,7 @@ download_mb = 3_258
 quant = "Q4_K"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = ["tools"]
 skills = { quality = 42, chat = 48, code = 38, reason = 40, write = 48, long = 34, adult = 48 }
@@ -642,7 +677,6 @@ tok_s = { gpu = 60, unified = 35, cpu = 7 }
 tok_s_tier = { T1 = 74, T2 = 115, T3 = 246, T4 = 384 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "mistral-ministral3-3b-reasoning-heretic-q4_k_m"
 name = "Mistral Ministral 3 3B Reasoning"
@@ -653,6 +687,7 @@ download_mb = 2047
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "reasoning"
 optional = true
 abliterated = { by = "coder3101", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -670,7 +705,6 @@ tok_s = { gpu = 130, unified = 55, cpu = 28 }
 tok_s_tier = { T1 = 53, T2 = 83, T3 = 176, T4 = 275 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "qwen3.5-4b-heretic-q4_k_m"
 name = "Qwen3.5 4B"
@@ -681,6 +715,7 @@ download_mb = 2583
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "p-e-w", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -699,7 +734,6 @@ tok_s = { gpu = 120, unified = 50, cpu = 25 }
 tok_s_tier = { T1 = 42, T2 = 65, T3 = 140, T4 = 218 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "meta-llama3.2-3b-heretic-q4_k_m"
 name = "Meta Llama 3.2 3B"
@@ -710,6 +744,7 @@ download_mb = 1926
 quant = "Q4_K_M"
 license = "Llama 3.2 Community License"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "DavidAU", method = "heretic" }
 badges = ["tools"]
@@ -728,7 +763,6 @@ tok_s = { gpu = 140, unified = 60, cpu = 30 }
 tok_s_tier = { T1 = 56, T2 = 88, T3 = 187, T4 = 292 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "ibm-granite4.2-3b-heretic-q4_k_m"
 name = "IBM Granite 4.2 3B"
@@ -739,6 +773,7 @@ download_mb = 2140
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "chat"
+use_case = "general-chat"
 optional = true
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = ["tools", "reasoning"]
@@ -756,35 +791,6 @@ tok_s = { gpu = 130, unified = 55, cpu = 28 }
 tok_s_tier = { T1 = 51, T2 = 79, T3 = 168, T4 = 263 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
-[[model]]
-id = "hf-smollm3-3b-heretic-q4_k_m"
-name = "HuggingFace SmolLM3 3B"
-repo = "virtualdmns/SmolLM3-3B-Heretic-Uncensored-GGUF"
-file = "SmolLM3-3B-Heretic-Uncensored-Q4_K_M.gguf"
-sha256 = "1e6d9704247f41f786f47b885cbff846d70a931dbdc82562439670f43b3589d5"
-download_mb = 1827
-quant = "Q4_K_M"
-license = "Apache-2.0"
-kind = "chat"
-optional = true
-abliterated = { by = "virtualdmns", method = "heretic" }
-badges = ["tools", "reasoning"]
-skills = { quality = 38, chat = 40, code = 36, reason = 40, write = 36, long = 34, adult = 36 }
-tier = "T1"
-route = "local:tiny"
-ctx_default = 8192
-params_b = 3
-active_b = 3
-ctx_max = 65_536
-run_mb = 3003   # 1827 weights + 576 KV (36 layers x 4 KV x hd128 = 72 KiB/tok) + 600
-needs_avx2 = true
-min_budget = { gpu = 3072, unified = 3072, cpu = 3072 }
-tok_s = { gpu = 140, unified = 60, cpu = 32 }
-tok_s_tier = { T1 = 59, T2 = 92, T3 = 197, T4 = 308 }
-gaming_safe = true
-estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-
 [[model]]
 id = "gemma-4-31b-it-abliterated-mtp"
 name = "Gemma 4 31B draft model"
@@ -797,6 +803,7 @@ download_mb = 911
 quant = "BF16"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "gemma-4-31b-it-abliterated-q4_k"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = []
@@ -807,7 +814,6 @@ run_mb = 1_167
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-26b-a4b-it-abliterated-mtp"
 name = "Gemma 4 26B-A4B draft model"
@@ -820,6 +826,7 @@ download_mb = 816
 quant = "BF16"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "gemma-4-26b-a4b-it-abliterated-q4_k"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = []
@@ -830,7 +837,6 @@ run_mb = 1_072
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-12b-it-abliterated-mtp"
 name = "Gemma 4 12B draft model"
@@ -843,6 +849,7 @@ download_mb = 822
 quant = "BF16"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "gemma-4-12b-it-abliterated-q4_k"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = []
@@ -853,7 +860,6 @@ run_mb = 1_078
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-e4b-it-abliterated-mtp"
 name = "Gemma 4 E4B draft model"
@@ -866,6 +872,7 @@ download_mb = 164
 quant = "BF16"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "gemma-4-e4b-it-abliterated-q4_k"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = []
@@ -876,7 +883,6 @@ run_mb = 420
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-e2b-it-abliterated-mtp"
 name = "Gemma 4 E2B draft model"
@@ -889,6 +895,7 @@ download_mb = 163
 quant = "BF16"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "gemma-4-e2b-it-abliterated-q4_k"
 abliterated = { by = "huihui-ai", method = "abliteration" }
 badges = []
@@ -899,7 +906,6 @@ run_mb = 419
 needs_avx2 = false
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-31b-it-abliterated-mmproj"
 name = "Gemma 4 31B vision projector"
@@ -913,6 +919,7 @@ download_mb = 1_146
 quant = "BF16"
 license = "Apache-2.0"
 kind = "vision-projector"
+use_case = "vision"
 pairs_with = "gemma-4-31b-it-abliterated-q4_k"
 badges = []
 tier = "T4"
@@ -923,7 +930,6 @@ run_mb = 1_317
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-26b-a4b-it-abliterated-mmproj"
 name = "Gemma 4 26B-A4B vision projector"
@@ -937,6 +943,7 @@ download_mb = 1_140
 quant = "BF16"
 license = "Apache-2.0"
 kind = "vision-projector"
+use_case = "vision"
 pairs_with = "gemma-4-26b-a4b-it-abliterated-q4_k"
 badges = []
 tier = "T3"
@@ -947,7 +954,6 @@ run_mb = 1_311
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-12b-it-abliterated-mmproj"
 name = "Gemma 4 12B vision projector"
@@ -961,6 +967,7 @@ download_mb = 168
 quant = "BF16"
 license = "Apache-2.0"
 kind = "vision-projector"
+use_case = "vision"
 pairs_with = "gemma-4-12b-it-abliterated-q4_k"
 badges = []
 tier = "T3"
@@ -971,7 +978,6 @@ run_mb = 193
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-e4b-it-abliterated-mmproj"
 name = "Gemma 4 E4B vision projector"
@@ -985,6 +991,7 @@ download_mb = 946
 quant = "BF16"
 license = "Apache-2.0"
 kind = "vision-projector"
+use_case = "vision"
 pairs_with = "gemma-4-e4b-it-abliterated-q4_k"
 badges = []
 tier = "T2"
@@ -995,7 +1002,6 @@ run_mb = 1_087
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "gemma-4-e2b-it-abliterated-mmproj"
 name = "Gemma 4 E2B vision projector"
@@ -1009,6 +1015,7 @@ download_mb = 942
 quant = "BF16"
 license = "Apache-2.0"
 kind = "vision-projector"
+use_case = "vision"
 pairs_with = "gemma-4-e2b-it-abliterated-q4_k"
 badges = []
 tier = "T1"
@@ -1019,7 +1026,6 @@ run_mb = 1_083
 needs_avx2 = false
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "qwen3.5-0.8b-heretic-drafter-q4_k_m"
 name = "Qwen3.5 0.8B (drafter)"
@@ -1030,6 +1036,7 @@ download_mb = 503
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "qwen3.5-9b-heretic-q4_k_m"
 abliterated = { by = "tvall43", method = "heretic" }
 badges = []
@@ -1040,7 +1047,6 @@ run_mb = 953   # 503 weights + ~150 KV + 300 overhead (shares the target's conte
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "meta-llama3.2-1b-heretic-drafter-q4_k_m"
 name = "Meta Llama 3.2 1B (drafter)"
@@ -1051,6 +1057,7 @@ download_mb = 770
 quant = "Q4_K_M"
 license = "Llama 3.2 Community License"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "meta-llama3.2-3b-heretic-q4_k_m"
 abliterated = { by = "saidutta69", method = "heretic" }
 badges = []
@@ -1061,7 +1068,6 @@ run_mb = 1220   # 770 weights + ~150 KV + 300 overhead (shares the target's cont
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "mistral-ministral3-3b-heretic-drafter-q4_k_m"
 name = "Mistral Ministral 3 3B (drafter)"
@@ -1072,6 +1078,7 @@ download_mb = 2047
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "reasoning"
 pairs_with = "mistral-ministral3-14b-reasoning-heretic-q4_k_m"
 abliterated = { by = "coder3101", method = "heretic" }
 badges = []
@@ -1082,7 +1089,6 @@ run_mb = 2497   # 2047 weights + ~150 KV + 300 overhead (shares the target's con
 needs_avx2 = true
 min_budget = {}
 tok_s = { gpu = 0, unified = 0, cpu = 0 }
-
 [[model]]
 id = "ibm-granite4.2-3b-heretic-drafter-q4_k_m"
 name = "IBM Granite 4.2 3B (drafter)"
@@ -1093,6 +1099,7 @@ download_mb = 2140
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "drafter"
+use_case = "general-chat"
 pairs_with = "ibm-granite4.2-8b-heretic-q4_k_m"
 abliterated = { by = "richardyoung", method = "heretic" }
 badges = []
@@ -1111,7 +1118,6 @@ tok_s = { gpu = 0, unified = 0, cpu = 0 }
 # folder under the voice folder; the token list is a small git file, checked
 # by its git oid. Not a chat model, so no `abliterated`. Not offered in
 # Download models until the app transcribes with it.
-
 [[model]]
 id = "parakeet-tdt-0.6b-v3-int8"
 offered = false
@@ -1124,6 +1130,7 @@ download_mb = 640
 quant = "int8"
 license = "CC-BY-4.0"
 kind = "speech-to-text"
+use_case = "voice"
 badges = []
 tier = "T1"
 route = "local:voice"
@@ -1164,6 +1171,7 @@ download_mb = 343
 quant = "fp32"
 license = "Apache-2.0"
 kind = "text-to-speech"
+use_case = "voice"
 badges = []
 tier = "T1"
 route = "local:voice"
@@ -1193,7 +1201,6 @@ bytes = 687
 # exits, so nothing stays in memory beside a game. Its text encoder (Qwen3
 # 4B) and its VAE are parts in the same folder. Not a chat model, so no
 # `abliterated`; every picture ask still passes the hard bans first.
-
 [[model]]
 id = "z-image-turbo-q4_k"
 name = "Z-Image Turbo pictures"
@@ -1205,6 +1212,7 @@ download_mb = 6_387
 quant = "Q4_K"
 license = "Apache-2.0"
 kind = "image"
+use_case = "image-gen"
 badges = []
 tier = "T2"
 route = "local:image"
@@ -1239,6 +1247,7 @@ download_mb = 8_859
 quant = "Q4_K_M"
 license = "Apache-2.0"
 kind = "image"
+use_case = "image-gen"
 optional = true
 badges = []
 tier = "T2"
@@ -1261,10 +1270,44 @@ file = "chroma1-hd/ae.safetensors"
 sha256 = "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
 bytes = 335_304_388
 
+# Short video on a GPU: Wan 2.2 TI2V 5B (Q4_K_M). The UMT5 text encoder
+# and Wan 2.2 VAE are parts. kind stays image so the files land in the
+# image folder; use_case video-gen keeps it off the picture picker.
+[[model]]
+id = "wan2.2-ti2v-5b-q4_k_m"
+name = "Wan 2.2 5B video"
+repo = "QuantStack/Wan2.2-TI2V-5B-GGUF"
+file = "wan2.2-ti2v-5b/Wan2.2-TI2V-5B-Q4_K_M.gguf"
+remote_file = "Wan2.2-TI2V-5B-Q4_K_M.gguf"
+sha256 = "95b19697b7f98e65b0a543640e9ca7b4dfec32e2a6e3731e8e10708be52655e2"
+download_mb = 3274
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "image"
+use_case = "video-gen"
+badges = []
+tier = "T3"
+route = "local:image"
+ctx_default = 0
+run_mb = 9000
+needs_avx2 = false
+min_budget = { gpu = 8192, unified = 16384 }
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
+[[model.parts]]
+repo = "city96/umt5-xxl-encoder-gguf"
+remote_file = "umt5-xxl-encoder-Q5_K_M.gguf"
+file = "wan2.2-ti2v-5b/umt5-xxl-encoder-Q5_K_M.gguf"
+sha256 = "eaea358bb438c5d211721a4feecc162000e3636e9cb96f51e216f1f44ebd12ce"
+bytes = 4_145_878_880
+[[model.parts]]
+remote_file = "VAE/Wan2.2_VAE.safetensors"
+file = "wan2.2-ti2v-5b/Wan2.2_VAE.safetensors"
+sha256 = "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156"
+bytes = 1_409_400_960
+
 # The picture guard: Qwen3-VL 2B looks at every finished local picture
 # against the hard bans before it is shown (llama.cpp with its image
 # reader). Local 18+ pictures wait until it is on disk.
-
 [[model]]
 id = "qwen3-vl-2b-guard-q8_0"
 name = "Picture guard (Qwen3-VL 2B)"
@@ -1276,6 +1319,7 @@ download_mb = 2_174
 quant = "Q8_0"
 license = "Apache-2.0"
 kind = "image-guard"
+use_case = "vision"
 badges = []
 tier = "T1"
 route = "local:image-guard"

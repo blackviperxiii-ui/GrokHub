@@ -288,7 +288,10 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
               aria-current={focused ? "true" : undefined}
               className="local-library-row"
             >
-              <p>{row.line}</p>
+              <p>
+                <span className="local-library-job">{row.useCase}</span>
+                {row.line}
+              </p>
               <p className="note">{row.about}</p>
               {action(row)}
               {failed && (

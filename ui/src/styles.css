@@ -7516,6 +7516,16 @@ button.primary:not(.quick-chip) {
   border-radius: var(--radius-sm);
 }
 
+.local-library-job {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 /* The model a Pulse card's Open in Settings landed on. */
 .local-library-row[aria-current="true"] {
   border-color: var(--accent);
