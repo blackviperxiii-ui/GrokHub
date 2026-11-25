@@ -74,6 +74,9 @@ pub struct Ask<'a> {
     pub lead_model: &'a str,
     /// The helper's prompt: a running sibling with the same one is a duplicate.
     pub objective: &'a str,
+    /// A message to one of the person's agents, which the person or an agent
+    /// asked for by name rather than the model choosing to split the work.
+    pub agent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,14 +113,22 @@ pub fn decide(ask: &Ask<'_>, facts: &Facts) -> Verdict {
             "Helpers don't run under an on-device lead model. Do this step yourself.",
         );
     }
-    let cap = turn_cap(facts.size);
+    // An agent message isn't the model choosing to split its own work, so a
+    // small turn doesn't refuse it: it gets at least a medium turn's helpers,
+    // and a long turn keeps its own cap.
+    let size = if ask.agent { None } else { facts.size };
+    let cap = if ask.agent {
+        turn_cap(facts.size).max(turn_cap(None))
+    } else {
+        turn_cap(size)
+    };
     if cap == 0 {
         return refuse(
             "small-turn",
             "This is a small task. Do it yourself instead of starting a helper.",
         );
     }
-    if facts.size == Some(TaskSize::Short) && !ask.explore {
+    if size == Some(TaskSize::Short) && !ask.explore {
         return refuse(
             "short-turn-general",
             "This is a short task. Do it yourself; a short task gets at most one explore helper, \
@@ -370,6 +381,7 @@ mod tests {
             worktree: false,
             lead_model: "grok-4.7",
             objective: "read the router",
+            agent: false,
         }
     }
 
@@ -402,6 +414,40 @@ mod tests {
             ..facts(TaskSize::Short)
         };
         assert_eq!(rule(decide(&ask(true), &one_done)), "turn-cap");
+    }
+
+    #[test]
+    fn an_agent_message_is_not_held_to_the_turns_size() {
+        let agent = Ask {
+            agent: true,
+            ..ask(false)
+        };
+        for size in [TaskSize::Tiny, TaskSize::Short, TaskSize::Long] {
+            assert_eq!(rule(decide(&agent, &facts(size))), "general", "{size:?}");
+        }
+        let four_sent = Facts {
+            spawned_this_turn: 4,
+            ..facts(TaskSize::Tiny)
+        };
+        assert_eq!(rule(decide(&agent, &four_sent)), "turn-cap");
+        let long_four = Facts {
+            spawned_this_turn: 4,
+            ..facts(TaskSize::Long)
+        };
+        assert_eq!(rule(decide(&agent, &long_four)), "general");
+        let long_ten = Facts {
+            spawned_this_turn: 10,
+            ..facts(TaskSize::Long)
+        };
+        assert_eq!(rule(decide(&agent, &long_ten)), "turn-cap");
+        let local = Ask {
+            lead_model: "local:gemma-26b",
+            ..agent
+        };
+        assert_eq!(
+            rule(decide(&local, &facts(TaskSize::Long))),
+            "lead-on-device"
+        );
     }
 
     #[test]

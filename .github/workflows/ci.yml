@@ -550,11 +550,12 @@ jobs:
           node ui/e2e/web.mjs
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-      # Release installer/AppImage/dmg. Skipped on pull_request: the debug
-      # smoke build below already compiles the shell the smoke test drives.
-      # release.yml still publishes tagged/beta channel bundles.
+      # Release installer/AppImage/dmg. Skipped on pull_request and on push
+      # to beta: the debug smoke build below already compiles the shell the
+      # smoke test drives, and release.yml builds the beta channel bundles
+      # for every beta push, so building them here too only doubles the run.
       - name: Bundles
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
         shell: bash
         run: ui/node_modules/.bin/tauri build -- --locked
       - name: Smoke-test build
