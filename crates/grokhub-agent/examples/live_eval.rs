@@ -3,7 +3,7 @@
 //!
 //! GROKHUB_EVAL_API_KEY=... cargo run -p grokhub-agent --example live_eval -- \
 //!     --budget-usd 1.00 [--k 3] [--model grok-4.3] [--effort low] [--only recall] \
-//!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--out report.md]
+//!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--suite default|coding] [--out report.md]
 //!
 //! `--auth signin` (Grok only) uses the app's saved "Sign in with Grok",
 //! billed to the SuperGrok pool, instead of GROKHUB_EVAL_API_KEY. It takes
@@ -18,6 +18,19 @@
 //! model id) with the key in GROKHUB_EVAL_OPENROUTER_KEY. `--provider local`
 //! sends them to the model server at GROKHUB_EVAL_LOCAL_URL (loopback only),
 //! model `--provider-model`, token GROKHUB_EVAL_LOCAL_TOKEN.
+//!
+//! `--suite coding` runs the 30 fixed coding tasks instead of the chat set.
+//! Pass or fail is each task's own tests. `--out` is required: the run writes
+//! the markdown report and `<out>.results.json` with that model's pass rate,
+//! escalations, tokens and wall time. One command is one model. Run it twice
+//! for the two arms:
+//!
+//! cargo run --release -p grokhub-agent --example live_eval -- --suite coding \
+//!     --provider local --provider-model coder --budget-usd 5 --k 1 \
+//!     --deadline-mins 150 --out coding-local.md
+//! cargo run --release -p grokhub-agent --example live_eval -- --suite coding \
+//!     --provider grok --auth signin --budget-usd 5 --k 1 \
+//!     --deadline-mins 150 --out coding-grok.md
 //!
 //! `--ab` compares the switch on and off task by task and reports billed
 //! dollars per solved task with 95% intervals. `--mde` is the smallest cost
@@ -113,6 +126,9 @@ fn main() {
             }
             "--provider" => opts.provider = Provider::parse(&value).unwrap_or_else(|e| fail(&e)),
             "--provider-model" => provider_model = Some(value),
+            "--suite" => {
+                opts.suite = grokhub_agent::EvalSuite::parse(&value).unwrap_or_else(|e| fail(&e))
+            }
             "--out" => out = Some(value),
             "--call-timeout-secs" => {
                 let secs: u64 = value
@@ -157,6 +173,9 @@ fn main() {
     let Some(budget) = budget else {
         fail("--budget-usd is required (at most 5.00)");
     };
+    if opts.suite == grokhub_agent::EvalSuite::Coding && out.is_none() {
+        fail("--suite coding needs --out (it writes <out>.results.json)");
+    }
     let budget = grokhub_agent::parse_live_budget(&budget).unwrap_or_else(|e| fail(&e));
     if signin && opts.provider != Provider::Grok {
         fail("--auth signin works with --provider grok only");
@@ -175,6 +194,7 @@ fn main() {
         Provider::OpenRouter => {
             let model = provider_model
                 .unwrap_or_else(|| fail("--provider openrouter needs --provider-model"));
+            opts.model = model.clone();
             Arc::new(OpenRouterClient::new(
                 env("GROKHUB_EVAL_OPENROUTER_KEY"),
                 model,
@@ -183,6 +203,7 @@ fn main() {
         Provider::Local => {
             let model =
                 provider_model.unwrap_or_else(|| fail("--provider local needs --provider-model"));
+            opts.model = model.clone();
             let token = std::env::var("GROKHUB_EVAL_LOCAL_TOKEN").unwrap_or_default();
             Arc::new(LocalClient::new(
                 &env("GROKHUB_EVAL_LOCAL_URL"),
@@ -230,6 +251,11 @@ fn main() {
             if let Err(err) = grokhub_agent::write_live_progress(md, jsonl, so_far, last) {
                 eprintln!("could not write progress: {err}");
             }
+            if so_far.suite == grokhub_agent::EvalSuite::Coding {
+                if let Err(err) = grokhub_agent::write_coding_results(so_far, md) {
+                    eprintln!("could not write the results file: {err}");
+                }
+            }
         }
     });
     if let Some(why) = &report.stopped {
@@ -259,6 +285,11 @@ fn main() {
     if let Some(path) = &md_path {
         if let Err(err) = grokhub_agent::write_live_atomic(path, md.as_bytes()) {
             fail(&format!("could not write report: {err}"));
+        }
+        if report.suite == grokhub_agent::EvalSuite::Coding {
+            if let Err(err) = grokhub_agent::write_coding_results(&report, path) {
+                fail(&format!("could not write the results file: {err}"));
+            }
         }
     }
     print!("{md}");
