@@ -1,15 +1,15 @@
 ---
 name: principle-test-behavior-not-implementation
-description: Writing or keeping a test. Assert what users observe, not internals.
+description: "Apply when you write, change, or keep a test. Assert what the code's users can observe, so that the test fails when that behavior breaks and keeps passing when only the internals change."
 ---
 
 # Test Behavior, Not Implementation
 
-Behavior: return values, errors, readable state, external effects (request sent, row written). Implementation: private helpers, call order, intermediate data.
+A test is a claim about what users of the code can observe through its interface: return values, errors, state they can read back, and effects on outside systems (a request sent, a row written). Private helpers, internal call order, and intermediate data are implementation.
 
-Two imagined edits:
+Judge each test against two imagined edits:
 
-- **Break the behavior.** Still passes? Proves nothing. Usual causes: loose assertion, expected value computed by the code, restated constants, asserting data the test built.
-- **Change internals**, same results. Fails? Pinned to implementation.
+- **Break the behavior** (a wrong value, a skipped or doubled effect). If the test still passes, it proves nothing. The usual causes are a loose assertion, an expected value computed by the code under test, a constant restated from the code, and an assertion on data the test built itself.
+- **Change the internals** and keep every observable result. If the test fails, it is pinned to the implementation.
 
-Keep tests that catch the first and survive the second. Use the real interface; derive expectations from the requirement. Payload to a mocked external service is behavior; an internal helper call isn't. Error type is contract; message wording isn't.
+Keep a test that catches the first edit and survives the second. Rewrite or delete the rest. Drive the code through its public interface with a concrete input, and derive the expected value from the requirement. What an external service receives is behavior, and that holds for the payload sent to a mocked one. A call to an internal helper is not. Pair "this never happens" with a case where it does happen. Assert the error type that callers branch on, not the message.
