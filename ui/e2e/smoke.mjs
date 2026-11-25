@@ -90,6 +90,15 @@ function toolCall(callId, name, args) {
 // "result checked"), as with a real model: write the note, re-read it, tick
 // the checklist, then reply in two pieces.
 function mockReply(callNumber, body) {
+  // The Team page's agent answers the message the person's chat hands it;
+  // the chat asks it once, then passes the answer on.
+  if (body.includes(`You are ${TEAM_NAME}, one of the person's agents`)) return textReply(TEAM_ANSWER);
+  if (body.includes(TEAM_ASK)) {
+    if (!body.includes("smoke-team-ask")) {
+      return toolCall("smoke-team-ask", "message_agent", { agent: TEAM_ID, message: TEAM_QUESTION });
+    }
+    return textReply(TEAM_REPLY);
+  }
   // The Pulse writer's two calls: the taste note, then one post.
   if (body.includes("You keep a short note on what one person likes")) {
     return textReply("They like smoke tests and shell news.");
@@ -375,6 +384,12 @@ const EP_PROMPT = "tidy the old folder as a watched session";
 const EP_TEXT = "rm -rf ~/old";
 const EP_REPLY = "Waiting for your OK on the delete";
 const WEB_PROMPT = "hello from the browser smoke test";
+const TEAM_NAME = "Smoke researcher";
+const TEAM_ID = "smoke-researcher";
+const TEAM_ASK = "ask the smoke researcher which router reaches the garden";
+const TEAM_QUESTION = "Which router reaches the garden?";
+const TEAM_ANSWER = "The mesh kit, with one unit by the back door.";
+const TEAM_REPLY = "The researcher says the mesh kit reaches it";
 const WEB_REPLY = "Hello, browser";
 
 async function find(s, css) {
@@ -1041,6 +1056,71 @@ async function plan(s, workspace) {
     return null;
   });
   console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, no picker needed`);
+}
+
+// Team: make a role agent on the Team page, have the chat message it, see the
+// exchange in the task log (agent-tasks.jsonl), then remove the agent so the
+// steps after this one see the chat's usual tools.
+async function team(s, config) {
+  await tab(s, "Team");
+  const one = async (xpath) => (await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }))[0];
+  const newRole = await waitFor("New role", () => one("//section[@aria-label='Team']//button[normalize-space()='New role']"));
+  await wd("POST", `${s}/element/${newRole[ELEMENT]}/click`, {});
+  const form = "form[aria-label='New role']";
+  await typeInto(s, await waitFor("the agent form", () => find(s, `${form} input`)), TEAM_NAME);
+  await typeInto(s, await find(s, `${form} textarea`), "Finds sources for questions about the house.");
+  await click(s, `${form} button[type='submit']`);
+  const made = await waitFor("the agent in agent-team.json", async () => {
+    if (!existsSync(join(config, "agent-team.json"))) return null;
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents?.find((a) => a.id === TEAM_ID) ?? null;
+  });
+  if (made.kind !== "role" || made.access !== "ask" || made.name !== TEAM_NAME) {
+    throw new Error(`the agent was saved as ${JSON.stringify(made)}`);
+  }
+  await waitFor("the agent's card", () => find(s, `section[aria-label='Team'] li[aria-label='${TEAM_NAME}']`));
+  console.log(`Team page made ${TEAM_ID} (${made.kind}, ${made.access})`);
+
+  await tab(s, "Chat");
+  const box = await waitFor("the message box", () => find(s, "section[aria-label='Chat'] textarea[aria-label='Message']"));
+  await typeInto(s, box, TEAM_ASK);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await turnOver(s, TEAM_REPLY);
+  const asked = mockSeen.find((c) => c.body.includes(`You are ${TEAM_NAME}, one of the person's agents`));
+  if (!asked?.body.includes(TEAM_QUESTION)) throw new Error("the agent's turn never got the message");
+  if (asked.body.includes(TEAM_ASK)) throw new Error("the agent's turn saw the person's chat");
+  const logged = await waitFor("the task in agent-tasks.jsonl", async () => {
+    const path = join(config, "agent-tasks.jsonl");
+    if (!existsSync(path)) return null;
+    const rows = readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    return rows.find((r) => r.to === TEAM_ID) ?? null;
+  });
+  if (logged.from !== "person" || logged.state !== "TASK_STATE_COMPLETED" || logged.asked !== TEAM_QUESTION || logged.reply !== TEAM_ANSWER) {
+    throw new Error(`the task was logged as ${JSON.stringify(logged)}`);
+  }
+  console.log(`task log: ${JSON.stringify({ from: logged.from, to: logged.to, state: logged.state, reply: logged.reply })}`);
+
+  await tab(s, "Team");
+  const row = await waitFor("the task log row", () =>
+    find(s, `ul[aria-label='Task log'] li[aria-label='You asked ${TEAM_NAME}']`),
+  );
+  const rowText = await wd("GET", `${s}/element/${row}/text`);
+  if (!rowText.includes("Answered") || !rowText.includes(TEAM_QUESTION)) throw new Error(`the log row said ${JSON.stringify(rowText)}`);
+  await shot(s, "team-task-log");
+  console.log(`Team page log row: ${JSON.stringify(rowText.split("\n")[0])}`);
+
+  const remove = await one(`//li[@aria-label='${TEAM_NAME}']//button[normalize-space()='Remove']`);
+  await wd("POST", `${s}/element/${remove[ELEMENT]}/click`, {});
+  const confirm = await waitFor("Remove to confirm", () =>
+    one(`//div[@aria-label='Remove ${TEAM_NAME}?']//button[normalize-space()='Remove']`),
+  );
+  await wd("POST", `${s}/element/${confirm[ELEMENT]}/click`, {});
+  await waitFor("the agent gone from agent-team.json", async () => {
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents.length === 0 ? true : null;
+  });
+  if (!existsSync(join(config, "agents", TEAM_ID))) throw new Error("removing the agent deleted its folder");
+  console.log("removed the agent; its folder stays");
 }
 
 // Settings → Local AI: on Windows smoke, capture Get engine → progress →
@@ -2132,6 +2212,7 @@ async function main() {
     await codeProjects(s, config, workspace);
     await codeAgent(s, config, workspace);
     await codeShip(s, config, workspace);
+    await team(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {
