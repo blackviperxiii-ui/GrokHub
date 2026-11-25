@@ -1,7 +1,7 @@
 # Built-in vstack skills: credit and license
 
 Bundled from [vstack](https://github.com/blackviperxiii-ui/vstack) release
-[`v1.6.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.6.0) (commit `3c6e08233dbfc96dc6a8d2b4b2152688c91c2bf8`).
+[`v1.7.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.7.0) (commit `499a3bcb2937990fc4524836c03d1c7ef9835746`).
 `.github/scripts/vstack_sync.py` writes this file, the skill folders and
 `../../src/builtin_skills.rs` from `vstack.json`; edit that list, not these files.
 
@@ -36,6 +36,7 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - ketchup
 - ketchup-video
 - land-it
+- lean-ci
 - maintain-formal-verification-skill
 - maintain-verification-skill
 - make-bot-ui
@@ -92,4 +93,4 @@ Left out:
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `f69270a9283d25d0cfef75ebfaeef77905d020761eee51122e128757f87e0d30`
+Bundle SHA-256: `141ebe087640cee3ded10f9fc741a915703b28dabe6b49e56078af6dbec4b9f6`
