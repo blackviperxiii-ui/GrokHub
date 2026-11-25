@@ -4192,10 +4192,7 @@ mod tests {
             outputs.iter().any(|o| o.contains("hello native")),
             "{outputs:?}"
         );
-        assert!(
-            !outputs.contains(&tools::PLAIN_SCHEMA_ERROR),
-            "{outputs:?}"
-        );
+        assert!(!outputs.contains(&tools::PLAIN_SCHEMA_ERROR), "{outputs:?}");
         assert_eq!(script.seen.lock().unwrap().len(), 3);
         assert_eq!(out.stop, StopReason::EndTurn);
         let _ = std::fs::remove_dir_all(&dir);
