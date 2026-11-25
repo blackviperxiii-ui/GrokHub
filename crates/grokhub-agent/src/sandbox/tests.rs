@@ -1068,3 +1068,97 @@ fn with_the_sandbox_off_quoted_and_globbed_key_paths_are_refused() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// `HOME` set to a made-up home for one test, put back after.
+#[cfg(target_os = "linux")]
+struct HomeVar(Option<std::ffi::OsString>);
+
+#[cfg(target_os = "linux")]
+impl HomeVar {
+    fn set(home: &Path) -> Self {
+        let prev = std::env::var_os("HOME");
+        // SAFETY: the tests here run one per process (nextest) or one at a
+        // time (`RUST_TEST_THREADS=1`), so nothing reads the environment
+        // while it changes.
+        unsafe { std::env::set_var("HOME", home) };
+        Self(prev)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HomeVar {
+    fn drop(&mut self) {
+        // SAFETY: as in `set`.
+        match self.0.take() {
+            Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
+}
+
+/// Linux, the real shell path: a program that builds a key path when it
+/// runs is past what the floor reads in the text, and the sandbox's masks
+/// keep the key out of reach anyway. With the sandbox off the same command
+/// reads it, so the masks are what stop it. The gate reads a relative word
+/// from the workspace: a link there into the key folder counts.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_program_that_builds_a_key_path_cannot_read_the_key_in_the_sandbox() {
+    if !netns::available() {
+        eprintln!("skipped: no user and mount namespaces here");
+        return;
+    }
+    let home = scratch("built-home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh").join("id_rsa"), "fake-key-material").unwrap();
+    let _home = HomeVar::set(&home);
+    let config = scratch("built-cfg");
+    let _pin = crate::perm::ConfigGuard::set(&config);
+    let ws = scratch("built-ws");
+    let cmd = concat!(
+        r#"python3 -c 'import os; p = os.path.join(os.environ["HOME"], "." + "#,
+        r#""".join(["s", "s", "h"]), "id_rsa"); print(open(p).read())'"#
+    );
+    assert_eq!(grokhub_core::host_safety::forbidden_reason(cmd), None);
+    let args = json!({ "command": cmd });
+    let plan = plan_for_call("run_terminal_command", &args, &ws).expect("a sandbox plan");
+    let ssh = home.join(".ssh").canonicalize().unwrap();
+    let hide = plan.isolation.map(|i| i.hide).unwrap_or_default();
+    assert!(hide.contains(&ssh), "{hide:?}");
+
+    let out = crate::tools::shell::run(&ws, &args, &|| false);
+    assert!(!out.text.contains("fake-key-material"), "{}", out.text);
+    assert!(out.failed, "{}", out.text);
+
+    std::fs::write(config.join(CONFIG_NAME), "enabled = false\n").unwrap();
+    let out = crate::tools::shell::run(&ws, &args, &|| false);
+    assert!(out.text.contains("fake-key-material"), "{}", out.text);
+
+    std::os::unix::fs::symlink(&ssh, ws.join("keys")).unwrap();
+    let gate = crate::gate::Gate {
+        mode: crate::gate::PermMode::Always,
+        readonly_session: false,
+        attended: true,
+        desktop: false,
+    };
+    let policy = crate::perm::Policy::empty();
+    let decide = |command: &str| {
+        let args = json!({ "command": command }).to_string();
+        crate::gate::decide_with(
+            &gate,
+            "run_terminal_command",
+            &args,
+            false,
+            None,
+            &ws,
+            Some(&policy),
+        )
+    };
+    let refused = crate::gate::Decision::Refuse("forbidden path: ssh keys".into());
+    assert_eq!(decide("cat keys/id_rsa"), refused);
+    assert_eq!(decide("cat k*/*"), refused);
+    assert_eq!(decide("ls"), crate::gate::Decision::Run);
+    for dir in [&home, &config, &ws] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

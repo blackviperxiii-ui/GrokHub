@@ -428,7 +428,12 @@ pub fn decide_with(
     let _lap = crate::timing::lap("harness:gate_decide_with");
     // Harness kernel: hard floor + hard class before soft Always / MCP / policy.
     // Access is applied by the cabin when building Gate (Readonly ⇒ desktop=false).
-    match crate::harness::decide(crate::harness::Step::Tool { name, arguments }) {
+    // The hard floor reads a shell command's relative words from the
+    // workspace the shell tool runs it in.
+    let step = crate::harness::Step::Tool { name, arguments };
+    let outcome =
+        grokhub_core::host_safety::in_workspace(workspace, || crate::harness::decide(step));
+    match outcome {
         crate::harness::GateOutcome::Refuse { reason } => {
             return Decision::Refuse(reason);
         }

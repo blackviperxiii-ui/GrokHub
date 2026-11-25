@@ -1796,22 +1796,6 @@ fn folded(path: &str) -> String {
     parts.join("/")
 }
 
-/// A command that names the consent ledger, or a routine consent store, in
-/// any way a shell could read it ([`host_safety::shell_readings`]): quoted
-/// (`"consent".jsonl`), or through a glob that could match it in the GrokHub
-/// folder (`GrokHub/consent.json?`, `cd GrokHub && … consent.js?nl`).
-fn names_consent(cmd: &str) -> bool {
-    host_safety::shell_readings(cmd).iter().any(|c| {
-        let names_app_folder = c.contains("grokhub") || host_safety::glob_names(c, &["grokhub"]);
-        c.contains("consent.jsonl")
-            || (c.contains("consent.json") && c.contains("routines"))
-            || host_safety::glob_names(c, &["grokhub", "consent.jsonl"])
-            || host_safety::glob_names(c, &["grokhub", "routines", "consent.json"])
-            || (names_app_folder && host_safety::glob_names(c, &["consent.jsonl"]))
-            || (c.contains("routines") && host_safety::glob_names(c, &["consent.json"]))
-    })
-}
-
 fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = host_safety::forbidden_reason(cmd) {
         return Some(why.to_string());
@@ -1819,7 +1803,8 @@ fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = grokhub_core::driver_check::input_driver_install(cmd) {
         return Some(why);
     }
-    if names_consent(cmd) {
+    // The consent ledger, however a shell could spell it.
+    if host_safety::names_consent(cmd) {
         return Some(LEDGER_FLOOR.into());
     }
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
@@ -3605,6 +3590,12 @@ mod tests {
                 "cd ~/.config/GrokHub/routines && cp x.json *.json",
                 ledger.clone(),
             ),
+            (
+                "echo '{}' >> ~/.config/[G][r][o][k][H][u][b]/[c][o][n][s][e][n][t].jsonl",
+                ledger.clone(),
+            ),
+            ("echo '{}' | tee -a ~/.config/*/*.jsonl", ledger.clone()),
+            ("echo '{}' >> ~/.config/*/c?nsent.*", ledger.clone()),
             ("cat ~/.s{s..s}h/id_rsa", floor("forbidden path: ssh keys")),
             (
                 "cd ~/.config/GrokHub && sed -i 's/x/y/' *",

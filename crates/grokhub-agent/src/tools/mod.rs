@@ -37,6 +37,7 @@ mod write;
 pub use registry::Settings as DeferredToolsSettings;
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
+pub(crate) use web_fetch::{dial_host, parse_public_url};
 pub use web_search::{
     brave_key_present, seal_brave_key, searxng_url_problem, Backend as WebSearchBackend,
     Settings as WebSearchSettings, BACKENDS as WEB_SEARCH_BACKENDS,
