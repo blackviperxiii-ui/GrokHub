@@ -1,0 +1,1 @@
+- Add agent team profiles (role, family, staff and customer agents), each with its own home, access level and who it may message, plus A2A v1.0 message, task and agent card shapes for agents to hand each other work (core only; no app surface yet).
