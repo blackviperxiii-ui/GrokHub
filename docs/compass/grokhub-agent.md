@@ -23,6 +23,7 @@
 ## What depends on it
 - The Tauri shell (`src-tauri/`): chat, sessions, unattended runs, MCP and plugins host the engine; harness and `ToolOutput` also feed the desktop MCP.
 ## Non-obvious
+- A local turn (`step_on_device` or a `local:` model) checks each tool call against the offered JSON schema (`tools/schema_check.rs`). The first miss is sent back once; the next miss in that turn is the plain error `not run: the tool arguments do not match the schema` and the turn stops. llama-server is started with `--jinja` so it builds a tool-call grammar from those schemas. The live eval report prints the malformed-call rate.
 - Gate v0 still treats Auto like Ask; Plan and btw stay read-only (`READ_ONLY_PHASE`).
 - Unattended runs (`run_unattended`): Ask denies every non-read-only tool; Auto uses the Phase 5 judge and fails closed.
 - Subagents: Explore is read-only, General copies the parent gate, depth 2 stops grandchildren, a worktree never falls back to the parent tree.

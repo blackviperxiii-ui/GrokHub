@@ -389,6 +389,10 @@ fn base_args(model: &Path, host: &str, port: u16) -> Vec<String> {
         // the answer, so it never reaches the chat as reply text.
         "--reasoning-format".into(),
         "deepseek".into(),
+        // Tool arguments are constrained to each tool's JSON schema. b12017
+        // builds that grammar from the request tools only when jinja is on
+        // (it is the default; pass it so a later default cannot drop it).
+        "--jinja".into(),
     ]
 }
 
@@ -3892,6 +3896,7 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|w| w == ["--reasoning-format", "deepseek"]));
+        assert!(args.iter().any(|a| a == "--jinja"));
         // Perf defaults (PR C) ride along even with the CPU floor.
         assert!(args.windows(2).any(|w| w[0] == "-ngl"));
         assert!(args.iter().any(|a| a == "--cache-prompt"));
