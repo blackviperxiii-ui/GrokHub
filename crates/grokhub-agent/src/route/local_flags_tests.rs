@@ -216,7 +216,10 @@ fn a_user_set_hip_visible_devices_is_left_alone_and_vulkan_is_untouched() {
         vec![],
         "Vulkan never gets HIP_VISIBLE_DEVICES"
     );
-    assert_eq!(hip_visible_env(Backend::Cuda, &with_igpu, |_| false), vec![]);
+    assert_eq!(
+        hip_visible_env(Backend::Cuda, &with_igpu, |_| false),
+        vec![]
+    );
 }
 
 #[cfg(target_os = "linux")]
