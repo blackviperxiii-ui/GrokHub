@@ -16,15 +16,91 @@ pub fn normalize_domain(raw: &str) -> String {
 }
 
 pub fn domain_matches(pattern: &str, url: &str) -> bool {
-    let Some(host) = host_of(url) else {
-        return false;
+    host_of(url).is_some_and(|host| domain_hit(pattern, &host))
+}
+
+/// Whether `host` is the domain `pattern` names or inside it. An IPv4
+/// address counts in any spelling (`domain:127.0.0.1` names `2130706433`).
+pub(crate) fn domain_hit(pattern: &str, host: &str) -> bool {
+    let canon = |text: &str| {
+        let text = normalize_domain(text);
+        crate::tools::dial_host(&text).unwrap_or(text)
     };
-    let domain = normalize_domain(&host);
-    let pattern = normalize_domain(pattern);
+    let (domain, pattern) = (canon(host), canon(pattern));
     if pattern.is_empty() {
         return false;
     }
     domain == pattern || domain.ends_with(&format!(".{pattern}"))
+}
+
+/// Where a fetch goes, for a URL rule to read: the scheme, host, port and
+/// path.
+pub(crate) struct Target {
+    scheme: Option<String>,
+    pub(crate) host: String,
+    /// `None` when the URL's port is no number.
+    port: Option<u16>,
+    path: String,
+}
+
+impl Target {
+    /// The fetch web_fetch makes ([`crate::tools::parse_public_url`]): always
+    /// https, on its port (443 unless the URL names another).
+    pub(crate) fn dialed(url: &str) -> Option<Self> {
+        let parts = crate::tools::parse_public_url(url).ok()?;
+        Some(Self {
+            scheme: Some("https".into()),
+            port: Some(parts.dns_port()),
+            host: parts.host,
+            path: parts.path,
+        })
+    }
+
+    /// The URL as a browser reads it ([`UrlParts`]), for deny and ask rules
+    /// to widen with: the scheme as written, the port as its number (443
+    /// unless written).
+    pub(crate) fn read(url: &str) -> Option<Self> {
+        let parts = url_parts(url);
+        let host = host_of(url)?;
+        let port = match authority_port(&parts.authority) {
+            None => Some(443),
+            Some(port) => port_number(port),
+        };
+        let path = if parts.path.is_empty() || parts.path.starts_with('?') {
+            format!("/{}", parts.path)
+        } else {
+            parts.path
+        };
+        Some(Self {
+            scheme: parts.scheme,
+            host: host.trim_end_matches('.').to_lowercase(),
+            port,
+            path: resolve_dots(&path),
+        })
+    }
+}
+
+/// The port an authority names after its host, as written.
+fn authority_port(authority: &str) -> Option<&str> {
+    let authority = authority.trim();
+    let after = match authority.strip_prefix('[') {
+        Some(inner) => inner.split_once(']').map_or("", |(_, after)| after),
+        None => authority.split_once(':').map_or("", |(_, port)| port),
+    };
+    let port = after.strip_prefix(':').unwrap_or(after).trim();
+    (!port.is_empty()).then_some(port)
+}
+
+/// A port written in digits as its number: `08443` is 8443.
+fn port_number(text: &str) -> Option<u16> {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    match text.trim_start_matches('0') {
+        "" => Some(0),
+        digits => digits.parse().ok(),
+    }
 }
 
 /// A URL split the way a browser reads it (the WHATWG URL parser) and so the
@@ -93,16 +169,19 @@ fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-/// The host of an authority (`[::1]:80` gives `::1`), `%` escapes decoded
-/// and blanks around it trimmed, as web_fetch trims them before it dials
-/// (`https:// evil.test/` dials `evil.test`).
+/// The host of an authority (`[::1]:80` gives `::1`), `%` escapes decoded,
+/// blanks and stray brackets around it trimmed (`evil.test]` gives
+/// `evil.test`), and an IPv4 address as its four decimal parts, the way
+/// web_fetch reads it ([`crate::tools::dial_host`]).
 fn host_part(authority: &str) -> String {
     let authority = authority.trim();
     let host = match authority.strip_prefix('[') {
         Some(inner) => inner.split(']').next().unwrap_or(""),
         None => authority.split(':').next().unwrap_or(""),
     };
-    percent_decode(host).trim().to_string()
+    let host = percent_decode(host);
+    let host = host.trim().trim_matches(['[', ']']).trim();
+    crate::tools::dial_host(host).unwrap_or_else(|_| host.to_string())
 }
 
 /// The scheme a fetch dials: web_fetch sends an `http` URL as `https`.
@@ -138,16 +217,14 @@ fn percent_decode(text: &str) -> String {
 }
 
 /// A URL glob (`*.github.com`, `https://*.github.com/*`, `docs.rs/serde/*`)
-/// against the URL a fetch dials: the pattern's scheme against the scheme
-/// it dials (`http` is sent as `https`), its host part against the host it
-/// dials (and its port, when the pattern names one), the rest against the
-/// path. So a `*` in the host part never reaches past the host.
-pub fn url_glob_matches(pattern: &str, url: &str) -> bool {
+/// against where a fetch goes: the pattern's scheme against the scheme
+/// (`http` is sent as `https`), its host part against the host, its port
+/// against the port as numbers, the rest against the path. So a `*` in the
+/// host part never reaches past the host. A pattern with no port names
+/// port 443, or any port when `wide` (a deny or ask rule, which only
+/// widens).
+pub(crate) fn url_glob_hit(pattern: &str, got: &Target, wide: bool) -> bool {
     let want = url_parts(pattern.trim());
-    let got = url_parts(url);
-    let Some(host) = host_of(url) else {
-        return false;
-    };
     let scheme_hit = want.scheme.as_deref().is_none_or(|scheme| {
         got.scheme
             .as_deref()
@@ -156,28 +233,34 @@ pub fn url_glob_matches(pattern: &str, url: &str) -> bool {
     if !scheme_hit {
         return false;
     }
-    let host = host.trim_end_matches('.').to_lowercase();
-    let want_host = want.authority.trim().trim_end_matches('.').to_lowercase();
-    let host_hit = match want_host.rsplit_once(':') {
-        Some((name, port)) if !want_host.starts_with('[') || name.ends_with(']') => {
-            let have_port = got.authority.rsplit_once(':').map(|(_, p)| p.trim());
-            glob_match(name.trim_matches(['[', ']']), &host, false)
-                && have_port.is_some_and(|p| glob_match(port, p, false))
-        }
-        _ => glob_match(want_host.trim_matches(['[', ']']), &host, false),
+    let want_host = want.authority.trim().to_lowercase();
+    let (name, port) = match want_host.strip_prefix('[') {
+        Some(inner) => inner
+            .split_once(']')
+            .map_or((inner, ""), |(name, after)| (name, after)),
+        None => want_host
+            .split_once(':')
+            .map_or((&*want_host, ""), |(n, p)| (n, p)),
     };
-    if !host_hit {
+    let port = port.strip_prefix(':').unwrap_or(port).trim();
+    let name = name.trim().trim_end_matches('.');
+    let name = crate::tools::dial_host(name).unwrap_or_else(|_| name.to_string());
+    if !glob_match(&name, &got.host, false) {
         return false;
     }
-    if want.path.is_empty() {
-        return true;
-    }
-    let path = if got.path.is_empty() || got.path.starts_with('?') {
-        format!("/{}", got.path)
-    } else {
-        got.path
+    let port_hit = match (port, got.port) {
+        ("", Some(have)) => wide || have == 443,
+        ("", None) => wide,
+        (want, Some(have)) => match port_number(want) {
+            Some(want) => want == have,
+            None => glob_match(want, &have.to_string(), false),
+        },
+        (_, None) => wide,
     };
-    glob_match(&want.path, &resolve_dots(&path), false)
+    if !port_hit {
+        return false;
+    }
+    want.path.is_empty() || glob_match(&want.path, &resolve_dots(&got.path), false)
 }
 
 /// `path` with its `.` and `..` segments (`%2e` too) resolved, as a fetch
