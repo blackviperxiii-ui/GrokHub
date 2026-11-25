@@ -23,6 +23,8 @@ pub struct SelfCtx<'a> {
     pub config_dir: &'a Path,
     pub origin: Origin,
     pub now_ms: u64,
+    /// The chat whose agent called it; `None` for the `--mcp-self` server.
+    pub session: Option<&'a str>,
 }
 
 impl<'a> SelfCtx<'a> {
@@ -35,6 +37,7 @@ impl<'a> SelfCtx<'a> {
             config_dir,
             origin: Origin::SelfManage,
             now_ms,
+            session: None,
         }
     }
 
@@ -193,7 +196,7 @@ fn automation_write(ctx: &SelfCtx<'_>, args: &Value, id: Option<&str>) -> Result
         (true, None) => return Err("an automation needs `every` (10m, 1h, 1d)".into()),
         (false, _) => crate::tools::control::interval_minutes(&every)?,
     };
-    crate::tools::control::write_automation(&instructions, mins, false, id, ctx.now_ms)
+    crate::tools::control::write_automation(&instructions, mins, false, id, ctx.now_ms, ctx.session)
 }
 
 fn arg(args: &Value, key: &str) -> String {

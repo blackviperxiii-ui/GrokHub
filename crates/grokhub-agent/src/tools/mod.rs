@@ -107,8 +107,10 @@ pub trait DesktopOps {
     fn hint(&self, _name: &str, args: &Value) -> Value {
         args.clone()
     }
-    /// [`LOOK_AT_SCREEN`]: a screenshot that only looks. It works with desktop
-    /// control off, so a wrapper that switches control off must still pass it.
+    /// [`LOOK_AT_SCREEN`]: a screenshot that only looks. In a chat it works
+    /// with desktop control off, so a wrapper that switches control off must
+    /// still pass it there. An unattended run has nobody to ask, so its
+    /// wrapper refuses a look once the switch is off.
     fn look(&self, args: &Value) -> ToolOutput {
         self.call("screenshot", args)
     }
@@ -210,6 +212,9 @@ pub fn dispatch_for_job(
     if let Some(session) = ctx.session {
         registry::bind_session(session);
     }
+    // A tool that runs other tools here (a routine's steps) runs them in
+    // this run, so they take its origin (`crate::web_origin`).
+    let _run = crate::web_origin::RunScope::enter(ctx.session);
     if let Some(set) = set {
         if !set.allows(name) {
             return ToolOutput::err(set::tool_set_refusal(name));
@@ -242,7 +247,7 @@ pub fn dispatch_for_job(
     }
     if crate::self_manage::self_tool(name).is_some() {
         // Path E: the loop already asked `harness::decide` (via `decide_with`).
-        return crate::self_manage::run_native(name, &args);
+        return crate::self_manage::run_native(name, &args, ctx.session);
     }
     if let Some(output) = crate::mcp::try_dispatch(name, &args, ctx.stop) {
         return output;
@@ -254,7 +259,7 @@ pub fn dispatch_for_job(
         "kill_command_or_subagent" => control::kill(ctx.tasks.as_ref(), &args),
         control::MERGE_WORK => control::merge(ctx, &args),
         "monitor" => control::monitor(ctx, &args),
-        "scheduler_create" => control::scheduler_create(&args),
+        "scheduler_create" => control::scheduler_create(&args, ctx.session),
         "scheduler_delete" => control::scheduler_delete(&args),
         run_routine::NAME => run_routine::run(ctx, &args),
         save_routine::NAME => save_routine::run(ctx, &args),
@@ -267,16 +272,25 @@ pub fn dispatch_for_job(
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }
-        LOOK_AT_SCREEN => match ctx.desktop {
+        LOOK_AT_SCREEN => match run_desktop(ctx) {
             Some(desktop) => fence_desktop("screenshot", desktop.look(&args)),
             None => ToolOutput::err("There is no screen to look at here."),
         },
-        "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
-            Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
-            None => ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG),
-        },
+        "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => {
+            match run_desktop(ctx) {
+                Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
+                None => ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG),
+            }
+        }
         other => ToolOutput::err(gate::readonly_refusal(other)),
     }
+}
+
+/// The desktop this call may use: none in a run that started from a paired
+/// browser's words, whatever desktop it was handed.
+fn run_desktop<'a>(ctx: &ToolCtx<'a>) -> Option<&'a dyn DesktopOps> {
+    let allowed = || crate::web_origin::desktop_allowed(crate::web_origin::of(ctx.session));
+    ctx.desktop.filter(|_| allowed())
 }
 
 fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
@@ -861,5 +875,150 @@ mod tests {
         assert_eq!(refused("src/routines/consent.json"), None);
         assert_eq!(refused(".config/GrokHub/routines/note/routine.json"), None);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Records each desktop call it is handed.
+    #[derive(Default)]
+    struct SpyDesk(std::sync::Mutex<Vec<String>>);
+
+    impl DesktopOps for SpyDesk {
+        fn halted(&self) -> bool {
+            false
+        }
+        fn locked(&self) -> bool {
+            false
+        }
+        fn call(&self, name: &str, _args: &Value) -> ToolOutput {
+            self.0.lock().unwrap().push(name.to_string());
+            ToolOutput::ok("done")
+        }
+    }
+
+    #[test]
+    fn a_browser_run_gets_no_desktop_it_was_handed() {
+        use crate::web_origin::{note_chat, start_run, RunOrigin, RunScope};
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-run-desktop-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _config = crate::perm::ConfigGuard::set(&dir);
+        // A chat a browser started, and a run of a job a browser wrote.
+        note_chat(&dir, "shell-web-desk-1").unwrap();
+        start_run(&dir, "shell-auto-webjob-5-1", RunOrigin::Browser).unwrap();
+        let desk = SpyDesk::default();
+        let stop = || false;
+        let steps = |session: Option<&str>| -> Vec<String> {
+            let ctx = ToolCtx {
+                workspace: &dir,
+                desktop: Some(&desk),
+                stop: &stop,
+                tasks: None,
+                owner: None,
+                session,
+            };
+            ["click", "look_at_screen"]
+                .iter()
+                .map(|name| dispatch(&ctx, name, r#"{"x":1,"y":2}"#).text)
+                .collect()
+        };
+        let none = vec![
+            grokhub_core::desktop_mcp::OFF_MSG.to_string(),
+            "There is no screen to look at here.".to_string(),
+        ];
+        // A turn typed at this computer in a browser's chat, its helper, the
+        // job's run, and a step a browser run's routine runs on its thread.
+        assert_eq!(steps(Some("shell-web-desk-1")), none);
+        assert_eq!(steps(Some("shell-web-desk-1/helper-1")), none);
+        assert_eq!(steps(Some("shell-auto-webjob-5-1")), none);
+        {
+            let _run = RunScope::enter(Some("shell-auto-webjob-5-1"));
+            assert_eq!(steps(None), none);
+        }
+        assert!(desk.0.lock().unwrap().is_empty());
+        // A chat started here keeps the desktop it was handed; a look comes
+        // back fenced as the screen's words.
+        for session in [Some("shell-desk-9"), None] {
+            let got = steps(session);
+            assert_eq!(got[0], "done");
+            let look: Vec<&str> = got[1].lines().collect();
+            assert_eq!(look.len(), 3, "{}", got[1]);
+            assert!(look[0].starts_with("<<<UNTRUSTED source=desktop nonce="));
+            assert_eq!(look[1], "done");
+        }
+        assert_eq!(
+            *desk.0.lock().unwrap(),
+            vec!["click", "screenshot", "click", "screenshot"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A routine the person saved and allowed here, run from a browser's
+    /// run, clicks and types nothing: its desktop steps get no desktop
+    /// either. Run from a chat started here, the same steps reach it.
+    #[test]
+    fn a_browser_runs_routine_gets_no_desktop_it_was_handed() {
+        use crate::web_origin::{note_chat, RunOrigin, RunScope};
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-routine-desktop-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _config = crate::perm::ConfigGuard::set(&dir);
+        crate::harness::use_key_store_for(
+            &dir,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
+        let rdir = grokhub_core::routine::routines_dir(&dir).join("open-notes");
+        std::fs::create_dir_all(&rdir).unwrap();
+        let saved = serde_json::json!({
+            "version": 1, "name": "open-notes", "about": "Opens my notes", "triggers": ["chat"],
+            "steps": [{ "id": "open", "desktop": { "screen": null, "ops": [
+                { "Click": { "x": 10, "y": 20 } }, { "Type": { "text": "hello" } }
+            ] } }]
+        });
+        std::fs::write(rdir.join(grokhub_core::routine::FILE), saved.to_string()).unwrap();
+        let routine =
+            grokhub_core::routine::Routine::load(&rdir, &crate::routine_run::step_tool).unwrap();
+        crate::routine_consent::grant(&dir, &routine, 1).unwrap();
+        note_chat(&dir, "shell-web-rt-1").unwrap();
+        let desk = SpyDesk::default();
+        let stop = || false;
+        let ran = |session: Option<&str>| -> (bool, String) {
+            let ctx = ToolCtx {
+                workspace: &dir,
+                desktop: Some(&desk),
+                stop: &stop,
+                tasks: None,
+                owner: None,
+                session,
+            };
+            let out = dispatch(&ctx, run_routine::NAME, r#"{"name":"open-notes"}"#);
+            let said: Vec<&str> = out.text.lines().collect();
+            (out.failed, said[1..said.len() - 1].join("\n"))
+        };
+        let refused = (
+            true,
+            "Stopped at open: desktop steps need the app's desktop control".to_string(),
+        );
+        assert_eq!(ran(Some("shell-web-rt-1")), refused);
+        assert_eq!(ran(Some("shell-web-rt-1/helper-1")), refused);
+        {
+            let _run = RunScope::enter(Some("shell-web-rt-1"));
+            assert_eq!(ran(None), refused);
+        }
+        assert!(desk.0.lock().unwrap().is_empty());
+        assert_eq!(
+            crate::web_origin::of_in(&dir, Some("shell-web-rt-1")),
+            RunOrigin::Browser
+        );
+        assert_eq!(
+            ran(Some("shell-desk-rt-1")),
+            (false, "open: done\ndone\n\nFinished.".to_string())
+        );
+        assert_eq!(*desk.0.lock().unwrap(), vec!["click", "type"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
