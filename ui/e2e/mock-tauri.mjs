@@ -854,6 +854,22 @@ export function initScript(theme = "ops-dark") {
             rows: [],
             said: null,
           };
+        case "get_team":
+          return {
+            agents: [
+              { id: "planner", name: "Planner", kind: "role", access: "ask", about: "Plans the week and hands out the work.", team: "home", desktop: false, talks_to: ["researcher"], share: false },
+              { id: "researcher", name: "Researcher", kind: "role", access: "read_only", about: "Finds sources and sums them up.", desktop: false, share: false },
+              { id: "front-desk", name: "Front desk", kind: "customer", access: "read_only", about: "Answers questions about opening hours.", team: "home", desktop: false, share: false },
+            ],
+            teams: [{ id: "home", name: "Home", lead: "planner" }],
+            problem: null,
+            tiers: ["workhorse"],
+          };
+        case "get_agent_tasks":
+          return [
+            { id: "task-2", from: { agent: "planner" }, to: "researcher", state: "TASK_STATE_COMPLETED", asked: "Which router has the best range for a two-floor house?", reply: "A mesh kit with two units, one on each floor.", started_ms: Date.now() - 120_000, ended_ms: Date.now() - 90_000 },
+            { id: "task-1", from: "person", to: "front-desk", state: "TASK_STATE_REJECTED", asked: "Book a table for Friday.", reply: "Front desk only answers; it can't start a booking.", started_ms: Date.now() - 600_000, ended_ms: Date.now() - 599_000 },
+          ];
         case "get_meetings":
           return { consent: { join: false, record: false }, live: null, past: [], hits: [], query: "" };
         case "list_automations":

@@ -183,6 +183,7 @@ pub mod storage;
 mod stt_stream;
 pub mod suggested;
 mod task_feed;
+mod team;
 mod turns;
 pub mod unattended;
 #[cfg(desktop)]
@@ -4181,6 +4182,59 @@ async fn vstack_sync_now(
 ) -> Result<grokhub_core::vstack_sync::VstackStatus, String> {
     let dir = state.config_dir.clone();
     off_main(move || vstack_sync::sync_now(&dir)).await?
+}
+
+#[tauri::command]
+async fn get_team(state: State<'_, ShellState>) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn team_save_agent(
+    state: State<'_, ShellState>,
+    agent: grokhub_core::agent_team::Profile,
+    add: bool,
+) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::save_agent(&dir, agent, add)).await?
+}
+
+#[tauri::command]
+async fn team_remove_agent(state: State<'_, ShellState>, id: String) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::remove_agent(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn team_save_team(
+    state: State<'_, ShellState>,
+    team: grokhub_core::agent_team::Team,
+    add: bool,
+) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::save_team(&dir, team, add)).await?
+}
+
+#[tauri::command]
+async fn team_remove_team(state: State<'_, ShellState>, id: String) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::remove_team(&dir, &id)).await?
+}
+
+/// The agent task log, newest first.
+#[tauri::command]
+async fn get_agent_tasks(
+    state: State<'_, ShellState>,
+) -> Result<Vec<grokhub_core::agent_tasks::TaskRecord>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || grokhub_core::agent_tasks::recent(&dir, 200)).await
+}
+
+#[tauri::command]
+async fn clear_agent_tasks(state: State<'_, ShellState>) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || grokhub_core::agent_tasks::clear(&dir)).await?
 }
 
 #[tauri::command]
@@ -9364,6 +9418,13 @@ pub fn run() {
             vstack_sync_status,
             vstack_sync_now,
             get_journal,
+            get_team,
+            team_save_agent,
+            team_remove_agent,
+            team_save_team,
+            team_remove_team,
+            get_agent_tasks,
+            clear_agent_tasks,
             get_meetings,
             meetings_act,
             get_wake_word,
