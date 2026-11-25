@@ -565,6 +565,15 @@ pub fn run_loop(
     // saved like that, and on the way out, so no provider ever sees a call
     // without its output.
     crate::client::pair_orphan_calls(history);
+    for line in crate::mcp::take_orphans(input.conversation_id) {
+        on_event(LoopEvent::Tool {
+            id: "mcp-task".into(),
+            name: "mcp".into(),
+            status: "failed".into(),
+            detail: line,
+            image: None,
+        });
+    }
     // Failover PR 7: a new run starts with a clean hand-off chain.
     crate::route::handoff::begin(input.conversation_id);
     let out = run_turn(input, history, user_text, image, on_event);
@@ -2692,6 +2701,15 @@ fn dispatch_tool_call(
         session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
+    // A job's tool set holds for the tools the loop runs itself too: a
+    // helper, a message to an agent, plan mode and the todo list.
+    let job_set = bound_job_tool_set(input.conversation_id);
+    if job_set.as_ref().is_some_and(|set| !set.allows(&call.name)) {
+        return (
+            ToolOutput::err(tools::tool_set_refusal(&call.name)),
+            Usage::default(),
+        );
+    }
     if let Some(done) = crate::session_tools::try_run(crate::session_tools::SessionCall {
         name: &call.name,
         arguments: &call.arguments,
@@ -2734,7 +2752,6 @@ fn dispatch_tool_call(
         on_event(LoopEvent::Elicit(view));
     };
     let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
-    let job_set = bound_job_tool_set(input.conversation_id);
     let output =
         crate::mcp::with_elicit(attended, &session, &mut emit_card, &mut wait_card, || {
             tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())

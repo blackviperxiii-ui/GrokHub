@@ -14,7 +14,7 @@ pub const VERSION_HEADER: &str = "A2A-Version";
 pub const MAX_PART_BYTES: usize = 32 * 1024;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_PARTS: usize = 16;
-const MAX_ID: usize = 128;
+pub const MAX_ID: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -104,14 +104,27 @@ impl<'de> Deserialize<'de> for Part {
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub message_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "empty_as_unset",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub context_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "empty_as_unset",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub task_id: Option<String>,
     pub role: Role,
     pub parts: Vec<Part>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub metadata: Value,
+}
+
+/// ProtoJSON reads an empty string field as unset.
+fn empty_as_unset<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(de)?.filter(|id| !id.is_empty()))
 }
 
 impl Message {
@@ -133,6 +146,16 @@ impl Message {
             return Err(A2aError::InvalidParams(format!(
                 "messageId is 1 to {MAX_ID} characters"
             )));
+        }
+        for (name, id) in [("contextId", &self.context_id), ("taskId", &self.task_id)] {
+            if id
+                .as_ref()
+                .is_some_and(|id| id.trim().is_empty() || id.len() > MAX_ID)
+            {
+                return Err(A2aError::InvalidParams(format!(
+                    "{name} is 1 to {MAX_ID} characters"
+                )));
+            }
         }
         if self.parts.is_empty() || self.parts.len() > MAX_PARTS {
             return Err(A2aError::InvalidParams(format!(
@@ -503,6 +526,10 @@ pub fn card(profile: &Profile, url: &str, app_version: &str) -> Value {
             "pushNotifications": false,
             "extendedAgentCard": false,
         },
+        "securitySchemes": {
+            "hub-token": { "httpAuthSecurityScheme": { "scheme": "Bearer" } }
+        },
+        "securityRequirements": [{ "schemes": { "hub-token": { "list": [] } } }],
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": ["text/plain"],
         "skills": [{
