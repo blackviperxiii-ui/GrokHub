@@ -340,6 +340,16 @@ impl TeamFile {
             None if !add => return Err(format!("`{}` isn't a team.", team.id)),
             _ => {}
         }
+        if let Some(other) = self
+            .teams
+            .iter()
+            .find(|t| t.lead == team.lead && t.id != team.id)
+        {
+            return Err(format!(
+                "`{}` already leads `{}`. Pick another lead, or remove that team first.",
+                team.lead, other.id
+            ));
+        }
         let lead = self
             .agents
             .iter_mut()

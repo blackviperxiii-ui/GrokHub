@@ -113,10 +113,15 @@ pub fn decide(ask: &Ask<'_>, facts: &Facts) -> Verdict {
             "Helpers don't run under an on-device lead model. Do this step yourself.",
         );
     }
-    // An agent message isn't the model choosing to split its own work, so the
-    // turn's size doesn't decide it: it counts like a medium turn's helpers.
+    // An agent message isn't the model choosing to split its own work, so a
+    // small turn doesn't refuse it: it gets at least a medium turn's helpers,
+    // and a long turn keeps its own cap.
     let size = if ask.agent { None } else { facts.size };
-    let cap = turn_cap(size);
+    let cap = if ask.agent {
+        turn_cap(facts.size).max(turn_cap(None))
+    } else {
+        turn_cap(size)
+    };
     if cap == 0 {
         return refuse(
             "small-turn",
@@ -425,6 +430,16 @@ mod tests {
             ..facts(TaskSize::Tiny)
         };
         assert_eq!(rule(decide(&agent, &four_sent)), "turn-cap");
+        let long_four = Facts {
+            spawned_this_turn: 4,
+            ..facts(TaskSize::Long)
+        };
+        assert_eq!(rule(decide(&agent, &long_four)), "general");
+        let long_ten = Facts {
+            spawned_this_turn: 10,
+            ..facts(TaskSize::Long)
+        };
+        assert_eq!(rule(decide(&agent, &long_ten)), "turn-cap");
         let local = Ask {
             lead_model: "local:gemma-26b",
             ..agent

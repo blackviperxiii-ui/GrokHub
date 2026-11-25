@@ -138,6 +138,7 @@ export function Team({ shown = true }: { shown?: boolean }) {
   }
 
   const name = (id: string) => page?.agents.find((a) => a.id === id)?.name ?? id;
+  const freeLead = page?.agents.find((a) => !page.teams.some((t) => t.lead === a.id));
 
   async function submitAgent(profile: AgentProfile, add: boolean) {
     const taken = page?.agents.map((a) => a.id) ?? [];
@@ -196,6 +197,7 @@ export function Team({ shown = true }: { shown?: boolean }) {
           </div>
           {agent?.add && (
             <AgentForm
+              key={agent.profile.kind}
               draft={agent}
               page={page}
               busy={busy}
@@ -273,10 +275,16 @@ export function Team({ shown = true }: { shown?: boolean }) {
             <div className="card-buttons">
               <button
                 type="button"
-                disabled={busy || page.agents.length === 0}
-                title={page.agents.length === 0 ? "Make an agent to lead it first" : undefined}
+                disabled={busy || !freeLead}
+                title={
+                  freeLead
+                    ? undefined
+                    : page.agents.length === 0
+                      ? "Make an agent to lead it first"
+                      : "Every agent already leads a team"
+                }
                 onClick={() =>
-                  setTeam({ team: { id: "", name: "", lead: page.agents[0]?.id ?? "" }, add: true })
+                  setTeam({ team: { id: "", name: "", lead: freeLead?.id ?? "" }, add: true })
                 }
               >
                 New team
@@ -427,7 +435,11 @@ function AgentForm({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!p.name.trim() || busy) return;
-    onSave(p);
+    // Something removed while the form was open isn't sent back.
+    const kept = { ...p };
+    if (p.talks_to) kept.talks_to = p.talks_to.filter((id) => others.some((a) => a.id === id));
+    if (p.team && !page.teams.some((t) => t.id === p.team)) kept.team = "";
+    onSave(kept);
   }
 
   return (
@@ -547,6 +559,10 @@ function TeamForm({
   onCancel: () => void;
 }) {
   const [t, setT] = useState(draft.team);
+  // An agent leads one team at most.
+  const leads = page.agents.filter(
+    (a) => !page.teams.some((other) => other.lead === a.id && other.id !== draft.team.id),
+  );
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -574,7 +590,7 @@ function TeamForm({
           value={t.lead}
           onChange={(e) => setT((now) => ({ ...now, lead: e.target.value }))}
         >
-          {page.agents.map((a) => (
+          {leads.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name}
             </option>

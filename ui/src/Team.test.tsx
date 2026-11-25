@@ -103,13 +103,44 @@ describe("Team", () => {
   });
 
   it("keeps a customer read only, off the desktop and without anyone to message", async () => {
+    api.saveAgent.mockResolvedValue(PAGE);
     render(<Team />);
-    await userEvent.click(await screen.findByRole("button", { name: "New customer" }));
+    // A form opened for another kind gives way to the kind clicked last.
+    await userEvent.click(await screen.findByRole("button", { name: "New staff" }));
+    await userEvent.click(screen.getByRole("button", { name: "New customer" }));
+    expect(screen.queryByRole("form", { name: "New staff" })).toBeNull();
     const form = within(screen.getByRole("form", { name: "New customer" }));
     expect(form.getByLabelText("Access")).toBeDisabled();
     expect(form.getByLabelText("Access")).toHaveValue("read_only");
     expect(form.queryByText("Talks to")).toBeNull();
     expect(form.queryByLabelText(/desktop/)).toBeNull();
+    await userEvent.type(form.getByLabelText("Name"), "Front desk");
+    await userEvent.click(form.getByRole("button", { name: "Make customer" }));
+    expect(api.saveAgent).toHaveBeenCalledWith(
+      {
+        id: "front-desk",
+        name: "Front desk",
+        kind: "customer",
+        access: "read_only",
+        about: "",
+        desktop: false,
+        share: false,
+      },
+      true,
+    );
+  });
+
+  it("doesn't send back an agent or team removed while the form was open", async () => {
+    api.removeAgent.mockResolvedValue({ ...PAGE, agents: [PAGE.agents[0]], teams: [] });
+    api.saveAgent.mockResolvedValue(PAGE);
+    render(<Team />);
+    await userEvent.click((await card("Writer")).getByRole("button", { name: "Edit" }));
+    await userEvent.click((await card("Planner")).getByRole("button", { name: "Remove" }));
+    const ask = within(screen.getByRole("group", { name: "Remove Planner?" }));
+    await userEvent.click(ask.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Removed Planner.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenCalledWith({ ...PAGE.agents[0], talks_to: [], team: "" }, false);
   });
 
   it("asks before removing an agent and says its folder stays", async () => {
@@ -148,6 +179,31 @@ describe("Team", () => {
     await userEvent.selectOptions(form.getByLabelText("Lead"), "planner");
     await userEvent.click(form.getByRole("button", { name: "Make team" }));
     expect(api.saveTeam).toHaveBeenCalledWith({ id: "front-desk", name: "Front desk", lead: "planner" }, true);
+  });
+
+  it("offers only agents who lead no other team as a lead", async () => {
+    render(<Team />);
+    await userEvent.click(await screen.findByRole("button", { name: "New team" }));
+    const form = within(screen.getByRole("form", { name: "New team" }));
+    const leads = within(form.getByLabelText("Lead")).getAllByRole("option");
+    expect(leads.map((o) => o.textContent)).toEqual(["Writer"]);
+    expect(form.getByLabelText("Lead")).toHaveValue("writer");
+    await userEvent.click(form.getByRole("button", { name: "Cancel" }));
+    await userEvent.click((await card("Desk")).getByRole("button", { name: "Edit" }));
+    const edit = within(screen.getByRole("form", { name: "Edit Desk" }));
+    const both = within(edit.getByLabelText("Lead")).getAllByRole("option");
+    expect(both.map((o) => o.textContent)).toEqual(["Writer", "Planner"]);
+  });
+
+  it("can't start a team when every agent already leads one", async () => {
+    api.getTeam.mockResolvedValue({
+      ...PAGE,
+      agents: [PAGE.agents[1]],
+    });
+    render(<Team />);
+    const add = await screen.findByRole("button", { name: "New team" });
+    expect(add).toBeDisabled();
+    expect(add).toHaveAttribute("title", "Every agent already leads a team");
   });
 
   it("lists who asked which agent what, newest first, and clears the log", async () => {

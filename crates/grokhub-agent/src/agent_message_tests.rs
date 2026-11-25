@@ -92,7 +92,9 @@ fn a_message_the_team_doesnt_allow_is_refused_with_why() {
     household(&config);
     let ask = |from: &Path, args: &str| {
         let _pin = ConfigGuard::set(from);
-        brief(args, &gate(PermMode::Auto, false, false), None).map(|b| b.profile.id)
+        asked(args)
+            .and_then(|a| brief(&a, &gate(PermMode::Auto, false, false), None))
+            .map(|b| b.profile.id)
     };
     let kid = home_of(&config, "kid");
     assert_eq!(
@@ -182,16 +184,14 @@ fn an_agent_gets_its_own_folders_and_system_text_with_only_the_message() {
     let config = scratch("brief");
     household(&config);
     let _pin = ConfigGuard::set(&config);
-    let brief = brief(
-        r#"{"agent":"researcher","message":"  Which router has the best range?  "}"#,
-        &gate(PermMode::Auto, false, false),
-        None,
-    )
-    .unwrap();
+    let asked = asked(r#"{"agent":"researcher","message":"  Which router has the best range?  "}"#)
+        .unwrap();
+    assert_eq!(asked.message, "Which router has the best range?");
+    assert_eq!(asked.origin(), Origin::Person);
+    let brief = brief(&asked, &gate(PermMode::Auto, false, false), None).unwrap();
     assert_eq!(brief.home, config.join("agents").join("researcher"));
     assert_eq!(brief.workspace, brief.home.join("work"));
     assert!(brief.workspace.is_dir());
-    assert_eq!(brief.message, "Which router has the best range?");
     assert_eq!(brief.gate, gate(PermMode::Ask, false, false));
     assert!(
         brief.system.ends_with(
@@ -209,9 +209,13 @@ fn an_agent_follows_the_playbook_that_fits_its_message_among_those_it_lists() {
     let _pin = ConfigGuard::set(&config);
     let steps = |message: &str| {
         let args = json!({"agent": "researcher", "message": message}).to_string();
-        let system = brief(&args, &gate(PermMode::Auto, false, false), None)
-            .unwrap()
-            .system;
+        let system = brief(
+            &asked(&args).unwrap(),
+            &gate(PermMode::Auto, false, false),
+            None,
+        )
+        .unwrap()
+        .system;
         system
             .lines()
             .find(|line| line.starts_with(grokhub_core::playbook::PLAYBOOK_HEAD))

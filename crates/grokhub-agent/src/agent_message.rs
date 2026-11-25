@@ -90,29 +90,27 @@ pub fn schema() -> Option<Value> {
     }))
 }
 
-/// One agent's turn, ready to run as a helper.
-pub(crate) struct Brief {
-    pub profile: Profile,
-    /// Its config folder, pinned for the whole turn.
-    pub home: PathBuf,
-    pub workspace: PathBuf,
-    pub gate: Gate,
-    pub policy: Policy,
-    pub system: String,
+/// A `message_agent` call that names an agent and says something: who sent
+/// it, from which app folder, to whom, and what.
+pub(crate) struct Asked {
+    from: From,
+    pub to: String,
     pub message: String,
-    /// The app's config folder, where the task log is.
-    pub root: PathBuf,
-    pub from: Origin,
 }
 
-/// Checks that the sender may message the agent and builds its turn.
-/// `caller` is the sender's gate and `policy` its rules; neither is ever
-/// widened.
-pub(crate) fn brief(
-    arguments: &str,
-    caller: &Gate,
-    policy: Option<&Policy>,
-) -> Result<Brief, String> {
+impl Asked {
+    /// The app's config folder, where the team file and the task log are.
+    pub fn root(&self) -> &Path {
+        &self.from.root
+    }
+
+    pub fn origin(&self) -> Origin {
+        self.from.me.clone().map_or(Origin::Person, Origin::Agent)
+    }
+}
+
+/// Reads a `message_agent` call's arguments, before any team rule.
+pub(crate) fn asked(arguments: &str) -> Result<Asked, String> {
     let value: Value =
         serde_json::from_str(arguments).map_err(|err| format!("arguments are not JSON: {err}"))?;
     let text = |key: &str| {
@@ -123,26 +121,52 @@ pub(crate) fn brief(
             .unwrap_or_default()
             .to_string()
     };
-    let (id, message) = (text("agent"), text("message"));
-    if id.is_empty() || message.is_empty() {
+    let (to, message) = (text("agent"), text("message"));
+    if to.is_empty() || message.is_empty() {
         return Err("agent and message are required".into());
     }
+    Ok(Asked {
+        from: From::here(),
+        to,
+        message,
+    })
+}
+
+/// One agent's turn, ready to run as a helper.
+pub(crate) struct Brief {
+    pub profile: Profile,
+    /// Its config folder, pinned for the whole turn.
+    pub home: PathBuf,
+    pub workspace: PathBuf,
+    pub gate: Gate,
+    pub policy: Policy,
+    pub system: String,
+}
+
+/// Checks that the sender may message the agent and builds its turn.
+/// `caller` is the sender's gate and `policy` its rules; neither is ever
+/// widened.
+pub(crate) fn brief(
+    asked: &Asked,
+    caller: &Gate,
+    policy: Option<&Policy>,
+) -> Result<Brief, String> {
+    let (from, id, message) = (&asked.from, &asked.to, &asked.message);
     if message.chars().count() > MAX_MESSAGE {
         return Err(format!(
             "a message to an agent is at most {MAX_MESSAGE} characters; send the gist, not the whole file"
         ));
     }
-    let from = From::here();
     let file = TeamFile::load(&from.root)?;
-    file.may_message(from.sender(), &id, &from.chain())
+    file.may_message(from.sender(), id, &from.chain())
         .map_err(|refusal| refusal.to_string())?;
     let profile = file
-        .agent(&id)
+        .agent(id)
         .cloned()
         .ok_or_else(|| format!("`{id}` isn't an agent"))?;
     let (Some(home), Some(workspace)) = (
-        agent_team::home(&from.root, &id),
-        agent_team::workspace(&from.root, &id),
+        agent_team::home(&from.root, id),
+        agent_team::workspace(&from.root, id),
     ) else {
         return Err(format!("`{id}` isn't an agent id"));
     };
@@ -153,7 +177,7 @@ pub(crate) fn brief(
         let _home = ConfigGuard::set(&home);
         let rules = grokhub_core::cabin_rules::cabin_rules_for("", gate.desktop);
         let mut system = crate::prompt::system_prompt(&rules, &workspace);
-        if let Some(steps) = playbook_steps(&profile, &message, &from.root) {
+        if let Some(steps) = playbook_steps(&profile, message, &from.root) {
             system.push_str("\n\n");
             system.push_str(&steps);
         }
@@ -168,9 +192,6 @@ pub(crate) fn brief(
         gate,
         policy,
         system,
-        message,
-        from: from.me.map_or(Origin::Person, Origin::Agent),
-        root: from.root,
     })
 }
 

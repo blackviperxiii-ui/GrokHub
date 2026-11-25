@@ -399,6 +399,16 @@ fn put_team_puts_its_lead_on_it_and_remove_team_frees_the_members() {
         file.put_team(work.clone(), true),
         Err("A team already uses the id `work`.".into())
     );
+    let taken = Team {
+        id: "chores".into(),
+        name: "Chores".into(),
+        lead: "planner".into(),
+    };
+    assert_eq!(
+        file.put_team(taken, true),
+        Err("`planner` already leads `home`. Pick another lead, or remove that team first.".into())
+    );
+    assert_eq!(file.agent("planner").unwrap().team, "home");
     let ghost = Team {
         lead: "ghost".into(),
         ..work.clone()
