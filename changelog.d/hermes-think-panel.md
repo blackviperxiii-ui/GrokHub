@@ -1,0 +1,1 @@
+- Fold Hermes 4 `<think>` blocks (split across stream chunks or left unclosed) into the Thought process panel so they never show in the chat body.
