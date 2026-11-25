@@ -58,6 +58,8 @@ const CONTROL: &[&str] = &[
     "spawn_subagent",
     "send_subagent_message",
     "merge_subagent_work",
+    // Starts one of the person's agents; it meets its own gate inside.
+    "message_agent",
     // Runs a saved routine; each of its steps meets this gate on its own.
     "run_routine",
     // Saves the last turn's steps as a routine; it always asks.

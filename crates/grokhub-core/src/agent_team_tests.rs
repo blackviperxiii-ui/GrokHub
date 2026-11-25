@@ -76,6 +76,13 @@ fn a_home_is_under_the_agents_folder_and_only_for_a_real_id() {
     for bad in ["", "../x", "a/b", "Kid", "-a", "a-", "a.b", &"x".repeat(41)] {
         assert_eq!(home(config, bad), None, "{bad}");
     }
+    assert_eq!(
+        whose_home(&home(config, "kid").unwrap()),
+        Some((config.to_path_buf(), "kid".to_string()))
+    );
+    assert_eq!(whose_home(config), None);
+    assert_eq!(whose_home(&config.join("other").join("kid")), None);
+    assert_eq!(whose_home(&config.join("agents").join("Kid")), None);
 }
 
 #[test]

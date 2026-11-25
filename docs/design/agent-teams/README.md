@@ -84,10 +84,20 @@ task that hasn't ended can be canceled.
 
 ## What it builds on
 
-- **Helpers.** A profile turn is a helper run with a pinned home, the
-  profile's gate (never wider than the caller's) and its `about` as the
-  persona. `spawn_subagent` gains an `agent` argument that runs the helper as
-  that profile.
+- **Helpers.** A profile turn is a helper run with the config pinned to the
+  agent's home, the profile's gate (never wider than the caller's, never
+  `Always`) and fresh system text built from the home, with the profile's
+  `about` as the persona. The caller's history and system text don't cross.
+- **`message_agent`.** The tool is offered only while the sender may message
+  at least one agent, and its `agent` argument lists just those, so a chat
+  with no team file sees the same tool list as before. A read-only chat
+  isn't offered it. Inside an agent's turn the sender is that agent (the
+  pinned home names it), and helpers stop at depth 2.
+- **Rules.** The agent's turn keeps the caller's deny and ask rules (they
+  only tighten) and adds its own rules and grants from its home. The
+  caller's allow rules and grants stay the caller's.
+- **Tools.** A profile's `tools` list binds the helper's tool set, kept
+  inside any job tool set the caller already runs under.
 - **Playbooks.** A profile can list the playbooks it may use. The usual pick
   then chooses only among those.
 - **Model profiles.** A profile can name a `model_profiles.toml` tier (for
@@ -97,9 +107,9 @@ task that hasn't ended can be canceled.
 
 1. Core: profiles, teams, the talk policy, A2A shapes and the task book (this
    page).
-2. Agent crate: the isolated profile turn, `message_agent` and `list_agents`
-   tools, `spawn_subagent` `agent`, playbook and model hooks.
-3. Desktop app: a Team page to make profiles from the four kinds, and a task
+2. Agent crate: the isolated profile turn and the `message_agent` tool.
+3. Agent crate: the playbook and model tier hooks.
+4. Desktop app: a Team page to make profiles from the four kinds, and a task
    log.
-4. Hub: agent cards and the JSON-RPC endpoint for paired peers, for profiles
+5. Hub: agent cards and the JSON-RPC endpoint for paired peers, for profiles
    marked `share`.

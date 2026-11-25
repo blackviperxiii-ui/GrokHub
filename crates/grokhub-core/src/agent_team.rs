@@ -209,6 +209,18 @@ pub fn home(config: &Path, id: &str) -> Option<PathBuf> {
     valid_id(id).then(|| config.join(HOMES_DIR).join(id))
 }
 
+/// The app's config folder and the agent's id when `config` is an agent's
+/// home (`{root}/agents/<id>`), else `None`. A turn pinned to a home sends
+/// as that agent.
+pub fn whose_home(config: &Path) -> Option<(PathBuf, String)> {
+    let id = config.file_name()?.to_str()?;
+    let agents = config.parent()?;
+    if !valid_id(id) || agents.file_name()? != HOMES_DIR {
+        return None;
+    }
+    Some((agents.parent()?.to_path_buf(), id.to_string()))
+}
+
 /// `{home}/work`: the folder its tools work in.
 pub fn workspace(config: &Path, id: &str) -> Option<PathBuf> {
     home(config, id).map(|h| h.join("work"))
