@@ -1,0 +1,1 @@
+- CI: the desktop app's checks on beta pass again. Its Windows test program now gets the same Common Controls 6 manifest as the app, so Windows starts it; the app smoke test follows the Local AI Advanced layout, the desktop switch that saves on the flip and the deferred tool list in `tool_search`; and a shell-glob floor test checks the PowerShell reading of `cat /*/*` on its own.

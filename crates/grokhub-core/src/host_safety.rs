@@ -4647,16 +4647,25 @@ mod tests {
             ("ls ~/.gnup[g]", "forbidden path: gnupg"),
             ("cat ~/.aw?/credentials", "forbidden path: aws credentials"),
             ("cat ~/.ku*/config", "forbidden path: kube config"),
-            // These globs expand to `~/.config/GrokHub/secrets.json` and
-            // `/etc/shadow`.
+            // This glob expands to `~/.config/GrokHub/secrets.json`.
             ("ls ~/.config/*/*.json", "forbidden path: app secrets"),
-            ("cat /*/*", "forbidden path: /etc/shadow"),
             ("ls ~/.*", "forbidden path: ssh keys"),
             ("du -sh ~/.*", "forbidden path: ssh keys"),
             ("ls /etc/*", "forbidden path: /etc/shadow"),
         ] {
             assert_eq!(forbidden_reason(cmd), Some(why), "{cmd}");
         }
+        // `/*/*` reaches `/etc/shadow` in a POSIX shell. A `*` in PowerShell
+        // or cmd also matches a name that starts with a dot, so read that way
+        // it reaches `/root/.ssh` first.
+        assert_eq!(
+            forbidden_reason_in("cat /*/*", false),
+            Some("forbidden path: /etc/shadow")
+        );
+        assert_eq!(
+            forbidden_reason_in("cat /*/*", true),
+            Some("forbidden path: ssh keys")
+        );
         // Globs and patterns that can't reach a guarded path still run.
         for cmd in [
             "grep -n '.*' notes.txt",
