@@ -112,7 +112,7 @@ pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Optio
     // (a model name only, no user data); loopback goes with no log line.
     let guard = |url: &str| {
         crate::harness::guard_quiet(
-            &crate::perm::config_dir(),
+            &crate::perm::app_config_dir(),
             &crate::harness::EgressReq::new(url, &[]),
         )
     };
@@ -466,7 +466,7 @@ fn production_assets_present() -> bool {
 /// The cabin's config folder: `GROKHUB_CONFIG`, else the platform default.
 /// Reading only the env var left the route off in every normal launch.
 fn config_dir() -> Option<PathBuf> {
-    Some(crate::perm::config_dir())
+    Some(crate::perm::app_config_dir())
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -970,6 +970,24 @@ pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput
     serve_within(class, text, HEAVY_WAIT, cancel)
 }
 
+/// The task kind a device turn picks its model for. A typed chat turn
+/// reads its own kind, as the router's pick did: a debugging question
+/// typed in chat is coding work for the model on disk too, not everyday
+/// chat.
+pub(crate) fn turn_kind(class: &str, tokens: u64, text: &str, picture: bool) -> Option<TaskKind> {
+    let lane = if class == super::ask::CHAT_CLASS && !text.trim().is_empty() {
+        let cx = super::ask::AskContext {
+            ctx_tokens: tokens,
+            needs_image: picture,
+            ..super::ask::AskContext::default()
+        };
+        super::ask::read(text, &cx).lane()
+    } else {
+        class
+    };
+    super::local_task::kind(lane, tokens, text)
+}
+
 /// Chat path that keeps function tools (cabin `web_search` / `web_fetch`) so the
 /// agent loop can run them and round-trip results. Background classes stay
 /// text-only via [`serve`].
@@ -988,11 +1006,11 @@ pub fn serve_request(
     let tokens = (text.len() as u64).div_ceil(4);
     let _need =
         super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
-    let kind = super::local_task::kind(class_norm, tokens, &text);
+    let kind = turn_kind(class_norm, tokens, &text, picture);
     let _kind = super::local_task::KindGuard::set(kind);
     // The chat's tier: the person's words this turn, else the chat's setting.
     // The router decides the model from it; the model never picks it.
-    let config_dir = crate::perm::config_dir();
+    let config_dir = crate::perm::app_config_dir();
     let helper = super::local_scale::helper_turn(class, &req.conversation_id);
     let care_first = crate::brain::care_first_enabled(&config_dir);
     let mut standing = super::local_pin::get(&config_dir, &req.conversation_id);
@@ -1039,7 +1057,7 @@ pub fn serve_request(
     super::identity::stamp(
         &mut req.input,
         live_tier(),
-        super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
+        super::local_sidecar::model_name(&crate::perm::app_config_dir()).as_deref(),
         req.effort.as_deref(),
     );
     // A server without its vision projector (`--mmproj`) refuses any
@@ -1110,7 +1128,7 @@ fn note_task_reply(kind: Option<TaskKind>, out: &Result<TurnOutput, String>, can
         Ok(o) => super::local_task::answered(&o.text, !o.calls.is_empty()),
         Err(_) => false,
     };
-    super::local_task::note_reply(&crate::perm::config_dir(), &model, kind, ok);
+    super::local_task::note_reply(&crate::perm::app_config_dir(), &model, kind, ok);
 }
 
 pub(crate) fn serve_within(

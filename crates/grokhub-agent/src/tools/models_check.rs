@@ -26,7 +26,9 @@ pub fn schema() -> Value {
 
 pub fn run(args: &Value) -> ToolOutput {
     let live = args.get("live").and_then(Value::as_bool).unwrap_or(true);
-    let dir = crate::perm::config_dir();
+    // The router's own folder: in an agent's turn that is the app's, not the
+    // agent's home, so the check reports the keys and models it routes over.
+    let dir = crate::perm::app_config_dir();
     let check = crate::route::check::run(&dir, live, grokhub_core::now_ms());
     ToolOutput::ok(crate::route::check::report(&check, false))
 }

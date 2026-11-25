@@ -58,6 +58,17 @@ pub fn config_dir() -> PathBuf {
     grokhub_core::paths::config_dir()
 }
 
+/// The app's own config folder, also inside an agent's turn (pinned to the
+/// agent's home): the model list, the router's state and local models stay
+/// the app's, while chats, memory and rules are the agent's.
+pub fn app_config_dir() -> PathBuf {
+    let dir = config_dir();
+    match grokhub_core::agent_team::agent_turn(&dir) {
+        Some((root, _)) => root,
+        None => dir,
+    }
+}
+
 pub fn project_key(workspace: &Path) -> String {
     let path = workspace
         .canonicalize()

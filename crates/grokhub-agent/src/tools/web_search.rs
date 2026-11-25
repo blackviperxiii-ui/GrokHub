@@ -273,7 +273,8 @@ pub(crate) fn run(args: &Value, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) 
     if query.chars().count() > QUERY_CAP {
         return ToolOutput::err(format!("query is too long (max {QUERY_CAP} characters)"));
     }
-    let config_dir = crate::perm::config_dir();
+    // Settings > Web search and its key are the app's, also in an agent's turn.
+    let config_dir = crate::perm::app_config_dir();
     let settings = Settings::load(&config_dir);
     let cache_key = format!("{}|{query}", settings.backend.as_str());
     if let Some(hit) = cache_get(&cache_key) {

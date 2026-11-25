@@ -150,7 +150,7 @@ fn a_demoted_tool_sits_in_the_index_and_loads_alone() {
     assert!(listed.iter().any(|n| n == "web_search"), "{listed:?}");
     let index = tools
         .iter()
-        .find(|t| t["name"] == super::super::registry::LOAD_TOOL_SCHEMA)
+        .find(|t| t["name"] == super::super::registry::TOOL_SEARCH)
         .map(|t| t.to_string())
         .unwrap_or_default();
     assert!(index.contains("skill"), "{index}");

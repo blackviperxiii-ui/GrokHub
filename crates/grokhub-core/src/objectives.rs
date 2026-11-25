@@ -25,7 +25,7 @@ mod board;
 mod chat;
 mod follow_up;
 mod game_data;
-mod season;
+pub(crate) mod season;
 mod typed;
 mod week;
 

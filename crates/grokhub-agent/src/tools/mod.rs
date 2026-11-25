@@ -37,6 +37,7 @@ mod write;
 pub use registry::Settings as DeferredToolsSettings;
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
+pub(crate) use web_fetch::{dial_host, parse_public_url};
 pub use web_search::{
     brave_key_present, seal_brave_key, searxng_url_problem, Backend as WebSearchBackend,
     Settings as WebSearchSettings, BACKENDS as WEB_SEARCH_BACKENDS,
@@ -266,7 +267,7 @@ pub fn dispatch_for_job(
         local_ai::SELFTEST => local_ai::selftest(&args),
         mods::PREPARE => mods::run(name, &args),
         home_assistant::CALL_SERVICE => home_assistant::run(name, &args),
-        "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
+        "web_fetch" => web_fetch::run_with_ports(&args, ctx.workspace, ctx.stop),
         "web_search" => web_search::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)

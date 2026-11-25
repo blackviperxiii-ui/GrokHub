@@ -91,7 +91,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("grokhub-local-pin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let _cfg = crate::perm::ConfigGuard::set(&dir);
-        let config = crate::perm::config_dir();
+        let config = crate::perm::app_config_dir();
         assert_eq!(get(&config, "shell-a"), None, "no file yet");
         assert_eq!(
             set(&config, "shell-a", Some(SpeedQuality::Speed)),

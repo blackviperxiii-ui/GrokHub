@@ -1,5 +1,6 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
+mod agent_message;
 mod auto_review;
 pub mod batch;
 pub mod brain;
