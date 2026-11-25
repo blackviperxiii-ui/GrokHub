@@ -345,7 +345,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let briefed = !spec.explore
         && !spec.worktree
         && spec.persona.trim().is_empty()
-        && crate::route::boundary::enabled(&crate::perm::config_dir());
+        && crate::route::boundary::enabled(&crate::perm::app_config_dir());
     if briefed {
         let missing = crate::route::boundary::missing_brief(&spec.prompt);
         if !missing.is_empty() {

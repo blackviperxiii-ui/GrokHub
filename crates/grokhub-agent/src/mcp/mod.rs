@@ -1371,11 +1371,17 @@ fn current_tools() -> Vec<ToolRec> {
     // not waited on.
     // Tests pin config and Offline only per thread, so they connect in line.
     let side_by_side = !cfg!(test) && pending.len() > 1;
+    // Each connect thread keeps the turn's config folder, so an agent's
+    // servers start with the agent's home.
+    let pin = crate::perm::pinned_config();
     match pending.as_slice() {
         many if side_by_side => std::thread::scope(|scope| {
             for slot in many {
-                let workspace = &workspace;
-                scope.spawn(move || connect_if_needed(slot, workspace));
+                let (workspace, pin) = (&workspace, &pin);
+                scope.spawn(move || {
+                    let _config = pin.clone().map(crate::perm::ConfigGuard::set);
+                    connect_if_needed(slot, workspace)
+                });
             }
         }),
         each => {

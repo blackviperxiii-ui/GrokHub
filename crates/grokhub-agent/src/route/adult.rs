@@ -95,7 +95,7 @@ pub fn no_local_notice() -> Option<String> {
     }
     // The files are there, so "none is set up" would be wrong: say why the
     // check found it isn't running.
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     if super::local_sidecar::assets_present(&dir) {
         let report = super::local_doctor::diagnose(&dir);
         if !matches!(

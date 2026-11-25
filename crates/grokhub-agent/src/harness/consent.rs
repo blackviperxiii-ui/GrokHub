@@ -251,6 +251,8 @@ impl ConsentLedger {
 
     fn load_with(config_dir: &Path, wait: bool) -> Self {
         let _lap = crate::timing::lap("harness:consent_load");
+        // Consent is the app's, also for an agent's home.
+        let config_dir = &super::egress::shared_dir(config_dir);
         let path = consent_path(config_dir);
         let Ok(f) = fs::File::open(&path) else {
             return Self::empty();
@@ -362,6 +364,7 @@ fn grant_id(seed: &str) -> String {
 
 /// Seal and append one line. Locked ⇒ nothing is written (no plaintext fallback).
 fn append_line(config_dir: &Path, g: &Grant) -> Result<(), String> {
+    let config_dir = &super::egress::shared_dir(config_dir);
     fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let line = serde_json::to_string(g).map_err(|e| e.to_string())?;
     let line = grokhub_core::redact_secrets(&line);

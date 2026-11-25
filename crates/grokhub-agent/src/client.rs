@@ -1403,7 +1403,8 @@ impl XaiClient {
         if !rides_chat_socket(req) {
             return None;
         }
-        let config_dir = crate::perm::config_dir();
+        // The app's transport setting, also in an agent's turn.
+        let config_dir = crate::perm::app_config_dir();
         if !crate::ws_mode::enabled_at(&config_dir) {
             return None;
         }

@@ -125,7 +125,8 @@ pub fn status_text(config_dir: &Path, now_ms: u64) -> String {
 }
 
 pub fn status(_args: &Value) -> ToolOutput {
-    let dir = crate::perm::config_dir();
+    // The local model is the app's, also in an agent's turn.
+    let dir = crate::perm::app_config_dir();
     let mut text = status_text(&dir, grokhub_core::now_ms());
     // The reason is read: the next message starts the model again instead
     // of waiting out the retry pause.

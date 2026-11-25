@@ -149,6 +149,10 @@ pub(crate) fn brief(
         let _home = ConfigGuard::set(&home);
         let rules = grokhub_core::cabin_rules::cabin_rules_for("", gate.desktop);
         let mut system = crate::prompt::system_prompt(&rules, &workspace);
+        if let Some(steps) = playbook_steps(&profile, &message, &from.root) {
+            system.push_str("\n\n");
+            system.push_str(&steps);
+        }
         system.push_str("\n\n");
         system.push_str(&persona(&profile));
         system
@@ -210,6 +214,35 @@ fn agent_policy(caller: Option<&Policy>, home: &Path, workspace: &Path) -> Polic
         rules,
         grants: own.grants,
     }
+}
+
+/// The steps of the playbook that fits the message, from the app's
+/// playbooks and only those the profile lists (when it lists any). The ask
+/// is sorted without a model; an unclear one gets no playbook, as in a chat.
+fn playbook_steps(profile: &Profile, message: &str, root: &Path) -> Option<String> {
+    let brief = crate::brain::classify(
+        &crate::brain::BriefInput {
+            text: message,
+            ..Default::default()
+        },
+        None,
+    );
+    if brief.by == "default" {
+        return None;
+    }
+    let (mut books, _) = crate::brain::playbook::load(root);
+    if let Some(allowed) = &profile.playbooks {
+        books.retain(|book| allowed.contains(&book.playbook.id));
+    }
+    let os = crate::brain::playbook::host_os();
+    crate::brain::playbook::pick(
+        &books,
+        brief.intent.as_str(),
+        &brief.domain,
+        os,
+        &brief.mood,
+    )
+    .map(|book| book.for_os(os).prompt_block())
 }
 
 fn persona(profile: &Profile) -> String {

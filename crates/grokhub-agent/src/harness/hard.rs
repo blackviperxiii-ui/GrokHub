@@ -1735,7 +1735,8 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
 /// An install of a tool whose driver Microsoft's cached vulnerable driver
 /// blocklist names (round 3 item 36).
 fn flagged_driver(cmd: &str) -> Option<HardClass> {
-    let list = grokhub_core::driver_check::cached(&crate::perm::config_dir());
+    // The app's cached list: the hard floor is shared, also in an agent's turn.
+    let list = grokhub_core::driver_check::cached(&crate::perm::app_config_dir());
     grokhub_core::driver_check::flag(cmd, &list).map(|_| HardClass::FlaggedDriver)
 }
 
