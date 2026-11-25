@@ -1,14 +1,23 @@
 import { useEffect, useState } from "react";
 import {
+  approveCompanion,
   forgetAllDevices,
+  getCompanions,
   getDevices,
   getHubJoin,
   getShare,
   joinHub,
   leaveHub,
+  newCompanionCode,
   newShareCode,
+  removeCompanion,
+  setCompanionAllowed,
+  startCompanions,
   startShare,
+  stopCompanions,
   stopShare,
+  type Companion,
+  type Companions,
   type Devices as Shape,
   type HubJoin,
   type PairedBrowser,
@@ -119,6 +128,202 @@ export function JoinCard() {
         )}
       </div>
     </div>
+  );
+}
+
+export const COMPANIONS_NOTE =
+  "A companion is a phone or another computer that lends this app what it has: its camera, screen, location, text messages, voice, a panel to show things on, and its own MCP servers and skills. It lends only what you allow here, and each use asks first like any other tool.";
+export const COMPANIONS_OFF = "Off. Start companions to pair a phone or another computer.";
+export const COMPANION_STEP = "On the companion, run:";
+export const NO_OFFERS = "It offers nothing yet. On the companion, run grokhub-hub node offer camera,location (or what it should lend).";
+export const COMPANION_REFRESH_MS = 5_000;
+
+/** What each offer is called on the page. */
+export const OFFER_LABELS: Record<string, string> = {
+  camera: "Camera",
+  screen: "Screen",
+  location: "Location",
+  sms: "Text messages",
+  talk: "Voice",
+  wake: "Wake",
+  canvas: "Panels",
+  mcp: "Its MCP servers",
+  skills: "Its skills",
+};
+
+const PLATFORMS: Record<string, string> = {
+  android: "Android",
+  linux: "Linux",
+  macos: "macOS",
+  windows: "Windows",
+};
+
+/** What the person types on the companion to pair it. */
+export function pairCommand(view: Companions): string {
+  return `grokhub-hub node pair ${view.address || "<this computer's address>"} ${view.code}`;
+}
+
+/** "Android · Online · Paired 5 min ago". */
+export function companionLine(c: Companion, now: number): string {
+  const state = !c.approved ? "Waiting for your yes" : c.online ? "Online" : "Offline";
+  return `${PLATFORMS[c.platform] ?? "Other device"} · ${state} · Paired ${ago(c.pairedAt, now)}`;
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((x) => b.includes(x));
+}
+
+/** One companion: what it offers, what you allow, and Remove. */
+export function CompanionRow({
+  companion,
+  now,
+  busy,
+  onSave,
+  onRemove,
+}: {
+  companion: Companion;
+  now: number;
+  busy: boolean;
+  onSave: (allowed: string[]) => void;
+  onRemove: () => void;
+}) {
+  const saved = companion.approved ? companion.allowed : [];
+  const savedKey = saved.join(",");
+  const [picked, setPicked] = useState<string[]>(saved);
+  // A save, or a change made elsewhere, resets the boxes to what is allowed now.
+  const [shown, setShown] = useState(savedKey);
+  if (shown !== savedKey) {
+    setShown(savedKey);
+    setPicked(saved);
+  }
+
+  function toggle(offer: string) {
+    setPicked((now) => (now.includes(offer) ? now.filter((o) => o !== offer) : [...now, offer]));
+  }
+
+  return (
+    <li className="card device" aria-label={companion.name}>
+      <div className="card-title">{companion.name}</div>
+      <div className="card-status">{companionLine(companion, now)}</div>
+      {companion.offers.length === 0 ? (
+        <div className="card-detail-line">{NO_OFFERS}</div>
+      ) : (
+        <fieldset className="companion-offers">
+          <legend>It may lend</legend>
+          {companion.offers.map((offer) => (
+            <label key={offer}>
+              <input
+                type="checkbox"
+                checked={picked.includes(offer)}
+                disabled={busy}
+                onChange={() => toggle(offer)}
+              />
+              {OFFER_LABELS[offer] ?? offer}
+            </label>
+          ))}
+        </fieldset>
+      )}
+      <div className="card-buttons">
+        {companion.approved ? (
+          <button type="button" disabled={busy || sameSet(picked, saved)} onClick={() => onSave(picked)}>
+            Save
+          </button>
+        ) : (
+          <button type="button" disabled={busy} onClick={() => onSave(picked)}>
+            Allow
+          </button>
+        )}
+        <button type="button" className="danger" disabled={busy} onClick={onRemove}>
+          Remove
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/** Devices → Companions: start the host, pair with a code, allow and remove. */
+export function CompanionsCard() {
+  const [view, setView] = useState<Companions | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const { note, fail, clear } = useNote();
+
+  useEffect(() => {
+    function read() {
+      getCompanions().then((next) => {
+        setView(next);
+        setNow(Date.now());
+      }, fail);
+    }
+    read();
+    const timer = window.setInterval(read, COMPANION_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [fail]);
+
+  async function step(run: () => Promise<Companions>) {
+    setBusy(true);
+    try {
+      setView(await run());
+      setNow(Date.now());
+      clear();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="card device" aria-label="Companions">
+        <div className="card-title">Companions</div>
+        <div className="card-status">
+          {view === null ? "Checking…" : view.on ? `On, port ${view.port}` : COMPANIONS_OFF}
+        </div>
+        {view?.on && view.code && (
+          <>
+            <p className="device-code" aria-label="Companion pairing code">
+              {view.code}
+            </p>
+            <div className="card-detail-line">{COMPANION_STEP}</div>
+            <code className="card-detail-line">{pairCommand(view)}</code>
+          </>
+        )}
+        <StatusLine note={note} />
+        <div className="card-buttons">
+          {view?.on ? (
+            <>
+              <button type="button" className="quiet" disabled={busy} onClick={() => void step(newCompanionCode)}>
+                New code
+              </button>
+              <button type="button" className="quiet" disabled={busy} onClick={() => void step(stopCompanions)}>
+                Stop companions
+              </button>
+            </>
+          ) : (
+            <button type="button" disabled={busy || view === null} onClick={() => void step(startCompanions)}>
+              Start companions
+            </button>
+          )}
+        </div>
+      </div>
+      {view && view.companions.length > 0 && (
+        <ul className="rows" aria-label="Paired companions">
+          {view.companions.map((c) => (
+            <CompanionRow
+              key={c.id}
+              companion={c}
+              now={now}
+              busy={busy}
+              onSave={(allowed) =>
+                void step(() => (c.approved ? setCompanionAllowed(c.id, allowed) : approveCompanion(c.id, allowed)))
+              }
+              onRemove={() => void step(() => removeCompanion(c.id))}
+            />
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 
@@ -278,6 +483,9 @@ export function Devices({
       <h2>Join another computer</h2>
       <p className="note">{JOIN_NOTE}</p>
       <JoinCard />
+      <h2>Companions</h2>
+      <p className="note">{COMPANIONS_NOTE}</p>
+      <CompanionsCard />
       <h2>Run a task on this PC</h2>
       <p className="note">{RUN_NOTE}</p>
       <textarea

@@ -38,6 +38,8 @@ mod code_keep;
 mod code_rollback;
 mod code_sessions;
 pub mod command_box;
+#[cfg(desktop)]
+mod companions;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
 pub use grokhub_code::activity as code_activity;
@@ -8941,6 +8943,18 @@ pub fn run() {
                 app.state::<ShellState>().config_dir.clone(),
                 Arc::clone(&app.state::<Arc<hub_share::HubShare>>()),
             );
+            #[cfg(desktop)]
+            {
+                let host = Arc::new(companions::Companions::open(
+                    &app.state::<ShellState>().config_dir,
+                ));
+                app.manage(Arc::clone(&host));
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    host.resume();
+                    companions::watch(handle, host);
+                });
+            }
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
@@ -9505,6 +9519,20 @@ pub fn run() {
             new_share_code,
             #[cfg(desktop)]
             fleet_machines,
+            #[cfg(desktop)]
+            companions::get_companions,
+            #[cfg(desktop)]
+            companions::start_companions,
+            #[cfg(desktop)]
+            companions::stop_companions,
+            #[cfg(desktop)]
+            companions::new_companion_code,
+            #[cfg(desktop)]
+            companions::approve_companion,
+            #[cfg(desktop)]
+            companions::set_companion_allowed,
+            #[cfg(desktop)]
+            companions::remove_companion,
             #[cfg(desktop)]
             get_hub_join,
             #[cfg(desktop)]
