@@ -2073,6 +2073,7 @@ dependencies = [
  "getrandom 0.4.3",
  "grokhub-proto",
  "hex",
+ "libc",
  "minisign-verify",
  "quick-xml 0.42.0",
  "regex",
