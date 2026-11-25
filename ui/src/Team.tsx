@@ -3,6 +3,7 @@ import {
   clearAgentTasks,
   getAgentTasks,
   getTeam,
+  pairedComputers,
   removeAgent,
   removeTeam,
   saveAgent,
@@ -13,6 +14,7 @@ import {
   type AgentTask,
   type AgentTaskState,
   type AgentTeam,
+  type PairedComputer,
   type TeamPage,
 } from "./teamApi";
 import { ConfirmRow, PageHead, StatusLine, useNote } from "./ui";
@@ -51,9 +53,20 @@ export const TASKS_EMPTY =
   "No messages yet. When you or one of your agents asks an agent something, it shows here.";
 export const KEPT_FOLDER =
   "Its chats and memory stay in its folder and come back if you make an agent with the same name.";
+export const SHARE_LEGEND = "Paired computers that can message it";
+export const NO_COMPUTERS = "No computer is paired yet. Pair one in Devices, under Share.";
+export const GONE_COMPUTER = "A computer that's no longer paired";
 
 const POLL_MS = 5000;
 const kindLabel = (kind: AgentKind) => KINDS.find((k) => k.kind === kind)?.label ?? kind;
+
+/** The paired computers that may message the agent now. */
+const sharedWith = (a: AgentProfile) => (a.share ? (a.share_with ?? []) : []);
+
+function sharedLabel(a: AgentProfile): string {
+  const n = sharedWith(a).length;
+  return n === 0 ? "" : ` · shared with ${n} computer${n === 1 ? "" : "s"}`;
+}
 
 /** A file id from a name: lowercase letters, digits and dashes, at most 40
  * long, made unique against `taken`. */
@@ -225,6 +238,7 @@ export function Team({ shown = true }: { shown?: boolean }) {
                       {kindLabel(a.kind)} · {ACCESS_LABELS[a.access]}
                       {a.team && ` · ${page.teams.find((t) => t.id === a.team)?.name ?? a.team}`}
                       {a.desktop && " · desktop"}
+                      {sharedLabel(a)}
                     </div>
                     <div className="card-title">{a.name}</div>
                     {a.about && <p className="team-about">{a.about.split("\n")[0]}</p>}
@@ -431,11 +445,36 @@ function AgentForm({
   onCancel: () => void;
 }) {
   const [p, setP] = useState(draft.profile);
+  // Null until read, and where there's no hub to share from (a phone).
+  const [computers, setComputers] = useState<PairedComputer[] | null>(null);
   const set = (patch: Partial<AgentProfile>) => setP((now) => ({ ...now, ...patch }));
   const customer = p.kind === "customer";
   const others = page.agents.filter((a) => a.id !== p.id);
   const talks = p.talks_to ?? [];
   const label = kindLabel(p.kind);
+  const picked = sharedWith(p);
+  // A computer unpaired since keeps its tick until the person clears it.
+  const gone = computers ? picked.filter((id) => !computers.some((c) => c.id === id)) : [];
+
+  useEffect(() => {
+    let live = true;
+    pairedComputers().then(
+      (now) => {
+        if (live) setComputers(now);
+      },
+      () => {
+        if (live) setComputers(null);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  function pick(id: string, on: boolean) {
+    const next = on ? [...picked, id] : picked.filter((c) => c !== id);
+    set({ share: next.length > 0, share_with: next });
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -508,6 +547,28 @@ function AgentForm({
                 }
               />
               {a.name}
+            </label>
+          ))}
+        </fieldset>
+      )}
+      {computers && (
+        <fieldset>
+          <legend>{SHARE_LEGEND}</legend>
+          {computers.length === 0 && gone.length === 0 && <p className="empty">{NO_COMPUTERS}</p>}
+          {computers.map((c) => (
+            <label key={c.id} className="team-check">
+              <input
+                type="checkbox"
+                checked={picked.includes(c.id)}
+                onChange={(e) => pick(c.id, e.target.checked)}
+              />
+              {c.name}
+            </label>
+          ))}
+          {gone.map((id, i) => (
+            <label key={id} className="team-check">
+              <input type="checkbox" checked onChange={(e) => pick(id, e.target.checked)} />
+              {gone.length > 1 ? `${GONE_COMPUTER} (${i + 1})` : GONE_COMPUTER}
             </label>
           ))}
         </fieldset>

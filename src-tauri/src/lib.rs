@@ -4280,18 +4280,53 @@ async fn get_team(state: State<'_, ShellState>) -> Result<team::Page, String> {
 
 #[tauri::command]
 async fn team_save_agent(
+    app: tauri::AppHandle,
     state: State<'_, ShellState>,
     agent: grokhub_core::agent_team::Profile,
     add: bool,
 ) -> Result<team::Page, String> {
     let dir = state.config_dir.clone();
-    off_main(move || team::save_agent(&dir, agent, add)).await?
+    off_main(move || {
+        let page = team::save_agent(&dir, agent, add)?;
+        recheck_door(&app);
+        Ok(page)
+    })
+    .await?
 }
 
 #[tauri::command]
-async fn team_remove_agent(state: State<'_, ShellState>, id: String) -> Result<team::Page, String> {
+async fn team_remove_agent(
+    app: tauri::AppHandle,
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<team::Page, String> {
     let dir = state.config_dir.clone();
-    off_main(move || team::remove_agent(&dir, &id)).await?
+    off_main(move || {
+        let page = team::remove_agent(&dir, &id)?;
+        recheck_door(&app);
+        Ok(page)
+    })
+    .await?
+}
+
+/// After an agent is saved or removed, a paired computer it is no longer
+/// shared with loses its running turns. Only an agent's own fields decide
+/// what a computer reaches, so team edits need no recheck.
+fn recheck_door(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
+        share.recheck();
+    }
+    #[cfg(not(desktop))]
+    let _ = app;
+}
+
+/// The computers paired with this one, for the Team page's share list. No
+/// pairing code, and memory only. Desktop only, like the hub.
+#[cfg(desktop)]
+#[tauri::command]
+fn team_computers(share: State<'_, Arc<hub_share::HubShare>>) -> Vec<hub_share::PeerView> {
+    share.computers()
 }
 
 #[tauri::command]
@@ -8562,6 +8597,42 @@ fn scheduled_route(config_dir: &Path) -> Result<scheduler::Route, String> {
     Ok((route.client, model, route.workspace, gate))
 }
 
+/// A paired computer's message to a shared agent, answered with the
+/// person's own sign-in and router as a scheduled run would be, read at each
+/// message. With no model to answer, the task log says why and the computer
+/// hears only that the agent couldn't answer.
+#[cfg(desktop)]
+struct AppTurns {
+    config: PathBuf,
+}
+
+#[cfg(desktop)]
+impl grokhub_hub::PeerTurns for AppTurns {
+    fn run(&self, ask: grokhub_hub::PeerAsk) -> grokhub_core::a2a::Outcome {
+        peer_turn(&self.config, scheduled_route(&self.config), ask)
+    }
+}
+
+#[cfg(desktop)]
+fn peer_turn(
+    config: &Path,
+    route: Result<scheduler::Route, String>,
+    ask: grokhub_hub::PeerAsk,
+) -> grokhub_core::a2a::Outcome {
+    match route {
+        Ok((client, model, _, _)) => grokhub_agent::answer_peer(grokhub_agent::PeerTurn {
+            config: config.to_path_buf(),
+            peer: ask.peer,
+            agent: ask.agent,
+            text: ask.text,
+            client,
+            model,
+            cancel: ask.cancel,
+        }),
+        Err(why) => grokhub_agent::peer_unanswered(config, &ask.peer, &ask.agent, &ask.text, &why),
+    }
+}
+
 /// Scheduled automations fire from here while the cabin is closed.
 #[cfg(desktop)]
 fn start_scheduler(app: &tauri::App) {
@@ -9223,9 +9294,18 @@ pub fn run() {
                     .store(global, std::sync::atomic::Ordering::SeqCst);
             }
             #[cfg(desktop)]
-            app.manage(Arc::new(hub_share::HubShare::open(
-                &app.state::<ShellState>().config_dir,
-            )));
+            {
+                let config = app.state::<ShellState>().config_dir.clone();
+                let door = Arc::new(grokhub_hub::A2aDoor::new(
+                    config.clone(),
+                    Arc::new(AppTurns {
+                        config: config.clone(),
+                    }),
+                    remote::lan_ip,
+                    &shell_update::version(),
+                ));
+                app.manage(Arc::new(hub_share::HubShare::open(&config, door)));
+            }
             #[cfg(desktop)]
             hub_join::start(
                 app.state::<ShellState>().config_dir.clone(),
@@ -9813,6 +9893,8 @@ pub fn run() {
             #[cfg(desktop)]
             new_share_code,
             #[cfg(desktop)]
+            team_computers,
+            #[cfg(desktop)]
             fleet_machines,
             #[cfg(desktop)]
             companions::get_companions,
@@ -10145,6 +10227,59 @@ mod command_tests {
 
     fn squeeze(code: &str) -> String {
         code.split_whitespace().collect()
+    }
+
+    #[test]
+    fn saving_or_removing_an_agent_rechecks_the_agent_door() {
+        // A turn for a computer the agent is no longer shared with stops now,
+        // not when that computer next calls.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for name in ["team_save_agent", "team_remove_agent"] {
+            let body = item_after(&src, &format!("async fn {name}("));
+            assert!(
+                body.contains("off_main(move||{") && body.contains("recheck_door(&app);"),
+                "{name} rechecks the door off the main thread: {body}"
+            );
+        }
+        let recheck = item_after(&src, "fn recheck_door(");
+        assert!(
+            recheck.contains("app.try_state::<Arc<hub_share::HubShare>>()")
+                && recheck.contains("share.recheck();"),
+            "{recheck}"
+        );
+        // The hub the app shares is built with the door.
+        assert!(squeeze(&src)
+            .contains("app.manage(Arc::new(hub_share::HubShare::open(&config,door)));"));
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn a_peer_message_with_no_model_is_logged_and_the_computer_hears_a_fixed_line() {
+        let dir = std::env::temp_dir().join(format!("peer-turn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ask = grokhub_hub::PeerAsk {
+            peer: "laptop-1".into(),
+            agent: "front-desk".into(),
+            text: "When are you open?".into(),
+            cancel: grokhub_agent::CancelToken::new(),
+        };
+        assert_eq!(
+            super::peer_turn(
+                &dir,
+                Err("Sign in with Grok or add an API key.".into()),
+                ask
+            ),
+            grokhub_core::a2a::Outcome::Failed("the agent couldn't answer".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&dir, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(
+            log[0].from,
+            grokhub_core::agent_tasks::Origin::Peer("laptop-1".into())
+        );
+        assert_eq!(log[0].reply, "Sign in with Grok or add an API key.");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

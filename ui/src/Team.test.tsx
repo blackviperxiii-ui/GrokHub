@@ -2,10 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentProfile, AgentTask, AgentTeam, TeamPage } from "./teamApi";
+import type { AgentProfile, AgentTask, AgentTeam, PairedComputer, TeamPage } from "./teamApi";
 
 const api = vi.hoisted(() => ({
   getTeam: vi.fn<() => Promise<TeamPage>>(),
+  pairedComputers: vi.fn<() => Promise<PairedComputer[]>>(),
   saveAgent: vi.fn<(agent: AgentProfile, add: boolean) => Promise<TeamPage>>(),
   removeAgent: vi.fn<(id: string) => Promise<TeamPage>>(),
   saveTeam: vi.fn<(team: AgentTeam, add: boolean) => Promise<TeamPage>>(),
@@ -16,7 +17,16 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./teamApi", () => api);
 
-import { AGENTS_EMPTY, idFor, KEPT_FOLDER, Team, TASKS_EMPTY } from "./Team";
+import {
+  AGENTS_EMPTY,
+  GONE_COMPUTER,
+  idFor,
+  KEPT_FOLDER,
+  NO_COMPUTERS,
+  SHARE_LEGEND,
+  Team,
+  TASKS_EMPTY,
+} from "./Team";
 
 function agent(over: Partial<AgentProfile> = {}): AgentProfile {
   return {
@@ -51,6 +61,83 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getTeam.mockResolvedValue(PAGE);
   api.getAgentTasks.mockResolvedValue([]);
+  api.pairedComputers.mockResolvedValue([]);
+});
+
+const LAPTOP: PairedComputer = { id: "laptop-1", name: "Laptop", lastSeen: 0 };
+const TABLET: PairedComputer = { id: "tablet-2", name: "Tablet", lastSeen: 0 };
+
+async function editWriter() {
+  await userEvent.click((await card("Writer")).getByRole("button", { name: "Edit" }));
+  return within(screen.getByRole("form", { name: "Edit Writer" }));
+}
+
+describe("sharing an agent with paired computers", () => {
+  it("lists the paired computers and saves the ones ticked", async () => {
+    api.pairedComputers.mockResolvedValue([LAPTOP, TABLET]);
+    const shared = { ...PAGE.agents[0], share: true, share_with: ["laptop-1"] };
+    api.saveAgent.mockResolvedValue({ ...PAGE, agents: [shared, PAGE.agents[1]] });
+    render(<Team />);
+    const form = await editWriter();
+    expect(await form.findByRole("group", { name: SHARE_LEGEND })).toBeInTheDocument();
+    expect(form.getByLabelText("Tablet")).not.toBeChecked();
+    await userEvent.click(form.getByLabelText("Laptop"));
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenCalledWith(shared, false);
+    expect(
+      (await card("Writer")).getByText("Role · Ask first · Desk · shared with 1 computer"),
+    ).toBeInTheDocument();
+  });
+
+  it("stops sharing when the last computer is unticked", async () => {
+    const shared = agent({ share: true, share_with: ["laptop-1", "tablet-2"] });
+    api.getTeam.mockResolvedValue({ ...PAGE, agents: [shared], teams: [] });
+    api.pairedComputers.mockResolvedValue([LAPTOP, TABLET]);
+    api.saveAgent.mockResolvedValue(PAGE);
+    render(<Team />);
+    expect((await card("Writer")).getByText("Role · Ask first · shared with 2 computers")).toBeInTheDocument();
+    const form = await editWriter();
+    await userEvent.click(await form.findByLabelText("Laptop"));
+    await userEvent.click(form.getByLabelText("Tablet"));
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenCalledWith({ ...shared, share: false, share_with: [] }, false);
+  });
+
+  it("keeps a computer that's no longer paired ticked until the person clears it", async () => {
+    const shared = agent({ share: true, share_with: ["old-pc", "laptop-1"] });
+    const page = { ...PAGE, agents: [shared], teams: [] };
+    api.getTeam.mockResolvedValue(page);
+    api.pairedComputers.mockResolvedValue([LAPTOP]);
+    api.saveAgent.mockResolvedValue(page);
+    render(<Team />);
+    let form = await editWriter();
+    expect(await form.findByLabelText(GONE_COMPUTER)).toBeChecked();
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenLastCalledWith(shared, false);
+    form = await editWriter();
+    await userEvent.click(await form.findByLabelText(GONE_COMPUTER));
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenLastCalledWith({ ...shared, share_with: ["laptop-1"] }, false);
+  });
+
+  it("says where to pair a computer when none is paired", async () => {
+    render(<Team />);
+    const form = await editWriter();
+    expect(await form.findByText(NO_COMPUTERS)).toBeInTheDocument();
+  });
+
+  it("hides the list where there's no hub to share from, and leaves sharing as it was", async () => {
+    const shared = agent({ share: true, share_with: ["laptop-1"] });
+    api.getTeam.mockResolvedValue({ ...PAGE, agents: [shared], teams: [] });
+    api.pairedComputers.mockRejectedValue("unknown command team_computers");
+    api.saveAgent.mockResolvedValue(PAGE);
+    render(<Team />);
+    const form = await editWriter();
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenCalledWith(shared, false);
+    expect(form.queryByRole("group", { name: SHARE_LEGEND })).toBeNull();
+    expect(screen.queryByText("unknown command team_computers")).toBeNull();
+  });
 });
 
 describe("idFor", () => {
