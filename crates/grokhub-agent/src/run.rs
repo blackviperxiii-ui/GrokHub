@@ -55,6 +55,16 @@ pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSet
     JobToolSetGuard { session }
 }
 
+/// Binds `names` for `session`, kept inside the set its nearest bound
+/// ancestor already has, so a child's own list never widens a job's.
+pub(crate) fn bind_narrower_tool_set(session: &str, names: &[String]) {
+    let inherited = bound_job_tool_set(session);
+    let kept = names
+        .iter()
+        .filter(|name| inherited.as_ref().is_none_or(|set| set.allows(name)));
+    let _ = bind_job_tool_set(session, ToolSet::only(kept.cloned()));
+}
+
 /// Remove a session's job [`ToolSet`] (tests / explicit teardown).
 pub fn clear_job_tool_set(session: &str) {
     if let Ok(mut map) = job_tool_sets().lock() {
@@ -353,6 +363,7 @@ fn recalled_chats() -> std::sync::MutexGuard<'static, crate::lru_map::LruMap<()>
 /// and only toward the safe side. An empty `chat` sticks for this run only.
 fn hosted_for_step(
     gate: &Gate,
+    perms: Option<&crate::perm::Policy>,
     workspace: &Path,
     history: &[InputItem],
     chat: &str,
@@ -365,7 +376,17 @@ fn hosted_for_step(
     if *recalled && !chat.is_empty() {
         recalled_chats().insert(chat, ());
     }
-    crate::perm::hosted_search_allowed(gate, &crate::perm::Policy::load(workspace).rules, *recalled)
+    // The turn's own rules when it has them (an agent's turn keeps its
+    // caller's deny and ask rules), else the saved ones.
+    let loaded;
+    let rules = match perms {
+        Some(policy) => &policy.rules,
+        None => {
+            loaded = crate::perm::Policy::load(workspace);
+            &loaded.rules
+        }
+    };
+    crate::perm::hosted_search_allowed(gate, rules, *recalled)
 }
 
 enum CompactPass {
@@ -568,7 +589,9 @@ fn run_turn(
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
     let config_dir = crate::perm::config_dir();
-    let soft_caps = crate::brain::care_first_enabled(&config_dir);
+    // Care-first is the router's setting, read from the app's folder as the
+    // router reads it, also in an agent's turn.
+    let soft_caps = crate::brain::care_first_enabled(&crate::perm::app_config_dir());
     let intention_block = (input.depth == 0)
         .then(|| crate::close_check::prompt_block(input.conversation_id))
         .filter(|block| !block.is_empty());
@@ -820,7 +843,11 @@ fn run_turn(
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
         let trigger = crate::compact::trigger_tokens(history, prompt_mark);
-        let long = crate::route::live::crosses_long_context(&config_dir, input.model, trigger);
+        let long = crate::route::live::crosses_long_context(
+            &crate::perm::app_config_dir(),
+            input.model,
+            trigger,
+        );
         // xAI bills the whole request at about 2x from 200k prompt tokens, so a
         // Grok chat compacts before that, whatever the model's window.
         let projected = crate::compact::projected_prompt_tokens(history, prompt_mark);
@@ -944,6 +971,7 @@ fn run_turn(
             tools,
             hosted_search: hosted_for_step(
                 &gate,
+                input.perms,
                 input.workspace,
                 history,
                 input.conversation_id,
@@ -1997,7 +2025,7 @@ fn repair_shell_lookup(input: &LoopIn<'_>, call: &FunctionCall) -> FunctionCall 
     let model = crate::route::handoff::last_served(input.conversation_id)
         .unwrap_or_else(|| input.model.to_string());
     crate::route::session_metrics::note_repair(
-        &crate::perm::config_dir(),
+        &crate::perm::app_config_dir(),
         input.conversation_id,
         &model,
         tool,
@@ -2775,6 +2803,10 @@ fn action_line(name: &str, arguments: &str) -> String {
             .or_else(|| field("url")),
         // `message` is what gets sent when both are set.
         "send_subagent_message" if field("message").is_some() => None,
+        // Who gets the work, then the work.
+        "message_agent" => field("agent")
+            .zip(field("message"))
+            .map(|(agent, message)| format!("{agent}: {message}")),
         _ if name.contains("__") && crate::self_manage::self_tool(name).is_none() => {
             lone_field(&value)
         }
@@ -3390,6 +3422,28 @@ mod tests {
         clear_job_tool_set(parent);
         clear_job_tool_set(&child);
         clear_job_tool_set(&nested);
+    }
+
+    #[test]
+    fn an_agents_own_tool_list_stays_inside_its_parents() {
+        let parent = "native-agent-tools-parent";
+        let agent = format!("{parent}/agent-1");
+        let names = ["read_file".to_string(), "grep".to_string()];
+        // Unbound parent: the agent gets its own list.
+        bind_narrower_tool_set(&agent, &names);
+        assert_eq!(
+            bound_job_tool_set(&agent),
+            Some(ToolSet::only(["grep", "read_file"]))
+        );
+        // A job's list: only what both allow.
+        let _job = bind_job_tool_set(parent, ToolSet::only(["read_file", "write"]));
+        bind_narrower_tool_set(&agent, &names);
+        assert_eq!(
+            bound_job_tool_set(&agent),
+            Some(ToolSet::only(["read_file"]))
+        );
+        clear_job_tool_set(parent);
+        clear_job_tool_set(&agent);
     }
 
     #[test]
@@ -4826,10 +4880,10 @@ mod tests {
             content: vec![ContentPart::InputText("look it up".into())],
         }];
         let mut fresh = false;
-        assert!(hosted_for_step(&gate, &dir, &plain, "", &mut fresh));
+        assert!(hosted_for_step(&gate, None, &dir, &plain, "", &mut fresh));
         let mut recalled = true;
         assert!(
-            !hosted_for_step(&gate, &dir, &plain, "", &mut recalled),
+            !hosted_for_step(&gate, None, &dir, &plain, "", &mut recalled),
             "no recall left in the history, but the run saw some"
         );
         assert!(recalled);
@@ -4838,18 +4892,47 @@ mod tests {
         // recalls nothing still keeps hosted search off.
         let chat = "hosted-sticky-chat";
         let mut first = true;
-        assert!(!hosted_for_step(&gate, &dir, &plain, chat, &mut first));
+        assert!(!hosted_for_step(
+            &gate, None, &dir, &plain, chat, &mut first
+        ));
         let mut later = false;
         assert!(
-            !hosted_for_step(&gate, &dir, &plain, chat, &mut later),
+            !hosted_for_step(&gate, None, &dir, &plain, chat, &mut later),
             "the chat saw recalled lines in an earlier turn"
         );
         assert!(later);
         let mut other = false;
         assert!(
-            hosted_for_step(&gate, &dir, &plain, "hosted-sticky-other", &mut other),
+            hosted_for_step(&gate, None, &dir, &plain, "hosted-sticky-other", &mut other),
             "another chat is not marked"
         );
+    }
+
+    #[test]
+    fn hosted_search_follows_the_turns_own_rules_when_it_has_them() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let dir = workspace("hosted-turn-rules");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let gate = chat(gate::PermMode::Ask, true, false);
+        let plain = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("look it up".into())],
+        }];
+        let deny = crate::perm::Policy {
+            rules: vec![crate::perm::parse_rule("web_search", crate::perm::Action::Deny).unwrap()],
+            grants: vec![],
+        };
+        let mut fresh = false;
+        // Nothing saved denies search, but the turn's rules do.
+        assert!(hosted_for_step(&gate, None, &dir, &plain, "", &mut fresh));
+        assert!(!hosted_for_step(
+            &gate,
+            Some(&deny),
+            &dir,
+            &plain,
+            "",
+            &mut fresh
+        ));
     }
 
     #[test]
@@ -8382,6 +8465,11 @@ mod tests {
                 r#"{"name":"disk-report","about":"Disk use"}"#,
                 ALL,
             ),
+            (
+                "message_agent",
+                r#"{"agent":"researcher","message":"Which router has the best range?"}"#,
+                "researcher: Which router has the best range?",
+            ),
         ];
         for (name, arguments, line) in rows {
             let line = if *line == ALL { arguments } else { line };
@@ -8404,7 +8492,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 81);
+        assert_eq!(native.len(), 82);
     }
 
     #[test]

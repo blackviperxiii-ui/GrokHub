@@ -107,7 +107,8 @@ pub fn run_in(config_dir: &Path, ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput 
             .and_then(Value::as_bool)
             .unwrap_or(false),
         approve: consent.as_ref().map(|c| c as &dyn routine_run::Approve),
-        desktop: ctx.desktop,
+        // A browser run's routine gets no desktop either.
+        desktop: super::run_desktop(ctx),
         stop: ctx.stop,
         brain: None,
         words: None,

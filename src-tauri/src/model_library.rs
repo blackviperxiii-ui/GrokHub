@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_picker::{BenchCache, Profile};
 use grokhub_core::local_setup::{self as ls, LocalModel, ModelKind, ModelTab};
+use grokhub_core::local_skills::TaskKind;
 use grokhub_core::model_download::{self as md, Control, Outcome, Progress, Step};
 use grokhub_core::model_library::{self as lib, Fit, Row, RowError};
 use grokhub_core::model_lineup as lineup;
+use grokhub_core::model_offer as offer;
 use grokhub_core::runtime_download as rd;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::local_engine::{self, Busy, HfFetch, DRAFTER_BUSY};
@@ -120,6 +122,98 @@ pub fn dir_for(config_dir: &Path, m: &LocalModel) -> PathBuf {
 
 fn on_disk(config_dir: &Path, m: &LocalModel) -> bool {
     md::complete(&dir_for(config_dir, m), m)
+}
+
+/// When each model, and any model for each task kind, was last offered
+/// (ms), so neither is asked about again within [`offer::OFFER_EVERY_MS`].
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Offered {
+    #[serde(default)]
+    models: BTreeMap<String, u64>,
+    #[serde(default)]
+    kinds: BTreeMap<String, u64>,
+}
+
+fn offers_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("local").join("install_offers.json")
+}
+
+fn read_offers(config_dir: &Path) -> Offered {
+    std::fs::read_to_string(offers_path(config_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// A model nothing on this PC fits well is looked for again at most this
+/// often per task kind, since reading this PC runs the GPU probes.
+const FIT_CHECK_EVERY_MS: u64 = 60 * 60 * 1000;
+
+/// The question and the line its Yes runs, for the chat model not on this
+/// PC that would do `kind` clearly better than every chat model here and
+/// fits this PC well. Whatever the answer, neither that model nor another
+/// one for `kind` is offered again for 30 days; a model already queued or
+/// downloading isn't offered. Reads this
+/// PC only when the disk leaves one worth offering, so call it off the main
+/// thread.
+pub fn install_offer(config_dir: &Path, kind: TaskKind, now_ms: u64) -> Option<(String, String)> {
+    let here = |m: &LocalModel| on_disk(config_dir, m);
+    offer_with(config_dir, kind, now_ms, here, || {
+        let p = crate::local_ai::read_machine(config_dir).profile();
+        lib::rows(&p, &BenchCache::new(), here)
+    })
+}
+
+/// [`install_offer`] with what's downloaded told by `on_disk` and this PC's
+/// rows read by `rows`, only when needed.
+fn offer_with(
+    config_dir: &Path,
+    kind: TaskKind,
+    now_ms: u64,
+    on_disk: impl Fn(&LocalModel) -> bool,
+    rows: impl FnOnce() -> Vec<Row>,
+) -> Option<(String, String)> {
+    static CHECKED: Mutex<BTreeMap<(PathBuf, &'static str), u64>> = Mutex::new(BTreeMap::new());
+    let mut shown = read_offers(config_dir);
+    if !offer::due(&shown.kinds, kind.key(), now_ms) {
+        return None;
+    }
+    let pending: Vec<&str> = match state().lock() {
+        Ok(s) => s
+            .queue
+            .iter()
+            .map(|m| m.id)
+            .chain(s.run.as_ref().map(|r| r.model.id))
+            .collect(),
+        Err(_) => return None,
+    };
+    let wanted: Vec<&'static LocalModel> = offer::worth_offering(ls::local_models(), kind, on_disk)
+        .into_iter()
+        .filter(|m| offer::due(&shown.models, m.id, now_ms) && !pending.contains(&m.id))
+        .collect();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut checked = CHECKED.lock().ok()?;
+    let key = (config_dir.to_path_buf(), kind.key());
+    if checked
+        .get(&key)
+        .is_some_and(|&at| now_ms >= at && now_ms - at < FIT_CHECK_EVERY_MS)
+    {
+        return None;
+    }
+    let Some(m) = offer::first_fitting(&wanted, &rows()) else {
+        checked.insert(key, now_ms);
+        return None;
+    };
+    shown.models.insert(m.id.to_string(), now_ms);
+    shown.kinds.insert(kind.key().to_string(), now_ms);
+    let path = offers_path(config_dir);
+    let text = serde_json::to_string_pretty(&shown).ok()?;
+    // Asked only once it is kept: an offer that can't be remembered would
+    // come back after every reply.
+    grokhub_core::pulse_writer::write_atomic(&path, &text).ok()?;
+    Some((offer::prompt(m, kind), format!("/download {}", m.id)))
 }
 
 fn status_of(s: &State) -> LibraryStatus {
@@ -803,5 +897,109 @@ mod tests {
             .insert(MID, lib::row_error(mid, &Outcome::BadChecksum).unwrap());
         settle(&mut s, mid, Ok("Downloaded Gemma 4 12B.".into()));
         assert!(s.errors.is_empty());
+    }
+
+    /// An empty config folder for the offer record.
+    fn config(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gh-offer-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn on(ids: &'static [&'static str]) -> impl Fn(&LocalModel) -> bool {
+        move |m| ids.contains(&m.id)
+    }
+
+    #[test]
+    fn a_device_reply_offers_one_better_model_per_task_and_reads_this_pc_only_when_needed() {
+        const CODER: &str = "qwen3.6-35b-a3b-heretic-q4_k_m";
+        let dir = config("offer");
+        let read = std::cell::Cell::new(0);
+        let pc_rows = || {
+            read.set(read.get() + 1);
+            rows(&[MID])
+        };
+        // Everyday chat stays on the model here, and this PC isn't read.
+        assert_eq!(
+            offer_with(&dir, TaskKind::Chat, 1_000, on(&[MID]), pc_rows),
+            None
+        );
+        assert_eq!(read.get(), 0);
+        let coder = ls::model_by_id(CODER).unwrap();
+        assert_eq!(
+            offer_with(&dir, TaskKind::Code, 1_000, on(&[MID]), pc_rows),
+            Some((
+                format!(
+                    "{} would handle coding better than the models on this computer. Download it? ({})",
+                    coder.name,
+                    ls::size_label(coder.download_mb)
+                ),
+                format!("/download {CODER}"),
+            ))
+        );
+        assert_eq!(read.get(), 1);
+        // Asked once: no other coding offer for 30 days, and no PC read for it.
+        assert_eq!(
+            offer_with(&dir, TaskKind::Code, 2_000, on(&[MID]), pc_rows),
+            None
+        );
+        assert_eq!(read.get(), 1);
+        // Another task has its own offer.
+        assert_eq!(
+            offer_with(&dir, TaskKind::Reason, 3_000, on(&[MID]), pc_rows).map(|(_, yes)| yes),
+            Some("/download qwen3.8-27b-heretic-q4_k_m".to_string())
+        );
+        // Kept on disk, so a restart doesn't ask again.
+        let kept = read_offers(&dir);
+        assert_eq!(kept.kinds.get("code"), Some(&1_000));
+        assert_eq!(kept.models.get(CODER), Some(&1_000));
+        // Thirty days on, coding is due again and the same model with it.
+        let later = 1_000 + offer::OFFER_EVERY_MS;
+        assert_eq!(
+            offer_with(&dir, TaskKind::Code, later, on(&[MID]), pc_rows).map(|(_, yes)| yes),
+            Some(format!("/download {CODER}"))
+        );
+        // Downloaded now: nothing beats it at coding by enough to ask.
+        let dir2 = config("offer-have");
+        assert_eq!(
+            offer_with(&dir2, TaskKind::Code, later, on(&[MID, CODER]), || {
+                rows(&[MID, CODER])
+            }),
+            None
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn when_nothing_fits_well_this_pc_is_read_again_only_after_an_hour() {
+        let dir = config("offer-none");
+        let read = std::cell::Cell::new(0);
+        let none_fit = || {
+            read.set(read.get() + 1);
+            Vec::new()
+        };
+        assert_eq!(
+            offer_with(&dir, TaskKind::Long, 1_000, on(&[MID]), none_fit),
+            None
+        );
+        assert_eq!(
+            offer_with(&dir, TaskKind::Long, 2_000, on(&[MID]), none_fit),
+            None
+        );
+        assert_eq!(read.get(), 1);
+        assert_eq!(
+            offer_with(
+                &dir,
+                TaskKind::Long,
+                1_000 + FIT_CHECK_EVERY_MS,
+                on(&[MID]),
+                none_fit
+            ),
+            None
+        );
+        assert_eq!(read.get(), 2);
+        // Nothing was offered, so nothing was kept.
+        assert!(!offers_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

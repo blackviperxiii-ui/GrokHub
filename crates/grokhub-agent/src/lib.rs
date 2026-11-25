@@ -1,5 +1,6 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
+mod agent_message;
 mod auto_review;
 pub mod batch;
 pub mod brain;
@@ -91,6 +92,7 @@ mod turn_budget;
 mod unattended;
 pub mod voice_session;
 pub mod vstack_sync;
+pub mod web_origin;
 mod work;
 mod ws_mode;
 pub mod xai_keychain;

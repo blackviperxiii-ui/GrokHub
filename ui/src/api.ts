@@ -1373,8 +1373,10 @@ export type SlashEffect =
   | { kind: "openNote"; view: "settings"; text: string }
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
-  /** `/plugins`: Settings → Labs. */
-  | { kind: "openSection"; section: "labs" }
+  /** `/plugins`: Settings → Labs. `/download` alone: Settings → Local AI. */
+  | { kind: "openSection"; section: "labs" | "localAi" }
+  /** `/download <model>`: that model's download starts on this computer. */
+  | { kind: "downloadModel"; id: string; name: string }
   /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
   | { kind: "shell"; check: CommandBoxVerdict }
   /** `/sync` or `/inhabit <computer>`: a send to a paired computer asks
@@ -3246,6 +3248,77 @@ export function stopShare(): Promise<Share> {
 
 export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
+}
+
+/** A phone or computer paired as a companion (src-tauri/src/companions.rs). */
+export interface Companion {
+  id: string;
+  name: string;
+  /** `android`, `linux`, `macos`, `windows` or `other`, as the companion says. */
+  platform: string;
+  /** The user said yes. Until then it lends nothing. */
+  approved: boolean;
+  /** What its person offers: camera, screen, location, sms, talk, wake, canvas, mcp, skills. */
+  offers: string[];
+  /** What the user allows, out of `offers`. */
+  allowed: string[];
+  online: boolean;
+  /** Unix ms. */
+  pairedAt: number;
+}
+
+/** Devices → Companions; desktop only. */
+export interface Companions {
+  on: boolean;
+  port: number;
+  /** The live pairing code; empty when none is open. Never log it. */
+  code: string;
+  /** This computer's number address on the network; empty while off or unknown. */
+  address: string;
+  companions: Companion[];
+}
+
+/** A wake or a heard line from a companion. */
+export interface CompanionEvent {
+  companion: string;
+  name: string;
+  kind: "wake" | "heard";
+  text: string;
+}
+
+export const COMPANION_EVENT = "companion-event";
+
+export function getCompanions(): Promise<Companions> {
+  return invoke<Companions>("get_companions");
+}
+
+export function startCompanions(): Promise<Companions> {
+  return invoke<Companions>("start_companions");
+}
+
+export function stopCompanions(): Promise<Companions> {
+  return invoke<Companions>("stop_companions");
+}
+
+export function newCompanionCode(): Promise<Companions> {
+  return invoke<Companions>("new_companion_code");
+}
+
+export function approveCompanion(id: string, allowed: string[]): Promise<Companions> {
+  return invoke<Companions>("approve_companion", { id, allowed });
+}
+
+export function setCompanionAllowed(id: string, allowed: string[]): Promise<Companions> {
+  return invoke<Companions>("set_companion_allowed", { id, allowed });
+}
+
+export function removeCompanion(id: string): Promise<Companions> {
+  return invoke<Companions>("remove_companion", { id });
+}
+
+/** A companion's wake or heard line, whichever page is open. */
+export function onCompanionEvent(handler: (event: CompanionEvent) => void): Promise<UnlistenFn> {
+  return subscribe<CompanionEvent>(COMPANION_EVENT, handler);
 }
 
 /** A computer on the Fleet page (src-tauri/src/fleet.rs); desktop only. */

@@ -149,6 +149,7 @@ pub use detect::{
     Evidence, Finding, SpanKind, ACTION_LOOP, APPROVAL_GATE_VIOLATION, CLAIMED_CLICK_NO_CHANGE,
     DONE_WITHOUT_CRITERIA, UNSUPPORTED_ASSURANCE,
 };
+pub(crate) use egress::shared_dir;
 pub use egress::{
     append_egress, current_origin, current_recall, egress_dest, egress_path, guard_egress,
     guard_or_park, guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,

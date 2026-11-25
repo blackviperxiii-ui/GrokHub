@@ -1826,6 +1826,9 @@ fn webfetch_rules_match_the_host_the_fetch_dials() {
         "https://EVIL.test.:8443",
         "https://evil%2etest/",
         "https:evil.test",
+        "https://evil.test]/x",
+        "https://]evil.test/x",
+        "https://evil.test[/x",
     ] {
         assert_eq!(fetch(&always, url, &deny), refused, "{url}");
     }
@@ -1912,6 +1915,30 @@ fn webfetch_rules_match_the_host_the_fetch_dials() {
         fetch(&ask_gate, "ftp://docs.rs/serde", &docs),
         Decision::Ask
     );
+    // Ports compare as numbers, 443 when none is written; an allow rule
+    // with no port allows port 443 only.
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs:0443/serde", &docs),
+        Decision::Run
+    );
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs:8443/serde", &docs),
+        Decision::Ask
+    );
+    let default = policy_of(&[("WebFetch(https://evil.test:443/*)", Action::Deny)], &[]);
+    let zeros = policy_of(&[("WebFetch(evil.test:8443)", Action::Deny)], &[]);
+    for (url, policy) in [
+        ("https://evil.test/x", &default),
+        ("http://evil.test:0443/x", &default),
+        ("https://evil.test:08443/x", &zeros),
+    ] {
+        assert_eq!(fetch(&always, url, policy), refused, "{url}");
+    }
+    // An IPv4 address counts in any spelling.
+    let ip = policy_of(&[("WebFetch(domain:127.0.0.1)", Action::Deny)], &[]);
+    for url in ["https://2130706433/", "https://0x7f.1/", "https://0177.1/"] {
+        assert_eq!(fetch(&always, url, &ip), refused, "{url}");
+    }
 }
 
 fn shell_url(url: &str) -> String {

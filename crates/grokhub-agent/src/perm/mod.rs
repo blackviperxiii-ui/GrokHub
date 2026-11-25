@@ -25,11 +25,12 @@ pub use rules::{parse_rule, Action, PatMode, Rule, RuleParseError, Tool};
 pub use split::{analyze, bare_command, Facts, Seg};
 
 pub(crate) use risk::{
-    git_words_are_read_only_query, git_words_have_unsafe_query_option, program_name, trusted_head,
+    git_words_are_read_only_query, git_words_have_unsafe_query_option, glob_may_add_option,
+    program_name, trusted_head,
 };
 pub use store::{
-    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules,
-    pinned_config, project_key, remember_grant, remove_grant, save_rules, ConfigGuard,
+    add_grant_at, app_config_dir, config_dir, config_pinned, load_all_grants, load_grants,
+    load_rules, pinned_config, project_key, remember_grant, remove_grant, save_rules, ConfigGuard,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,22 +197,33 @@ pub fn mcp_matches(rule: &Rule, tool_name: &str) -> bool {
         && matchers::rule_matches_text(rule, tool_name, rule.action != Action::Allow)
 }
 
-/// Whether a `WebFetch` rule covers a fetch of `url`, by the host the fetch
-/// dials (`https://evil.test?.github.com` dials `evil.test`). A deny or ask
-/// glob also matches the URL as written, which only widens it.
+/// Whether a `WebFetch` rule covers a fetch of `url`, by the host, port and
+/// path web_fetch dials, read by web_fetch's own parse
+/// (`https://evil.test?.github.com` dials `evil.test`, `https://2130706433`
+/// dials `127.0.0.1`). A deny or ask rule also matches the URL the way a
+/// browser reads it, and a glob the URL as written: both only widen it.
 pub fn webfetch_matches(rule: &Rule, url: &str) -> bool {
     if !matchers::tool_reaches(rule.tool, Tool::WebFetch) {
         return false;
     }
-    match rule.pattern.as_deref() {
-        None | Some("*") | Some("") => true,
-        Some(pattern) if rule.mode == PatMode::Domain => matchers::domain_matches(pattern, url),
-        Some(pattern) => {
-            matchers::domain_matches(pattern, url)
-                || matchers::url_glob_matches(pattern, url)
-                || (rule.action != Action::Allow && matchers::glob_match(pattern, url, false))
-        }
-    }
+    let pattern = match rule.pattern.as_deref() {
+        None | Some("*") | Some("") => return true,
+        Some(pattern) => pattern,
+    };
+    let wide = rule.action != Action::Allow;
+    let domain = rule.mode == PatMode::Domain;
+    let hit = |target: &matchers::Target| {
+        matchers::domain_hit(pattern, &target.host)
+            || (!domain && matchers::url_glob_hit(pattern, target, wide))
+    };
+    let dialed = matchers::Target::dialed(url);
+    let read = if wide {
+        matchers::Target::read(url)
+    } else {
+        None
+    };
+    dialed.iter().chain(read.iter()).any(hit)
+        || (wide && !domain && matchers::glob_match(pattern, url, false))
 }
 
 /// An explicit ask rule matched. Auto-review must not override it.

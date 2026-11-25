@@ -168,36 +168,128 @@ pub fn scope_refusal(scope: &Scope, home: Option<&Path>) -> Option<String> {
     if d.is_empty() || !(d.starts_with('/') || drive) {
         return Some("files: needs one absolute folder".into());
     }
-    let d = folded_parts(d);
+    // As written, and where links, junctions and short names lead when the
+    // folder is there.
+    let spellings = |path: &str| {
+        let mut out = vec![folded_parts(path)];
+        if let Ok(real) = fs::canonicalize(path) {
+            out.push(folded_parts(&real.display().to_string()));
+        }
+        out
+    };
+    let dirs = spellings(dir);
     if let Some(home) = home {
         // The home folder itself, or any folder that holds it (`/home`),
-        // however either is spelled (`/home/user/.`, `/home//user`, `C:\Users`).
-        if folded_parts(&home.display().to_string()).starts_with(&d) {
+        // however either is spelled (`/home/user/.`, `/home//user`, `C:\Users`,
+        // `\Users`, `\\localhost\c$\Users\User`, `C:\Users\ADMINI~1`).
+        let homes = spellings(&home.display().to_string());
+        if dirs.iter().any(|d| homes.iter().any(|h| holds(d, h))) {
             return Some("files: one folder at a time, never all of your home folder".into());
         }
     }
-    if scope_excluded(&d.join("/")) {
+    if dirs.iter().any(|d| scope_excluded(&d.join("/"))) {
         return Some("files: that folder is always excluded".into());
     }
     None
 }
 
+/// Whether the folder `dir` is `path` or holds it, both as [`folded_parts`]
+/// gives them. A folder with no drive (`\Users`) is on whichever drive the
+/// reader is on, so it counts on each; a part may be the 8.3 short name of
+/// the other ([`short_name_of`]).
+fn holds(dir: &[String], path: &[String]) -> bool {
+    let (Some((root, dir)), Some((path_root, path))) = (dir.split_first(), path.split_first())
+    else {
+        return false;
+    };
+    let on_drive = |r: &str| r.len() == 2 && r.ends_with(':');
+    let root_hit = root == path_root || (root.is_empty() && on_drive(path_root));
+    root_hit
+        && dir.len() <= path.len()
+        && dir
+            .iter()
+            .zip(path)
+            .all(|(d, p)| d == p || short_name_of(d, p) || short_name_of(p, d))
+}
+
+/// Whether `part` could be the 8.3 short name Windows gives the long name
+/// `long`: up to six characters of it and `~N` (`admini~1` for
+/// `administrator`, `progra~1` for `program files`, `userna~1.nam` for
+/// `user.name`), or two of its characters and a hash (`ad3f1c~1`), which
+/// can't be checked and so counts.
+fn short_name_of(part: &str, long: &str) -> bool {
+    let Some((stem, tail)) = part.split_once('~') else {
+        return false;
+    };
+    let (num, ext) = tail.split_once('.').unwrap_or((tail, ""));
+    let digits = !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit());
+    if stem.is_empty() || stem.chars().count() > 6 || !digits || ext.chars().count() > 3 {
+        return false;
+    }
+    // Windows drops blanks and dots and writes `_` for what 8.3 can't hold.
+    let squeeze = |s: &str| -> String {
+        s.chars()
+            .filter(|c| !matches!(c, ' ' | '.'))
+            .map(|c| {
+                if c.is_ascii() && !"+,;=[]".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    let (base, long_ext) = long
+        .rsplit_once('.')
+        .filter(|(b, _)| !b.is_empty())
+        .unwrap_or((long, ""));
+    let (base, long_ext, whole) = (squeeze(base), squeeze(long_ext), squeeze(long));
+    let stem = squeeze(stem);
+    let first_two: String = stem.chars().take(2).collect();
+    let hashed = stem.len() == 6
+        && stem.bytes().skip(2).all(|b| b.is_ascii_hexdigit())
+        && whole.starts_with(&first_two);
+    (base.starts_with(&stem) && long_ext.starts_with(ext))
+        || (ext.is_empty() && whole.starts_with(&stem))
+        || hashed
+}
+
 /// An absolute path's parts for comparing: the root first (`""`, or a drive
-/// such as `c:`), `\` read as `/`, a Windows `\\?\` or `\\.\` prefix
-/// dropped, no empty or `.` parts, each `..` stepping back, in lowercase,
-/// and each part without trailing dots and blanks, which Windows drops when
-/// it opens a path (`C:\Users\User.` opens `C:\Users\User`, `.. ` steps
-/// back). Windows and macOS homes are case-blind; on Linux this refuses a
-/// little more, which fails closed.
+/// such as `c:`), `\` read as `/`, a Windows `\\?\`, `\\.\` or `\??\`
+/// prefix dropped, an admin share read as its drive (`\\localhost\c$\x` is
+/// `c:\x`, on whichever machine the name stands for), no empty or `.`
+/// parts, each `..` stepping back, in lowercase, each part without trailing
+/// dots and blanks, which Windows drops when it opens a path
+/// (`C:\Users\User.` opens `C:\Users\User`, `.. ` steps back), and macOS's
+/// data volume as the path it stands for (`/System/Volumes/Data/Users` is
+/// `/Users`). Windows and macOS homes are case-blind; on Linux this refuses
+/// a little more, which fails closed.
 fn folded_parts(path: &str) -> Vec<String> {
     let path = path.replace('\\', "/").to_lowercase();
-    let path = match path
-        .strip_prefix("//?/")
-        .or_else(|| path.strip_prefix("//./"))
+    let path = match ["//?/", "//./", "/??/"]
+        .iter()
+        .find_map(|prefix| path.strip_prefix(prefix))
     {
         Some(rest) => rest
             .strip_prefix("unc/")
             .map_or_else(|| rest.to_string(), |share| format!("//{share}")),
+        None => path,
+    };
+    let path = match path.strip_prefix("//") {
+        Some(unc) => {
+            let mut names = unc.split('/').filter(|n| !n.is_empty());
+            let (_server, share) = (names.next(), names.next().unwrap_or(""));
+            match share.trim_end_matches(['.', ' ']).as_bytes() {
+                [d, b'$'] if d.is_ascii_alphabetic() => {
+                    format!(
+                        "{}:/{}",
+                        char::from(*d),
+                        names.collect::<Vec<_>>().join("/")
+                    )
+                }
+                _ => path,
+            }
+        }
         None => path,
     };
     let mut split = path.split('/');
@@ -214,6 +306,9 @@ fn folded_parts(path: &str) -> Vec<String> {
             "" => {}
             part => parts.push(part.to_string()),
         }
+    }
+    if parts[0].is_empty() && parts.len() >= 4 && parts[1..4] == ["system", "volumes", "data"] {
+        parts.drain(1..4);
     }
     parts
 }
@@ -251,6 +346,8 @@ impl ConsentLedger {
 
     fn load_with(config_dir: &Path, wait: bool) -> Self {
         let _lap = crate::timing::lap("harness:consent_load");
+        // Consent is the app's, also for an agent's home.
+        let config_dir = &super::egress::shared_dir(config_dir);
         let path = consent_path(config_dir);
         let Ok(f) = fs::File::open(&path) else {
             return Self::empty();
@@ -362,6 +459,7 @@ fn grant_id(seed: &str) -> String {
 
 /// Seal and append one line. Locked ⇒ nothing is written (no plaintext fallback).
 fn append_line(config_dir: &Path, g: &Grant) -> Result<(), String> {
+    let config_dir = &super::egress::shared_dir(config_dir);
     fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let line = serde_json::to_string(g).map_err(|e| e.to_string())?;
     let line = grokhub_core::redact_secrets(&line);
@@ -692,6 +790,117 @@ mod tests {
             );
         }
         assert_eq!(refused(r"C:\Users\User\Documents.", r"C:\Users\User"), None);
+    }
+
+    /// On Windows and macOS the home folder has more spellings: no drive,
+    /// an admin share, a device or object prefix, an 8.3 short name, the
+    /// data volume. Each is refused, and an excluded folder through each.
+    #[test]
+    fn the_home_folder_is_refused_in_windows_and_macos_spellings() {
+        let whole = Some("files: one folder at a time, never all of your home folder");
+        let excluded = Some("files: that folder is always excluded");
+        let refused =
+            |dir: &str, home: &str| scope_refusal(&Scope::Files(dir.into()), Some(Path::new(home)));
+        for spelled in [
+            r"\Users\User",
+            r"\Users",
+            r"\Users\User\.",
+            r"\\localhost\c$\Users\User",
+            r"\\localhost\C$",
+            r"\\127.0.0.1\c$\Users",
+            r"\\my-pc\c$\users\user\",
+            r"\\?\UNC\localhost\c$\Users\User",
+            r"\\?\C:\Users\User",
+            r"\??\C:\Users\User",
+            r"\??\UNC\localhost\c$\Users",
+            r"C:\USERS~1\User",
+            r"C:\Users\USER~1",
+        ] {
+            assert_eq!(
+                refused(spelled, r"C:\Users\User").as_deref(),
+                whole,
+                "{spelled}"
+            );
+        }
+        for spelled in [
+            r"C:\Users\ADMINI~1",
+            r"C:\Users\ADMINI~2",
+            r"\Users\admini~1",
+            r"C:\Users\AD3F1C~1",
+            r"\\localhost\c$\Users\ADMINI~1",
+        ] {
+            assert_eq!(
+                refused(spelled, r"C:\Users\Administrator").as_deref(),
+                whole,
+                "{spelled}"
+            );
+        }
+        assert_eq!(
+            refused(r"C:\Users\Administrator", r"C:\Users\ADMINI~1").as_deref(),
+            whole
+        );
+        for spelled in [
+            "/System/Volumes/Data/Users/user",
+            "/System/Volumes/Data/Users",
+            "/system/volumes/data/users/user/",
+            "/System/Volumes/Data",
+        ] {
+            assert_eq!(
+                refused(spelled, "/Users/user").as_deref(),
+                whole,
+                "{spelled}"
+            );
+        }
+        for (dir, home) in [
+            (r"\\localhost\c$\Users\User\.ssh", r"C:\Users\User"),
+            (r"\Users\User\.ssh", r"C:\Users\User"),
+            ("/System/Volumes/Data/Users/user/.ssh", "/Users/user"),
+        ] {
+            assert_eq!(refused(dir, home).as_deref(), excluded, "{dir}");
+        }
+        // Other folders stay open.
+        for (dir, home) in [
+            (r"\Users\User\Documents", r"C:\Users\User"),
+            (r"\\localhost\c$\Users\User\Documents", r"C:\Users\User"),
+            (r"\\localhost\share\Users\User", r"C:\Users\User"),
+            (r"C:\Users\OTHERU~1", r"C:\Users\User"),
+            (r"C:\Users\ADMINI~1\Documents", r"C:\Users\Administrator"),
+            (r"D:\Users\User", r"C:\Users\User"),
+            ("/System/Volumes/Data/Users/user/Documents", "/Users/user"),
+            ("/System/Volumes/Data/Users/other", "/Users/user"),
+        ] {
+            assert_eq!(refused(dir, home), None, "{dir}");
+        }
+    }
+
+    /// A link to the home folder, or to a folder that holds it, is the home
+    /// folder; a link to an excluded folder is excluded.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_the_home_folder_is_refused() {
+        use std::os::unix::fs::symlink;
+        let (d, _g) = dir("home-link");
+        let home = d.join("home").join("user");
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        fs::create_dir_all(home.join("Documents")).unwrap();
+        let links = d.join("links");
+        fs::create_dir_all(&links).unwrap();
+        symlink(&home, links.join("me")).unwrap();
+        symlink(d.join("home"), links.join("all")).unwrap();
+        symlink(home.join(".ssh"), links.join("keys")).unwrap();
+        symlink(home.join("Documents"), links.join("docs")).unwrap();
+        let refused = |dir: &Path, home: &Path| {
+            scope_refusal(&Scope::Files(dir.display().to_string()), Some(home))
+        };
+        let whole = Some("files: one folder at a time, never all of your home folder");
+        assert_eq!(refused(&links.join("me"), &home).as_deref(), whole);
+        assert_eq!(refused(&links.join("all"), &home).as_deref(), whole);
+        assert_eq!(refused(&home, &links.join("me")).as_deref(), whole);
+        assert_eq!(
+            refused(&links.join("keys"), &home).as_deref(),
+            Some("files: that folder is always excluded")
+        );
+        assert_eq!(refused(&links.join("docs"), &home), None);
     }
 
     #[test]

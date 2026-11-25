@@ -11,6 +11,8 @@ This page is the protocol. The code is in:
 | --- | --- |
 | Paired list and consent rules | `crates/grokhub-core/src/companion_nodes.rs` |
 | Host: pairing, relay, MCP endpoint | `crates/grokhub-hub/src/node_host.rs` |
+| Companion program (`grokhub-hub node`) | `crates/grokhub-hub/src/node_client.rs` |
+| The app: Devices → Companions, connections, events | `src-tauri/src/companions.rs`, `ui/src/Devices.tsx` |
 
 ## How it fits together
 
@@ -177,8 +179,8 @@ when the companion doesn't answer within 120 seconds.
 `sms_send` takes `{"to": "+15555550100", "body": "…"}`.
 
 `talk_say` takes `{"text": "…"}` and speaks it on the companion.
-`talk_listen` takes `{"seconds": 8}`, records, and answers what it heard as
-text when the companion can transcribe, else an error saying it can't.
+`talk_listen` takes `{}`, listens once, and answers what it heard as text.
+A companion lists it only when it can transcribe.
 
 `canvas_show` takes a panel spec, the same declarative JSON the app's
 `show_panel` tool uses (`crates/grokhub-core/src/panel_spec.rs`): headings,
@@ -188,6 +190,75 @@ carries HTML or script, so a panel can't run code on the companion.
 
 `skills_list` answers names and descriptions; `skill_read` takes
 `{"name": "…"}` and answers the skill's `SKILL.md`.
+
+## In the app
+
+Devices → Companions starts the host on the companion port and shows a
+pairing code with the command to type on the companion. The host is off
+until the user starts it, and it starts again at the next launch until they
+stop it (`companion-host.json`). The paired list stays while it is off.
+
+A companion that paired waits under Devices → Companions with a box for
+each thing it offers, none ticked. **Allow** saves the ticked ones. The app
+then adds one MCP connection, `companion-<id>`, pointing at
+`/node/v1/mcp/<id>`. Its key is sealed with the keyring like any connector's
+key (`tokenRef`), never written into `mcp.json`. All companions share one
+key, read back from a sealed connection when the host starts, so saved
+connections keep working across launches. **Save** changes what an
+approved companion may lend; **Remove** stops its token, ends its poll and
+deletes its connection and sealed key.
+
+When an approved companion comes online, the app opens its connection
+again so chats list what it lends now. A `wake` event brings the window to
+the front and opens a new chat; a `heard` line is sent in the open chat.
+
+## Running a companion
+
+`grokhub-hub node` turns the device it runs on into a companion:
+
+```sh
+grokhub-hub node pair 192.168.1.20 ABC-123 --name "Pixel 8"
+grokhub-hub node offer camera,location,talk,wake
+grokhub-hub node run
+```
+
+`pair` takes the number address and the code the app shows, and saves the
+pairing in `companion-node.json` in the config folder, readable by this
+user only. `offer` sets what this device lends; it starts with nothing.
+`run` stays connected and prints a line for each tool the app calls.
+`wake` sends a wake event, and `wake --listen` sends what you say as a
+`heard` event. `status` shows the pairing and what this device can lend.
+`forget` deletes the pairing here.
+
+What each device can lend:
+
+| Offer | Android (Termux with Termux:API) | Linux | macOS | Windows |
+| --- | --- | --- | --- | --- |
+| `camera` | `termux-camera-photo` | `ffmpeg` and a webcam | `imagesnap` | no |
+| `screen` | no | yes | yes | yes |
+| `location` | `termux-location` | no | no | no |
+| `sms` | `termux-sms-list`, `termux-sms-send` | no | no | no |
+| `talk` | `termux-tts-speak`; listens with `termux-speech-to-text` | `espeak-ng`, `espeak` or `spd-say` | `say` | the built-in voice |
+| `canvas` | `termux-open` | `xdg-open` | `open` | yes |
+| `wake`, `mcp`, `skills` | yes | yes | yes | yes |
+
+Programs run with an argument list, never through a shell. Text that
+starts with `-` gets a leading space so a program can't read it as an
+option. On Windows the words to speak travel in an environment variable,
+never inside the script. Photos and screenshots past 1,600 pixels on the
+long side are scaled down to JPEG.
+
+A panel opens once as a local page with no script and a strict content
+policy; the page reloads every two seconds, so the next `canvas_show`
+appears in the same window.
+
+The `mcp` offer lends the MCP servers this device has connected, named
+`<server>-<tool>`. Answers go back without this device's untrusted fence,
+because the app fences them as its own MCP output. A server that is another
+companion's relay is never lent on: that companion's person allowed this
+device, not whoever it lends to. The `skills` offer reads the skills in
+this device's `.claude/skills` and `.grok/skills` folders and the app's own
+skill folder; the built-in skills stay out.
 
 ## What isn't in version 1
 

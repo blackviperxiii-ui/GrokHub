@@ -119,6 +119,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/route/local_spec.rs", 2, "speed test and refusal check against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
     ("crates/grokhub-hub/src/doctor.rs", 1, "--doctor reads its own hub's /v1/health on 127.0.0.1 only"),
+    ("crates/grokhub-hub/src/node_client.rs", 1, "`node` companion dials only the app's companion host at a private number address (host_address refuses public ones), so Offline only never blocks it and it never leaves the LAN"),
     ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     ("src-tauri/src/hub_join.rs", 1, "Join another computer: pairs with and sends the machine card to a hub on this network or this computer only (number address checked before every call), no redirects"),

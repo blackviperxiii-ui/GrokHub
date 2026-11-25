@@ -21,6 +21,7 @@ use grokhub_core::{BoardCard, BoardStatus};
 
 use super::ops::SelfCtx;
 use super::SelfClass;
+use crate::web_origin::{note_card_write, CardPart};
 
 /// Every `work_*` tool and its class. None deletes.
 pub const WORK_TOOLS: &[(&str, SelfClass)] = &[
@@ -281,6 +282,12 @@ pub fn run(ctx: &SelfCtx<'_>, tool: &str, args: &Value) -> Result<String, String
                 .unwrap_or_default();
             let id = wr::edit_board_file(&path, now, |cards| {
                 let id = wr::open_run_card(cards, WorkKind::Task, &title, "", "", now);
+                // A browser run's card is a browser's ([`crate::web_origin`]).
+                let parts = [CardPart::Words, CardPart::Steps];
+                if let Err(e) = note_card_write(ctx.config_dir, &id, ctx.session, &parts) {
+                    cards.retain(|c| c.id != id);
+                    return Err(e);
+                }
                 if let Some(c) = cards.iter_mut().find(|c| c.id == id) {
                     c.status = BoardStatus::Todo;
                     c.steps = wi::clean_steps(steps);
@@ -293,8 +300,8 @@ pub fn run(ctx: &SelfCtx<'_>, tool: &str, args: &Value) -> Result<String, String
                     }
                     wi::clean_card(c);
                 }
-                id
-            })?;
+                Ok(id)
+            })??;
             let _ = append_work_log(
                 &wr::work_dir(ctx.config_dir),
                 &id,
@@ -340,7 +347,17 @@ fn work_update(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     if step.is_some() != status.is_some() {
         return Err("A step change needs both step and status.".into());
     }
+    let mut parts = Vec::new();
+    if step.is_some() || next.is_some() {
+        parts.push(CardPart::Steps);
+    }
+    if blocker.is_some() {
+        parts.push(CardPart::Blocker);
+    }
     let reply = wr::edit_board_file(&path, now, |cards| {
+        // A browser run's write marks what it writes ([`crate::web_origin`]).
+        find_mine(cards, &id)?;
+        note_card_write(ctx.config_dir, &id, ctx.session, &parts)?;
         let c = find_mine(cards, &id)?;
         let mut kept = None;
         if let (Some(n), Some(st)) = (step, status) {

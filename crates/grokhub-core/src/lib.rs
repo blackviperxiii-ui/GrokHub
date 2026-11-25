@@ -2,8 +2,10 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod a2a;
 pub mod action_mode;
 pub mod adult_guard;
+pub mod agent_team;
 pub mod amr;
 pub mod app_json;
 pub mod app_lock;
@@ -154,6 +156,7 @@ pub mod model_download;
 pub mod model_drop;
 pub mod model_library;
 pub mod model_lineup;
+pub mod model_offer;
 pub mod model_registry;
 pub mod mods;
 pub mod msg_channels;
@@ -288,7 +291,7 @@ pub use ask_offers::{
     WINDOW_MS as ASK_OFFER_WINDOW_MS,
 };
 pub use at_context::{
-    expand_at_context, find_at_refs, AtKind, AtRef, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
+    find_at_refs, AtKind, AtRef, Typed, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
     FOLDER_ENTRY_CAP, GIT_COMMIT_CAP,
 };
 pub use attach::{

@@ -112,7 +112,7 @@ pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Optio
     // (a model name only, no user data); loopback goes with no log line.
     let guard = |url: &str| {
         crate::harness::guard_quiet(
-            &crate::perm::config_dir(),
+            &crate::perm::app_config_dir(),
             &crate::harness::EgressReq::new(url, &[]),
         )
     };
@@ -466,7 +466,7 @@ fn production_assets_present() -> bool {
 /// The cabin's config folder: `GROKHUB_CONFIG`, else the platform default.
 /// Reading only the env var left the route off in every normal launch.
 fn config_dir() -> Option<PathBuf> {
-    Some(crate::perm::config_dir())
+    Some(crate::perm::app_config_dir())
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -1010,7 +1010,7 @@ pub fn serve_request(
     let _kind = super::local_task::KindGuard::set(kind);
     // The chat's tier: the person's words this turn, else the chat's setting.
     // The router decides the model from it; the model never picks it.
-    let config_dir = crate::perm::config_dir();
+    let config_dir = crate::perm::app_config_dir();
     let helper = super::local_scale::helper_turn(class, &req.conversation_id);
     let care_first = crate::brain::care_first_enabled(&config_dir);
     let mut standing = super::local_pin::get(&config_dir, &req.conversation_id);
@@ -1057,7 +1057,7 @@ pub fn serve_request(
     super::identity::stamp(
         &mut req.input,
         live_tier(),
-        super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
+        super::local_sidecar::model_name(&crate::perm::app_config_dir()).as_deref(),
         req.effort.as_deref(),
     );
     // A server without its vision projector (`--mmproj`) refuses any
@@ -1128,7 +1128,7 @@ fn note_task_reply(kind: Option<TaskKind>, out: &Result<TurnOutput, String>, can
         Ok(o) => super::local_task::answered(&o.text, !o.calls.is_empty()),
         Err(_) => false,
     };
-    super::local_task::note_reply(&crate::perm::config_dir(), &model, kind, ok);
+    super::local_task::note_reply(&crate::perm::app_config_dir(), &model, kind, ok);
 }
 
 pub(crate) fn serve_within(
