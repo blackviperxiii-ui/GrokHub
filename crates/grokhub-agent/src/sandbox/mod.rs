@@ -90,6 +90,8 @@ impl Default for Settings {
 }
 
 pub fn settings(config_dir: &Path) -> Settings {
+    // The sandbox is the app's, also for an agent's home.
+    let config_dir = crate::harness::shared_dir(config_dir);
     match std::fs::read_to_string(config_dir.join(CONFIG_NAME)) {
         Ok(text) => parse_file(&text, grokhub_core::user_home().as_deref()),
         Err(_) => Settings::default(),

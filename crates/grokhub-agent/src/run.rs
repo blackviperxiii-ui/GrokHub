@@ -363,6 +363,7 @@ fn recalled_chats() -> std::sync::MutexGuard<'static, crate::lru_map::LruMap<()>
 /// and only toward the safe side. An empty `chat` sticks for this run only.
 fn hosted_for_step(
     gate: &Gate,
+    perms: Option<&crate::perm::Policy>,
     workspace: &Path,
     history: &[InputItem],
     chat: &str,
@@ -375,7 +376,17 @@ fn hosted_for_step(
     if *recalled && !chat.is_empty() {
         recalled_chats().insert(chat, ());
     }
-    crate::perm::hosted_search_allowed(gate, &crate::perm::Policy::load(workspace).rules, *recalled)
+    // The turn's own rules when it has them (an agent's turn keeps its
+    // caller's deny and ask rules), else the saved ones.
+    let loaded;
+    let rules = match perms {
+        Some(policy) => &policy.rules,
+        None => {
+            loaded = crate::perm::Policy::load(workspace);
+            &loaded.rules
+        }
+    };
+    crate::perm::hosted_search_allowed(gate, rules, *recalled)
 }
 
 enum CompactPass {
@@ -960,6 +971,7 @@ fn run_turn(
             tools,
             hosted_search: hosted_for_step(
                 &gate,
+                input.perms,
                 input.workspace,
                 history,
                 input.conversation_id,
@@ -4868,10 +4880,10 @@ mod tests {
             content: vec![ContentPart::InputText("look it up".into())],
         }];
         let mut fresh = false;
-        assert!(hosted_for_step(&gate, &dir, &plain, "", &mut fresh));
+        assert!(hosted_for_step(&gate, None, &dir, &plain, "", &mut fresh));
         let mut recalled = true;
         assert!(
-            !hosted_for_step(&gate, &dir, &plain, "", &mut recalled),
+            !hosted_for_step(&gate, None, &dir, &plain, "", &mut recalled),
             "no recall left in the history, but the run saw some"
         );
         assert!(recalled);
@@ -4880,18 +4892,47 @@ mod tests {
         // recalls nothing still keeps hosted search off.
         let chat = "hosted-sticky-chat";
         let mut first = true;
-        assert!(!hosted_for_step(&gate, &dir, &plain, chat, &mut first));
+        assert!(!hosted_for_step(
+            &gate, None, &dir, &plain, chat, &mut first
+        ));
         let mut later = false;
         assert!(
-            !hosted_for_step(&gate, &dir, &plain, chat, &mut later),
+            !hosted_for_step(&gate, None, &dir, &plain, chat, &mut later),
             "the chat saw recalled lines in an earlier turn"
         );
         assert!(later);
         let mut other = false;
         assert!(
-            hosted_for_step(&gate, &dir, &plain, "hosted-sticky-other", &mut other),
+            hosted_for_step(&gate, None, &dir, &plain, "hosted-sticky-other", &mut other),
             "another chat is not marked"
         );
+    }
+
+    #[test]
+    fn hosted_search_follows_the_turns_own_rules_when_it_has_them() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let dir = workspace("hosted-turn-rules");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let gate = chat(gate::PermMode::Ask, true, false);
+        let plain = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("look it up".into())],
+        }];
+        let deny = crate::perm::Policy {
+            rules: vec![crate::perm::parse_rule("web_search", crate::perm::Action::Deny).unwrap()],
+            grants: vec![],
+        };
+        let mut fresh = false;
+        // Nothing saved denies search, but the turn's rules do.
+        assert!(hosted_for_step(&gate, None, &dir, &plain, "", &mut fresh));
+        assert!(!hosted_for_step(
+            &gate,
+            Some(&deny),
+            &dir,
+            &plain,
+            "",
+            &mut fresh
+        ));
     }
 
     #[test]

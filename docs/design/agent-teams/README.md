@@ -29,7 +29,11 @@ it. Shared state the agent crate keeps is read from the app's folder inside a
 turn too: the router's (`perm::app_config_dir`), and egress consent, its log
 and its cards, which the egress guard and the consent ledger resolve to the
 app's folder for an agent's home. The person's chat words ("use low effort
-for debugging") steer their chat and its helpers, not an agent.
+for debugging") steer their chat and its helpers, not an agent. An agent's
+shell sees its own workspace and none of the app's folder around it: the
+app's files, the other agents' homes and its own files outside `work/` are
+hidden, and the app's sandbox settings apply. The hard floor guards the
+skills and memory folders of the app and of every agent.
 
 | Its own (under its home) | Shared with the app | Never crosses a message |
 |---|---|---|

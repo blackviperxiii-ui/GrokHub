@@ -85,6 +85,34 @@ pub fn hidden(home: Option<&Path>, config_dir: &Path, workspace: &Path) -> Vec<P
         push(sign_in);
     }
     push(config_dir.to_path_buf());
+    // An agent's workspace is inside its home, inside the app's folder, so
+    // neither folder can be hidden whole. Hide what's next to the way down
+    // instead: the app's own files (the person's chats and memory), the
+    // other agents' homes, and the agent's own files outside its workspace.
+    if let Some((root, me)) = grokhub_core::agent_team::agent_turn(config_dir) {
+        let entries = |dir: &Path| {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .collect::<Vec<_>>()
+        };
+        let mine = grokhub_core::agent_team::home(&root, &me.id);
+        for path in entries(&root) {
+            if path.file_name() != Some(std::ffi::OsStr::new(grokhub_core::agent_team::HOMES_DIR)) {
+                push(path);
+                continue;
+            }
+            for other in entries(&path) {
+                if Some(&other) == mine.as_ref() {
+                    entries(&other).into_iter().for_each(&mut push);
+                } else {
+                    push(other);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -123,5 +151,64 @@ mod tests {
         let got = hidden(Some(&home), &config, &inside);
         assert!(!got.contains(&ssh.canonicalize().unwrap()), "{got:?}");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_agents_shell_sees_only_its_own_workspace_of_the_app_folder() {
+        use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+        let app = std::env::temp_dir().join(format!("loadout-agent-hide-{}", std::process::id()));
+        let kid = app.join("agents/kid");
+        let ws = kid.join("work");
+        for dir in [
+            &app.join("sessions"),
+            &app.join("memory"),
+            &app.join("agents/planner"),
+            &kid.join("memory"),
+            &ws,
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        TeamFile {
+            version: VERSION,
+            agents: vec![
+                Profile::new(Kind::Family, "kid", "Kid"),
+                Profile::new(Kind::Role, "planner", "Planner"),
+            ],
+            teams: vec![],
+        }
+        .save(&app)
+        .unwrap();
+        let canon = |p: &Path| p.canonicalize().unwrap();
+        let got = hidden(None, &kid, &ws);
+        for want in [
+            app.join("sessions"),
+            app.join("memory"),
+            app.join(grokhub_core::agent_team::TEAM_FILE),
+            app.join("agents/planner"),
+            kid.join("memory"),
+        ] {
+            assert!(
+                got.contains(&canon(&want)),
+                "{} missing from {got:?}",
+                want.display()
+            );
+        }
+        // The way down to the workspace, and the workspace, stay.
+        for keep in [&app, &app.join("agents"), &kid, &ws] {
+            assert!(
+                !got.contains(&canon(keep)),
+                "{} hidden: {got:?}",
+                keep.display()
+            );
+        }
+        // The person's own shell hides the whole app folder, as before.
+        let elsewhere = app
+            .parent()
+            .unwrap()
+            .join(format!("loadout-ws-{}", std::process::id()));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(hidden(None, &app, &elsewhere).last(), Some(&canon(&app)));
+        let _ = std::fs::remove_dir_all(&app);
+        let _ = std::fs::remove_dir_all(&elsewhere);
     }
 }
