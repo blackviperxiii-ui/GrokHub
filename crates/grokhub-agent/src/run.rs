@@ -744,6 +744,8 @@ fn run_turn(
     // already sent back for taking thanks anyway.
     let after_empty = input.depth == 0 && crate::voice_session::after_empty(input.conversation_id);
     let mut credit_noted = false;
+    // A change request's reply claimed done with nothing run, and was sent back once.
+    let mut unbacked_noted = false;
     // Small talk shows no thought that narrates the app's tools or rules.
     let casual = input.depth == 0 && crate::route::intent::casual_turn(user_text);
     // Where `ran` stood at the last check, and how many notes it sent.
@@ -1408,7 +1410,15 @@ fn run_turn(
                                 .then(|| crate::drive::unbacked_done(&last_assistant, evidence))
                                 .flatten()
                             {
-                                // The app's check, shown as status: it doesn't
+                                // The first time, the model is told (as the app's
+                                // note) and gets one more step.
+                                if !unbacked_noted {
+                                    unbacked_noted = true;
+                                    crate::route::ladder::note_low_check();
+                                    history.push(cabin_note(crate::drive::UNBACKED_DONE_NOTE));
+                                    continue;
+                                }
+                                // Again: the app's check, shown as status. It doesn't
                                 // speak in the model's voice or join its words.
                                 on_event(LoopEvent::Thought(text.into()));
                             }
@@ -7802,7 +7812,8 @@ mod tests {
     }
 
     #[test]
-    fn a_change_request_that_claims_done_with_no_tool_run_says_it_is_not_done() {
+    fn a_change_request_that_claims_done_with_no_tool_run_is_sent_back_once_then_says_it_is_not_done(
+    ) {
         let dir = workspace("claim-done");
         let conv = format!("claim-done-{}", std::process::id());
         crate::checkpoint::set_turn_brief(
@@ -7811,11 +7822,21 @@ mod tests {
         );
         let script = scripted(vec![
             turn("Pulse feed updated. Done. ✨", Vec::new()),
+            turn("Pulse feed updated. Done.", Vec::new()),
             turn("unused", Vec::new()),
         ]);
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
-        assert_eq!(script.seen.lock().unwrap().len(), 1);
+        // Sent back once as the app's note, then the second claim ends the turn.
+        assert_eq!(script.seen.lock().unwrap().len(), 2);
+        let texts = user_texts(&history);
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert_eq!(texts[1], crate::drive::UNBACKED_DONE_NOTE);
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { role, content } if role == "user"
+                && matches!(content.first(), Some(ContentPart::InputText(t)) if t.starts_with("<cabin-note>\nYou said this is done"))
+        )));
         let line = "That isn't done yet: nothing ran this turn to make or check the change.";
         // The app's check shows as status, once, and never as the model's words.
         assert_eq!(
@@ -7833,6 +7854,30 @@ mod tests {
             InputItem::Message { content, .. } if content.first() == Some(&ContentPart::InputText(line.into()))
         )));
         crate::session_tools::invalidate_todos(&conv);
+        // Sent back, the model runs a tool: the turn ends on its checked reply, with no status line.
+        let conv = format!("claim-done-then-ran-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let script = scripted(vec![
+            turn("Done.", Vec::new()),
+            turn("", vec![call("l1", "list_dir", "{}")]),
+            turn("Checked: the feed is updated.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert_eq!(user_texts(&history)[1], crate::drive::UNBACKED_DONE_NOTE);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, LoopEvent::Thought(t) if t == line))
+                .count(),
+            0
+        );
+        crate::session_tools::invalidate_todos(&conv);
         // A plain question with the same words gets no extra line.
         let conv = format!("claim-done-q-{}", std::process::id());
         crate::checkpoint::set_turn_brief(
@@ -7843,11 +7888,16 @@ mod tests {
                 &[],
             ),
         );
-        let script = scripted(vec![turn("Done: it is 4 pm.", Vec::new())]);
+        let script = scripted(vec![
+            turn("Done: it is 4 pm.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
         let (_, _, events) = run_drive(&script, &dir, &conv);
         assert!(!events
             .iter()
             .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains("isn't done yet"))));
+        // ...and no note: the model is asked once.
+        assert_eq!(script.seen.lock().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

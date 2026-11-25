@@ -1,0 +1,1 @@
+- Chat: when a change request's reply says it is done but nothing ran this turn to make or check the change, the model is now sent back once to do the work or say plainly that it isn't done, instead of the turn ending on the claim. A second claim with still nothing run ends the turn with the "That isn't done yet" status line, as before.

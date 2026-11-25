@@ -237,6 +237,11 @@ If {product} has no way to do it, mark it cancelled, say so once in plain words 
     }
 }
 
+/// The app's note, once per run, when a change request's reply claims the
+/// work is done but [`unbacked_done`] finds nothing ran: the model gets one
+/// more step to do it or say it isn't done.
+pub const UNBACKED_DONE_NOTE: &str = "You said this is done, but no tool ran this turn to make or check the change. Do it now and check the result with a tool, or say plainly that it isn't done and why.";
+
 /// The line a change request's reply gets when it claims the work is done
 /// but no tool ran this run: nothing backs the claim, so the turn says so.
 pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {

@@ -673,7 +673,8 @@ pub fn note_out_of_budget() {
 }
 
 /// E4: one of the run's own checks (a reply that doesn't match its results,
-/// an unchecked change, the close check) sent the model back for another step.
+/// an unchecked change, a done claim with nothing run, the close check) sent
+/// the model back for another step.
 pub fn note_low_check() {
     STAGE.with(|t| t.borrow_mut().pending.low_check = true);
 }
