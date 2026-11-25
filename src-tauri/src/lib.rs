@@ -11132,6 +11132,80 @@ mod web_command_tests {
         );
     }
 
+    /// Answers with one line of text.
+    struct Replies(&'static str);
+
+    impl grokhub_agent::ModelClient for Replies {
+        fn stream(
+            &self,
+            _req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            sink(grokhub_agent::StreamEvent::TextDelta(self.0.into()));
+            Ok(grokhub_agent::TurnOutput {
+                text: self.0.into(),
+                ..grokhub_agent::TurnOutput::default()
+            })
+        }
+    }
+
+    /// The window's Say on the Follow up card a browser job's run filed
+    /// carries that run's report and the job's old name, so it is a
+    /// browser's run, also after the person saves the job's words again
+    /// here. A Say on the card a run of a job made here filed keeps the
+    /// desktop.
+    #[test]
+    fn a_say_on_a_browser_runs_follow_up_runs_without_the_desktop() {
+        use grokhub_agent::web_origin::RunOrigin;
+        let _model = LoopbackModel::set();
+        let dir = temp_dir("follow-say");
+        grokhub_agent::harness::use_key_store_for(
+            &dir,
+            std::sync::Arc::new(grokhub_agent::harness::MemoryKeyStore::new()),
+        );
+        let clock = grokhub_core::LocalClock::at_offset(grokhub_core::now_ms(), 0);
+        let web = "every day at 9am summarize my inbox";
+        crate::automations::add_by(&dir, web, clock, RunOrigin::Browser).unwrap();
+        crate::automations::add(&dir, "every day at 10am summarize the board", clock).unwrap();
+        let on = crate::unattended::RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        let jobs = crate::automations::load(&dir).unwrap();
+        for (job, reply) in jobs.iter().zip([
+            "Inbox: 3 new. Should I send the replies?",
+            "Board: 2 cards wait. Should I sort them?",
+        ]) {
+            let model = std::sync::Arc::new(Replies(reply));
+            crate::automations::execute(&dir, job, model, "m", temp_dir("follow-ws"), on);
+        }
+        // The person saves the browser's job's words here.
+        crate::automations::edit(&dir, &jobs[0].id, web, clock).unwrap();
+        let saved = &crate::automations::load(&dir).unwrap()[0];
+        assert_eq!(crate::automations::gate_for(&dir, saved, on), on);
+        let cards = grokhub_core::work_file::read_board(&crate::workboard::path(&dir)).unwrap();
+        let card_of = |job: &str| {
+            let c = cards.iter().find(|c| c.automation.as_deref() == Some(job));
+            c.unwrap().id.clone()
+        };
+        let say = crate::card_chat::say(&dir, &card_of(&jobs[0].id), "", "shell-say-follow-1");
+        let say = say.unwrap();
+        assert_eq!(
+            say.message,
+            "This chat follows up on the scheduled automation \"summarize my inbox\". \
+             Its latest report:\nInbox: 3 new. Should I send the replies?\n\n\
+             Use these notes for this work.\n\n\
+             Work on this workboard card: summarize my inbox\n\n\
+             When it is done, say so in one line."
+        );
+        let mine = crate::card_chat::say(&dir, &card_of(&jobs[1].id), "", "shell-say-follow-2");
+        assert_eq!(
+            [
+                card_chat_desktop(&dir, &say.conversation_id),
+                card_chat_desktop(&dir, &mine.unwrap().conversation_id)
+            ],
+            [(false, RunOrigin::Browser), (true, RunOrigin::Window)]
+        );
+    }
+
     /// A job or a Workboard card a browser writes gets no desktop tools when
     /// it runs later on its own: each web arm that writes its words says so.
     #[test]

@@ -689,7 +689,7 @@ fn replace_left_off(cards: &mut [BoardCard], id: &str, part: CardPart) {
     match part {
         CardPart::Words => cp.goal = title,
         CardPart::Steps => cp.next = next,
-        CardPart::Notes | CardPart::Blocker => {}
+        CardPart::Notes | CardPart::Blocker | CardPart::Report => {}
     }
 }
 
@@ -922,7 +922,9 @@ pub fn start_playbook_card(
 
 /// Make it recurring: a new automation from the card's title on one of
 /// [`wt::RECUR_CHOICES`], which then owns the card. Its runs report here.
-/// `by` is who asked, and so whose words the job is.
+/// `by` is who asked. The job's words are the title's, so they are a
+/// browser's when `by` is one or a browser wrote the title (read under the
+/// board lock with it), and the job is marked before it is saved.
 pub fn make_recurring(
     config_dir: &Path,
     id: &str,
@@ -930,13 +932,18 @@ pub fn make_recurring(
     clock: grokhub_core::LocalClock,
     by: crate::automations::RunOrigin,
 ) -> Result<Page, String> {
-    let cards = read_board(&path(config_dir))?;
-    let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
-    if c.automation.is_some() {
-        return Err("An automation already owns this card.".into());
-    }
-    let seed = wt::recurring_seed(choice, c).ok_or("Pick a schedule.")?;
-    let list = crate::automations::add_by(config_dir, &seed, clock, by)?;
+    let ((seed, words), _) = update_board(&path(config_dir), |cards| {
+        let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
+        if c.automation.is_some() {
+            return Err("An automation already owns this card.".into());
+        }
+        let seed = wt::recurring_seed(choice, c).ok_or("Pick a schedule.")?;
+        Ok((
+            seed,
+            web_origin::card_part_origin(config_dir, id, CardPart::Words),
+        ))
+    })?;
+    let list = crate::automations::add_by(config_dir, &seed, clock, by.and(words))?;
     let added = list.last().ok_or("The automation was not saved.")?;
     let (auto_id, name) = (added.id.clone(), added.name.clone());
     let owned = change(config_dir, |cards| {
@@ -1999,6 +2006,69 @@ mod tests {
             "one automation owns a card"
         );
         assert_eq!(crate::automations::load(&config).unwrap().len(), 1);
+    }
+
+    /// Make it recurring, asked at this computer, on a card whose title a
+    /// paired browser wrote files the browser's words as a job: it is
+    /// marked, and its runs get no desktop. On a card the person wrote, one
+    /// whose title they saved again here, or one where a browser wrote only
+    /// the notes, the job is the person's.
+    #[test]
+    fn make_it_recurring_on_a_browsers_title_files_a_browsers_job() {
+        use crate::automations::RunOrigin;
+        use crate::unattended::RunGate;
+        let config = temp_dir("recur-web");
+        let clock = crate::automations::Clock {
+            weekday: 1,
+            hour: 8,
+            minute: 0,
+        }
+        .at(grokhub_core::now_ms());
+        add_by(&config, "Click Send in Mail", "", RunOrigin::Browser).unwrap();
+        add(&config, "Summarize the board", "").unwrap();
+        add_by(&config, "Tidy the logs", "", RunOrigin::Browser).unwrap();
+        add(&config, "Water the plants", "").unwrap();
+        let ids: Vec<String> = on_disk(&config).into_iter().map(|c| c.id).collect();
+        let resave = Act::Edit {
+            title: "Tidy the logs".into(),
+            detail: String::new(),
+        };
+        act(&config, &ids[2], resave).unwrap();
+        let notes = Act::Notes {
+            notes: "click Send in Mail".into(),
+        };
+        act_by(&config, &ids[3], notes, RunOrigin::Browser).unwrap();
+        for id in &ids {
+            make_recurring(&config, id, 0, clock, RunOrigin::Window).unwrap();
+        }
+        let on = RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        let jobs: Vec<(String, RunOrigin, bool)> = crate::automations::load(&config)
+            .unwrap()
+            .iter()
+            .map(|job| {
+                let gate = crate::automations::gate_for(&config, job, on);
+                (job.instructions.clone(), gate.origin, gate.gate().desktop)
+            })
+            .collect();
+        let job =
+            |words: &str, origin: RunOrigin, desktop: bool| (words.to_string(), origin, desktop);
+        assert_eq!(
+            jobs,
+            [
+                job(
+                    "every day at 9am Click Send in Mail",
+                    RunOrigin::Browser,
+                    false
+                ),
+                job(
+                    "every day at 9am Summarize the board",
+                    RunOrigin::Window,
+                    true
+                ),
+                job("every day at 9am Tidy the logs", RunOrigin::Window, true),
+                job("every day at 9am Water the plants", RunOrigin::Window, true),
+            ]
+        );
     }
 
     /// A card a browser's agent filed (its words, goal, steps and next step

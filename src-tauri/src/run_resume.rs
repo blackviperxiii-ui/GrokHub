@@ -264,7 +264,15 @@ pub fn run(
     let end = end_of(&result);
     match (&job.automation, &end) {
         (Some(auto), RunEnd::Done | RunEnd::Failed(_)) => {
-            crate::automations::board_run_end(config_dir, auto, Some(&job.card_id), &result)
+            // The report is the run's words: a browser's when its gate or
+            // its session is one.
+            let session = grokhub_agent::web_origin::of_in(config_dir, Some(&job.session_id));
+            let ran = crate::automations::BoardRun {
+                job: auto,
+                asked: &auto.instructions,
+                origin: job.gate.origin.and(session),
+            };
+            crate::automations::board_run_end(config_dir, ran, Some(&job.card_id), &result)
         }
         _ => settle(config_dir, &job.card_id, job.attempt, &end, &result.text),
     }
