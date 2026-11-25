@@ -1,0 +1,1 @@
+- Bot Desktop starts again on another display number when another screen took its number at the same moment, and a stopped Bot Desktop frees its number instead of leaving it held until a reboot.
