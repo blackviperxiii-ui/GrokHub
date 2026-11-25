@@ -3680,9 +3680,22 @@ fn code_session_resume(
     state: State<'_, ShellState>,
     conversation_id: String,
 ) -> Result<String, String> {
-    let left = code_keep::read(&state.config_dir, &conversation_id)
+    code_resume_noted(&state.send_back, &state.config_dir, &conversation_id)
+}
+
+/// The Code tab's resume prompt for `conversation_id`, noted for
+/// `send_chat` as typed by no one: it is built from the session's plan and
+/// to-dos, which the model wrote.
+fn code_resume_noted(
+    back: &turns::SendBack,
+    config_dir: &Path,
+    conversation_id: &str,
+) -> Result<String, String> {
+    let left = code_keep::read(config_dir, conversation_id)
         .ok_or("This session has no checkpoint to resume.")?;
-    Ok(code_keep::resume_prompt(&left))
+    let prompt = code_keep::resume_prompt(&left);
+    back.expect(conversation_id, &prompt, grokhub_core::Typed::nothing());
+    Ok(prompt)
 }
 
 /// Code tab: the workspace's repo, read only.
@@ -4317,7 +4330,7 @@ async fn workboard_resume(
         .filter(|(_, s)| s.busy())
         .map(|(id, _)| id.clone())
         .collect();
-    off_main(move || {
+    let resumed = off_main(move || {
         let card =
             grokhub_core::work_run::read_board_file(&grokhub_core::work_run::board_path(&dir))?
                 .into_iter()
@@ -4350,7 +4363,22 @@ async fn workboard_resume(
             page: workboard::load(&dir)?,
         })
     })
-    .await?
+    .await??;
+    Ok(noted_resume(&state.send_back, resumed))
+}
+
+/// A resume the page sends at once in its chat, noted for `send_chat` as
+/// typed by no one: its block is the card's checkpoint and steps, which the
+/// model wrote.
+fn noted_resume(back: &turns::SendBack, resumed: workboard::Resume) -> workboard::Resume {
+    if !resumed.background {
+        back.expect(
+            &resumed.conversation_id,
+            &resumed.prompt,
+            grokhub_core::Typed::nothing(),
+        );
+    }
+    resumed
 }
 
 /// Start an unattended resume of card `id`: the card goes to Doing now, and

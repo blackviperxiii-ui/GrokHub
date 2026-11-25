@@ -3771,6 +3771,109 @@ mod tests {
         assert!(!user.contains("MINE-4242"), "{user}");
         assert!(user.contains(&text), "{user}");
     }
+
+    /// Workboard Resume: the page sends the card's resume block at once.
+    /// Its checkpoint is the model's (work_update writes it), so an `@`
+    /// reference there stays text and the file it names is not read.
+    #[test]
+    fn a_workboard_resume_block_reads_no_reference() {
+        use grokhub_core::{BoardCard, BoardStatus, Checkpoint, WorkOrigin};
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("resume-at", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("resume-at-board");
+        let mut card = BoardCard::new("Tidy up", "", "");
+        card.id = "c1".into();
+        card.status = BoardStatus::Blocked;
+        card.run = true;
+        card.origin = Some(WorkOrigin::Agent);
+        card.thread_id = Some("shell-resume-at".into());
+        card.checkpoint = Some(Checkpoint {
+            goal: "tidy the repo".into(),
+            next: format!("Read @file:{} and @file:mine.txt first", outside.display()),
+            ..Default::default()
+        });
+        std::fs::write(
+            crate::workboard::path(&config),
+            serde_json::to_string(&[card]).expect("board"),
+        )
+        .expect("write board");
+        let always = grokhub_core::wire::PermissionMode::AlwaysApprove;
+        let resumed = crate::workboard::resume(&config, "c1", "shell-new", always).expect("resume");
+        let back = crate::turns::SendBack::default();
+        let resumed = crate::noted_resume(&back, resumed);
+        let sent = typed(&resumed.prompt);
+        let words = back.typed(&resumed.conversation_id, &sent);
+        let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
+        let session = Session::spawn_with(
+            "shell-resume-at",
+            temp_dir("resume-at-config"),
+            fake_desktop,
+        );
+        let stop = session.prompt_typed(&text, words.clone(), Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert_eq!(stop, Ok("end_turn".to_string()));
+        assert_eq!(resumed.conversation_id, "shell-resume-at");
+        assert!(
+            resumed.prompt.contains("@file:mine.txt"),
+            "{}",
+            resumed.prompt
+        );
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(!user.contains("MINE-4242"), "{user}");
+        assert_eq!(words, grokhub_core::Typed::nothing());
+        assert!(user.contains(&resumed.prompt), "{user}");
+    }
+
+    /// Code tab Resume: the prompt comes from the session's plan, which the
+    /// model wrote, so its `@` references stay text too.
+    #[test]
+    fn a_code_tab_resume_prompt_reads_no_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("code-resume-at", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("code-resume-at-keep");
+        let chat = "code-resume-at";
+        crate::lead::save_plan(
+            &config,
+            chat,
+            &format!(
+                "Tidy the repo\n- [ ] Read @file:{} and @file:mine.txt first",
+                outside.display()
+            ),
+        )
+        .expect("plan");
+        crate::code_keep::record(&config, chat, None);
+        let back = crate::turns::SendBack::default();
+        let prompt = crate::code_resume_noted(&back, &config, chat).expect("resume");
+        let sent = typed(&prompt);
+        let words = back.typed(chat, &sent);
+        let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
+        let session = Session::spawn_with(chat, temp_dir("code-resume-at-config"), fake_desktop);
+        let stop = session.prompt_typed(&text, words.clone(), Vec::new(), route, Box::new(|_| {}));
+        let user = first_user_text(&client);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert_eq!(stop, Ok("end_turn".to_string()));
+        assert_eq!(
+            prompt,
+            format!(
+                "Continue this Code tab session where it left off.\nGoal: Tidy the repo\n\
+                 Next: Read @file:{} and @file:mine.txt first",
+                outside.display()
+            )
+        );
+        assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
+        assert!(!user.contains("MINE-4242"), "{user}");
+        assert_eq!(words, grokhub_core::Typed::nothing());
+        assert!(user.contains(&prompt), "{user}");
+    }
 }
 
 #[cfg(test)]
