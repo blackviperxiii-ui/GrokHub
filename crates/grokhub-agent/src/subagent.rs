@@ -5813,14 +5813,19 @@ mod tests {
                 "{name}: {outputs:?}"
             );
         }
+        // A script passes the read-only gate only where the OS sandbox holds
+        // it; then the set stops it. Either way it never runs.
+        let script = &outputs["run_tool_script"];
+        let read_only = "read-only in this phase: `run_tool_script` is not available. \
+                         Use read_file, list_dir, grep, or glob.";
+        assert!(
+            script.contains(read_only)
+                || script.contains(&crate::tools::tool_set_refusal("run_tool_script")),
+            "{script}"
+        );
         // A helper and the todo list run inside the loop; the set stops them
         // too (an explore helper skips the read-only refusal).
-        for name in [
-            "run_tool_script",
-            "session_search",
-            "spawn_subagent",
-            "todo_write",
-        ] {
+        for name in ["session_search", "spawn_subagent", "todo_write"] {
             assert!(
                 outputs[name].contains(&crate::tools::tool_set_refusal(name)),
                 "{name}: {outputs:?}"
