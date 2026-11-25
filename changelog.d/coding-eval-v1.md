@@ -1,0 +1,1 @@
+- Live eval can run 30 fixed coding tasks from merged pull requests, and record each model's pass rate, escalations, tokens and wall time.

@@ -1056,6 +1056,7 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         planned: 0,
         retries: 0,
         done: true,
+        suite: EvalSuite::Default,
     };
     let tasks = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"];
     let better: Vec<Attempt> = tasks
@@ -1322,8 +1323,47 @@ fn no_try_starts_after_the_deadline() {
 }
 
 #[test]
+fn a_coding_task_fails_when_its_own_tests_fail_and_the_results_name_the_model() {
+    let client: Arc<dyn ModelClient + Send + Sync> = Arc::new(Fixed {
+        answers: vec![],
+        cost: 1,
+    });
+    let opts = LiveOpts {
+        k: 1,
+        only: Some("code-chat-preview".into()),
+        suite: EvalSuite::Coding,
+        ..LiveOpts::new("local-a")
+    };
+    let report = run_live(client, &opts, parse_budget("1").unwrap());
+    assert_eq!(report.suite, EvalSuite::Coding);
+    assert_eq!(report.attempts.len(), 1);
+    assert_eq!(report.attempts[0].task, "code-chat-preview");
+    assert!(!report.attempts[0].pass);
+    let err = report.attempts[0].error.as_deref().unwrap_or("");
+    assert!(
+        err.contains("tests failed"),
+        "the task's tests decide the try, got {err}"
+    );
+    let md = render_live(&report);
+    assert!(md.contains("| local-a | grok | 0% (0/1) |"), "{md}");
+    let dir = std::env::temp_dir().join(format!("gh-coding-results-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = write_coding_results(&report, &dir.join("coding.md")).unwrap();
+    let json = std::fs::read_to_string(&path).unwrap();
+    assert!(json.contains("\"suite\": \"coding-v1\""), "{json}");
+    assert!(json.contains("\"model\": \"local-a\""), "{json}");
+    assert!(json.contains("\"pass_rate\": \"0% (0/1)\""), "{json}");
+    assert!(json.contains("\"escalations\": 0"), "{json}");
+    assert!(json.contains("\"task_set\": 30"), "{json}");
+    assert!(json.contains("\"tokens\":"), "{json}");
+    assert!(json.contains("\"wall_ms\":"), "{json}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn every_task_has_an_effort_range_on_the_ladder() {
-    for t in tasks() {
+    for t in tasks().into_iter().chain(coding_tasks()) {
         let (lo, hi) = t.effort;
         let lo = crate::route::ladder::rung(lo).unwrap_or_else(|| panic!("{}: {lo}", t.id));
         let hi = crate::route::ladder::rung(hi).unwrap_or_else(|| panic!("{}: {hi}", t.id));
