@@ -10,9 +10,7 @@
 //! chat, mail or checkout window.
 //! Hard class never applies to read-only tools (read_file, grep, list_dir, …).
 
-use super::git_words::{
-    git_option_values, git_runs_own, git_shell_value, GIT_COMMAND_OPTIONS, GIT_RUNNERS,
-};
+use super::git_words::command_may_push;
 use grokhub_core::host_safety;
 
 /// Spike-1c path D: the computer-use tool names an outside agent may bring,
@@ -206,7 +204,7 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
     if let HardHit::Floor(_) = floor {
         return floor;
     }
-    if let Some(class) = command_class(&action.to_ascii_lowercase(), &own_as_written(action)) {
+    if let Some(class) = command_class(&action.to_ascii_lowercase(), action) {
         return HardHit::Class(class);
     }
     if let Some(rule) = ask_click(title, action) {
@@ -1081,13 +1079,6 @@ fn head_at(words: &[String]) -> Option<usize> {
         }
     }
     None
-}
-
-/// Where the command a shell segment's words run starts: past leading
-/// `NAME=value` words and the wrappers that run the rest (`sudo`, `env`,
-/// `nice -n 10`, `timeout 5`, `xargs`, `command`, `bash -c`).
-pub fn command_head(words: &[String]) -> Option<usize> {
-    head_at(words)
 }
 
 /// A shell variable assignment word (`NAME=value`).
@@ -2137,7 +2128,7 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if SHELL_TOOLS.contains(&name) {
         let written = command_arg(arguments).unwrap_or_default();
         let cmd = written.to_ascii_lowercase();
-        return command_class(&cmd, &own_as_written(&written))
+        return command_class(&cmd, &written)
             .or_else(|| system_admin(&cmd))
             .or_else(|| flagged_driver(&cmd))
             .or_else(|| asks_outside_sandbox(arguments));
@@ -2509,7 +2500,9 @@ fn changes_boot(seg: &str, words: &[String], at: Option<usize>) -> bool {
     false
 }
 
-fn command_class(cmd: &str, own: Own) -> Option<HardClass> {
+/// `cmd` is the command in lower case, `written` as it was written: git
+/// reads its verbs, and the shell its words, in the case they have.
+fn command_class(cmd: &str, written: &str) -> Option<HardClass> {
     // A newline, `$(...)`, `<(...)` and backticks start another command too.
     let cmd = cmd.replace("$(", ";").replace("<(", ";").replace(">(", ";");
     let segs: Vec<&str> = cmd
@@ -2523,6 +2516,7 @@ fn command_class(cmd: &str, own: Own) -> Option<HardClass> {
             .map(|i| leaf(&words[i]).to_string())
             .unwrap_or_default()
     };
+    let git_read = std::cell::OnceCell::new();
     for seg in &segs {
         let h = head(seg);
         let h = h.as_str();
@@ -2546,7 +2540,10 @@ fn command_class(cmd: &str, own: Own) -> Option<HardClass> {
         {
             return Some(HardClass::Delete);
         }
-        if ships_seg(seg, 0, own) {
+        // Read once for the whole command, as the shell runs it; here at
+        // the first part that names git, so an earlier part's class stands.
+        let git_ships = || *git_read.get_or_init(|| command_may_push(written));
+        if (seg.contains("git") && git_ships()) || ships_seg(seg, 0) {
             return Some(HardClass::Ship);
         }
         if SEND_HEADS.contains(&h) {
@@ -2556,20 +2553,12 @@ fn command_class(cmd: &str, own: Own) -> Option<HardClass> {
             return Some(HardClass::Credentials);
         }
     }
+    // git spelled so no part names it: `g\it`, `$'\x67it'`, a glob.
+    if *git_read.get_or_init(|| command_may_push(written)) {
+        return Some(HardClass::Ship);
+    }
     None
 }
-
-/// git's own options before the verb that take the next word as their value
-/// (lower case, as [`command_class`] reads the command).
-const GIT_VALUE_OPTIONS: &[&str] = &[
-    "-c",
-    "--git-dir",
-    "--work-tree",
-    "--namespace",
-    "--super-prefix",
-    "--config-env",
-    "--attr-source",
-];
 
 /// `gh api` options that never change the method or add a body. Any other
 /// option means the call can't be read as a GET.
@@ -2594,56 +2583,19 @@ const GH_API_READ_FLAGS: &[&str] = &[
     "--verbose",
 ];
 
-/// [`git_runs_own`] for a command [`command_class`] reads in lower case. git's
-/// commands are case-sensitive and alias names are not, so `git STATUS` may
-/// run an alias `status` that git never runs for `git status`: a word
-/// written with a capital letter anywhere in `written`, scripts inside it
-/// too, is not read as git's own.
-fn own_as_written(written: &str) -> impl Fn(&str) -> bool {
-    fn cased(text: &str, depth: u8, out: &mut Vec<String>) {
-        for seg in text.split([';', '|', '&', '\n', '\r', '`']) {
-            for word in shell_words(seg) {
-                if word.bytes().any(|b| b.is_ascii_uppercase()) {
-                    out.push(word.to_ascii_lowercase());
-                }
-                if depth < SHIP_DEPTH && word.contains(char::is_whitespace) {
-                    cased(&word, depth + 1, out);
-                }
-            }
-        }
-    }
-    let mut words = Vec::new();
-    cased(written, 0, &mut words);
-    move |verb| !words.iter().any(|w| w == verb) && git_runs_own(verb)
-}
-
 /// How deep [`ships_cmd`] reads scripts inside scripts (`bash -c`,
-/// `eval`, an alias that runs a shell). Deeper than this asks.
+/// `eval`). Deeper than this asks.
 const SHIP_DEPTH: u8 = 6;
 
-/// Whether git runs a word after `git` as its own command, not an alias:
-/// [`git_runs_own`], or a stand-in in tests.
-type Own<'a> = &'a dyn Fn(&str) -> bool;
-
-/// Step 6 of phase 5: whether any command in `cmd` pushes, or opens or
-/// merges a pull request. `cmd` is lower case, as [`command_class`] reads
-/// it, and `own` knows which words were written with a capital letter
-/// ([`own_as_written`]). Each command is read by its
-/// shell words, quotes joined as a shell joins them (`g''it`, `-C 'my
-/// app'`), past git's global options, the wrappers [`head_at`] knows, shell
-/// keywords (`if`, `then`, `!`), `stdbuf`, `flock` and `eval`, and into a
-/// script given to `bash -c`, `sh -lc` and the like. `commit`,
-/// `commit-tree` and `update-ref` are not here: the person chose that an
-/// agent's plain commit stays as it is, and the push gates refuse to push a
-/// commit the app did not make. A git word the installed git doesn't run as
-/// its own command ([`git_runs_own`]) may be an alias from a config file,
-/// so it is read as a push. A command git is given to run later is read
-/// too: a variable set for it (`EDITOR='<command>'`), a `-c` or `git
-/// config` value (`core.editor`), an option that names one (`grep -O`,
-/// `fetch --upload-pack`) and what one of [`GIT_RUNNERS`] is given. A
-/// script file still passes; the gates in `grokhub-code`'s `push.rs` are
-/// what hold.
-fn ships_cmd(cmd: &str, depth: u8, own: Own) -> bool {
+/// Step 6 of phase 5: whether any command in `cmd` opens or merges a pull
+/// request with gh. `cmd` is lower case, as [`command_class`] reads it.
+/// Each command is read by its shell words, past gh's global options, the
+/// wrappers [`head_at`] knows, shell keywords (`if`, `then`, `!`),
+/// `stdbuf`, `flock` and `eval`, and into a script given to `bash -c`,
+/// `sh -lc` and the like. A git push is read by [`command_may_push`]'s
+/// closed rule instead: any command that could run git is a Ship card
+/// unless every git in it is read as one that can't push.
+fn ships_cmd(cmd: &str, depth: u8) -> bool {
     if depth > SHIP_DEPTH {
         return true;
     }
@@ -2651,60 +2603,33 @@ fn ships_cmd(cmd: &str, depth: u8, own: Own) -> bool {
     cmd.split([';', '|', '&', '\n', '\r', '`'])
         .map(str::trim)
         .filter(|seg| !seg.is_empty())
-        .any(|seg| ships_seg(seg, depth, own))
+        .any(|seg| ships_seg(seg, depth))
 }
 
 /// [`ships_cmd`] for one segment, already split on `;`, `|`, `&` and the rest.
-fn ships_seg(seg: &str, depth: u8, own: Own) -> bool {
-    names_push_program(seg) || words_ship(&shell_words(seg), depth, own)
-}
-
-/// git's own push programs named by path: `/usr/lib/git-core/git-push`,
-/// `"$(git --exec-path)/git-push"`.
-fn names_push_program(seg: &str) -> bool {
-    seg.split(|c: char| c.is_whitespace() || "\"'`$();|&<>{}=".contains(c))
-        .any(|token| matches!(leaf(token), "git-push" | "git-send-pack" | "git-http-push"))
-}
-
-/// A `NAME=<command>` word whose command ships: a variable git or a hook
-/// reads as a command to run (`EDITOR`, `GIT_SEQUENCE_EDITOR`, `PAGER`).
-fn assigns_a_ship(word: &str, depth: u8, own: Own) -> bool {
-    is_assignment(word)
-        && word.split_once('=').is_some_and(|(_, value)| {
-            value.contains(char::is_whitespace) && ships_cmd(git_shell_value(value), depth + 1, own)
-        })
+fn ships_seg(seg: &str, depth: u8) -> bool {
+    words_ship(&shell_words(seg), depth)
 }
 
 /// One segment's words: the head, past wrappers and keywords, and what it
 /// runs.
-fn words_ship(words: &[String], depth: u8, own: Own) -> bool {
+fn words_ship(words: &[String], depth: u8) -> bool {
     let mut from = 0;
     while from < words.len() {
         let Some(at) = head_at(&words[from..]).map(|at| at + from) else {
-            return words[from..].iter().any(|w| assigns_a_ship(w, depth, own));
+            return false;
         };
-        // `EDITOR='git push -f origin main' git commit`
-        if words[from..at]
-            .iter()
-            .any(|w| assigns_a_ship(w, depth, own))
-        {
-            return true;
-        }
         let word = &words[at];
         // `bash -c '<script>'`: the script is one word.
         if word.contains(char::is_whitespace) {
-            return ships_cmd(&words[at..].join(" "), depth + 1, own);
+            return ships_cmd(&words[at..].join(" "), depth + 1);
         }
         let rest = &words[at + 1..];
         match leaf(word) {
             "if" | "then" | "elif" | "else" | "do" | "while" | "until" | "!" | "builtin"
             | "unbuffer" | "chronic" => from = at + 1,
-            "eval" => return ships_cmd(&rest.join(" "), depth + 1, own),
-            // `export EDITOR='<command>'`: git runs it later.
-            "export" | "declare" | "typeset" | "local" | "readonly" => {
-                return rest.iter().any(|w| assigns_a_ship(w, depth, own));
-            }
-            // `stdbuf -o0 git push`, `stdbuf -o 0 git push`
+            "eval" => return ships_cmd(&rest.join(" "), depth + 1),
+            // `stdbuf -o0 gh pr merge`, `stdbuf -o 0 gh pr merge`
             "stdbuf" => {
                 from = at + 1;
                 while let Some(w) = words.get(from).filter(|w| w.starts_with('-')) {
@@ -2715,12 +2640,10 @@ fn words_ship(words: &[String], depth: u8, own: Own) -> bool {
                     };
                 }
             }
-            // `flock /tmp/l git push`, `flock /tmp/l -c 'git push'`
+            // `flock /tmp/l gh pr merge`, `flock /tmp/l -c 'gh pr merge'`
             "flock" => {
                 if let Some(i) = rest.iter().position(|w| w == "-c" || w == "--command") {
-                    return rest
-                        .get(i + 1)
-                        .is_some_and(|s| ships_cmd(s, depth + 1, own));
+                    return rest.get(i + 1).is_some_and(|s| ships_cmd(s, depth + 1));
                 }
                 from = at + 1;
                 while let Some(w) = words.get(from).filter(|w| w.starts_with('-')) {
@@ -2749,117 +2672,20 @@ fn words_ship(words: &[String], depth: u8, own: Own) -> bool {
                         1
                     };
                 }
-                return script && words.get(i).is_some_and(|s| ships_cmd(s, depth + 1, own));
+                return script && words.get(i).is_some_and(|s| ships_cmd(s, depth + 1));
             }
-            _ => return ships(words, at, depth, own),
+            _ => return ships(words, at),
         }
     }
     false
 }
 
-/// The command whose head is at `head` pushes or opens or merges a pull
-/// request. Read by words, not by prefix, so git's global options (`-C
-/// <dir>`, `-c <k=v>`, `--git-dir`, `--no-pager`, …) and gh's (`-R <repo>`)
-/// before the verb don't hide it. An alias given with `-c alias.<name>=`
-/// is read as what it names, and any other word the installed git doesn't
-/// run as its own command as a push. A command git runs is read too: a
-/// `-c` or `git config` value (`core.editor=<command>`), an option's
-/// ([`GIT_COMMAND_OPTIONS`]) and what one of [`GIT_RUNNERS`] is given.
-fn ships(words: &[String], head: usize, depth: u8, own: Own) -> bool {
+/// The command whose head is at `head` opens or merges a pull request.
+/// Read by words, not by prefix, so gh's global options (`-R <repo>`)
+/// before the command don't hide it.
+fn ships(words: &[String], head: usize) -> bool {
     let at = |i: usize| words.get(i).map(String::as_str);
-    let runs = |command: &str| ships_cmd(git_shell_value(command), depth + 1, own);
     match leaf(&words[head]) {
-        "git" => {
-            // Aliases set on this command line: name, and what it runs when
-            // that can be read.
-            let mut aliases: Vec<(&str, Option<&str>)> = Vec::new();
-            let mut i = head + 1;
-            while let Some(w) = at(i).filter(|w| w.starts_with('-')) {
-                let value = match w {
-                    "-c" => at(i + 1),
-                    "--config-env" => at(i + 1).map(|v| v.split('=').next().unwrap_or(v)),
-                    _ => w
-                        .strip_prefix("--config-env=")
-                        .map(|v| v.split('=').next().unwrap_or(v)),
-                };
-                if let Some(alias) = value.and_then(|v| v.strip_prefix("alias.")) {
-                    let set = match alias.split_once('=') {
-                        Some((name, runs)) if w == "-c" => (name, Some(runs)),
-                        Some((name, _)) => (name, None),
-                        None => (alias, None),
-                    };
-                    aliases.push(set);
-                }
-                // `-c core.editor='<command>'`: a command git may run.
-                let set_to = value
-                    .filter(|_| w == "-c")
-                    .and_then(|v| v.split_once('='))
-                    .map(|(_, set_to)| set_to);
-                if set_to.is_some_and(|v| v.contains(char::is_whitespace) && runs(v)) {
-                    return true;
-                }
-                i += if GIT_VALUE_OPTIONS.contains(&w) { 2 } else { 1 };
-            }
-            let Some(verb) = at(i) else {
-                return false;
-            };
-            let args = &words[i + 1..];
-            if let Some((_, alias_runs)) = aliases.iter().rev().find(|(name, _)| *name == verb) {
-                let Some(alias_runs) = alias_runs else {
-                    // Set from the environment: what it runs can't be read.
-                    return true;
-                };
-                let line = match alias_runs.strip_prefix('!') {
-                    Some(shell) => format!("{shell} {}", args.join(" ")),
-                    None => format!("git {alias_runs} {}", args.join(" ")),
-                };
-                return ships_cmd(&line, depth + 1, own);
-            }
-            if matches!(verb, "push" | "send-pack" | "http-push") {
-                return true;
-            }
-            // An alias from a config file, or a word no git here knows.
-            if !own(verb) {
-                return true;
-            }
-            // In lower case, as `args` are: grep's `-O` is `-o` here.
-            let options = GIT_COMMAND_OPTIONS
-                .iter()
-                .find(|(name, _)| *name == verb)
-                .is_some_and(|(_, opts)| {
-                    let opts: Vec<String> = opts.iter().map(|o| o.to_ascii_lowercase()).collect();
-                    let opts: Vec<&str> = opts.iter().map(String::as_str).collect();
-                    git_option_values(args, &opts).into_iter().any(runs)
-                });
-            options
-                || match verb {
-                    // `git subtree push`, `git lfs push`
-                    "subtree" | "lfs" => args
-                        .iter()
-                        .find(|w| !w.starts_with('-'))
-                        .is_some_and(|w| w == "push"),
-                    // A command saved for later: `git config core.editor '<command>'`.
-                    "config" => args.iter().any(|w| !w.starts_with('-') && runs(w)),
-                    // `for-each-repo --config=<key> <git command>`
-                    "for-each-repo" => {
-                        args.iter()
-                            .position(|w| !w.starts_with('-'))
-                            .is_some_and(|k| {
-                                let mut line = vec!["git".to_string()];
-                                line.extend_from_slice(&args[k..]);
-                                ships(&line, 0, depth + 1, own)
-                            })
-                    }
-                    // `rebase -x '<script>'`, `submodule foreach git push`
-                    _ if GIT_RUNNERS.contains(&verb) => args.iter().enumerate().any(|(k, w)| {
-                        matches!(w.as_str(), "push" | "send-pack")
-                            || (w.contains(char::is_whitespace) && runs(w))
-                            || (leaf(w) == "git" && ships(args, k, depth + 1, own))
-                    }),
-                    _ => false,
-                }
-        }
-        "git-push" | "git-send-pack" | "git-http-push" => true,
         "gh" => {
             // Like cobra: an option before the command takes the next word,
             // unless it carries `=` or is help or version.
@@ -5137,6 +4963,8 @@ mod tests {
             "git -c 'core.sshCommand=ssh -i /home/user/.ssh/deploy' push origin work/x",
             "git -c \"user.name=a b\" push",
             "git -C 'my app' push",
+            // An alias set on the line can run anything.
+            "git -c alias.st=status st",
         ] {
             assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
         }
@@ -5147,7 +4975,6 @@ mod tests {
             "sh -c 'git status'",
             "if true; then git status; fi",
             "eval git log",
-            "git -c alias.st=status st",
             "gh repo create my-app --private",
             "stdbuf -o0 cargo test",
             "cat docs/git-push.md",
@@ -5156,11 +4983,11 @@ mod tests {
         }
     }
 
-    /// An alias from a config file can push anything, so a git word the
-    /// installed git doesn't run as its own command is a Ship card, and so
-    /// is a push in a command git runs for one of its own: a runner's
-    /// script, an option that names a command, a value saved in config or
-    /// set in a variable git reads.
+    /// The closed rule: a command in which the shell could run git is a
+    /// Ship card unless every git in it is read as one that can't push. An
+    /// alias, a `-c`, a config write, a changed `PATH` or editor, a runner
+    /// git is given, a word git doesn't run as its own command and any part
+    /// the reader can't read all may push, however they are spelled.
     #[test]
     fn a_git_word_that_isnt_gits_own_command_or_a_push_git_runs_is_hard_class_ship() {
         let shell = |cmd: &str| {
@@ -5169,7 +4996,7 @@ mod tests {
                 &serde_json::json!({ "command": cmd }).to_string(),
             )
         };
-        for cmd in [
+        let mut ship = vec![
             "git config alias.ship push && git ship --force origin main",
             "git ship --force origin main",
             "env git ship --force origin main",
@@ -5199,56 +5026,143 @@ mod tests {
             "git config alias.Ship push && git Ship --force origin main",
             "git STATUS --force origin main",
             "bash -c 'git S\"TATUS\" --force origin main'",
-        ] {
-            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
-        }
-        for cmd in [
+            // An alias that git finds as a program after a PATH change.
+            "git config alias.lfs push && env PATH=/usr/lib/git-core git lfs --force origin main",
+            "git config alias.lfs push && PATH=/usr/lib/git-core git lfs --force origin main",
+            "PATH=/usr/lib/git-core; git lfs --force origin main",
+            "GIT_EXEC_PATH=/tmp/x git status",
+            "git --exec-path=/tmp/x status",
+            // Wrappers and runners the shell reads.
+            "setsid -w git ship --force origin main",
+            "setsid -w git push --force origin main",
+            "find . -maxdepth 0 -exec git ship --force origin main ';'",
+            "echo 'git ship --force origin main' | sh",
+            "echo git ship --force origin main | bash -s",
+            "stdbuf -oL git ship --force origin main",
+            "flock /tmp/l git ship --force origin main",
+            "nohup git ship --force origin main",
+            "timeout 30 git ship --force origin main",
+            "timeout -s KILL 30 git ship --force origin main",
+            "echo ship | xargs git",
+            "xargs git < verbs.txt",
+            "bash -c 'git ship --force origin main'",
+            "G=git; $G ship --force origin main",
+            "G=$(echo git); \"$G\" ship --force origin main",
+            "/usr/bin/g?t ship --force origin main",
+            "watch -n1 git ship",
+            "alias g=git; g ship --force origin main",
+            "ln -s /usr/bin/git ./g && ./g ship --force origin main",
+            "printf 'git ship --force origin main' > x.sh; sh x.sh",
+            "echo Z2l0IHNoaXA= | base64 -d > x.sh; sh x.sh",
+            "echo Z2l0IHNoaXA= | base64 -d | sh",
+            // An editor that is a shell, and a transport that runs one.
+            "git config core.editor sh && git commit",
+            "git -c core.editor=sh commit",
+            "EDITOR=sh git commit",
+            "GIT_EDITOR=sh git commit",
+            "git config sequence.editor sh && git rebase -i main",
+            "git -c sequence.editor=sh rebase -i main",
+            "git --config-env=core.editor=ED commit",
+            "git fetch 'ext::sh -c git% ship% --force% origin% main' main",
+            "git clone fd::3 x",
+            // A push's destination set on the line.
+            "git config remote.origin.push +refs/heads/code/fix:refs/heads/main && git push origin code/fix",
+            // Set on the line or kept for later: each may push.
             "git config alias.ship push",
-            "git rebase -i main",
             "git rebase -x 'cargo test' main",
-            "git submodule update --init",
             "git submodule foreach git pull",
             "git -c core.editor=true commit",
             "git config core.editor 'code --wait'",
-            "git grep -n -e agent",
             "git fetch --upload-pack=git-upload-pack origin",
             "EDITOR='code --wait' git commit",
+            "git lfs pull",
+            "git subtree split --prefix=lib",
+        ];
+        // How bash reads them, the shell Linux and macOS run commands in.
+        if cfg!(unix) {
+            ship.extend([
+                "g\\it ship --force origin main",
+                "g\\it push --force origin main",
+                "sh <<'EOF'\ngit ship --force origin main\nEOF",
+                "bash <<< 'git ship --force origin main'",
+                "$'\\x67it' ship --force origin main",
+            ]);
+        }
+        // How PowerShell reads them, the shell Windows runs commands in.
+        if cfg!(windows) {
+            ship.extend([
+                "g`it push --force origin main",
+                "& git ship --force origin main",
+                "iex 'git ship --force origin main'",
+                "$env:PATH = 'C:\\x'; git lfs --force origin main",
+                "cmd /c git ship --force origin main",
+                "powershell -Command \"git ship --force origin main\"",
+            ]);
+        }
+        for cmd in ship {
+            assert_eq!(shell(cmd), Some(HardClass::Ship), "{cmd}");
+        }
+        for cmd in [
+            "git rebase -i main",
+            "git submodule update --init",
+            "git grep -n -e agent",
             "git --no-pager diff",
             "git commit -m \"Fix: Ship it\"",
             "git -C /home/user/My-App status",
+            "git -c user.name=user -c user.email=user@example.com commit -m x",
+            "git config user.email user@example.com",
+            "git config --get remote.origin.push",
+            "git fetch origin",
+            "git switch -c code/fix",
         ] {
             assert_eq!(shell(cmd), None, "{cmd}");
         }
     }
 
-    /// Which words git runs itself depends on its version and on what is
-    /// installed. On a git without `refs` (before 2.46), an alias named
-    /// `refs` runs; with git-lfs installed, no alias can stand in for
-    /// `lfs`, and without it one can.
+    /// The commands an agent runs all day stay off the card, whatever
+    /// their quoted words say, in any letter case. A push is a Ship card
+    /// every time; the Code tab's push guard is what lets one to an app
+    /// branch run.
     #[test]
-    fn a_word_is_read_as_gits_own_only_when_the_installed_git_runs_it() {
-        let git_2_43 = |verb: &str| matches!(verb, "config" | "status" | "commit" | "switch");
-        let with_lfs = |verb: &str| git_2_43(verb) || matches!(verb, "lfs" | "refs" | "replay");
-        for cmd in [
-            "git config alias.refs push && git refs --force origin main",
-            "git config alias.replay push && git replay --force origin main",
-            "git config alias.backfill push && git backfill --force origin main",
-            "git lfs pull",
-            "git subtree split --prefix=lib",
-        ] {
-            assert!(ships_cmd(cmd, 0, &git_2_43), "{cmd}");
+    fn ordinary_commands_are_not_parked() {
+        let shell = |cmd: &str| {
+            hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        let mut ordinary = vec![
+            "git add -A && git commit -m \"Add tests\"",
+            "git commit -am \"Commit the fix\"",
+            "git status && echo \"Status ok\"",
+            "git diff --stat -- \"Diff Notes.md\"",
+            "git status",
+            "git log --oneline -5",
+            "git diff",
+            "git add -A && git commit -m \"git push --force origin main\"",
+            "git commit -m 'PUSH to Main: Git Push --Force'",
+            "cargo test",
+            "ls",
+            "grep -r push .",
+            "find . -name '*.rs'",
+            "cargo test -p grokhub-agent --lib --locked harness::",
+            "git log --oneline -5 | head -3",
+            "git diff --stat | tail -1",
+            "cd crates && cargo build 2>&1 | tail -20",
+            "$HOME/.cargo/bin/cargo fmt --check",
+            "git show HEAD:src/main.rs > /tmp/main.rs",
+            "git stash && git stash pop",
+            "RUST_LOG=debug cargo run",
+        ];
+        // bash and git read no lower-case variable for a program to run.
+        if cfg!(unix) {
+            ordinary.push("sha=$(git rev-parse HEAD); git log -1 \"$sha\"");
         }
-        for cmd in [
-            "git refs list",
-            "git replay --onto main topic~2 topic",
-            "git lfs pull",
-            "git lfs install",
-            "git switch -c code/fix",
-        ] {
-            assert!(!ships_cmd(cmd, 0, &with_lfs), "{cmd}");
+        for cmd in ordinary {
+            assert_eq!(shell(cmd), None, "{cmd}");
+            assert_eq!(classify_ask("Run command", cmd), HardHit::None, "{cmd}");
         }
-        assert!(ships_cmd("git lfs push origin main", 0, &with_lfs));
-        assert!(ships_cmd("git backfill --force origin main", 0, &with_lfs));
+        assert_eq!(shell("git push origin code/fix"), Some(HardClass::Ship));
     }
 
     #[test]
