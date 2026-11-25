@@ -306,7 +306,7 @@ pub fn apply_caps(bench: &BenchReport, eval: &EvalReport) {
 
 /// Production CLI: start the sidecar (if assets exist), bench + eval, print, exit code.
 pub fn run_cli() -> i32 {
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     local::set_enabled(true);
     let load_start = Instant::now();
     if let Err(e) = super::local_sidecar::ensure_global(&dir) {
@@ -348,7 +348,7 @@ pub fn run_cli() -> i32 {
 pub fn run_for_ui() -> Result<String, String> {
     local::set_enabled(true);
     let load_start = Instant::now();
-    let _ = super::local_sidecar::ensure_global(&crate::perm::config_dir());
+    let _ = super::local_sidecar::ensure_global(&crate::perm::app_config_dir());
     let load_ms = load_start.elapsed().as_millis() as u64;
     let rt = local::runtime().ok_or_else(|| "No local model runtime is installed.".to_string())?;
     let d = super::local_perf::current_defaults();
@@ -364,7 +364,7 @@ pub fn run_for_ui() -> Result<String, String> {
     let report = format_full_report(&bench, &eval);
     // Then the draft model, when there is one: with and without it.
     Ok(
-        match super::local_spec::run_bench(&crate::perm::config_dir()) {
+        match super::local_spec::run_bench(&crate::perm::app_config_dir()) {
             Some(line) => format!("{report}\n\n{line}"),
             None => report,
         },

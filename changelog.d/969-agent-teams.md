@@ -1,0 +1,2 @@
+- Add agent team profiles (role, family, staff and customer agents), each with its own home, access level and who it may message, plus A2A v1.0 message, task and agent card shapes for agents to hand each other work (core only; no app surface yet).
+- Let the chat hand work to an agent profile with the new `message_agent` tool: the agent runs with its own home, rules and system text, never wider than the chat that asked, and sees only the message. The tool appears only once an agent team exists.

@@ -4,6 +4,8 @@
 
 pub mod doctor;
 pub mod mcp_bridge;
+pub mod node_client;
+pub mod node_host;
 pub mod oauth_cli;
 mod server;
 pub mod update;
@@ -41,6 +43,9 @@ pub enum Launch {
     Update,
     /// Sign in with Grok (device code) into the shell's keychain entry.
     OAuth,
+    /// `grokhub-hub node pair|offer|run|wake|status|forget`: this device as
+    /// a companion of the app on another computer.
+    Node,
 }
 
 impl Launch {
@@ -57,6 +62,7 @@ impl Launch {
                 | Launch::BenchLocal
                 | Launch::RoutineRun
                 | Launch::RoutineManage
+                | Launch::Node
         )
     }
 }
@@ -71,6 +77,9 @@ pub fn askpass_socket(args: &[String]) -> Option<&str> {
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
+    if args.get(1).map(String::as_str) == Some("node") {
+        return Launch::Node;
+    }
     if args.get(1).map(String::as_str) == Some("bench")
         && args.get(2).map(String::as_str) == Some("local")
     {
@@ -293,6 +302,10 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "routine"])),
             Launch::Serve
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "node", "run"])),
+            Launch::Node
         );
         // Allow seals its grant with the keyring key, so the CLI needs the
         // keyring like a routine run does.

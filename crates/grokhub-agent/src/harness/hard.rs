@@ -1735,7 +1735,8 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
 /// An install of a tool whose driver Microsoft's cached vulnerable driver
 /// blocklist names (round 3 item 36).
 fn flagged_driver(cmd: &str) -> Option<HardClass> {
-    let list = grokhub_core::driver_check::cached(&crate::perm::config_dir());
+    // The app's cached list: the hard floor is shared, also in an agent's turn.
+    let list = grokhub_core::driver_check::cached(&crate::perm::app_config_dir());
     grokhub_core::driver_check::flag(cmd, &list).map(|_| HardClass::FlaggedDriver)
 }
 
@@ -1796,12 +1797,6 @@ fn folded(path: &str) -> String {
     parts.join("/")
 }
 
-/// A command that names the consent ledger, or a routine consent store.
-fn names_consent(cmd: &str) -> bool {
-    let c = cmd.to_ascii_lowercase();
-    c.contains("consent.jsonl") || (c.contains("consent.json") && c.contains("routines"))
-}
-
 fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = host_safety::forbidden_reason(cmd) {
         return Some(why.to_string());
@@ -1809,7 +1804,8 @@ fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = grokhub_core::driver_check::input_driver_install(cmd) {
         return Some(why);
     }
-    if names_consent(cmd) {
+    // The consent ledger, however a shell could spell it.
+    if host_safety::names_consent(cmd) {
         return Some(LEDGER_FLOOR.into());
     }
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
@@ -2036,11 +2032,20 @@ fn in_cabin_instructions(parts: &[String]) -> bool {
         }
         _ => parts,
     };
-    if config.is_empty() || parts.len() <= config.len() {
-        return false;
-    }
-    parts.iter().zip(&config).all(|(a, b)| a == b)
-        && matches!(parts[config.len()].as_str(), "skills" | "memory")
+    // `skills` or `memory` right after `root` plus `skip` more parts.
+    let under = |root: &[&str], skip: usize| {
+        !root.is_empty()
+            && parts.len() > root.len() + skip
+            && parts.iter().zip(root).all(|(a, b)| a == b)
+            && matches!(parts[root.len() + skip].as_str(), "skills" | "memory")
+    };
+    // In an agent's turn the config folder is its home: the app's own
+    // folders and every other agent's home stay guarded too.
+    let app = norm_path(&crate::perm::app_config_dir().display().to_string());
+    let app: Vec<&str> = app.split('/').filter(|part| !part.is_empty()).collect();
+    let in_homes =
+        parts.get(app.len()).map(String::as_str) == Some(grokhub_core::agent_team::HOMES_DIR);
+    under(&config, 0) || under(&app, 0) || (in_homes && under(&app, 2))
 }
 
 /// A write, edit or non-read-only command that names the agent's settings.
@@ -3504,6 +3509,119 @@ mod tests {
         );
     }
 
+    /// Quotes, globs and doubled slashes don't hide a key path or the
+    /// consent ledger from the floor.
+    #[test]
+    fn the_floor_sees_quoted_globbed_and_doubled_slash_paths() {
+        let floor = |reason: &str| {
+            Some(HardFloor {
+                reason: reason.into(),
+            })
+        };
+        let ledger = floor("hard floor: consent ledger (only your click changes it)");
+        for (cmd, want) in [
+            ("cat ~/.ssh/id_rsa", floor("forbidden path: ssh keys")),
+            (r#"cat ~/."ssh"/id_rsa"#, floor("forbidden path: ssh keys")),
+            ("cat ~/.ss?/id_rsa", floor("forbidden path: ssh keys")),
+            ("cat /etc//shadow", floor("forbidden path: /etc/shadow")),
+            (
+                concat!("cat ~/.grok//auth", ".json"),
+                floor("forbidden path: grok login"),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json?",
+                ledger.clone(),
+            ),
+            (
+                r#"echo '{}' >> ~/.config/GrokHub/"consent".jsonl"#,
+                ledger.clone(),
+            ),
+            (
+                r"echo '{}' >> ~/.config/GrokHub/consent.json\l",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub//consent.js[o]nl",
+                ledger.clone(),
+            ),
+            (
+                "cp x.json ~/.config/GrokHub/routines/consent.js?n",
+                ledger.clone(),
+            ),
+            (
+                r#"cd ~/.config/GrokHub/"routines" && printf '{}' > "consent".json"#,
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub && echo '{}' >> consent.js?nl",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/Grok?ub && echo '{}' >> c*.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/Grok?ub/consent.json?",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub/routines && cp x.json consent.js?n",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json[[:lower:]]",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json$'l'",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json$\"l\"",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.js\\\nonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json{l..l}",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub && echo '{}' | tee -a *.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub/routines && cp x.json *.json",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/[G][r][o][k][H][u][b]/[c][o][n][s][e][n][t].jsonl",
+                ledger.clone(),
+            ),
+            ("echo '{}' | tee -a ~/.config/*/*.jsonl", ledger.clone()),
+            ("echo '{}' >> ~/.config/*/c?nsent.*", ledger.clone()),
+            ("cat ~/.s{s..s}h/id_rsa", floor("forbidden path: ssh keys")),
+            (
+                "cd ~/.config/GrokHub && sed -i 's/x/y/' *",
+                floor("forbidden path: app secrets"),
+            ),
+            ("wc -l logs/*.jsonl", None),
+            ("wc -l /home/user/GrokHub/logs/*.jsonl", None),
+            ("cd /home/user/GrokHub && wc -l logs/*.jsonl", None),
+            ("cd ~/.config/GrokHub && ls logs", None),
+            ("cat */*.json", None),
+            ("ls src/consent.*", None),
+        ] {
+            assert_eq!(hard_floor("run_terminal_command", &sh(cmd)), want, "{cmd}");
+        }
+    }
+
     #[test]
     fn hard_class_names_and_commands() {
         assert_eq!(hard_class("hard_send_stub", "{}"), Some(HardClass::Send));
@@ -4605,6 +4723,54 @@ mod tests {
             HardClass::parse("agent_config"),
             Some(HardClass::AgentConfig)
         );
+    }
+
+    #[test]
+    fn an_agent_cant_write_the_apps_or_another_agents_skills_or_memory() {
+        use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+        let app = std::env::temp_dir().join(format!("gh-hard-agent-{}", std::process::id()));
+        let kid = app.join("agents").join("kid");
+        std::fs::create_dir_all(&kid).unwrap();
+        TeamFile {
+            version: VERSION,
+            agents: vec![
+                Profile::new(Kind::Family, "kid", "Kid"),
+                Profile::new(Kind::Role, "planner", "Planner"),
+            ],
+            teams: vec![],
+        }
+        .save(&app)
+        .unwrap();
+        let _cfg = crate::perm::ConfigGuard::set(&kid);
+        let write = |p: &std::path::Path| {
+            serde_json::json!({ "path": p.display().to_string(), "content": "x" }).to_string()
+        };
+        for path in [
+            kid.join("skills/new/run.sh"),
+            app.join("skills/new/run.sh"),
+            app.join("memory/USER.md"),
+            app.join("agents/planner/skills/x/run.sh"),
+            app.join("agents/planner/memory/notes.txt"),
+        ] {
+            assert_eq!(
+                hard_class("write", &write(&path)),
+                Some(HardClass::AgentConfig),
+                "{}",
+                path.display()
+            );
+        }
+        for path in [
+            kid.join("work/skills.txt"),
+            app.join("agents/planner/work/a.txt"),
+        ] {
+            assert_ne!(
+                hard_class("write", &write(&path)),
+                Some(HardClass::AgentConfig),
+                "{}",
+                path.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&app);
     }
 
     #[test]

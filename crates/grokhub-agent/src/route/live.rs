@@ -711,6 +711,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let settings = spend::spend_settings();
     let user_bench = super::user_bench::load(config_dir);
     laps.mark("route:week_budget");
+    // Inside an agent's turn (pinned to its home), the agent's profile: its
+    // tier narrows the pick.
+    let agent = grokhub_core::agent_team::agent_turn(&crate::perm::config_dir()).map(|(_, p)| p);
+    let agent_tier = agent
+        .as_ref()
+        .map(|profile| profile.model_tier.clone())
+        .filter(|tier| !tier.is_empty());
     super::connectivity::sync_from_core();
     let rt = offline_estimator();
     let key = episode_key(call);
@@ -740,9 +747,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     });
     let lane = ask.as_ref().map(|a| a.lane());
     // What the chat's words asked for this kind of task ("use Opus for the
-    // refactor"); a helper reads its chat's asks.
+    // refactor"); a helper reads its chat's asks. An agent sees only its
+    // message, so the person's words don't steer its turn.
     let (named_model, named_effort) = ask
         .as_ref()
+        .filter(|_| agent.is_none())
         .map(|a| {
             let asks = super::task_steer::asks(config_dir, key);
             super::task_steer::for_kind(&asks, a.kind)
@@ -1033,10 +1042,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         lane,
         named_model: named_model.as_deref(),
         named_effort: named_effort.as_deref(),
+        model_tier: agent_tier.as_deref(),
         size: Some(size_est),
         // Failover PR 5: whether a local model is already loaded, for the
         // warm-local default. Never starts the sidecar to find out.
         local_warm: super::local::warm_runtime().is_some(),
+        light_chat: ask.as_ref().is_some_and(|a| a.light_chat()),
         // Failover PR 6: the scorer's hard filters read the quota ledger
         // (PR 3) and the turn's explicitness, decided by the call site.
         quota: load_quota(config_dir),
@@ -1891,7 +1902,7 @@ pub fn stream_routed(
 ) -> Result<TurnOutput, ClientError> {
     let entered = std::time::Instant::now();
     crate::harness::replay::clear_last();
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     // Playbooks 8: a banned ask never leaves the computer, this turn or a later one.
     let mut sent = req.clone();
     super::adult::scrub(&mut sent.input);
@@ -2344,7 +2355,7 @@ pub fn compact_routed(
     if !client.compacts_server_side() {
         return None;
     }
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     // Playbooks 8: a banned ask never leaves the computer, here either.
     let mut sent = req.clone();
     super::adult::scrub(&mut sent.input);

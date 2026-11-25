@@ -216,7 +216,7 @@ fn an_http_hook_shows_its_host_on_the_page() {
 }
 
 #[test]
-fn a_hook_for_an_event_nothing_fires_says_so() {
+fn a_session_end_hook_runs_and_one_whose_matcher_never_matches_says_so() {
     let s = Scratch::new("never");
     let (cfg, home, ws) = (s.cfg(), s.home(), s.ws());
     let dir = home.join(".grok").join("hooks");
@@ -237,11 +237,8 @@ fn a_hook_for_an_event_nothing_fires_says_so() {
     assert_eq!(
         notes,
         vec![
-            (
-                "./save.sh".to_string(),
-                false,
-                "Never runs: SessionEnd isn't fired here yet".to_string()
-            ),
+            // Deleting a chat fires SessionEnd, so its hook runs.
+            ("./save.sh".to_string(), true, String::new()),
             ("echo manual".to_string(), false, NEVER_MATCHES.to_string()),
         ]
     );

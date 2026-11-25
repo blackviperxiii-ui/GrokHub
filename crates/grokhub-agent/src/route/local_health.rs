@@ -112,7 +112,7 @@ pub fn log(event: &str, detail: Option<&str>) {
 /// [`log`] with a time in milliseconds.
 pub fn log_ms(event: &str, detail: Option<&str>, ms: Option<u64>) {
     #[cfg(not(test))]
-    log_to(&crate::perm::config_dir(), event, detail, ms);
+    log_to(&crate::perm::app_config_dir(), event, detail, ms);
     #[cfg(test)]
     let _ = (event, detail, ms);
 }

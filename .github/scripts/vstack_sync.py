@@ -437,26 +437,38 @@ def sync(tag, src, summary):
     print("\n".join(note))
 
 
-def newer():
-    doc = load()
+def remote_tags(repo):
     refs = subprocess.run(
-        ["git", "ls-remote", "--tags", "--refs", doc["repo"]],
+        ["git", "ls-remote", "--tags", "--refs", repo],
         check=True, capture_output=True, text=True,
     ).stdout
-    tags = [line.split("refs/tags/", 1)[1] for line in refs.splitlines() if "refs/tags/" in line]
+    return [line.split("refs/tags/", 1)[1] for line in refs.splitlines() if "refs/tags/" in line]
+
+
+def newest(tags):
+    """The highest vX.Y.Z tag in `tags`."""
     tags = [t for t in tags if TAG.match(t)]
     if not tags:
         raise SyncError("no vX.Y.Z tags upstream")
-    best = max(tags, key=tag_key)
+    return max(tags, key=tag_key)
+
+
+def newer():
+    doc = load()
+    best = newest(remote_tags(doc["repo"]))
     if tag_key(best) > tag_key(doc["tag"]):
         print(best)
 
 
 def check_upstream(src=None):
-    """Fail when vstack `main` skills/ list differs from vstack.json `skills`."""
+    """Fail when the skills/ list at vstack's newest vX.Y.Z tag differs from
+    vstack.json `skills`. The bundle is pinned to a tag, so a skill that is only
+    on `main` waits for the next tag instead of failing every PR."""
     doc = load()
     tmp = None
+    ref = None
     if src is None:
+        tag = newest(remote_tags(doc["repo"]))
         tmp = tempfile.mkdtemp(prefix="vstack-up-")
         src = os.path.join(tmp, "vstack")
         subprocess.run(
@@ -467,7 +479,7 @@ def check_upstream(src=None):
                 "--depth",
                 "1",
                 "--branch",
-                "main",
+                tag,
                 "--filter=blob:none",
                 "--no-checkout",
                 doc["repo"],
@@ -475,8 +487,12 @@ def check_upstream(src=None):
             ],
             check=True,
         )
+        ref = "HEAD"
+    else:
+        tag = newest(git(src, "tag", "--list").split())
+        ref = tag
     try:
-        rows = git(src, "ls-tree", "-d", "--name-only", "HEAD:skills")
+        rows = git(src, "ls-tree", "-d", "--name-only", f"{ref}:skills")
     finally:
         if tmp:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -486,9 +502,9 @@ def check_upstream(src=None):
     extra = sorted(set(bundled) - set(upstream))
     if missing or extra:
         raise SyncError(
-            f"bundled skill list drifted from upstream main (missing={missing}, extra={extra})"
+            f"bundled skill list drifted from upstream {tag} (missing={missing}, extra={extra})"
         )
-    print(f"vstack-sync: {len(bundled)} bundled skills match upstream main")
+    print(f"vstack-sync: {len(bundled)} bundled skills match upstream {tag}")
 
 
 def main(argv):

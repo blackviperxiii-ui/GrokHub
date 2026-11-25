@@ -2,8 +2,10 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod a2a;
 pub mod action_mode;
 pub mod adult_guard;
+pub mod agent_team;
 pub mod amr;
 pub mod app_json;
 pub mod app_lock;
@@ -54,6 +56,7 @@ pub mod cli_history;
 pub mod clips;
 pub mod code_resume;
 pub mod companion;
+pub mod companion_nodes;
 pub mod connectivity;
 pub mod connector;
 pub mod consult;
@@ -153,6 +156,7 @@ pub mod model_download;
 pub mod model_drop;
 pub mod model_library;
 pub mod model_lineup;
+pub mod model_offer;
 pub mod model_registry;
 pub mod mods;
 pub mod msg_channels;

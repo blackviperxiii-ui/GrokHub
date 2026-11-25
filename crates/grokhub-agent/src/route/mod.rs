@@ -145,6 +145,10 @@ pub struct ModelCall {
 
 /// The route rule on a call stepped up after a re-plan.
 pub const STEP_UP_RULE: &str = "replan:step_up";
+/// The router picked within the tier an agent's profile names.
+pub const AGENT_TIER_RULE: &str = "agent:tier";
+/// An agent's profile named a tier with no model Auto could send: picked as usual.
+pub const AGENT_TIER_MISSING_RULE: &str = "agent:tier:missing";
 
 impl ModelCall {
     pub fn xai(
@@ -259,7 +263,7 @@ pub fn call_model(
             call.provider
         )));
     }
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     // Playbooks 8: a banned ask never leaves the computer.
     let mut sent = call.clone();
     adult::scrub(&mut sent.input);
@@ -541,6 +545,9 @@ pub struct RouteInput<'a> {
     /// The effort the chat's words asked for this kind of task, held inside
     /// the class's floor and ceiling.
     pub named_effort: Option<&'a str>,
+    /// Inside an agent's turn, the `model_profiles.toml` tier its profile
+    /// names: Auto picks among that tier's models, else as usual.
+    pub model_tier: Option<&'a str>,
     /// Failover PR 5: the turn's size estimate ([`sizing`]), when the call
     /// site sized it. A long task keeps free provider models out of the pick
     /// while a carrier route exists and ranks the paid routes first (xAI,
@@ -552,6 +559,11 @@ pub struct RouteInput<'a> {
     /// estimate, the warm model takes the turn by default
     /// ([`sizing::warm_local_default`]).
     pub local_warm: bool,
+    /// The typed ask is light chat the device answers as well: a greeting,
+    /// a quick fact, everyday talk, a story or an explanation, with nothing
+    /// at stake. Not research (it needs the web), code or reasoning. Only
+    /// such a turn may take the warm-local default online.
+    pub light_chat: bool,
     /// Failover PR 3's quota ledger, as last detected: the scorer's hard
     /// filters read it, so a closed, spent or benched route is never
     /// picked in the first place (failover PR 6).
@@ -1288,6 +1300,31 @@ impl Router {
                 fit
             }
         };
+        let throttled = matches!(
+            input.local.capacity.level,
+            grokhub_core::local_governor::Level::Throttle
+        );
+        // Online the device takes only background work, except a light
+        // typed chat while its model is already loaded (the warm-local
+        // default below): the gate then admits it as it would offline.
+        // The turn's ladder hasn't climbed (no trouble, no "try again", no
+        // "think hard"): a fresh pick at its start is the ordinary case.
+        let calm = input.steer != ladder::Steer::Harder
+            && input
+                .pick
+                .as_ref()
+                .is_none_or(|p| p.moved != ladder::Move::Up);
+        let warm_chat = input.local_warm
+            && input.light_chat
+            && (!input.needs_image || input.local.sees_pictures)
+            && input.episode_model.is_none()
+            && calm
+            && local::fits_by_trimming(input.class)
+            && sizing::warm_local_default(input.size.map(|s| s.size), throttled);
+        let warm_gate = local::LocalGate {
+            offline: true,
+            ..input.local.clone()
+        };
         let ids: Vec<&str> = reg
             .models
             .keys()
@@ -1296,6 +1333,7 @@ impl Router {
             .filter(|id| {
                 !local::is_local(id)
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
+                    || (warm_chat && local::admits(&warm_gate, id, input.class, input.ctx_tokens))
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
@@ -1344,6 +1382,31 @@ impl Router {
             }
         } else {
             ids
+        };
+        // Inside an agent's turn, its profile's tier: Auto picks among that
+        // tier's models it could send. The device has no tier and stays in
+        // reach; a tier with no such model changes nothing.
+        let ids: Vec<&str> = match input.model_tier {
+            Some(tier) => {
+                let kept: Vec<&str> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        local::is_local(id)
+                            || (reg.get(id).and_then(|r| r.meta.card.tier.as_deref()) == Some(tier)
+                                && in_auto_pool(reg, id, input.spend.settings.ceiling_usd_per_m)
+                                && auto_ok(reg, profiles, input.lane(), id))
+                    })
+                    .collect();
+                if kept.iter().all(|id| local::is_local(id)) {
+                    rules.push(AGENT_TIER_MISSING_RULE.into());
+                    ids
+                } else {
+                    rules.push(AGENT_TIER_RULE.into());
+                    kept
+                }
+            }
+            None => ids,
         };
         // The chat's words named a model for this kind of task: Auto picks
         // among the models that carry the name and that Auto could send.
@@ -1473,20 +1536,17 @@ impl Router {
         // Failover PR 5, the warm-local rule (corrected 2026-11-07): a model
         // already loaded on the device takes a less challenging turn by
         // default — no cloud spend, no cold start — unless the turn is
-        // pinned to an episode model or carries an explicit pick. The gate
+        // pinned to an episode model or its ladder climbed (`calm`). Typed
+        // chat takes it only when light (`warm_chat`). The gate
         // admitted the tier into `ids` already, so class eligibility and
         // the governor's say are spent (at Unload nothing is admitted);
         // sizing adds only the size line and, under throttle, tiny only.
         // A cloud candidate must exist for the default to be a choice at
         // all: with no cloud route the device is a fallback, and the
         // fallback paths below own the pick (and its cabin note).
-        let throttled = matches!(
-            input.local.capacity.level,
-            grokhub_core::local_governor::Level::Throttle
-        );
         let warm_local = if input.local_warm
             && input.episode_model.is_none()
-            && input.pick.is_none()
+            && calm
             && ids.iter().any(|id| !local::is_local(id))
             && sizing::warm_local_default(input.size.map(|s| s.size), throttled)
         {
@@ -1967,6 +2027,8 @@ mod r2a_tests;
 #[cfg(test)]
 mod r2b_tests;
 
+#[cfg(test)]
+mod matrix_tests;
 #[cfg(test)]
 mod r3b_tests;
 
@@ -2780,6 +2842,35 @@ mod tests {
         reg.entitlement.credential = Credential::Plan;
         reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, rows)], &[], 1);
         reg
+    }
+
+    /// An agent's tier narrows Auto to that tier's models; a tier no model
+    /// carries picks as usual and says so.
+    #[test]
+    fn an_agents_tier_narrows_the_pick_and_a_tier_nothing_carries_does_not() {
+        let reg = xai_listed(&["grok-4.7", "grok-4.3"]);
+        let none = BTreeMap::new();
+        let mut base = input("debug", "grok-4.7", 0.5);
+        base.lane = Some("debug");
+        let auto = Router::choose(&base, &reg, &none, &no_table(), 10);
+        assert_eq!(auto.model, "grok-4.7", "{auto:?}");
+        let workhorse = RouteInput {
+            model_tier: Some("workhorse"),
+            ..base.clone()
+        };
+        let r = Router::choose(&workhorse, &reg, &none, &no_table(), 10);
+        assert_eq!(r.model, "grok-4.3", "{r:?}");
+        assert!(r.rule_ids.iter().any(|id| id == AGENT_TIER_RULE), "{r:?}");
+        let free = RouteInput {
+            model_tier: Some("free"),
+            ..base.clone()
+        };
+        let r = Router::choose(&free, &reg, &none, &no_table(), 10);
+        assert_eq!(r.model, "grok-4.7", "{r:?}");
+        assert!(
+            r.rule_ids.iter().any(|id| id == AGENT_TIER_MISSING_RULE),
+            "{r:?}"
+        );
     }
 
     /// The chat's words narrow Auto to the named model and hold the named
