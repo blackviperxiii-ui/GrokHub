@@ -385,6 +385,16 @@ def fetched_name(url: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", url.split("://", 1)[-1]).strip("_")[:150]
 
 
+def github_repo_root(url: str) -> bool:
+    """A GitHub repo URL is https with host github.com and owner/repo only."""
+    parsed = urllib.parse.urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "github.com"
+        and parsed.path.strip("/").count("/") == 1
+    )
+
+
 class Fetcher:
     def __init__(self, out: Path, offline: bool = False, timeout: float = 15.0) -> None:
         self.dir = out / "fetched"
@@ -984,7 +994,7 @@ def render(findings: list[Finding], surfaces: list[Surface], misses: dict[str, s
     if misses:
         lines += ["", "Unchecked sources (fetch elsewhere, save under fetched/<file>, rerun):"]
         for url, why in sorted(misses.items()):
-            lines.append(f"- {url} ({why}) -> {fetched_name(url + ('.tags' if url.count('/') == 4 and 'github.com' in url else ''))}")
+            lines.append(f"- {url} ({why}) -> {fetched_name(url + ('.tags' if github_repo_root(url) else ''))}")
     if used:
         lines += ["", "Saved bodies used (fetched/):"]
         lines += [f"- {name} ({size} bytes)" for name, size in sorted(used.items())]
@@ -1163,5 +1173,16 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _self_test() -> None:
+    assert github_repo_root("https://github.com/owner/repo") is True
+    assert github_repo_root("https://github.com.evil/owner/repo") is False
+    assert github_repo_root("https://notgithub.com/github.com/repo") is False
+    assert github_repo_root("https://evil.example/a/b?q=github.com") is False
+    assert github_repo_root("https://github.com/owner/repo/tree") is False
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        _self_test()
+        raise SystemExit(0)
     sys.exit(main())

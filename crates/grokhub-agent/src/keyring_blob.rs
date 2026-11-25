@@ -170,14 +170,14 @@ pub fn get(backend: &dyn Backend, account: &str) -> Result<Option<String>, Strin
     };
     if n > 64 {
         return Err(format!(
-            "The system keychain entry for {account} has too many chunks ({n})."
+            "The system keychain entry has too many chunks ({n})."
         ));
     }
     let mut out = String::new();
     for i in 0..n {
-        let chunk = backend.get(&chunk_account(account, i))?.ok_or_else(|| {
-            format!("The system keychain entry for {account} is missing chunk {i}.")
-        })?;
+        let chunk = backend
+            .get(&chunk_account(account, i))?
+            .ok_or_else(|| format!("The system keychain entry is missing chunk {i}."))?;
         out.push_str(&chunk);
     }
     if out.trim().is_empty() {
@@ -281,10 +281,7 @@ mod tests {
                 .expect("chunk");
             assert!(utf16_units(&chunk) <= CHUNK_UTF16_MAX);
         }
-        assert_eq!(
-            get(&store, "shell-xai-oauth").unwrap().as_deref(),
-            Some(secret.as_str())
-        );
+        assert!((get(&store, "shell-xai-oauth").unwrap().as_deref()) == (Some(secret.as_str())));
     }
 
     #[test]
@@ -362,13 +359,12 @@ mod tests {
         ];
         for account in accounts {
             set(&store, account, &secret).unwrap();
-            assert_eq!(
-                get(&store, account).unwrap().as_deref(),
-                Some(secret.as_str()),
-                "{account}"
-            );
+            assert!((get(&store, account).unwrap().as_deref()) == (Some(secret.as_str())));
             delete(&store, account).unwrap();
-            assert!(get(&store, account).unwrap().is_none(), "{account}");
+            assert!(
+                get(&store, account).unwrap().is_none(),
+                "keychain entry was not deleted"
+            );
         }
     }
 
@@ -389,7 +385,7 @@ mod tests {
         let secret: String = "W".repeat(PLATFORM_UTF16_LIMIT + 120);
         set(&backend, &account, &secret).expect("Windows Credential Manager set");
         let got = get(&backend, &account).expect("get");
-        assert_eq!(got.as_deref(), Some(secret.as_str()));
+        assert!((got.as_deref()) == (Some(secret.as_str())));
         delete(&backend, &account).expect("delete");
         assert!(get(&backend, &account).expect("get after delete").is_none());
     }
