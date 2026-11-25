@@ -535,6 +535,16 @@ fn spawn_llama(
     cmd.envs(super::local_warm::cache_env(|k| {
         std::env::var_os(k).is_some()
     }));
+    // ROCm: hide the iGPU so HIP can't crash on it; leave a user value alone.
+    if let Some(l) = launch {
+        if let Some(p) = autoconfig::profile() {
+            cmd.envs(super::local_flags::hip_visible_env(
+                l.backend,
+                &p.gpus,
+                |k| std::env::var_os(k).is_some(),
+            ));
+        }
+    }
     if run.low_priority {
         super::local_flags::below_normal(&mut cmd);
     }
