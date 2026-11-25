@@ -390,10 +390,9 @@ fn base_urls_are_https_hosts_and_xai_is_built_in() {
     );
     for key in providers::NamedKey::ALL {
         let url = format!("https://{}.example.com/v1", key.account());
-        assert_ne!(
-            parse_base_url(&url).map(|(_, _, id)| id).as_deref(),
-            Ok(key.account()),
-            "{url}"
+        assert!(
+            (parse_base_url(&url).map(|(_, _, id)| id).as_deref()) != (Ok(key.account())),
+            "a named key's account was accepted as a provider id"
         );
     }
     let a = providers::Provider {
@@ -3309,15 +3308,15 @@ fn an_openrouter_call_sends_its_backup_session_and_deny_and_keeps_the_answering_
 
 #[test]
 fn a_chats_session_id_is_a_hash_of_its_id_never_its_text() {
-    assert_eq!(
-        providers::openrouter_session_id("conv-1").as_deref(),
-        Some("36524fd8f6747fc2712506d01fee0e18")
+    assert!(
+        (providers::openrouter_session_id("conv-1").as_deref())
+            == (Some("36524fd8f6747fc2712506d01fee0e18"))
     );
-    assert_eq!(
-        providers::openrouter_session_id(" or-chat-7 ").as_deref(),
-        Some("bed5f8094605e99e4ec7d0fd7a4e7dc4")
+    assert!(
+        (providers::openrouter_session_id(" or-chat-7 ").as_deref())
+            == (Some("bed5f8094605e99e4ec7d0fd7a4e7dc4"))
     );
-    assert_eq!(providers::openrouter_session_id("  "), None);
+    assert!(providers::openrouter_session_id("  ").is_none());
     // With no backup and no conversation, only the provider field is added.
     let mut b = json!({"model": "vendor/a"});
     providers::apply_openrouter_picks(&mut b, None, "");

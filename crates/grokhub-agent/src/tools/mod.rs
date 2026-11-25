@@ -22,6 +22,7 @@ mod read_file;
 pub(crate) mod registry;
 pub(crate) mod run_routine;
 pub(crate) mod save_routine;
+mod schema_check;
 mod search_replace;
 mod session_search;
 pub(crate) mod set;
@@ -35,6 +36,9 @@ pub(crate) mod workspace_tools;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
+#[cfg(test)]
+pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
+pub(crate) use schema_check::{schema_message, schema_miss};
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
 pub(crate) use web_fetch::{dial_host, parse_public_url};
