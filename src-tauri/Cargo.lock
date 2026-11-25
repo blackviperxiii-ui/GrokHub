@@ -2122,9 +2122,11 @@ dependencies = [
 name = "grokhub-hub"
 version = "3.6.0"
 dependencies = [
+ "base64 0.23.1",
  "grokhub-agent",
  "grokhub-core",
  "grokhub-desktop",
+ "image",
  "keyring",
  "serde",
  "serde_json",

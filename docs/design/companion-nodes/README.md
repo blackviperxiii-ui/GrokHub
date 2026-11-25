@@ -11,6 +11,7 @@ This page is the protocol. The code is in:
 | --- | --- |
 | Paired list and consent rules | `crates/grokhub-core/src/companion_nodes.rs` |
 | Host: pairing, relay, MCP endpoint | `crates/grokhub-hub/src/node_host.rs` |
+| Companion program (`grokhub-hub node`) | `crates/grokhub-hub/src/node_client.rs` |
 
 ## How it fits together
 
@@ -177,8 +178,8 @@ when the companion doesn't answer within 120 seconds.
 `sms_send` takes `{"to": "+15555550100", "body": "…"}`.
 
 `talk_say` takes `{"text": "…"}` and speaks it on the companion.
-`talk_listen` takes `{"seconds": 8}`, records, and answers what it heard as
-text when the companion can transcribe, else an error saying it can't.
+`talk_listen` takes `{}`, listens once, and answers what it heard as text.
+A companion lists it only when it can transcribe.
 
 `canvas_show` takes a panel spec, the same declarative JSON the app's
 `show_panel` tool uses (`crates/grokhub-core/src/panel_spec.rs`): headings,
@@ -188,6 +189,54 @@ carries HTML or script, so a panel can't run code on the companion.
 
 `skills_list` answers names and descriptions; `skill_read` takes
 `{"name": "…"}` and answers the skill's `SKILL.md`.
+
+## Running a companion
+
+`grokhub-hub node` turns the device it runs on into a companion:
+
+```sh
+grokhub-hub node pair 192.168.1.20 ABC-123 --name "Pixel 8"
+grokhub-hub node offer camera,location,talk,wake
+grokhub-hub node run
+```
+
+`pair` takes the number address and the code the app shows, and saves the
+pairing in `companion-node.json` in the config folder, readable by this
+user only. `offer` sets what this device lends; it starts with nothing.
+`run` stays connected and prints a line for each tool the app calls.
+`wake` sends a wake event, and `wake --listen` sends what you say as a
+`heard` event. `status` shows the pairing and what this device can lend.
+`forget` deletes the pairing here.
+
+What each device can lend:
+
+| Offer | Android (Termux with Termux:API) | Linux | macOS | Windows |
+| --- | --- | --- | --- | --- |
+| `camera` | `termux-camera-photo` | `ffmpeg` and a webcam | `imagesnap` | no |
+| `screen` | no | yes | yes | yes |
+| `location` | `termux-location` | no | no | no |
+| `sms` | `termux-sms-list`, `termux-sms-send` | no | no | no |
+| `talk` | `termux-tts-speak`; listens with `termux-speech-to-text` | `espeak-ng`, `espeak` or `spd-say` | `say` | the built-in voice |
+| `canvas` | `termux-open` | `xdg-open` | `open` | yes |
+| `wake`, `mcp`, `skills` | yes | yes | yes | yes |
+
+Programs run with an argument list, never through a shell. Text that
+starts with `-` gets a leading space so a program can't read it as an
+option. On Windows the words to speak travel in an environment variable,
+never inside the script. Photos and screenshots past 1,600 pixels on the
+long side are scaled down to JPEG.
+
+A panel opens once as a local page with no script and a strict content
+policy; the page reloads every two seconds, so the next `canvas_show`
+appears in the same window.
+
+The `mcp` offer lends the MCP servers this device has connected, named
+`<server>-<tool>`. Answers go back without this device's untrusted fence,
+because the app fences them as its own MCP output. A server that is another
+companion's relay is never lent on: that companion's person allowed this
+device, not whoever it lends to. The `skills` offer reads the skills in
+this device's `.claude/skills` and `.grok/skills` folders and the app's own
+skill folder; the built-in skills stay out.
 
 ## What isn't in version 1
 
