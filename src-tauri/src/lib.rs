@@ -10633,6 +10633,7 @@ mod web_command_tests {
             notified: crate::os_extras::Pending::default(),
             auto: Mutex::default(),
             card_carry: Mutex::default(),
+            send_back: crate::turns::SendBack::default(),
             code_sessions: crate::code_sessions::Folders::open(dir.to_path_buf()),
             #[cfg(desktop)]
             focus_help: Mutex::new(crate::focus_help::FocusHelp::default()),
