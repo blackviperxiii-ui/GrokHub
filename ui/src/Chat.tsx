@@ -22,6 +22,7 @@ import {
   exportChat,
   forgetMessage,
   composerGhostSuggest,
+  downloadModels,
   getBehavior,
   getHangoutMode,
   getStartChat,
@@ -222,6 +223,8 @@ const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
 
 /** `/view-plan` before any plan was made. */
 export const NO_PLAN = "No plan yet. Use Plan mode.";
+/** Said once a `/download` is queued: the page that shows its progress. */
+export const downloadingLine = (name: string) => `Downloading ${name}. Settings → Local AI shows how it's going.`;
 
 /** Bare `/plan`: the next message plans first. */
 export const PLAN_NEXT = "Your next message gets a plan first.";
@@ -942,7 +945,7 @@ export function Chat({
    * chip that goes somewhere. `false` back: this app has no such page. */
   onOpenView?: (view: View) => boolean | void;
   /** `/plugins` opens Settings → Labs. */
-  onOpenSection?: (section: "labs") => void;
+  onOpenSection?: (section: "labs" | "localAi") => void;
   /** `/palette` opens the command palette. */
   onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
@@ -1977,6 +1980,14 @@ export function Chat({
       case "openSection":
         if (onOpenSection) onOpenSection(effect.section);
         else onOpenView?.("settings");
+        break;
+      case "downloadModel":
+        try {
+          await downloadModels([effect.id]);
+          setItems((now) => [...now, { kind: "slash", command, text: downloadingLine(effect.name) }]);
+        } catch (err) {
+          setItems((now) => [...now, { kind: "slash", command, text: String(err) }]);
+        }
         break;
       case "import": {
         // Review opens with the workspace's notes; with none to read, the chat says so.

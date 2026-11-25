@@ -1373,8 +1373,10 @@ export type SlashEffect =
   | { kind: "openNote"; view: "settings"; text: string }
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
-  /** `/plugins`: Settings → Labs. */
-  | { kind: "openSection"; section: "labs" }
+  /** `/plugins`: Settings → Labs. `/download` alone: Settings → Local AI. */
+  | { kind: "openSection"; section: "labs" | "localAi" }
+  /** `/download <model>`: that model's download starts on this computer. */
+  | { kind: "downloadModel"; id: string; name: string }
   /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
   | { kind: "shell"; check: CommandBoxVerdict }
   /** `/sync` or `/inhabit <computer>`: a send to a paired computer asks
