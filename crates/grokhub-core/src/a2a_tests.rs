@@ -103,6 +103,24 @@ fn a_message_is_capped_in_parts_and_bytes() {
             "messageId is 1 to 128 characters".into()
         ))
     );
+    let mut long_context = ask("hi");
+    long_context.context_id = Some("c".repeat(129));
+    assert_eq!(
+        long_context.check(),
+        Err(A2aError::InvalidParams(
+            "contextId is 1 to 128 characters".into()
+        ))
+    );
+    long_context.context_id = Some("c".repeat(128));
+    assert_eq!(long_context.check(), Ok(()));
+    let mut blank_task = ask("hi");
+    blank_task.task_id = Some(String::new());
+    assert_eq!(
+        blank_task.check(),
+        Err(A2aError::InvalidParams(
+            "taskId is 1 to 128 characters".into()
+        ))
+    );
 }
 
 #[test]
@@ -356,6 +374,10 @@ fn a_profile_card_has_the_required_fields_and_one_skill() {
                 "protocolVersion": "1.0",
             }],
             "capabilities": { "streaming": false, "pushNotifications": false, "extendedAgentCard": false },
+            "securitySchemes": {
+                "hub-token": { "httpAuthSecurityScheme": { "scheme": "Bearer" } }
+            },
+            "securityRequirements": [{ "schemes": { "hub-token": { "list": [] } } }],
             "defaultInputModes": ["text/plain", "application/json"],
             "defaultOutputModes": ["text/plain"],
             "skills": [{

@@ -209,6 +209,16 @@ describe("Team", () => {
   it("lists who asked which agent what, newest first, and clears the log", async () => {
     api.getAgentTasks.mockResolvedValue([
       {
+        id: "task-3",
+        from: { peer: "d-1a2b" },
+        to: "writer",
+        state: "TASK_STATE_COMPLETED",
+        asked: "When are you open?",
+        reply: "9 to 5.",
+        started_ms: 3,
+        ended_ms: 4,
+      },
+      {
         id: "task-2",
         from: { agent: "planner" },
         to: "writer",
@@ -233,7 +243,11 @@ describe("Team", () => {
     render(<Team />);
     const log = within(await screen.findByRole("list", { name: "Task log" }));
     const rows = log.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"));
-    expect(rows).toEqual(["Planner asked Writer", "You asked Writer"]);
+    expect(rows).toEqual([
+      "A paired computer asked Writer",
+      "Planner asked Writer",
+      "You asked Writer",
+    ]);
     const refused = within(log.getByRole("listitem", { name: "Planner asked Writer" }));
     expect(refused.getByText(/^Planner asked Writer · Refused · /)).toBeInTheDocument();
     expect(refused.getByText("Why")).toBeInTheDocument();

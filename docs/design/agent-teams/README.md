@@ -71,6 +71,11 @@ the hard floor and the sandbox). A customer profile can't be saved with
 - A customer agent never starts a message.
 - A chain of messages stops at 3 hops, and an agent already in the chain
   can't be asked again (no loops).
+- A paired computer may message only an agent marked `share` whose
+  `share_with` lists its device id. To that computer, any other agent looks
+  missing. Its turn runs read only and unattended, with only `read_file`,
+  `list_dir`, `grep` and `glob`, under the automation origin, and the
+  message is fenced as outside text (`grokhub_agent::answer_peer`).
 
 ## A2A shapes
 

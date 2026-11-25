@@ -14,7 +14,7 @@ pub const VERSION_HEADER: &str = "A2A-Version";
 pub const MAX_PART_BYTES: usize = 32 * 1024;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_PARTS: usize = 16;
-const MAX_ID: usize = 128;
+pub const MAX_ID: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -133,6 +133,16 @@ impl Message {
             return Err(A2aError::InvalidParams(format!(
                 "messageId is 1 to {MAX_ID} characters"
             )));
+        }
+        for (name, id) in [("contextId", &self.context_id), ("taskId", &self.task_id)] {
+            if id
+                .as_ref()
+                .is_some_and(|id| id.trim().is_empty() || id.len() > MAX_ID)
+            {
+                return Err(A2aError::InvalidParams(format!(
+                    "{name} is 1 to {MAX_ID} characters"
+                )));
+            }
         }
         if self.parts.is_empty() || self.parts.len() > MAX_PARTS {
             return Err(A2aError::InvalidParams(format!(
@@ -503,6 +513,10 @@ pub fn card(profile: &Profile, url: &str, app_version: &str) -> Value {
             "pushNotifications": false,
             "extendedAgentCard": false,
         },
+        "securitySchemes": {
+            "hub-token": { "httpAuthSecurityScheme": { "scheme": "Bearer" } }
+        },
+        "securityRequirements": [{ "schemes": { "hub-token": { "list": [] } } }],
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": ["text/plain"],
         "skills": [{

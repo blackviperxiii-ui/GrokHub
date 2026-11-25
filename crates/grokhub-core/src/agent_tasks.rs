@@ -24,6 +24,8 @@ pub enum Origin {
     Person,
     /// One of the person's agents, by id.
     Agent(String),
+    /// A paired computer, by its device id.
+    Peer(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +170,12 @@ mod tests {
         assert!(
             line.starts_with(r#"{"id":"task-1","from":"person","#),
             "{line}"
+        );
+        let mut peer = record(3);
+        peer.from = Origin::Peer("laptop".into());
+        assert_eq!(
+            serde_json::to_value(&peer.from).unwrap(),
+            serde_json::json!({"peer": "laptop"})
         );
         let ids: Vec<String> = recent(dir.as_path(), 10)
             .into_iter()
