@@ -1611,7 +1611,7 @@ fn run_turn(
                     }
                 }
             }
-            if let Some(output) = replay_held(input.conversation_id, call, input.workspace) {
+            if let Some(output) = replay_image(input.conversation_id, call) {
                 let id = tool_id(call);
                 let refused = output.failed;
                 emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
@@ -1711,6 +1711,15 @@ fn run_turn(
             } else {
                 base
             };
+            // The person already allowed this exact call and it failed. The
+            // same ask does not come back. A hard class still asks.
+            let base = if matches!(base, Decision::Ask) {
+                held_failure(input.conversation_id, &call.name, &call.arguments)
+                    .map(Decision::Refuse)
+                    .unwrap_or(base)
+            } else {
+                base
+            };
             let base_kind = safety_events::Kind::of(&base);
             let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
                 client: input.client,
@@ -1763,6 +1772,7 @@ fn run_turn(
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
             let mut refused = false;
+            let mut permitted = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
                     refused = true;
@@ -1821,17 +1831,20 @@ fn run_turn(
                         &turn_request,
                     );
                     match waited {
-                        Waited::Answer(PermAnswer::Allow) => note_tool(
-                            input,
-                            &mut gate,
-                            base_readonly,
-                            plan_at_start,
-                            call,
-                            &id,
-                            on_event,
-                            &pre_context,
-                            &mut nested_agents,
-                        ),
+                        Waited::Answer(PermAnswer::Allow) => {
+                            permitted = true;
+                            note_tool(
+                                input,
+                                &mut gate,
+                                base_readonly,
+                                plan_at_start,
+                                call,
+                                &id,
+                                on_event,
+                                &pre_context,
+                                &mut nested_agents,
+                            )
+                        }
                         Waited::Answer(PermAnswer::Always) => {
                             if input.perms.is_some() {
                                 if let Err(err) = crate::perm::remember_allow_always(
@@ -1862,6 +1875,7 @@ fn run_turn(
                             // A yes to a merge is a yes to that merge: it
                             // never stops the asking for what comes after.
                             always |= call.name != tools::control::MERGE_WORK;
+                            permitted = true;
                             note_tool(
                                 input,
                                 &mut gate,
@@ -1956,16 +1970,14 @@ fn run_turn(
                     output.text
                 );
             }
-            if output.failed {
-                if failure_sticks(&output.text) {
-                    crate::perm::note_failure(
-                        input.conversation_id,
-                        &call.name,
-                        &call.arguments,
-                        &output.text,
-                    );
-                }
-            } else if call.name == "image_generate" {
+            if permitted && output.failed && failure_sticks(&output.text) {
+                crate::perm::note_failure(
+                    input.conversation_id,
+                    &call.name,
+                    &call.arguments,
+                    &output.text,
+                );
+            } else if !output.failed && call.name == "image_generate" {
                 crate::perm::remember_image(
                     input.conversation_id,
                     &call.arguments,
@@ -2384,22 +2396,29 @@ fn session_allows(conversation: &str, name: &str, arguments: &str) -> bool {
     crate::perm::session_covers(conversation, name, arguments)
 }
 
-fn replay_held(conversation: &str, call: &FunctionCall, workspace: &Path) -> Option<ToolOutput> {
-    if call.name == "image_generate" {
-        if let Some(held) = crate::perm::earlier_image(conversation, &call.arguments) {
-            return Some(ToolOutput {
-                text: held.text,
-                image_data_url: held.image,
-                failed: false,
-                mcp_app: None,
-            });
-        }
-    }
-    let text = crate::perm::earlier_failure(conversation, &call.name, &call.arguments)?;
-    if text == gate::NO_WORKSPACE && !tools::workspace_missing(workspace) {
+fn replay_image(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> {
+    if call.name != "image_generate" {
         return None;
     }
-    Some(ToolOutput::err(text))
+    let held = crate::perm::earlier_image(conversation, &call.arguments)?;
+    Some(ToolOutput {
+        text: held.text,
+        image_data_url: held.image,
+        failed: false,
+        mcp_app: None,
+    })
+}
+
+/// A failure from a call the person already allowed. Hard classes and merges
+/// still ask.
+fn held_failure(conversation: &str, name: &str, arguments: &str) -> Option<String> {
+    if crate::harness::hard_class(name, arguments).is_some() {
+        return None;
+    }
+    if name == tools::control::MERGE_WORK {
+        return None;
+    }
+    crate::perm::earlier_failure(conversation, name, arguments)
 }
 
 fn failure_sticks(text: &str) -> bool {
@@ -2977,9 +2996,6 @@ fn run_readonly_tool_batch(
             fresh.note_findings();
         }
         note_repeat(repeats, call, &output);
-        if output.failed && failure_sticks(&output.text) {
-            crate::perm::note_failure(session, &call.name, &call.arguments, &output.text);
-        }
         push_output(history, input.conversation_id, call, output);
     }
 
@@ -6385,6 +6401,48 @@ mod tests {
             std::fs::read_to_string(dir.join("once-8.txt")).unwrap(),
             "8"
         );
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_allow_comes_back_without_asking_again() {
+        let dir = workspace("fail-again");
+        let conv = "fail-again-ac4";
+        crate::perm::clear_conversation(conv);
+        let args = r#"{"command":"false"}"#;
+        let script = script_calls(vec![
+            vec![call("fail-1", "run_terminal_command", args)],
+            vec![call("fail-2", "run_terminal_command", args)],
+        ]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "run false",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Permission { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, vec!["fail-1"]);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs[0].1.contains("exit 1"), "{}", outputs[0].1);
+        assert_eq!(outputs[0].1, outputs[1].1);
         crate::perm::clear_conversation(conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
