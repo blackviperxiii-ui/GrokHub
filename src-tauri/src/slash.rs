@@ -324,6 +324,14 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row("/plugins", "Open Plugins", "/plugins")
     },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/download",
+            "Download a model for this computer…",
+            "/download ",
+        )
+    },
     row("/resume", "Open History", "/resume"),
     row("/palette", "Command palette", "/palette"),
     ShellCmd {
@@ -424,8 +432,12 @@ pub enum Effect {
     OpenNote { view: &'static str, text: String },
     /// `/imagine` and `/imagine-video`. An empty prompt opens the page.
     Imagine { media: &'static str, prompt: String },
-    /// `/plugins`: Settings → Labs, where the plugin list lives.
+    /// `/plugins`: Settings → Labs, where the plugin list lives. `/download`
+    /// alone: Settings → Local AI, where Download models lives.
     OpenSection { section: &'static str },
+    /// `/download <model>`: queue that catalog model's download on this
+    /// computer (the Yes of the card that offers a better model for a task).
+    DownloadModel { id: String, name: String },
     /// `/sh <line>` or `$ <line>`: the Command page's checks on the line. A
     /// queued line goes to the agent; a confirm asks with its own Yes.
     Shell { check: crate::command_box::Verdict },
@@ -857,8 +869,24 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
         "/journal" => open("journal"),
         "/learn" => mine(Op::Learn),
         "/plugins" => fx(Effect::OpenSection { section: "labs" }),
+        "/download" if rest.is_empty() => fx(Effect::OpenSection { section: "localAi" }),
+        "/download" => Some(download_model(rest).map(Action::Effect)),
         _ => None,
     }
+}
+
+/// The catalog model `/download` names, by id or by name, any case.
+fn download_model(named: &str) -> Result<Effect, String> {
+    grokhub_core::local_setup::local_models()
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(named) || m.name.eq_ignore_ascii_case(named))
+        .map(|m| Effect::DownloadModel {
+            id: m.id.into(),
+            name: m.name.into(),
+        })
+        .ok_or_else(|| {
+            format!("{named} isn't in the model list. /download alone opens Download models.")
+        })
 }
 
 const PROJECT_USAGE: &str =
@@ -1871,6 +1899,32 @@ mod tests {
         assert_eq!(
             parse("/plugins", true),
             Err("/plugins works on your computer.".into())
+        );
+        let mid =
+            grokhub_core::local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").unwrap();
+        let get = Ok(Action::Effect(Effect::DownloadModel {
+            id: mid.id.into(),
+            name: mid.name.into(),
+        }));
+        assert_eq!(
+            parse("/download gemma-4-12b-it-abliterated-q4_k", false),
+            get
+        );
+        assert_eq!(
+            parse(&format!("/download {}", mid.name.to_uppercase()), false),
+            get
+        );
+        assert_eq!(
+            parse("/download", false),
+            Ok(Action::Effect(Effect::OpenSection { section: "localAi" }))
+        );
+        assert_eq!(
+            parse("/download nope-7b", false),
+            Err("nope-7b isn't in the model list. /download alone opens Download models.".into())
+        );
+        assert_eq!(
+            parse("/download gemma-4-12b-it-abliterated-q4_k", true),
+            Err("/download works on your computer.".into())
         );
         assert_eq!(parse("/resume", false), Ok(Action::Op(Op::Sessions)));
         for word in [
