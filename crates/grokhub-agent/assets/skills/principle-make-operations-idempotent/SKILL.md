@@ -1,12 +1,14 @@
 ---
 name: principle-make-operations-idempotent
-description: Steps that run amid crashes and retries. Same end state however prior runs ended.
+description: "Apply when designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries. Converge to the same end state regardless of partial prior runs."
 ---
 
 # Make Operations Idempotent
 
-Derive each step from existing state, not the last run's intent: read state, compare to goal, apply the difference. A repeat finds nothing to do.
+Design every state-changing operation to converge to the correct state however many times it runs and wherever the previous run stopped.
 
-Leftovers (locks, temp files, half-written records, claimed jobs) must look stale wherever a run stopped. Write temp then rename; compare by content.
+Derive each step from the state that exists, not from what the previous run meant to do. Read the current state, compare it to the goal, and apply only the difference. A repeat run finds nothing to do.
 
-**Test:** twice? Crash at every point? Same end state? If "it depends", add reconciliation.
+Anything a run leaves behind (a lock, a temporary file, a half-written record, a claimed job) must be recognizable as stale by the next run, by evidence that holds wherever the previous run could have stopped. Write to a temporary path and rename it into place. Compare by content.
+
+The test: what happens if this runs twice? What if the previous run crashed at every possible point? Is the end state the same? If the answer depends on what was left behind, add a reconciliation step.

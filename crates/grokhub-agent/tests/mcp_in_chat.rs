@@ -476,7 +476,9 @@ fn playwright_restarts_after_attach_save_with_new_origins() {
     let first = argv_lines(&argv_log);
     assert_eq!(first.len(), 1, "one spawn before save: {first:?}");
     assert!(
-        first[0].iter().any(|a| a == "--allowed-origins=https://github.com"),
+        first[0]
+            .iter()
+            .any(|a| a == "--allowed-origins=https://github.com"),
         "first spawn origins: {first:?}"
     );
     assert!(
@@ -491,7 +493,10 @@ fn playwright_restarts_after_attach_save_with_new_origins() {
         endpoint: "http://127.0.0.1:9222".into(),
         origins: Vec::new(),
     };
-    assert_eq!(next.allow("https://github.com/user/my-app").unwrap(), "https://github.com");
+    assert_eq!(
+        next.allow("https://github.com/user/my-app").unwrap(),
+        "https://github.com"
+    );
     assert_eq!(next.allow("https://docs.rs").unwrap(), "https://docs.rs");
     next.save(&dir).unwrap();
     let restarted = mcp::browser_attach_changed();

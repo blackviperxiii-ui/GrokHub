@@ -80,9 +80,14 @@ fn a_container_plan_is_enforced_and_skips_host_confinement() {
         }),
     };
     assert!(plan.enforced());
-    let mut cmd = std::process::Command::new("true");
-    apply(&mut cmd, &plan).unwrap();
-    assert_eq!(cmd.get_envs().count(), 0, "no proxy variables or tokens");
+    // `apply` is Unix only: Windows never plans a container (see
+    // `container::detect`) and spawns through its process container.
+    #[cfg(unix)]
+    {
+        let mut cmd = std::process::Command::new("true");
+        apply(&mut cmd, &plan).unwrap();
+        assert_eq!(cmd.get_envs().count(), 0, "no proxy variables or tokens");
+    }
     assert_eq!(
         network_note(Some(&plan), true, "curl: (6) Could not resolve host: example.com"),
         Some("[sandbox] This command ran in a container with no network, so nothing it starts can reach a host. If it needs the network, rerun with outside_sandbox (asks the user).")
@@ -975,6 +980,9 @@ fn a_planted_or_renamed_sudo_stays_in_the_sandbox() {
             );
             assert!(!target.exists(), "{cmd}: {}", out.text);
         }
+        // Only Linux runs the command, so only it checks the target.
+        #[cfg(not(target_os = "linux"))]
+        let _ = target;
     }
     for dir in [&config, &ws, &outside] {
         let _ = std::fs::remove_dir_all(dir);

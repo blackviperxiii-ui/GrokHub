@@ -1,16 +1,15 @@
 ---
 name: principle-minimize-reader-load
-description: Hard-to-trace code. Fewer layers to trace, less state to hold.
+description: "Apply when reviewing or shaping code that's hard to trace. Count layers between question and answer, and hidden state in the reader's head; collapse one-caller wrappers and shrink mutable scope."
 ---
 
 # Minimize Reader Load
 
-Reader work has two axes: **layers to trace** and **state to hold**.
+Reader load is the work a reader must do to understand code. It has two independent axes: layers to trace between the question and the answer, and hidden or mutable state to hold in their head. Guard both.
 
-- Inline one-caller wrappers, one-impl adapters, speculative indirection.
-- Each layer must change the abstraction; collapse pass-throughs.
-- Small interfaces hiding real decisions.
-- Returns over mutation; locals over fields over globals; derive, don't sync.
-- Name invariants once, at the boundary.
+- Collapse layers that only forward: wrappers with one caller, adapters with no second implementation, pass-through methods, speculative indirection. Inline them. Each layer that stays must change the abstraction.
+- Keep interfaces small, and make each one hide a real decision.
+- Shrink state scope: returns over mutations, locals over fields, fields over module state, module state over globals. Derive instead of sync.
+- Name an invariant once at the boundary, not in every consumer.
 
-**Test:** "where does X come from, what changes X?" in 30s?
+The test: can a new reader answer "where does X come from?" and "what can change X?" in under 30 seconds? If not, cut layers or cut state.
