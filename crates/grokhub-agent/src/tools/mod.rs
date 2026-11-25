@@ -262,7 +262,7 @@ pub fn dispatch_for_job(
         local_ai::SELFTEST => local_ai::selftest(&args),
         mods::PREPARE => mods::run(name, &args),
         home_assistant::CALL_SERVICE => home_assistant::run(name, &args),
-        "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
+        "web_fetch" => web_fetch::run_with_ports(&args, ctx.workspace, ctx.stop),
         "web_search" => web_search::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)

@@ -55,7 +55,7 @@
 //! code strings and after common rebuilds (`chr(46)`, `"a"+"b"`).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -235,6 +235,11 @@ const BRACES_TOO_BIG: &str = "forbidden path: brace expansion too large to check
 /// A Windows path with more parts of only dots and blanks (`...`) than the
 /// floor reads each way.
 const DOTS_TOO_MANY: &str = "forbidden path: too many dot-only path parts to check";
+/// A command nested deeper, or larger once read, than the floor reads.
+const TOO_DEEP: &str = "forbidden path: command nested too deep to check";
+/// A word with more unquoted expansions (each may split it) than the floor
+/// reads each way.
+const SPLITS_TOO_MANY: &str = "forbidden path: too many expansions in one word to check";
 
 /// Where a path starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,6 +270,8 @@ struct GuardForm {
     root: Root,
     parts: Vec<GPart>,
     what: Guarded,
+    /// The guarded path is a folder (`.ssh`), not a file.
+    folder: bool,
 }
 
 /// Each guarded path under a home folder.
@@ -362,10 +369,15 @@ fn guard_forms(place: &Place, kinds: &[Guarded]) -> Vec<GuardForm> {
         if kinds.contains(&what) {
             let mut parts = base.to_vec();
             parts.extend(tail.iter().map(|t| name(t)));
+            let folder = matches!(
+                what,
+                Guarded::SshKeys | Guarded::Gnupg | Guarded::Aws | Guarded::Kube
+            ) || tail.last() == Some(&"sudoers.d");
             out.push(GuardForm {
                 root: root.clone(),
                 parts,
                 what,
+                folder,
             });
         }
     };
@@ -467,8 +479,18 @@ enum Tok {
 /// How many spellings the floor reads a word as before it reads its next
 /// choice as any text ([`alternatives`]).
 const MAX_ALTERNATIVES: usize = 256;
-/// How deep the floor reads commands inside commands.
-const MAX_DEPTH: usize = 4;
+/// How deep the floor reads commands inside commands. Past it the command
+/// is refused ([`TOO_DEEP`]).
+const MAX_DEPTH: usize = 8;
+/// How deep quotes, brackets, braces and `${…}` may nest inside one text,
+/// and choices inside a variable's value. Past it the command is refused.
+const MAX_NEST: usize = 64;
+/// How many atoms and choices a variable's value may hold once the values
+/// it reads are put in. Past it the command is refused.
+const MAX_WEIGHT: usize = 4096;
+/// How many unquoted expansions one word may hold. Past it the word is
+/// refused ([`SPLITS_TOO_MANY`]).
+const MAX_SPLITS: usize = 16;
 
 /// Reads one command text into words, the way bash (or, on Windows,
 /// PowerShell and cmd) splits and unquotes it.
@@ -486,6 +508,15 @@ struct Lexer<'p> {
     heredocs: Vec<(String, bool)>,
     /// A word names a folder the floor can't follow (`~-`, `$OLDPWD`).
     lost: bool,
+    /// How deep the braces and `${…}` being read nest.
+    nest: usize,
+    /// Where a `{` that never closes in its word stands, so it is tried once.
+    open_braces: HashSet<usize>,
+    /// Where a class opening at each position closes ([`class_closes`]),
+    /// once a `[` needs it.
+    classes: Option<Vec<usize>>,
+    /// The text nests past [`MAX_NEST`]: the floor refuses it.
+    too_deep: bool,
 }
 
 impl<'p> Lexer<'p> {
@@ -499,7 +530,27 @@ impl<'p> Lexer<'p> {
             nested: Vec::new(),
             heredocs: Vec::new(),
             lost: false,
+            nest: 0,
+            open_braces: HashSet::new(),
+            classes: None,
+            too_deep: false,
         }
+    }
+
+    /// Where the bracket that opens at `c[open]` closes ([`matching`]).
+    fn matching(&mut self, open: usize, left: char, right: char) -> usize {
+        matching(&self.c, open, left, right).unwrap_or_else(|TooDeep| {
+            self.too_deep = true;
+            self.c.len()
+        })
+    }
+
+    /// Where the `"…"` whose body starts at `from` closes ([`sh_quote_end`]).
+    fn quote_end(&mut self, from: usize) -> Option<usize> {
+        sh_quote_end(&self.c, from).unwrap_or_else(|TooDeep| {
+            self.too_deep = true;
+            None
+        })
     }
 
     fn at(&self, k: usize) -> Option<char> {
@@ -521,6 +572,9 @@ impl<'p> Lexer<'p> {
     fn tokens(&mut self) -> Vec<Tok> {
         let mut toks = Vec::new();
         while let Some(ch) = self.at(0) {
+            if self.too_deep {
+                return toks;
+            }
             match ch {
                 '\\' if !self.ps() && self.at(1) == Some('\n') => self.i += 2,
                 '`' if self.ps() && self.at(1) == Some('\n') => self.i += 2,
@@ -613,16 +667,7 @@ impl<'p> Lexer<'p> {
 
     /// `name=value`: a later `$name` reads as `value` too.
     fn assign(&mut self, w: &Word, eq: usize) {
-        let name: Option<String> = w.pieces[..eq]
-            .iter()
-            .map(|p| match p {
-                Piece::A(Atom::Lit(c)) if c.is_ascii_alphanumeric() || *c == '_' => Some(*c),
-                _ => None,
-            })
-            .collect();
-        let Some(name) =
-            name.filter(|n| !n.is_empty() && !n.starts_with(|c: char| c.is_ascii_digit()))
-        else {
+        let Some(name) = assigned_name(w) else {
             return;
         };
         let value = w.pieces[eq + 1..].to_vec();
@@ -635,7 +680,7 @@ impl<'p> Lexer<'p> {
         let mut out: Vec<Piece> = Vec::new();
         let start = self.i;
         while let Some(ch) = self.at(0) {
-            if self.ends_word(ch) {
+            if self.ends_word(ch) || self.too_deep {
                 return (out, None);
             }
             if in_brace && matches!(ch, ',' | '}') {
@@ -708,7 +753,7 @@ impl<'p> Lexer<'p> {
             '`' => self.backtick(false, out),
             '*' | '?' | '+' | '@' | '!' if self.at(1) == Some('(') => {
                 // An extglob group: it may match any name.
-                let close = matching(&self.c, self.i + 1, '(', ')');
+                let close = self.matching(self.i + 1, '(', ')');
                 out.push(Piece::A(Atom::Any { split: false }));
                 self.i = (close + 1).min(self.c.len());
             }
@@ -870,7 +915,7 @@ impl<'p> Lexer<'p> {
     fn ps_dollar(&mut self, quoted: bool, out: &mut Vec<Piece>) {
         match self.at(1) {
             Some('(') => {
-                let close = matching(&self.c, self.i + 1, '(', ')');
+                let close = self.matching(self.i + 1, '(', ')');
                 let inner: String = self.c[self.i + 2..close.min(self.c.len())].iter().collect();
                 self.nested.push(inner);
                 out.push(Piece::A(Atom::Any { split: !quoted }));
@@ -924,7 +969,7 @@ impl<'p> Lexer<'p> {
     /// `"…"` in a POSIX shell: `\` escapes `$`, `` ` ``, `"`, `\` and a
     /// newline; `$` and backticks expand; globs are plain.
     fn double_quoted(&mut self, out: &mut Vec<Piece>, w: &mut Word) {
-        let Some(close) = sh_quote_end(&self.c, self.i + 1) else {
+        let Some(close) = self.quote_end(self.i + 1) else {
             self.lit(out, '"');
             self.i += 1;
             return;
@@ -983,19 +1028,19 @@ impl<'p> Lexer<'p> {
         match self.at(1) {
             Some('(') if self.at(2) == Some('(') => {
                 // Arithmetic: a number.
-                let close = matching(&self.c, self.i + 1, '(', ')');
+                let close = self.matching(self.i + 1, '(', ')');
                 out.push(Piece::A(Atom::Any { split: false }));
                 self.i = (close + 1).min(self.c.len());
             }
             Some('(') => {
-                let close = matching(&self.c, self.i + 1, '(', ')');
+                let close = self.matching(self.i + 1, '(', ')');
                 let inner: String = self.c[self.i + 2..close.min(self.c.len())].iter().collect();
                 self.nested.push(inner);
                 out.push(any);
                 self.i = (close + 1).min(self.c.len());
             }
             Some('{') => {
-                let close = matching(&self.c, self.i + 1, '{', '}');
+                let close = self.matching(self.i + 1, '{', '}');
                 let body: String = self.c[self.i + 2..close.min(self.c.len())].iter().collect();
                 self.i = (close + 1).min(self.c.len());
                 self.parameter(&body, quoted, out);
@@ -1048,10 +1093,18 @@ impl<'p> Lexer<'p> {
             out.push(Piece::A(Atom::Any { split: !quoted }));
             return;
         };
+        if self.nest >= MAX_NEST {
+            self.too_deep = true;
+            return;
+        }
         let mut sub = Lexer::new(&rest[op.len()..], self.place, self.ps, self.vars.clone());
+        sub.nest = self.nest + 1;
         let mut sw = Word::default();
         let mut word = Vec::new();
         while let Some(ch) = sub.at(0) {
+            if sub.too_deep {
+                break;
+            }
             if sub.ends_word(ch) {
                 sub.lit(&mut word, ch);
                 sub.i += 1;
@@ -1061,6 +1114,7 @@ impl<'p> Lexer<'p> {
         }
         self.nested.append(&mut sub.nested);
         self.lost |= sub.lost;
+        self.too_deep |= sub.too_deep;
         match op.trim_start_matches(':') {
             "-" | "=" => out.push(Piece::Choice(vec![value, word])),
             "+" => out.push(Piece::Choice(vec![Vec::new(), word])),
@@ -1080,6 +1134,12 @@ impl<'p> Lexer<'p> {
             out.extend(first);
             return;
         };
+        if too_heavy(values) {
+            // A value that reads itself (`x=$x$x`) doubles each time.
+            self.too_deep = true;
+            out.extend(first);
+            return;
+        }
         let mut choices = vec![first];
         choices.extend(values.iter().map(|v| {
             v.iter()
@@ -1139,11 +1199,9 @@ impl<'p> Lexer<'p> {
 
     /// `[…]`: a class when it closes within the word, else a plain `[`.
     fn class(&mut self, out: &mut Vec<Piece>) {
-        let end = class_end(&self.c, self.i).filter(|&end| {
-            self.c[self.i + 1..end]
-                .iter()
-                .all(|&c| c != '/' && !c.is_whitespace() && !matches!(c, '\'' | '"'))
-        });
+        let c = &self.c;
+        let closes = self.classes.get_or_insert_with(|| class_closes(c));
+        let end = Some(closes[self.i]).filter(|&end| end != usize::MAX);
         match end {
             Some(end) => {
                 out.push(Piece::A(Atom::Class(self.c[self.i + 1..end].to_vec())));
@@ -1156,8 +1214,29 @@ impl<'p> Lexer<'p> {
         }
     }
 
-    /// `{a,b}` or `{x..y}`: each word it gives; anything else is plain.
+    /// `{a,b}` or `{x..y}`: each word it gives; anything else is plain. A
+    /// `{` that gave no words is plain when it is met again.
     fn brace(&mut self, out: &mut Vec<Piece>, w: &mut Word) {
+        let start = self.i;
+        if self.open_braces.contains(&start) {
+            self.lit(out, '{');
+            self.i += 1;
+            return;
+        }
+        if self.nest >= MAX_NEST {
+            self.too_deep = true;
+            return;
+        }
+        self.nest += 1;
+        let gave = self.brace_words(out, w);
+        self.nest -= 1;
+        if !gave {
+            self.open_braces.insert(start);
+        }
+    }
+
+    /// [`Self::brace`] once it is tried: whether the braces gave words.
+    fn brace_words(&mut self, out: &mut Vec<Piece>, w: &mut Word) -> bool {
         let (start, quoted, eq, nested) = (self.i, w.quoted, w.eq, self.nested.len());
         let restore = |lx: &mut Self, w: &mut Word, out: &mut Vec<Piece>| {
             lx.i = start + 1;
@@ -1165,6 +1244,7 @@ impl<'p> Lexer<'p> {
             w.eq = eq;
             lx.nested.truncate(nested);
             lx.lit(out, '{');
+            false
         };
         self.i += 1;
         let mut items: Vec<Vec<Piece>> = Vec::new();
@@ -1183,7 +1263,7 @@ impl<'p> Lexer<'p> {
         w.eq = eq;
         if items.len() >= 2 {
             out.push(Piece::Choice(items));
-            return;
+            return true;
         }
         let body: String = self.c[start + 1..self.i - 1].iter().collect();
         match seq_items(&body) {
@@ -1194,8 +1274,9 @@ impl<'p> Lexer<'p> {
             )),
             // Past 64 items: any text there.
             Some(_) => out.push(Piece::A(Atom::Any { split: false })),
-            None => restore(self, w, out),
+            None => return restore(self, w, out),
         }
+        true
     }
 
     /// `~`, `~/…`, `~+`, `~-` or `~name` at the start of a word.
@@ -1267,25 +1348,96 @@ fn w_start(c: &[char], at: usize) -> usize {
         .map_or(0, |j| j + 1)
 }
 
-/// Where the POSIX `"…"` whose body starts at `from` closes.
-fn sh_quote_end(c: &[char], from: usize) -> Option<usize> {
+/// A scan of quotes and brackets nested past [`MAX_NEST`].
+struct TooDeep;
+
+/// What a scan is inside.
+enum Open {
+    /// A POSIX `"…"`.
+    Quote,
+    /// A bracket pair and how deep it stands.
+    Bracket {
+        left: char,
+        right: char,
+        depth: usize,
+    },
+}
+
+/// Where what `first` opens closes, reading from `from`: a POSIX `"…"`
+/// (`\` escapes, `$(…)` and backticks inside skipped) or a bracket pair
+/// (quotes and nesting skipped). `None` when it doesn't close. One loop
+/// with its own stack, so no input runs the thread out of stack.
+fn close_of(c: &[char], from: usize, first: Open) -> Result<Option<usize>, TooDeep> {
+    let mut stack = vec![first];
     let mut j = from;
-    while j < c.len() {
-        match c[j] {
-            '\\' => j += 2,
-            '"' => return Some(j),
-            '$' if c.get(j + 1) == Some(&'(') => j = matching(c, j + 1, '(', ')') + 1,
-            '`' => {
-                j += 1;
-                while j < c.len() && c[j] != '`' {
-                    j += if c[j] == '\\' { 2 } else { 1 };
+    while let Some(top) = stack.last_mut() {
+        let Some(&ch) = c.get(j) else {
+            return Ok(None);
+        };
+        let mut closed = false;
+        match top {
+            Open::Quote => match ch {
+                '\\' => j += 2,
+                '"' => closed = true,
+                '$' if c.get(j + 1) == Some(&'(') => {
+                    stack.push(Open::Bracket {
+                        left: '(',
+                        right: ')',
+                        depth: 0,
+                    });
+                    j += 1;
                 }
-                j += 1;
+                '`' => {
+                    j += 1;
+                    while j < c.len() && c[j] != '`' {
+                        j += if c[j] == '\\' { 2 } else { 1 };
+                    }
+                    j += 1;
+                }
+                _ => j += 1,
+            },
+            Open::Bracket { left, right, depth } => match ch {
+                '\\' => j += 2,
+                '\'' if *left == '(' => {
+                    j = (j + 1..c.len())
+                        .find(|&k| c[k] == '\'')
+                        .map_or(c.len(), |k| k + 1);
+                }
+                '"' => {
+                    stack.push(Open::Quote);
+                    j += 1;
+                }
+                ch if ch == *left => {
+                    *depth += 1;
+                    j += 1;
+                }
+                ch if ch == *right => {
+                    *depth = depth.saturating_sub(1);
+                    closed = *depth == 0;
+                    if !closed {
+                        j += 1;
+                    }
+                }
+                _ => j += 1,
+            },
+        }
+        if closed {
+            stack.pop();
+            if stack.is_empty() {
+                return Ok(Some(j));
             }
-            _ => j += 1,
+            j += 1;
+        }
+        if stack.len() > MAX_NEST {
+            return Err(TooDeep);
         }
     }
-    None
+    Ok(None)
+}
+
+/// Where the POSIX `"…"` whose body starts at `from` closes.
+fn sh_quote_end(c: &[char], from: usize) -> Result<Option<usize>, TooDeep> {
+    close_of(c, from, Open::Quote)
 }
 
 /// Where the PowerShell `"…"` whose body starts at `from` closes.
@@ -1304,28 +1456,13 @@ fn ps_quote_end(c: &[char], from: usize) -> Option<usize> {
 
 /// Where the bracket that opens at `c[open]` closes, quotes and nesting
 /// skipped; the end of the text when it doesn't.
-fn matching(c: &[char], open: usize, left: char, right: char) -> usize {
-    let mut depth = 0usize;
-    let mut j = open;
-    while j < c.len() {
-        match c[j] {
-            '\\' => j += 1,
-            '\'' if left == '(' => {
-                j = (j + 1..c.len()).find(|&k| c[k] == '\'').unwrap_or(c.len());
-            }
-            '"' => j = sh_quote_end(c, j + 1).unwrap_or(c.len()),
-            ch if ch == left => depth += 1,
-            ch if ch == right => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return j;
-                }
-            }
-            _ => {}
-        }
-        j += 1;
-    }
-    c.len()
+fn matching(c: &[char], open: usize, left: char, right: char) -> Result<usize, TooDeep> {
+    let open_bracket = Open::Bracket {
+        left,
+        right,
+        depth: 0,
+    };
+    Ok(close_of(c, open, open_bracket)?.unwrap_or(c.len()))
 }
 
 /// The character a backslash at `chars[i - 1]` stands for in `$'…'`, and
@@ -1470,10 +1607,11 @@ fn unquote_once(raw: &str, ps: bool) -> String {
                 i = j + 1;
             }
             '"' => {
+                // Past what the floor scans, the lexer refuses the text.
                 let close = if ps {
                     ps_quote_end(&c, i + 1)
                 } else {
-                    sh_quote_end(&c, i + 1)
+                    sh_quote_end(&c, i + 1).unwrap_or(None)
                 }
                 .unwrap_or(c.len());
                 let mut j = i + 1;
@@ -1509,7 +1647,8 @@ fn reads_as_command(text: &str) -> bool {
 
 /// A word's spellings once its choices are made, at most
 /// [`MAX_ALTERNATIVES`]. Past that, each choice left reads as any text in
-/// one part, and the second value says whether such a choice held a `/`.
+/// one part, and the second value says whether such a choice held a `/` or
+/// could make a part `.` or `..`.
 fn alternatives(pieces: &[Piece]) -> (Vec<Vec<Atom>>, bool) {
     let mut done: Vec<Vec<Atom>> = vec![Vec::new()];
     let mut deep = false;
@@ -1533,7 +1672,9 @@ fn alternatives(pieces: &[Piece]) -> (Vec<Vec<Atom>>, bool) {
                     }
                 }
                 if over {
-                    deep |= items.iter().any(|item| holds_sep(item));
+                    // Read as any text in one part: a choice that could step
+                    // to another folder (`/`, `..`, `.`) could name any path.
+                    deep |= items.iter().any(|item| holds_sep(item) || dotty(item));
                     for d in &mut done {
                         d.push(Atom::Any { split: false });
                     }
@@ -1554,6 +1695,38 @@ fn alternatives(pieces: &[Piece]) -> (Vec<Vec<Atom>>, bool) {
     (done, deep)
 }
 
+/// Whether a variable's values hold more than [`MAX_WEIGHT`] atoms and
+/// choices, or choices nested past [`MAX_NEST`].
+fn too_heavy(values: &[Vec<Piece>]) -> bool {
+    let mut todo: Vec<(&[Piece], usize)> = values.iter().map(|v| (&v[..], 0)).collect();
+    let mut weight = 0usize;
+    while let Some((pieces, depth)) = todo.pop() {
+        if depth > MAX_NEST {
+            return true;
+        }
+        for p in pieces {
+            weight += 1;
+            if weight > MAX_WEIGHT {
+                return true;
+            }
+            if let Piece::Choice(items) = p {
+                todo.extend(items.iter().map(|item| (&item[..], depth + 1)));
+            }
+        }
+    }
+    false
+}
+
+/// Whether a brace choice's item could leave its path part `.` or `..`:
+/// it is empty, or only dots and blanks, in some spelling.
+fn dotty(pieces: &[Piece]) -> bool {
+    pieces.iter().all(|p| match p {
+        Piece::A(Atom::Lit('.' | ' ') | Atom::Any { .. }) => true,
+        Piece::A(_) => false,
+        Piece::Choice(items) => items.iter().any(|item| dotty(item)),
+    })
+}
+
 fn holds_sep(pieces: &[Piece]) -> bool {
     pieces.iter().any(|p| match p {
         Piece::A(a) => *a == Atom::Sep,
@@ -1562,22 +1735,36 @@ fn holds_sep(pieces: &[Piece]) -> bool {
 }
 
 /// The words an unquoted expansion's value could split `atoms` into: the
-/// whole, and each run that starts or ends where such an expansion is.
-fn spans(atoms: &[Atom]) -> Vec<&[Atom]> {
-    let cuts: Vec<usize> = atoms
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| matches!(a, Atom::Any { split: true }))
-        .map(|(i, _)| i)
-        .take(8)
-        .collect();
+/// whole, and each run that starts or ends where such an expansion is (a
+/// run of expansions side by side counts once). `None` past
+/// [`MAX_SPLITS`] such places.
+fn spans(atoms: &[Atom]) -> Option<Vec<&[Atom]>> {
+    let any = |a: &Atom| matches!(a, Atom::Any { .. });
+    // Each run of expansions that holds an unquoted one: where it starts
+    // and ends.
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < atoms.len() {
+        if !any(&atoms[i]) {
+            i += 1;
+            continue;
+        }
+        let end = (i..atoms.len())
+            .find(|&j| !any(&atoms[j]))
+            .unwrap_or(atoms.len());
+        if atoms[i..end].contains(&Atom::Any { split: true }) {
+            cuts.push((i, end));
+        }
+        i = end;
+    }
+    if cuts.len() > MAX_SPLITS {
+        return None;
+    }
     let mut out = vec![atoms];
-    let starts: Vec<usize> = std::iter::once(0)
-        .chain(cuts.iter().map(|c| c + 1))
-        .collect();
+    let starts: Vec<usize> = std::iter::once(0).chain(cuts.iter().map(|c| c.1)).collect();
     let ends: Vec<usize> = cuts
         .iter()
-        .copied()
+        .map(|c| c.0)
         .chain(std::iter::once(atoms.len()))
         .collect();
     for &s in &starts {
@@ -1587,7 +1774,14 @@ fn spans(atoms: &[Atom]) -> Vec<&[Atom]> {
             }
         }
     }
-    out
+    Some(out)
+}
+
+/// A span whose first part is only expansions, read as if they were empty:
+/// the rest from the root (`"$u"/etc/shadow` is `/etc/shadow`).
+fn without_empty_head(span: &[Atom]) -> Option<&[Atom]> {
+    let sep = span.iter().position(|a| *a == Atom::Sep)?;
+    (sep > 0 && span[..sep].iter().all(|a| matches!(a, Atom::Any { .. }))).then(|| &span[sep..])
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,14 +1792,25 @@ fn spans(atoms: &[Atom]) -> Vec<&[Atom]> {
 #[derive(Default)]
 struct Reading {
     words: Vec<Word>,
-    /// Each `cd` (or `pushd`, `Set-Location`) in order: its folder word, or
-    /// `None` for home.
+    /// Each `cd` (or `pushd`, `Set-Location`, `env -C`, `tar -C`) in order:
+    /// its folder word, or `None` for home.
     cds: Vec<Option<Word>>,
+    /// Each value the command gives `CDPATH`.
+    cdpath: Vec<Vec<Piece>>,
+    /// The words of each command that makes a link (`ln`, `cp -s`,
+    /// `mklink`, `New-Item -ItemType SymbolicLink`).
+    links: Vec<Word>,
     /// A move the floor can't follow (`cd -`, `popd`, `~-`).
     lost: bool,
     /// The command loops or defines a function, so a `cd` may run more
     /// than once, or before words that come earlier.
     loops: bool,
+    /// A command the floor can't read runs first (its name is an expansion,
+    /// `source`, `eval` of an expansion): it may turn on dotglob.
+    unknown_head: bool,
+    /// The command nests deeper, or is larger once read, than the floor
+    /// reads.
+    too_deep: bool,
 }
 
 const CD_WORDS: &[&str] = &[
@@ -1628,13 +1833,40 @@ const LOOP_WORDS: &[&str] = &[
     "%",
     "do",
 ];
+/// Tools that run in the folder a flag names (`-C dir`, `--chdir=dir`,
+/// `--directory=dir`).
+const CHDIR_TOOLS: &[&str] = &[
+    "env", "tar", "bsdtar", "gtar", "git", "make", "gmake", "ninja",
+];
+/// Text that may turn on bash's dotglob (or zsh's and ksh's like options),
+/// lowercase without `_`.
+const DOTGLOB_WORDS: &[&str] = &[
+    "shopt",
+    "dotglob",
+    "globdots",
+    "globignore",
+    "bashopts",
+    "bashenv",
+    "fignore",
+    "setopt",
+];
+
+/// Values the command gives variables, by name.
+type Vars = HashMap<String, Vec<Vec<Piece>>>;
 
 fn read_command(cmd: &str, place: &Place, ps: bool) -> Reading {
     let mut reading = Reading::default();
     let mut todo = vec![(cmd.to_string(), 0usize, HashMap::new())];
-    let mut budget = cmd.len().saturating_mul(MAX_DEPTH);
+    // Each text queued, with the variables it is read with: the same text
+    // is often found twice (`"$(…)"` as a command and as a quoted word).
+    let mut seen: HashMap<String, Vec<Vars>> = HashMap::new();
+    let mut budget = cmd.len().saturating_mul(2 * MAX_DEPTH).saturating_add(4096);
     while let Some((text, depth, vars)) = todo.pop() {
-        budget = budget.saturating_sub(text.len());
+        if text.len() > budget {
+            reading.too_deep = true;
+            break;
+        }
+        budget -= text.len();
         if text.contains("()") {
             reading.loops = true;
         }
@@ -1652,33 +1884,182 @@ fn read_command(cmd: &str, place: &Place, ps: bool) -> Reading {
             reading.words.push(w);
         }
         reading.lost |= lexer.lost;
-        if depth + 1 < MAX_DEPTH {
-            for inner in std::mem::take(&mut lexer.nested) {
-                if inner.len() <= budget {
-                    todo.push((inner, depth + 1, lexer.vars.clone()));
-                }
+        reading.too_deep |= lexer.too_deep;
+        for value in lexer.vars.get("CDPATH").into_iter().flatten() {
+            if !reading.cdpath.contains(value) {
+                reading.cdpath.push(value.clone());
             }
+        }
+        for inner in std::mem::take(&mut lexer.nested) {
+            if inner.trim().is_empty() {
+                continue;
+            }
+            let read_with = seen.entry(inner.clone()).or_default();
+            if read_with.contains(&lexer.vars) {
+                continue;
+            }
+            if depth >= MAX_DEPTH {
+                reading.too_deep = true;
+            }
+            read_with.push(lexer.vars.clone());
+            todo.push((inner, depth + 1, lexer.vars.clone()));
+        }
+        if reading.too_deep {
+            break;
         }
     }
     reading
 }
 
-/// The moves in `toks`, and whether they loop.
+/// The name a word such as `x=1` gives a value to.
+fn assigned_name(w: &Word) -> Option<String> {
+    let name: String = w.pieces[..w.eq?]
+        .iter()
+        .map(|p| match p {
+            Piece::A(Atom::Lit(c)) if c.is_ascii_alphanumeric() || *c == '_' => Some(*c),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    (!name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit())).then_some(name)
+}
+
+/// Whether pieces hold an expansion the floor can't know.
+fn holds_any(pieces: &[Piece]) -> bool {
+    pieces.iter().any(|p| match p {
+        Piece::A(a) => matches!(a, Atom::Any { .. }),
+        Piece::Choice(items) => items.iter().any(|i| holds_any(i)),
+    })
+}
+
+/// A word made of `w`'s pieces from `from` on.
+fn tail_word(w: &Word, from: usize) -> Word {
+    Word {
+        pieces: w.pieces[from.min(w.pieces.len())..].to_vec(),
+        raw: w.raw.clone(),
+        quoted: w.quoted,
+        eq: None,
+    }
+}
+
+/// The words from `toks[i]` up to the end of its command.
+fn args(toks: &[Tok], i: usize) -> impl Iterator<Item = &Word> {
+    toks[i.min(toks.len())..].iter().map_while(|t| match t {
+        Tok::Word(w) => Some(w),
+        Tok::Op => None,
+    })
+}
+
+/// Where the command that holds `toks[i]` ends.
+fn command_end(toks: &[Tok], i: usize) -> usize {
+    (i..toks.len())
+        .find(|&j| matches!(toks[j], Tok::Op))
+        .unwrap_or(toks.len())
+}
+
+fn lower_plain(w: &Word) -> String {
+    w.plain().unwrap_or_default().to_lowercase()
+}
+
+/// The folder a tool's `-C dir`, `-Cdir`, `--chdir=dir` or `--directory dir`
+/// names, for each such flag among `args`.
+fn chdir_targets<'w>(mut args: impl Iterator<Item = &'w Word>) -> Vec<Word> {
+    let mut out = Vec::new();
+    while let Some(w) = args.next() {
+        let text = w.plain().unwrap_or_default();
+        let long = |flag: &str| text == flag || text.starts_with(&format!("{flag}="));
+        if text == "-C" || long("--chdir") || long("--directory") {
+            match w.eq {
+                Some(eq) => out.push(tail_word(w, eq + 1)),
+                None => out.extend(args.next().cloned()),
+            }
+        } else if text.starts_with("-C") || w.raw.starts_with("-C") {
+            out.push(tail_word(w, 2));
+        }
+    }
+    out
+}
+
+/// The words of a command that makes a link, when `base` names one:
+/// `ln`, `cp -s`, `mklink`, `New-Item -ItemType SymbolicLink`.
+fn link_words(base: &str, args: Vec<&Word>) -> Vec<Word> {
+    let flags = |w: &Word| {
+        let t = lower_plain(w);
+        (t.len() > 1 && t.starts_with('-')) || matches!(t.as_str(), "/d" | "/j" | "/h")
+    };
+    let makes = match base {
+        "ln" | "mklink" => true,
+        "cp" => args.iter().any(|w| {
+            let t = lower_plain(w);
+            t == "--symbolic-link"
+                || (t.starts_with('-') && !t.starts_with("--") && t.contains('s'))
+        }),
+        "new-item" | "ni" => args.iter().any(|w| {
+            let t = lower_plain(w);
+            let t = t.rsplit(':').next().unwrap_or(&t);
+            matches!(t, "symboliclink" | "junction" | "hardlink")
+        }),
+        _ => false,
+    };
+    if !makes {
+        return Vec::new();
+    }
+    args.into_iter().filter(|w| !flags(w)).cloned().collect()
+}
+
+/// The moves in `toks`, whether they loop, the links they make, and
+/// whether a command the floor can't read runs.
 fn note_moves(toks: &[Tok], ps: bool, reading: &mut Reading) {
     let mut i = 0;
+    let mut at_head = true;
+    // How far the words after a tool that moves or makes links were read:
+    // a later such word in the same command reads no more of them.
+    let (mut chdir_read, mut links_read) = (0, 0);
     while i < toks.len() {
         let Tok::Word(w) = &toks[i] else {
             i += 1;
+            at_head = true;
             continue;
         };
         i += 1;
+        let first = std::mem::replace(&mut at_head, false);
         let head = w
             .plain()
             .map(|p| p.to_ascii_lowercase())
             .unwrap_or_default();
+        let base = head.rsplit('/').next().unwrap_or(&head);
+        let base = base.strip_suffix(".exe").unwrap_or(base).to_string();
+        if first && assigned_name(w).is_some() {
+            at_head = true;
+        } else if first {
+            let evals = base == "eval" && args(toks, i).any(|a| holds_any(&a.pieces));
+            reading.unknown_head |=
+                holds_any(&w.pieces) || evals || base == "source" || base == ".";
+        }
         reading.loops |= LOOP_WORDS.contains(&head.as_str());
+        if CHDIR_TOOLS.contains(&base.as_str()) && i > chdir_read {
+            reading
+                .cds
+                .extend(chdir_targets(args(toks, i)).into_iter().map(Some));
+            chdir_read = command_end(toks, i);
+        }
+        let links = matches!(base.as_str(), "ln" | "cp" | "mklink" | "new-item" | "ni");
+        if links && i > links_read {
+            reading
+                .links
+                .extend(link_words(&base, args(toks, i).collect()));
+            links_read = command_end(toks, i);
+        }
         if LOST_WORDS.contains(&head.as_str()) {
             reading.lost = true;
+            continue;
+        }
+        // cmd and PowerShell also read `cd..` and `cd\x` as a move.
+        let glued = ["cd", "chdir"].into_iter().find(|cd| {
+            head.strip_prefix(cd)
+                .is_some_and(|rest| rest.starts_with(['.', '/']))
+        });
+        if let Some(cd) = glued.filter(|_| ps) {
+            reading.cds.push(Some(tail_word(w, cd.len())));
             continue;
         }
         if !CD_WORDS.contains(&head.as_str()) {
@@ -1706,6 +2087,26 @@ fn note_moves(toks: &[Tok], ps: bool, reading: &mut Reading) {
     }
 }
 
+/// Whether bash's dotglob may be on for the command's globs: text that
+/// turns it on (`shopt`, `GLOBIGNORE=`, `BASHOPTS`, zsh's `setopt
+/// globdots`), a command the floor can't read, or this process's own
+/// environment.
+fn dotglob_may_be_on(reading: &Reading) -> bool {
+    let set = |key: &str| std::env::var_os(key).is_some_and(|v| !v.is_empty());
+    let opts = std::env::var("BASHOPTS").is_ok_and(|v| v.contains("dotglob"));
+    if reading.unknown_head || opts || set("GLOBIGNORE") || set("BASH_ENV") {
+        return true;
+    }
+    reading.words.iter().any(|w| {
+        alternatives(&w.pieces).0.iter().any(|alt| {
+            let mut text = String::new();
+            alt.iter().for_each(|a| push_atom_text(&mut text, a));
+            let text: String = text.to_lowercase().chars().filter(|c| *c != '_').collect();
+            DOTGLOB_WORDS.iter().any(|t| text.contains(t))
+        })
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
@@ -1731,14 +2132,28 @@ enum Dots {
     /// On Windows, a part of only dots and blanks (`...`, `. .`): the floor
     /// reads it each way.
     Odd,
+    /// A part of dots and expansions that is `..` when they are empty
+    /// (`.$u.`): the floor reads it as written and as `..`.
+    MaybeUp,
     Name,
 }
 
 fn dots_kind(part: &Part, windows: bool) -> Dots {
-    let Some(text) = part_text(part) else {
+    let Part::Pat(atoms) = part else {
         return Dots::Name;
     };
-    match text.as_str() {
+    if let Some(text) = lit_text(atoms) {
+        return text_dots(&text, windows);
+    }
+    match empty_reading(atoms, windows) {
+        Some(Dots::Up) => Dots::MaybeUp,
+        Some(Dots::Odd) => Dots::Odd,
+        _ => Dots::Name,
+    }
+}
+
+fn text_dots(text: &str, windows: bool) -> Dots {
+    match text {
         "" | "." => Dots::Here,
         ".." => Dots::Up,
         t if windows && t.chars().all(|c| c == '.' || c == ' ') => match t.trim_end_matches(' ') {
@@ -1748,6 +2163,21 @@ fn dots_kind(part: &Part, windows: bool) -> Dots {
         },
         _ => Dots::Name,
     }
+}
+
+/// What a part of only dots, blanks and expansions reads as when the
+/// expansions are empty; `None` for any other part.
+fn empty_reading(atoms: &[Atom], windows: bool) -> Option<Dots> {
+    let mut text = String::new();
+    let mut any = false;
+    for a in atoms {
+        match a {
+            Atom::Lit(c @ ('.' | ' ')) => text.push(*c),
+            Atom::Any { .. } => any = true,
+            _ => return None,
+        }
+    }
+    any.then(|| text_dots(&text, windows))
 }
 
 impl PathPat {
@@ -1777,9 +2207,10 @@ impl PathPat {
     }
 
     /// The paths this one reads as without `.` parts and with each `..`
-    /// stepping back; on Windows a part of only dots and blanks each way;
+    /// stepping back; on Windows a part of only dots and blanks each way,
+    /// and a part that is `..` once its expansions are empty both ways;
     /// macOS's data volume and `/private` as the paths they stand for.
-    /// `None` past three such Windows parts.
+    /// `None` past three such parts.
     fn folded(&self, windows: bool) -> Option<Vec<Self>> {
         let mut all: Vec<Vec<Part>> = vec![Vec::new()];
         let mut odd = 0;
@@ -1790,7 +2221,7 @@ impl PathPat {
                     p.pop();
                 }),
                 Dots::Name => all.iter_mut().for_each(|p| p.push(part.clone())),
-                Dots::Odd => {
+                kind @ (Dots::Odd | Dots::MaybeUp) => {
                     odd += 1;
                     if odd > 3 {
                         return None;
@@ -1801,7 +2232,10 @@ impl PathPat {
                         up.pop();
                         let mut kept = p.clone();
                         kept.push(part.clone());
-                        next.extend([p, up, kept]);
+                        if matches!(kind, Dots::Odd) {
+                            next.push(p);
+                        }
+                        next.extend([up, kept]);
                     }
                     all = next;
                 }
@@ -2017,6 +2451,15 @@ fn unc(parts: &[Vec<Atom>]) -> PathPat {
 // Matching
 // ---------------------------------------------------------------------------
 
+/// How a glob matches a name: with Windows' rules, and whether `*`, `?`
+/// and `[…]` may match a leading dot (bash's dotglob, which the command may
+/// turn on).
+#[derive(Clone, Copy)]
+struct Rules {
+    windows: bool,
+    dotglob: bool,
+}
+
 fn eq_fold(a: char, b: char) -> bool {
     a == b
         || if a.is_ascii() && b.is_ascii() {
@@ -2047,23 +2490,24 @@ fn win_pattern(pat: &[Atom]) -> &[Atom] {
 
 /// Whether the one-part pattern `pat` matches `name` (lowercase), without
 /// case. A POSIX glob follows bash: a leading dot only by a leading dot, or
-/// by an expansion's text. On Windows any name, with a stream suffix and
-/// trailing dots and blanks dropped, and 8.3 short names.
-fn name_matches(pat: &[Atom], name: &[char], windows: bool) -> bool {
-    if windows {
+/// by an expansion's text, unless dotglob may be on. On Windows any name,
+/// with a stream suffix and trailing dots and blanks dropped, and 8.3 short
+/// names.
+fn name_matches(pat: &[Atom], name: &[char], rules: Rules) -> bool {
+    if rules.windows {
         let pat = win_pattern(pat);
         return atoms_match(pat, name) || short_name_matches(pat, name);
     }
-    let dot_ok = matches!(pat.first(), Some(Atom::Lit('.') | Atom::Any { .. }));
+    let dot_ok = rules.dotglob || matches!(pat.first(), Some(Atom::Lit('.') | Atom::Any { .. }));
     if name.first() == Some(&'.') && !dot_ok {
         return false;
     }
     atoms_match(pat, name)
 }
 
-fn part_matches(pat: &[Atom], name: &str, windows: bool) -> bool {
+fn part_matches(pat: &[Atom], name: &str, rules: Rules) -> bool {
     let name: Vec<char> = name.to_lowercase().chars().collect();
-    name_matches(pat, &name, windows)
+    name_matches(pat, &name, rules)
 }
 
 /// `ADMINI~1` or `SSH~1` as the 8.3 short name of `Administrator` or
@@ -2128,25 +2572,62 @@ fn atoms_match(pat: &[Atom], name: &[char]) -> bool {
         .all(|a| matches!(a, Atom::Star | Atom::Any { .. }))
 }
 
-/// Where a bracket class that opens at `pat[open]` closes. A `]` right
-/// after `[` (or after `[!`) is part of the class, and so is the `]` of a
-/// `[:alpha:]`, `[=a=]` or `[.a.]` inside it.
-fn class_end(pat: &[char], open: usize) -> Option<usize> {
-    let mut i = open + 1;
-    if matches!(pat.get(i), Some('!' | '^')) {
-        i += 1;
-    }
-    if pat.get(i) == Some(&']') {
-        i += 1;
-    }
-    while i < pat.len() {
-        match pat[i] {
-            ']' => return Some(i),
-            '[' => i = inner_end(pat, i).map_or(i + 1, |end| end + 1),
-            _ => i += 1,
+/// Where a bracket class that opens at each position of `c` closes, or
+/// `usize::MAX` where a `[` is plain. A `]` right after `[` (or after `[!`)
+/// is part of the class, and so is the `]` of a `[:alpha:]`, `[=a=]` or
+/// `[.a.]` inside it; a body with a `/`, a blank or a quote is no class.
+/// Found in one pass from the end, so a run of `[` that never closes costs
+/// one pass, not one scan to the end of the text for each `[`.
+fn class_closes(c: &[char]) -> Vec<usize> {
+    const NONE: usize = usize::MAX;
+    const KINDS: [char; 3] = [':', '=', '.'];
+    let n = c.len();
+    // For each kind of inner class, the first `X]` at or after a position.
+    let mut pair = vec![[NONE; 3]; n + 1];
+    // The first `/`, blank or quote at or after a position.
+    let mut stop = vec![n; n + 1];
+    for j in (0..n).rev() {
+        pair[j] = pair[j + 1];
+        for (k, kind) in KINDS.iter().enumerate() {
+            if c[j] == *kind && c.get(j + 1) == Some(&']') {
+                pair[j][k] = j;
+            }
         }
+        let stops = c[j] == '/' || c[j].is_whitespace() || matches!(c[j], '\'' | '"');
+        stop[j] = if stops { j } else { stop[j + 1] };
     }
-    None
+    // The `]` a class body read from a position ends at.
+    let mut first = vec![NONE; n + 2];
+    for j in (0..n).rev() {
+        let inner = (c[j] == '[')
+            .then(|| KINDS.iter().position(|k| c.get(j + 1) == Some(k)))
+            .flatten()
+            .and_then(|k| pair.get(j + 2).map(|p| p[k]))
+            .filter(|&m| m != NONE);
+        first[j] = match (c[j], inner) {
+            (']', _) => j,
+            (_, Some(m)) => first[m + 2],
+            _ => first[j + 1],
+        };
+    }
+    (0..n)
+        .map(|open| {
+            if c[open] != '[' {
+                return NONE;
+            }
+            let mut i = open + 1;
+            if matches!(c.get(i), Some('!' | '^')) {
+                i += 1;
+            }
+            if c.get(i) == Some(&']') {
+                i += 1;
+            }
+            match first.get(i).copied().unwrap_or(NONE) {
+                end if end != NONE && stop[open + 1] >= end => end,
+                _ => NONE,
+            }
+        })
+        .collect()
 }
 
 /// Where a `[:name:]`, `[=c=]` or `[.c.]` that opens at `pat[at]` closes.
@@ -2220,9 +2701,9 @@ fn class_matches(body: &[char], c: char) -> bool {
     }
 }
 
-fn gpart_matches(pat: &[Atom], g: &GPart, windows: bool) -> bool {
+fn gpart_matches(pat: &[Atom], g: &GPart, rules: Rules) -> bool {
     match g {
-        GPart::Name(name) => name_matches(pat, name, windows),
+        GPart::Name(name) => name_matches(pat, name, rules),
         GPart::AnyName => !matches!(pat.first(), Some(Atom::Lit('.'))),
     }
 }
@@ -2240,9 +2721,23 @@ fn root_matches(p: &Root, g: &Root) -> bool {
 
 /// Whether the path pattern could name the guarded path, or a path inside
 /// it, as written.
-fn reaches(p: &PathPat, g: &GuardForm, windows: bool) -> bool {
+fn reaches(p: &PathPat, g: &GuardForm, rules: Rules) -> bool {
     let at = u64::from(root_matches(&p.root, &g.root));
-    walk(at, &p.parts, g, windows) & done(g) != 0
+    walk(at, &p.parts, g, rules) & done(g) != 0
+}
+
+/// Whether the path pattern could name the guarded path, a path inside it,
+/// or a folder that holds it, from the same kind of root: a drive path is
+/// not read as a POSIX one here, where its first part would stand for any
+/// user's or drive's folder.
+fn on_the_way(p: &PathPat, g: &GuardForm, rules: Rules) -> bool {
+    let same = match (&p.root, &g.root) {
+        (Root::Posix, Root::Posix) => true,
+        (Root::Drive(a), Root::Drive(b)) => a == b,
+        (Root::Drive(_) | Root::AnyDrive, Root::Drive(_) | Root::AnyDrive) => true,
+        _ => false,
+    };
+    walk(u64::from(same), &p.parts, g, rules) != 0
 }
 
 /// Where each guarded path's form stands after a folder's parts (0 when
@@ -2251,8 +2746,8 @@ fn reaches(p: &PathPat, g: &GuardForm, windows: bool) -> bool {
 /// together with what follows it (a POSIX folder of under three parts:
 /// macOS's `/private/etc`, `/System/Volumes/Data`): such a word goes
 /// through [`resolve`].
-fn starts_in(cwd: &PathPat, forms: &[GuardForm], windows: bool) -> Option<Vec<u64>> {
-    let spellings = cwd.folded(windows)?;
+fn starts_in(cwd: &PathPat, forms: &[GuardForm], rules: Rules) -> Option<Vec<u64>> {
+    let spellings = cwd.folded(rules.windows)?;
     if spellings
         .iter()
         .any(|f| f.root == Root::Posix && f.parts.len() < 3)
@@ -2265,7 +2760,7 @@ fn starts_in(cwd: &PathPat, forms: &[GuardForm], windows: bool) -> Option<Vec<u6
                 u64::from(root_matches(&f.root, &g.root)),
                 &f.parts,
                 g,
-                windows,
+                rules,
             )
         })
     };
@@ -2295,7 +2790,7 @@ fn relative(span: &[Atom], windows: bool) -> Option<(Vec<Part>, Vec<Part>)> {
             Dots::Up => {
                 folded.pop()?;
             }
-            Dots::Odd => return None,
+            Dots::Odd | Dots::MaybeUp => return None,
             Dots::Name => folded.push(part.clone()),
         }
     }
@@ -2310,12 +2805,20 @@ fn done(g: &GuardForm) -> u64 {
 /// Where a pattern stands against the guarded path after `parts`, from
 /// `at`. Bit j: the pattern so far matches the guarded path's first j
 /// parts. Once it matches all of them it stays there: what follows is
-/// inside the guarded path.
-fn walk(mut at: u64, parts: &[Part], g: &GuardForm, windows: bool) -> u64 {
+/// inside the guarded path. A part of only `*` (`**`) may be any number of
+/// folders (globstar, and zsh's and fish's `**`): through a guarded folder,
+/// or, as the last part, onto any guarded path. A part that is `.` or
+/// nothing once its expansions are empty may be no part.
+fn walk(mut at: u64, parts: &[Part], g: &GuardForm, rules: Rules) -> u64 {
     let m = g.parts.len();
     let done = done(g);
     let all = (done << 1) - 1;
-    for part in parts {
+    let step = |at: u64, atoms: &[Atom]| {
+        (0..m)
+            .filter(|&j| at >> j & 1 == 1 && gpart_matches(atoms, &g.parts[j], rules))
+            .fold(0, |next, j| next | 1 << (j + 1))
+    };
+    for (k, part) in parts.iter().enumerate() {
         if at & done != 0 || at == 0 {
             return at;
         }
@@ -2323,9 +2826,24 @@ fn walk(mut at: u64, parts: &[Part], g: &GuardForm, windows: bool) -> u64 {
             // Any number of parts: every state from the first one reached,
             // short of the whole guarded path.
             Part::Deep => all & !((at & at.wrapping_neg()) - 1) & !done,
-            Part::Pat(atoms) => (0..m)
-                .filter(|&j| at >> j & 1 == 1 && gpart_matches(atoms, &g.parts[j], windows))
-                .fold(0, |next, j| next | 1 << (j + 1)),
+            Part::Pat(atoms) if atoms.len() > 1 && atoms.iter().all(|a| *a == Atom::Star) => {
+                let mut reach = at;
+                loop {
+                    let next = reach | (step(reach, &[Atom::Star]) & !done);
+                    if next == reach {
+                        break;
+                    }
+                    reach = next;
+                }
+                if g.folder || k + 1 == parts.len() {
+                    reach |= step(reach, &[Atom::Star]);
+                }
+                reach
+            }
+            Part::Pat(atoms) => {
+                let maybe_none = matches!(empty_reading(atoms, rules.windows), Some(Dots::Here));
+                step(at, atoms) | if maybe_none { at } else { 0 }
+            }
         };
     }
     at
@@ -2378,7 +2896,15 @@ impl RealPaths {
         if let Some(real) = self.0.get(path) {
             return real.clone();
         }
+        // A POSIX system reads `x/..` as the folder above where `x` really
+        // is (Windows folds `..` by text, as `canonicalize` does there).
+        let up = !cfg!(windows)
+            && path.components().next_back() == Some(std::path::Component::ParentDir);
         let real = match (path.parent(), path.file_name()) {
+            (Some(parent), _) if up && !parent.as_os_str().is_empty() => {
+                let above = self.of(parent);
+                above.parent().map_or(above.clone(), Path::to_path_buf)
+            }
             (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
                 let joined = self.of(parent).join(name);
                 // Windows resolves short names and junctions only this way.
@@ -2446,7 +2972,7 @@ fn fs_hit(
     guards: &[(PathBuf, Guarded)],
     real: &mut RealPaths,
     budget: &mut Budget,
-    windows: bool,
+    rules: Rules,
 ) -> Option<Guarded> {
     let mut frontier = vec![root_path(&p.root)?];
     for part in &p.parts {
@@ -2470,7 +2996,7 @@ fn fs_hit(
                     }
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
-                    if part_matches(atoms, &name, windows) {
+                    if part_matches(atoms, &name, rules) {
                         next.push(dir.join(&*name));
                     }
                 }
@@ -2529,7 +3055,26 @@ fn folders(reading: &Reading, place: &Place) -> Vec<PathPat> {
             }
         }
     };
-    let cdpath = std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
+    // `CDPATH`, from this process and from the command: a relative `cd`
+    // may land in any of its folders.
+    let env_cdpath = std::env::var_os("CDPATH").filter(|v| !v.is_empty());
+    let mut cd_unknown = env_cdpath.is_some();
+    let mut cd_dirs: Vec<PathPat> = env_cdpath
+        .iter()
+        .flat_map(std::env::split_paths)
+        .filter(|p| p.is_absolute())
+        .map(|p| PathPat::of(&p))
+        .collect();
+    for value in &reading.cdpath {
+        let (alts, deep) = alternatives(value);
+        cd_unknown |= deep;
+        for alt in &alts {
+            for entry in alt.split(|a| *a == Atom::Lit(':')) {
+                cd_unknown |= entry.iter().any(|a| matches!(a, Atom::Any { .. }));
+                cd_dirs.extend(resolve(entry, std::slice::from_ref(&start), place.windows));
+            }
+        }
+    }
     let mut follows = !reading.lost;
     for target in &reading.cds {
         let Some(target) = target else {
@@ -2538,7 +3083,7 @@ fn folders(reading: &Reading, place: &Place) -> Vec<PathPat> {
         };
         let (alts, deep) = alternatives(&target.pieces);
         follows &= !deep;
-        let cd_path = cdpath || target.raw.to_ascii_lowercase().contains("cdpath");
+        let cd_path = cd_unknown || target.raw.to_ascii_lowercase().contains("cdpath");
         let mut found = Vec::new();
         for alt in &alts {
             let relative = alt.first() != Some(&Atom::Sep);
@@ -2547,6 +3092,14 @@ fn folders(reading: &Reading, place: &Place) -> Vec<PathPat> {
                 follows = false;
             }
             found.extend(resolve(alt, &out, place.windows));
+            if relative {
+                found.extend(resolve(alt, &cd_dirs, place.windows));
+            }
+        }
+        if place.fs {
+            // `cd -P` (and `set -P`) goes through a link before `..`.
+            let real: Vec<PathPat> = found.iter().filter_map(physical).collect();
+            found.extend(real);
         }
         add(&mut out, found);
         if out.len() > 64 {
@@ -2560,9 +3113,22 @@ fn folders(reading: &Reading, place: &Place) -> Vec<PathPat> {
     out
 }
 
+/// Where a folder path really is on this system: links followed, and `..`
+/// read after them, as `cd -P` reads it.
+fn physical(p: &PathPat) -> Option<PathPat> {
+    let mut path = root_path(&p.root)?;
+    for part in &p.parts {
+        path.push(part_text(part)?);
+    }
+    let real = path.canonicalize().ok()?;
+    Some(PathPat::of(&real))
+}
+
 /// What one floor check has read and spent so far.
 struct Floor<'p> {
     place: &'p Place,
+    /// How globs match names for the command being read.
+    rules: Rules,
     forms: Vec<GuardForm>,
     /// The guarded paths on this system, resolved once a word needs them.
     guards: Option<Vec<(PathBuf, Guarded)>>,
@@ -2594,7 +3160,15 @@ impl Floor<'_> {
                 let mut text = String::new();
                 alt.iter().for_each(|a| push_atom_text(&mut text, a));
                 self.texts.push(text);
-                for span in spans(alt) {
+                let Some(spans) = spans(alt) else {
+                    return Some(SPLITS_TOO_MANY);
+                };
+                // Each span, and the span with an empty first part of
+                // expansions left out.
+                let spans = spans
+                    .into_iter()
+                    .flat_map(|span| std::iter::once(span).chain(without_empty_head(span)));
+                for span in spans {
                     // A word of only expansions has a value the floor can't
                     // see: it is outside, like a command's output.
                     if span.iter().all(|a| matches!(a, Atom::Any { .. })) {
@@ -2617,16 +3191,64 @@ impl Floor<'_> {
         None
     }
 
+    /// For a word of a command that makes a link: the reason a guarded path
+    /// it names, holds or leads to on disk gives. A link to a folder that
+    /// holds a guarded path (`ln -s ~/.grok g`) would let a later word
+    /// reach it by a name the floor can't see.
+    fn holds(&mut self, word: &Word, cwds: &[PathPat]) -> Option<&'static str> {
+        let windows = self.place.windows;
+        let (alts, deep) = alternatives(&word.pieces);
+        if deep {
+            return Some(BRACES_TOO_BIG);
+        }
+        for alt in &alts {
+            for path in resolve(alt, cwds, windows) {
+                let Some(folded) = path.folded(windows) else {
+                    return Some(DOTS_TOO_MANY);
+                };
+                let rules = self.rules;
+                let hit = folded
+                    .iter()
+                    .find_map(|f| self.forms.iter().find(|g| on_the_way(f, g, rules)));
+                if let Some(g) = hit {
+                    return Some(g.what.reason());
+                }
+                if let Some(why) = self.holds_on_disk(&path) {
+                    return Some(why);
+                }
+            }
+        }
+        None
+    }
+
+    /// The reason a guarded path inside where `path` resolves on disk gives.
+    fn holds_on_disk(&mut self, path: &PathPat) -> Option<&'static str> {
+        if !self.place.fs || self.budget.spent() {
+            return None;
+        }
+        let mut buf = root_path(&path.root)?;
+        for part in &path.parts {
+            buf.push(part_text(part)?);
+        }
+        let (forms, real) = (&self.forms, &mut self.real);
+        let guards = self.guards.get_or_insert_with(|| real_guards(forms, real));
+        let target = real.of(&buf);
+        guards
+            .iter()
+            .find(|(g, _)| inside(g, &target))
+            .map(|(_, what)| what.reason())
+    }
+
     /// The reason a guarded path the path pattern could name gives: as
     /// written, or on the filesystem.
     fn path(&mut self, path: &PathPat) -> Option<&'static str> {
-        let windows = self.place.windows;
-        let Some(folded) = path.folded(windows) else {
+        let Some(folded) = path.folded(self.rules.windows) else {
             return Some(DOTS_TOO_MANY);
         };
+        let rules = self.rules;
         let hit = folded
             .iter()
-            .find_map(|f| self.forms.iter().find(|g| reaches(f, g, windows)));
+            .find_map(|f| self.forms.iter().find(|g| reaches(f, g, rules)));
         if let Some(g) = hit {
             return Some(g.what.reason());
         }
@@ -2641,13 +3263,13 @@ impl Floor<'_> {
         folded: &[Part],
         cwds: &[PathPat],
     ) -> Option<&'static str> {
-        let windows = self.place.windows;
+        let rules = self.rules;
         for (k, cwd) in cwds.iter().enumerate() {
             if self.starts.len() <= k {
                 self.starts.resize(k + 1, None);
             }
             let forms = &self.forms;
-            let starts = self.starts[k].get_or_insert_with(|| starts_in(cwd, forms, windows));
+            let starts = self.starts[k].get_or_insert_with(|| starts_in(cwd, forms, rules));
             let Some(starts) = starts else {
                 if let Some(why) = self.path(&cwd.join(raw)) {
                     return Some(why);
@@ -2657,7 +3279,7 @@ impl Floor<'_> {
             let hit = forms
                 .iter()
                 .zip(starts.iter())
-                .find(|(g, at)| **at != 0 && walk(**at, folded, g, windows) & done(g) != 0);
+                .find(|(g, at)| **at != 0 && walk(**at, folded, g, rules) & done(g) != 0);
             if let Some((g, _)) = hit {
                 return Some(g.what.reason());
             }
@@ -2675,8 +3297,7 @@ impl Floor<'_> {
         }
         let (forms, real) = (&self.forms, &mut self.real);
         let guards = self.guards.get_or_insert_with(|| real_guards(forms, real));
-        let windows = self.place.windows;
-        fs_hit(path, guards, real, &mut self.budget, windows).map(Guarded::reason)
+        fs_hit(path, guards, real, &mut self.budget, self.rules).map(Guarded::reason)
     }
 }
 
@@ -2687,6 +3308,10 @@ impl Floor<'_> {
 fn floor_hit(cmd: &str, place: &Place, kinds: &[Guarded]) -> (Option<&'static str>, Vec<String>) {
     let mut floor = Floor {
         place,
+        rules: Rules {
+            windows: place.windows,
+            dotglob: false,
+        },
         forms: guard_forms(place, kinds),
         guards: None,
         real: RealPaths::default(),
@@ -2701,8 +3326,17 @@ fn floor_hit(cmd: &str, place: &Place, kinds: &[Guarded]) -> (Option<&'static st
     };
     for &ps in dialects {
         let reading = read_command(cmd, place, ps);
+        if reading.too_deep {
+            return (Some(TOO_DEEP), floor.texts);
+        }
         let cwds = folders(&reading, place);
+        floor.rules.dotglob = dotglob_may_be_on(&reading);
         floor.starts.clear();
+        for word in &reading.links {
+            if let Some(why) = floor.holds(word, &cwds) {
+                return (Some(why), floor.texts);
+            }
+        }
         for word in &reading.words {
             if let Some(why) = floor.word(word, &cwds) {
                 return (Some(why), floor.texts);
@@ -4550,6 +5184,324 @@ mod tests {
             Some("forbidden path: /etc/shadow")
         );
         assert_eq!(forbidden_reason("cat shad?w"), None);
+    }
+
+    /// A command that may turn on bash's dotglob or globstar (`shopt`,
+    /// `GLOBIGNORE`, `BASHOPTS`, `bash -O`, another shell) has its globs
+    /// read without the leading-dot rule, and `**` as any number of folders.
+    #[test]
+    fn a_command_that_may_turn_on_dotglob_reads_globs_that_way() {
+        let project = fake("/home/user/my-app");
+        let ssh = Some("forbidden path: ssh keys");
+        for (cmd, want) in [
+            ("shopt -s dotglob; cat ~/*/id_rsa", ssh),
+            ("GLOBIGNORE=x; cat ~/*/id_rsa", ssh),
+            ("export GLOBIGNORE=.; cat ~/*/id_rsa", ssh),
+            ("sh''opt -s dotglob; cat ~/*/id_rsa", ssh),
+            ("env BASHOPTS=dotglob bash -c 'cat ~/*/id_rsa'", ssh),
+            ("bash -O dotglob -c 'cat ~/*/id_rsa'", ssh),
+            ("$(printf sh)opt -s $(printf dot)glob; cat ~/*/id_rsa", ssh),
+            ("shopt -s globstar dotglob; cat ~/**/id_rsa", ssh),
+            ("shopt -s globstar; cat ~/.config/**/consent.json", None),
+            ("zsh -c 'setopt globdots; cat ~/*/id_rsa'", ssh),
+            (
+                "shopt -s dotglob; cat ~/*rok/auth.json",
+                Some("forbidden path: grok login"),
+            ),
+            // `*` may be `.ssh`, a folder that could hold an `auth.json`.
+            ("shopt -s dotglob; cat ~/*/auth.json", ssh),
+            (
+                "shopt -s dotglob; cat ~/*fig/*/s*.json",
+                Some("forbidden path: app secrets"),
+            ),
+            ("shopt -s dotglob; cat ~/*/*/s*.json", ssh),
+            ("shopt -s dotglob; ls *.rs", None),
+            ("shopt -s nullglob; cat src/*.ts", None),
+            ("cat ~/*/id_rsa", None),
+        ] {
+            assert_eq!(forbidden_reason_at(cmd, &project), want, "{cmd}");
+        }
+        for cmd in [
+            r#"shopt -s dotglob; echo '{"x":2}' | tee -a ~/*/GrokHub/c*.jsonl"#,
+            "shopt -s globstar; cat ~/.config/**/consent.json",
+        ] {
+            assert!(consent_at(cmd, &project), "{cmd}");
+        }
+        assert!(!consent_at("cat ~/*/GrokHub/c*.jsonl", &project));
+    }
+
+    /// Commands inside commands are read however deep they go, and past
+    /// what the floor reads (depth or length) the command is refused, never
+    /// let through unread.
+    #[test]
+    fn commands_nested_past_what_the_floor_reads_are_refused() {
+        let project = fake("/home/user/my-app");
+        let ssh = Some("forbidden path: ssh keys");
+        let four = "bash <<A\nbash <<B\nbash <<C\nbash <<D\ncat ~/.s?h/id_rsa\nD\nC\nB\nA";
+        assert_eq!(forbidden_reason_at(four, &project), ssh);
+        let quoted = format!(
+            r#"echo $(bash -c 'cat ~/.s?h/id_rsa') "$("$("$(true {})")")""#,
+            "A".repeat(100)
+        );
+        assert_eq!(forbidden_reason_at(&quoted, &project), ssh);
+        let mut deep = String::from("cat ~/.s?h/id_rsa\n");
+        for k in 0..12 {
+            deep = format!("bash <<E{k}\n{deep}E{k}\n");
+        }
+        assert_eq!(forbidden_reason_at(&deep, &project), Some(TOO_DEEP));
+        let deep = format!("echo {}x", "\"$(".repeat(40));
+        assert_eq!(forbidden_reason_at(&deep, &project), Some(TOO_DEEP));
+        // A long commit message in a here-document is read and passes.
+        let body = "Fix the `cargo test` run and $(x) notes.\n".repeat(150);
+        let commit = format!("git commit -m \"$(cat <<'EOF'\n{body}EOF\n)\"");
+        assert_eq!(forbidden_reason_at(&commit, &project), None);
+        assert!(!consent_at(&commit, &project));
+    }
+
+    /// Input nested thousands deep is refused on a 2 MB thread (the size
+    /// std and tokio give one) without overflowing its stack, and quickly.
+    #[test]
+    fn deeply_nested_input_is_refused_without_overflowing_the_stack() {
+        let too_deep = Some(TOO_DEEP);
+        let cases: Vec<(String, Option<&'static str>)> = vec![
+            (format!("echo {}", "\"$(".repeat(10_000)), too_deep),
+            (format!("echo {}", "{".repeat(10_000)), too_deep),
+            (format!("echo {}", "{a,".repeat(10_000)), too_deep),
+            (format!("echo {}", "${x:-".repeat(10_000)), too_deep),
+            (format!("echo {}", "\"${x:-".repeat(10_000)), too_deep),
+            (format!("{} echo $x", "x=$x$x;".repeat(40)), too_deep),
+            // Forty open braces, each read once.
+            (format!("echo x{}y", "{,".repeat(40)), None),
+        ];
+        let got = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let project = fake("/home/user/my-app");
+                cases
+                    .iter()
+                    .map(|(cmd, want)| {
+                        let started = Instant::now();
+                        let why = forbidden_reason_at(cmd, &project);
+                        (why, *want, started.elapsed())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        for (k, (why, want, took)) in got.iter().enumerate() {
+            assert_eq!(why, want, "case {k}");
+            assert!(*took < Duration::from_secs(3), "case {k}: {took:?}");
+        }
+    }
+
+    /// A `[` that never closes costs one pass, not a scan to the end of
+    /// the text for each one.
+    #[test]
+    fn unclosed_brackets_cost_one_pass() {
+        let project = fake("/home/user/my-app");
+        for cmd in [
+            format!("cat {}", "[".repeat(40_000)),
+            format!("cat a{}", "[a".repeat(20_000)),
+            format!("cat {}", "[[:".repeat(13_000)),
+            format!("cat x{}", "[!".repeat(20_000)),
+        ] {
+            let started = Instant::now();
+            assert_eq!(forbidden_reason_at(&cmd, &project), None);
+            let took = started.elapsed();
+            assert!(took < Duration::from_secs(2), "{:?}: {took:?}", &cmd[..12]);
+        }
+        // Classes still read as classes.
+        for cmd in [
+            "cat ~/.s[s]h/id_rsa",
+            "cat ~/.s[[:alpha:]]h/id_rsa",
+            "cat ~/.s[]s]h/id_rsa",
+            "cat ~/.s[!x]h/id_rsa",
+        ] {
+            assert_eq!(
+                forbidden_reason_at(cmd, &project),
+                Some("forbidden path: ssh keys"),
+                "{cmd}"
+            );
+        }
+        assert_eq!(forbidden_reason_at("cat ~/.s[x]h/id_rsa", &project), None);
+    }
+
+    /// Past the spellings the floor reads, a brace choice that could step
+    /// a folder (`..`, `.`) is refused like one that holds a `/`.
+    #[test]
+    fn a_brace_choice_of_dots_past_the_cap_is_refused() {
+        let project = fake("/home/user/my-app");
+        let home = fake("/home/user");
+        let commas = "{,}".repeat(8);
+        assert_eq!(
+            forbidden_reason_at(
+                &format!("cat {commas}{{..,..}}/.s?h/id_rsa | head -c 40"),
+                &project
+            ),
+            Some(BRACES_TOO_BIG)
+        );
+        assert_eq!(
+            forbidden_reason_at(&format!("cat {commas}{{.,.}}/.s?h/id_rsa"), &home),
+            Some(BRACES_TOO_BIG)
+        );
+        let seven = "{,}".repeat(7);
+        assert_eq!(
+            forbidden_reason_at(&format!("cat {seven}{{..,..}}/.s?h/id_rsa"), &project),
+            Some("forbidden path: ssh keys")
+        );
+        assert_eq!(
+            forbidden_reason_at(&format!("cat {commas}{{a,b}}.txt"), &project),
+            None
+        );
+    }
+
+    /// An expansion the floor can't know may be empty: at the start of a
+    /// word it leaves the rest as written (maybe from the root), and next
+    /// to dots it may leave `.` or `..`.
+    #[test]
+    fn an_expansion_that_may_be_empty_leaves_the_rest_of_the_word() {
+        let project = fake("/home/user/my-app");
+        let ssh = Some("forbidden path: ssh keys");
+        let shadow = Some("forbidden path: /etc/shadow");
+        let nine = "$a".repeat(9);
+        let dots = "$a.".repeat(9);
+        for (cmd, want) in [
+            (r#"cat "$u"$HOME/.s?h/id_rsa"#.to_string(), ssh),
+            (r#"cat "$u"/etc/shado?"#.to_string(), shadow),
+            (r#"cat "${u}"'/etc/'shado?"#.to_string(), shadow),
+            // Quoted, the `?` is a plain `?`: bash opens `/etc/shado?`.
+            (r#"cat "${u}"'/etc/shado?'"#.to_string(), None),
+            (format!("cat {nine}$HOME/.s?h/id_rsa"), ssh),
+            (format!("cat {dots}$a/etc/shado?"), shadow),
+            ("cat .$u./.s?h/id_rsa".to_string(), ssh),
+            (r#"cat "$u"./"$v".s?h/id_rsa"#.to_string(), None),
+            ("cat $x/notes.txt".to_string(), None),
+            (r#"cat "$u"src/main.rs"#.to_string(), None),
+        ] {
+            assert_eq!(forbidden_reason_at(&cmd, &project), want, "{cmd}");
+        }
+        let windows = fake_windows(r"C:\Users\User\my-app");
+        assert_eq!(
+            forbidden_reason_at(r#"type "$u"\Users\User\.s?h\id_rsa"#, &windows),
+            ssh
+        );
+    }
+
+    /// Folder moves the floor follows: `CDPATH` set in the command,
+    /// `env -C`, `tar -C`, `git -C`, `make -C`, and cmd's and PowerShell's
+    /// `cd..` and `cd\…`.
+    #[test]
+    fn the_floor_follows_cdpath_chdir_flags_and_cmd_cd_spellings() {
+        let project = fake("/home/user/my-app");
+        let grok = Some("forbidden path: grok login");
+        let secrets = Some("forbidden path: app secrets");
+        let shadow = Some("forbidden path: /etc/shadow");
+        for (cmd, want) in [
+            ("CDPATH=~ cd .grok && cat auth.json", grok),
+            ("export CDPATH=~; cd .grok; cat a*.json", grok),
+            ("CDPATH=~/.config cd GrokHub && cat s*.json", secrets),
+            ("CDPATH=/ cd etc && cat shadow", shadow),
+            ("env -C ~/.grok cat auth.json", grok),
+            ("env --chdir=$HOME/.grok cat auth.json", grok),
+            ("env -C/etc cat shadow", shadow),
+            ("tar -C ~/.grok -cf - auth.json | tar -xOf -", grok),
+            ("git -C /etc show HEAD:shadow", None),
+            ("make -C /etc -f shadow", shadow),
+            ("cd src && cat main.rs", None),
+            ("env -C src cargo test", None),
+            ("tar -C build -xf x.tar", None),
+            ("grep -C 3 foo notes.txt", None),
+        ] {
+            assert_eq!(forbidden_reason_at(cmd, &project), want, "{cmd}");
+        }
+        assert!(consent_at(
+            r#"CDPATH=~/.config cd GrokHub && echo '{"x":2}' | tee -a c*.jsonl"#,
+            &project
+        ));
+        let windows = fake_windows(r"C:\Users\User\my-app");
+        let ssh = Some("forbidden path: ssh keys");
+        for (cmd, want) in [
+            (r"cd.. & type .s?h\id_rsa", ssh),
+            (r"cd.. ; Get-Content .s?h\id_rsa", ssh),
+            (r"cd\Users\User\.grok & type auth.json", grok),
+            (r"chdir..\.. & type Users\User\.s?h\id_rsa", ssh),
+            (r"cd src & type main.rs", None),
+        ] {
+            assert_eq!(forbidden_reason_at(cmd, &windows), want, "{cmd}");
+        }
+    }
+
+    /// A link the command makes is read through: a link's target that holds
+    /// a guarded path is refused, so `ln -s ~/.grok g && cat g/auth.json`
+    /// is.
+    #[test]
+    fn a_link_the_command_makes_to_a_guarded_folder_is_refused() {
+        let project = fake("/home/user/my-app");
+        for (cmd, want) in [
+            (
+                "ln -s ~/.grok g && cat g/auth.json",
+                Some("forbidden path: grok login"),
+            ),
+            (
+                "ln -s ~ h && cat h/.s?h/id_rsa",
+                Some("forbidden path: ssh keys"),
+            ),
+            (
+                "ln -sfn .. up; cat up/.s?h/id_rsa",
+                Some("forbidden path: ssh keys"),
+            ),
+            ("/bin/ln -s / r", Some("forbidden path: ssh keys")),
+            (
+                "cp -rs ~/.config/GrokHub c",
+                Some("forbidden path: app secrets"),
+            ),
+            ("ln -s ../shared/config.toml config.toml", None),
+            ("ln -sf build/app app", None),
+            ("ln -s ~/projects/lib lib", None),
+            ("cp -r ~/projects/lib lib", None),
+        ] {
+            assert_eq!(forbidden_reason_at(cmd, &project), want, "{cmd}");
+        }
+        let windows = fake_windows(r"C:\Users\User\my-app");
+        for cmd in [
+            r"mklink /D g C:\Users\User\.grok",
+            r"cmd /c mklink /J g %USERPROFILE%\.grok",
+            r"New-Item -ItemType SymbolicLink -Path g -Target $env:USERPROFILE\.grok",
+        ] {
+            assert_eq!(
+                forbidden_reason_at(cmd, &windows),
+                Some("forbidden path: grok login"),
+                "{cmd}"
+            );
+        }
+        assert_eq!(
+            forbidden_reason_at(r"New-Item -ItemType Directory -Path $HOME\x", &windows),
+            None
+        );
+    }
+
+    /// `cd -P` goes through a link before `..`, so the floor reads a
+    /// folder's `..` on disk too.
+    #[cfg(unix)]
+    #[test]
+    fn a_cd_through_a_link_and_up_counts_where_it_lands() {
+        let (root, place) = tree("physical");
+        let home = place.home.clone().unwrap();
+        std::fs::create_dir_all(home.join("x")).unwrap();
+        std::os::unix::fs::symlink(home.join("x"), place.cwd.join("lnk")).unwrap();
+        for cmd in [
+            "cd -P lnk/.. && cat .s?h/id_rsa",
+            "set -P; cd lnk; cd ..; cat .s?h/id_rsa",
+        ] {
+            assert_eq!(
+                forbidden_reason_at(cmd, &place),
+                Some("forbidden path: ssh keys"),
+                "{cmd}"
+            );
+        }
+        assert_eq!(forbidden_reason_at("cd lnk && ls", &place), None);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
