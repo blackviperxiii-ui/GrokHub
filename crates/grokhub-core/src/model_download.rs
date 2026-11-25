@@ -1,6 +1,9 @@
 //! Downloading an on-device model into the models folder: progress, pause,
 //! cancel, resume (after a restart too), and a SHA-256 check against the hash
-//! the catalog pins for the file (the publisher's listing must still agree). The network sits behind [`Fetch`], so the
+//! the catalog pins for the file. A real hash in the publisher's listing must
+//! still agree with that pin. When the listing has the file but the hash is
+//! masked or missing, the pin is the checksum, and the finished file is still
+//! verified against it. The network sits behind [`Fetch`], so the
 //! cabin plugs in HTTP and tests plug in a fake server.
 //!
 //! On disk, under the models folder:
@@ -95,18 +98,39 @@ const MAX_PAGES: usize = 50;
 
 /// The publisher's SHA-256 for `file` in `repo`: reads `file`'s folder
 /// listing through `get`, following its next pages, until the file shows.
-/// Every [`Fetch`] uses this, so the shell and the cabin read the same pages.
+/// A real `lfs.oid` is that hash; a real `xetHash` is used when the oid is
+/// masked. When the file is listed and every hash is masked or missing, the
+/// catalog pin is the checksum. A file the listing omits stays an error, pin
+/// or not. Every [`Fetch`] uses this, so the shell and the cabin read the
+/// same pages.
 pub fn sha256_lookup(
     repo: &str,
     file: &str,
     get: &mut dyn FnMut(&str) -> Result<Page, String>,
 ) -> Result<String, String> {
+    sha256_lookup_with_pin(repo, file, catalog_pin(repo, file), get)
+}
+
+fn sha256_lookup_with_pin(
+    repo: &str,
+    file: &str,
+    pin: Option<&str>,
+    get: &mut dyn FnMut(&str) -> Result<Page, String>,
+) -> Result<String, String> {
+    let pin = pin.filter(|p| is_sha256_hex(p));
     let mut url = tree_url(repo, file);
     let mut seen = Vec::new();
+    let mut hidden = false;
     for _ in 0..MAX_PAGES {
         let (body, link) = get(&url)?;
-        if let Some(h) = sha256_from_tree(&body, file) {
-            return Ok(h);
+        match listed_hash(&body, file) {
+            Some(ListedHash::Real(h)) => return Ok(h),
+            Some(ListedHash::Hidden) => {
+                // The path is on this page. Later pages will not list it again.
+                hidden = true;
+                break;
+            }
+            None => {}
         }
         seen.push(url);
         match link.as_deref().and_then(next_page) {
@@ -114,9 +138,16 @@ pub fn sha256_lookup(
             _ => break,
         }
     }
-    Err(format!(
-        "Hugging Face lists no checksum for {file} in {repo}."
-    ))
+    if hidden {
+        if let Some(pin) = pin {
+            return Ok(pin.to_ascii_lowercase());
+        }
+    }
+    Err(no_checksum(file, repo))
+}
+
+fn no_checksum(file: &str, repo: &str) -> String {
+    format!("Hugging Face lists no checksum for {file} in {repo}.")
 }
 
 /// `file`'s `lfs.oid` in a Hugging Face tree listing.
@@ -131,6 +162,59 @@ pub fn sha256_from_tree(json: &str, file: &str) -> Option<String> {
         .as_str()?;
     (oid.len() == 64 && oid.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| oid.to_ascii_lowercase())
+}
+
+/// What one tree page says about `file`.
+enum ListedHash {
+    /// Lowercase hex from `lfs.oid`, or from `xetHash` when the oid is not hex.
+    Real(String),
+    /// The path is on the page and neither hash is 64 hex digits.
+    Hidden,
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `None` when `file` is not on this page (or the page is not a listing).
+fn listed_hash(json: &str, file: &str) -> Option<ListedHash> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let entry = v
+        .as_array()?
+        .iter()
+        .find(|e| e.get("path").and_then(|p| p.as_str()) == Some(file))?;
+    let lfs = entry.get("lfs");
+    let oid = lfs.and_then(|l| l.get("oid")).and_then(|o| o.as_str());
+    if let Some(h) = oid.filter(|s| is_sha256_hex(s)) {
+        return Some(ListedHash::Real(h.to_ascii_lowercase()));
+    }
+    let xet = entry
+        .get("xetHash")
+        .and_then(|o| o.as_str())
+        .or_else(|| lfs.and_then(|l| l.get("xetHash")).and_then(|o| o.as_str()));
+    if let Some(h) = xet.filter(|s| is_sha256_hex(s)) {
+        return Some(ListedHash::Real(h.to_ascii_lowercase()));
+    }
+    Some(ListedHash::Hidden)
+}
+
+/// The catalog sha256 for `file` in `repo`, when a row pins one.
+fn catalog_pin(repo: &str, file: &str) -> Option<&'static str> {
+    for m in crate::local_setup::local_models() {
+        if m.repo == repo && m.remote_name() == file && is_sha256_hex(m.sha256) {
+            return Some(m.sha256);
+        }
+        for p in m.parts {
+            if p.repo == repo
+                && p.remote_file == file
+                && let FileCheck::Sha256(h) = p.check
+                && is_sha256_hex(h)
+            {
+                return Some(h);
+            }
+        }
+    }
+    None
 }
 
 pub fn part_path(dir: &Path, m: &LocalModel) -> PathBuf {
@@ -398,6 +482,7 @@ pub fn download(
             continue;
         };
         match fetch.sha256(it.repo, it.remote) {
+            // A masked or missing listing hash comes back as this same pin.
             Ok(h) if h == pin => {}
             Ok(_) => {
                 return failed(Step::Checksum, format!(
@@ -1184,5 +1269,202 @@ mod tests {
         assert!(!complete(&dir, &m));
         assert!(!dir.join("stt/tokens.txt.part").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 64 asterisks, the mask the Hub prints for a hidden LFS oid.
+    const STARS: &str = "****************************************************************";
+
+    fn masked_tree(file: &str) -> String {
+        format!(
+            r#"[{{"type":"file","path":"{file}","lfs":{{"oid":"{STARS}","size":1}},"xetHash":"{STARS}"}}]"#
+        )
+    }
+
+    /// Serves `BODY`. `sha256` runs `lookup` against `tree`.
+    struct TreeFetch<F> {
+        tree: String,
+        opens: Mutex<u32>,
+        lookup: F,
+    }
+
+    impl<F> Fetch for TreeFetch<F>
+    where
+        F: Fn(&str, &str, String) -> Result<String, String>,
+    {
+        fn open(&self, _url: &str, offset: u64) -> Result<Opened, String> {
+            assert_eq!(offset, 0);
+            *self.opens.lock().unwrap() += 1;
+            Ok((
+                Box::new(Cursor::new(BODY.to_vec())),
+                0,
+                Some(BODY.len() as u64),
+            ))
+        }
+        fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
+            (self.lookup)(repo, file, self.tree.clone())
+        }
+    }
+
+    #[test]
+    fn a_masked_hash_with_a_catalog_pin_is_the_checksum_and_the_download_is_verified() {
+        assert_eq!(STARS.len(), 64);
+        let phi =
+            *crate::local_setup::model_by_id("microsoft-phi4-mini-3.8b-heretic-q4_k_m").unwrap();
+        let pin = "15b925dec5237c100597068357360d22750c6eee6fa02ba6bdb81fd564f0cbcf";
+        assert_eq!(phi.sha256, pin);
+        assert!(phi.parts.is_empty());
+        assert_eq!(
+            sha256_lookup(phi.repo, phi.file, &mut |_| {
+                Ok((masked_tree(phi.file), None))
+            })
+            .as_deref(),
+            Ok(pin)
+        );
+        let bare = format!(r#"[{{"type":"file","path":"{}"}}]"#, phi.file);
+        assert_eq!(
+            sha256_lookup(phi.repo, phi.file, &mut |_| Ok((bare.clone(), None))).as_deref(),
+            Ok(pin)
+        );
+        let granite = crate::local_setup::model_by_id("ibm-granite4.2-3b-heretic-q4_k_m").unwrap();
+        let gpin = "198acf45f90e07463b8eeba1b6083bb675bfb83a0d9fd3cda5ccd850e4cbb23b";
+        assert_eq!(granite.sha256, gpin);
+        assert_eq!(
+            sha256_lookup(granite.repo, granite.file, &mut |_| {
+                Ok((masked_tree(granite.file), None))
+            })
+            .as_deref(),
+            Ok(gpin)
+        );
+        // The path is not in the listing, so the catalog pin is not a checksum.
+        assert_eq!(
+            sha256_lookup(phi.repo, phi.file, &mut |_| Ok(("[]".into(), None))),
+            Err(format!(
+                "Hugging Face lists no checksum for {} in {}.",
+                phi.file, phi.repo
+            ))
+        );
+
+        let m = model();
+        let body_pin: &'static str = sha(BODY).leak();
+        let dir = tmp("masked-pin");
+        let srv = TreeFetch {
+            tree: masked_tree(m.file),
+            opens: Mutex::new(0),
+            lookup: move |repo: &str, file: &str, tree: String| {
+                super::sha256_lookup_with_pin(repo, file, Some(body_pin), &mut |_| {
+                    Ok((tree.clone(), None))
+                })
+            },
+        };
+        let mut seen = Vec::new();
+        let out = download(&dir, &m, &srv, &Control::default(), &mut |p| seen.push(p));
+        assert_eq!(
+            out,
+            Outcome::Done(Installed {
+                id: "test-model".into(),
+                file: "test.gguf".into(),
+                sha256: body_pin.into(),
+                bytes: BODY.len() as u64,
+            })
+        );
+        assert!(seen.contains(&Progress::Verifying));
+        assert_eq!(*srv.opens.lock().unwrap(), 1);
+        assert_eq!(fs::read(dir.join("test.gguf")).unwrap(), BODY);
+        let _ = fs::remove_dir_all(&dir);
+
+        // The shell's lookup has no extra pin argument: the catalog supplies it,
+        // the stand-in bytes are not that file, and verify rejects them.
+        let dir = tmp("phi-mask");
+        let srv = TreeFetch {
+            tree: masked_tree(phi.file),
+            opens: Mutex::new(0),
+            lookup: |repo: &str, file: &str, tree: String| {
+                sha256_lookup(repo, file, &mut |_| Ok((tree.clone(), None)))
+            },
+        };
+        let mut seen = Vec::new();
+        let out = download(&dir, &phi, &srv, &Control::default(), &mut |p| seen.push(p));
+        assert_eq!(out, Outcome::BadChecksum);
+        assert!(seen.contains(&Progress::Verifying));
+        assert_eq!(*srv.opens.lock().unwrap(), 1);
+        assert!(!dir.join(phi.file).exists());
+        assert!(partial_bytes(&dir, &phi).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_masked_hash_with_no_catalog_pin_still_refuses() {
+        let m = model();
+        let err = format!(
+            "Hugging Face lists no checksum for {} in {}.",
+            m.file, m.repo
+        );
+        assert_eq!(
+            sha256_lookup(m.repo, m.file, &mut |_| Ok((masked_tree(m.file), None))),
+            Err(err.clone())
+        );
+        let dir = tmp("no-pin");
+        let srv = TreeFetch {
+            tree: masked_tree(m.file),
+            opens: Mutex::new(0),
+            lookup: |repo: &str, file: &str, tree: String| {
+                sha256_lookup(repo, file, &mut |_| Ok((tree.clone(), None)))
+            },
+        };
+        let out = download(&dir, &m, &srv, &Control::default(), &mut |_| {});
+        assert_eq!(
+            out,
+            Outcome::Failed {
+                step: Step::Checksum,
+                why: format!("Couldn't read the checksum for {}: {err}", m.name),
+            }
+        );
+        assert_eq!(*srv.opens.lock().unwrap(), 0);
+        assert!(partial_bytes(&dir, &m).is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_real_listed_hash_that_disagrees_with_the_pin_still_refuses() {
+        let phi =
+            *crate::local_setup::model_by_id("microsoft-phi4-mini-3.8b-heretic-q4_k_m").unwrap();
+        let listed = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_ne!(listed, phi.sha256);
+        let tree = format!(
+            r#"[{{"path":"{}","lfs":{{"oid":"{listed}"}},"xetHash":"{STARS}"}}]"#,
+            phi.file
+        );
+        assert_eq!(
+            sha256_lookup(phi.repo, phi.file, &mut |_| Ok((tree.clone(), None))).as_deref(),
+            Ok(listed)
+        );
+        let xet = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        let xet_tree = format!(
+            r#"[{{"path":"{}","lfs":{{"oid":"{STARS}"}},"xetHash":"{xet}"}}]"#,
+            phi.file
+        );
+        assert_eq!(
+            sha256_lookup(phi.repo, phi.file, &mut |_| Ok((xet_tree.clone(), None))).as_deref(),
+            Ok(xet)
+        );
+        let dir = tmp("real-drift");
+        let srv = TreeFetch {
+            tree,
+            opens: Mutex::new(0),
+            lookup: |repo: &str, file: &str, tree: String| {
+                sha256_lookup(repo, file, &mut |_| Ok((tree.clone(), None)))
+            },
+        };
+        let out = download(&dir, &phi, &srv, &Control::default(), &mut |_| {});
+        assert_eq!(
+            out,
+            Outcome::Failed {
+                step: Step::Checksum,
+                why: "Hugging Face now lists a different file for Microsoft Phi-4-mini 3.8B than the one Loadout pinned, so it wasn't downloaded.".into(),
+            }
+        );
+        assert_eq!(*srv.opens.lock().unwrap(), 0);
+        assert!(partial_bytes(&dir, &phi).is_none());
+        let _ = fs::remove_dir_all(dir);
     }
 }
