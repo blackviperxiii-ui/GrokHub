@@ -1482,6 +1482,7 @@ fn the_report_prints_the_malformed_tool_call_rate() {
         malformed_calls: 1,
     };
     let mut report = LiveReport {
+        suite: EvalSuite::Default,
         model: "local".into(),
         provider: Provider::Local,
         ab: None,
