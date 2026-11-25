@@ -1801,7 +1801,7 @@ fn run_turn(
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
             if !refused {
-                note_repeat(&mut repeats, call, &output);
+                note_repeat(&mut repeats, input.workspace, call, &output);
             }
             crate::post_check::note_ran(&mut ran, call, &output);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
@@ -2148,15 +2148,39 @@ fn repeat_key(call: &FunctionCall) -> String {
 }
 
 /// Count a call that ran. A successful edit clears every count: the next test
-/// run checks new code, so it isn't a repeat.
-fn note_repeat(repeats: &mut HashMap<String, u32>, call: &FunctionCall, output: &ToolOutput) {
-    if !output.failed && crate::compact::path_from_write_call(&call.name, &call.arguments).is_some()
-    {
+/// run checks new code, so it isn't a repeat. An edit refused because its
+/// file changed on disk drops the counts of that file's reads: the read it
+/// asks for sees new text.
+fn note_repeat(
+    repeats: &mut HashMap<String, u32>,
+    workspace: &Path,
+    call: &FunctionCall,
+    output: &ToolOutput,
+) {
+    let edited = crate::compact::path_from_write_call(&call.name, &call.arguments);
+    if !output.failed && edited.is_some() {
         repeats.clear();
         return;
     }
+    if let Some(raw) = edited.filter(|_| tools::seen::is_refusal(&output.text)) {
+        if let Ok(file) = tools::confine(workspace, &raw) {
+            repeats.retain(|key, _| !reads_file(key, workspace, &file));
+        }
+    }
     let seen = repeats.entry(repeat_key(call)).or_insert(0);
     *seen = seen.saturating_add(1);
+}
+
+/// Whether repeat key `key` is a `read_file` of `file`.
+fn reads_file(key: &str, workspace: &Path, file: &Path) -> bool {
+    let Some(arguments) = key.strip_prefix("read_file\n") else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|args| tools::tool_path_arg("read_file", &args))
+        .and_then(|raw| tools::confine(workspace, &raw).ok())
+        .is_some_and(|read| read == file)
 }
 
 fn push_result(
@@ -2672,7 +2696,7 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
-        note_repeat(repeats, call, &output);
+        note_repeat(repeats, input.workspace, call, &output);
         push_output(history, input.conversation_id, call, output);
     }
 
@@ -4262,6 +4286,121 @@ mod tests {
                 if name == "read_file" && status == "failed" && detail.contains("Stop repeating it")
         )));
         assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "v2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// [`Script`], with a file changed on disk just before request `at`.
+    struct ChangesFileAt {
+        script: Script,
+        at: usize,
+        path: std::path::PathBuf,
+        text: &'static str,
+    }
+
+    impl ModelClient for ChangesFileAt {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            if self.script.seen.lock().unwrap().len() == self.at {
+                std::fs::write(&self.path, self.text).unwrap();
+            }
+            self.script.stream(req, cancel, sink)
+        }
+    }
+
+    #[test]
+    fn a_stale_edit_refusal_lets_the_read_it_asks_for_run_again() {
+        let dir = workspace("stale-repeat");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one\n").unwrap();
+        let read = |id: &str| call(id, "read_file", r#"{"target_file":"a.txt"}"#);
+        let edit = |id: &str| {
+            call(
+                id,
+                "search_replace",
+                r#"{"file_path":"a.txt","old_string":"one","new_string":"ONE"}"#,
+            )
+        };
+        let turns = vec![
+            ScriptTurn::calls(vec![read("r1")], Usage::default()),
+            ScriptTurn::calls(vec![read("r2")], Usage::default()),
+            // The person edits a.txt before this reply's edit runs.
+            ScriptTurn::calls(vec![edit("e1")], Usage::default()),
+            ScriptTurn::calls(vec![read("r3")], Usage::default()),
+            ScriptTurn::calls(vec![edit("e2")], Usage::default()),
+            ScriptTurn::text("done"),
+        ];
+        let client = ChangesFileAt {
+            script: Script {
+                turns: Mutex::new(turns),
+                seen: Mutex::new(Vec::new()),
+                cancel_on_text: false,
+                steer: None,
+            },
+            at: 2,
+            path: file.clone(),
+            text: "one\nadded by the user\n",
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: "stale-repeat",
+            max_turns: 10,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &permits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let output_of = |id: &str| {
+            history
+                .iter()
+                .find_map(|item| match item {
+                    InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                        Some(output.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert!(
+            output_of("e1").starts_with("a.txt changed since you last read it"),
+            "{}",
+            output_of("e1")
+        );
+        assert_eq!(output_of("r3"), "1|one\n2|added by the user\n");
+        assert!(
+            output_of("e2").starts_with("replaced 1 in a.txt\n"),
+            "{}",
+            output_of("e2")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "ONE\nadded by the user\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -59,11 +59,20 @@ pub(crate) fn changed_on_disk(session: Option<&str>, path: &Path) -> bool {
     std::fs::read(path).is_ok_and(|bytes| fnv1a(&bytes) != hash)
 }
 
+/// What follows the path in [`refusal`].
+const STALE: &str = " changed since you last read it (the person, a helper or a command edited it). Nothing was changed: read it again with read_file, then edit what is there now.";
+
 /// The answer to an edit of a file that changed since the chat saw it.
 pub(crate) fn refusal(raw: &str) -> String {
-    format!(
-        "{raw} changed since you last read it (the person, a helper or a command edited it). Nothing was changed: read it again with read_file, then edit what is there now."
-    )
+    format!("{raw}{STALE}")
+}
+
+/// Whether an edit's answer is [`refusal`]: the file changed on disk, so the
+/// chat's next read of it is new work, not a repeat.
+pub(crate) fn is_refusal(text: &str) -> bool {
+    text.lines()
+        .next()
+        .is_some_and(|line| line.ends_with(STALE))
 }
 
 /// After a PostToolUse hook ran on a `write` or `search_replace`: a
@@ -105,5 +114,9 @@ mod tests {
             refusal("a.txt"),
             "a.txt changed since you last read it (the person, a helper or a command edited it). Nothing was changed: read it again with read_file, then edit what is there now."
         );
+        assert!(is_refusal(&format!("{}\nhook note", refusal("a.txt"))));
+        assert!(!is_refusal(
+            "The string to replace was not found in the file"
+        ));
     }
 }
