@@ -160,9 +160,9 @@ impl HttpConn {
         let req = crate::harness::EgressReq::new(&self.post_url, data);
         let tool = format!("mcp:{}", self.server);
         crate::harness::guard_or_park(&crate::perm::config_dir(), &req, &tool, &mut || stop())?;
-        match self.send_call(name, args, key, timeout) {
+        match self.send_call(name, args, key, timeout, stop) {
             Err(err) if retry_safe && super::idem::maybe_ran(&err) && !stop() => {
-                self.send_call(name, args, key, timeout)
+                self.send_call(name, args, key, timeout, stop)
             }
             other => other,
         }
@@ -174,20 +174,49 @@ impl HttpConn {
         args: &Value,
         key: Option<&str>,
         timeout: Duration,
+        stop: &dyn Fn() -> bool,
     ) -> Result<(String, bool, Value), String> {
         if self.stateless {
             let server = self.server.clone();
-            return rpc::call_tool_raw(&server, name, args, &mut |params| {
-                self.roundtrip("tools/call", rpc::with_key(params, key), timeout)
-            });
+            let session = super::elicit::hook_session().unwrap_or_default();
+            return rpc::call_tool_raw(
+                &server,
+                &session,
+                name,
+                args,
+                stop,
+                &mut |method, params| {
+                    let params = if method == "tools/call" {
+                        rpc::with_key(params, key)
+                    } else {
+                        params
+                    };
+                    self.roundtrip(method, params, timeout)
+                },
+            );
         }
         let result = self.roundtrip(
             "tools/call",
             rpc::with_key(json!({"name": name, "arguments": args}), key),
             timeout,
         )?;
+        if result.get("resultType").and_then(Value::as_str) == Some("task") {
+            return Err(format!(
+                "MCP server `{}` returned a task on a connection that is not 2026-07-28",
+                self.server
+            ));
+        }
         let (text, failed) = rpc::tool_output(&result);
         Ok((text, failed, result))
+    }
+
+    pub(crate) fn raw_rpc(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        self.roundtrip(method, params, timeout)
     }
 
     /// `resources/read` for one URI (MCP Apps `ui://` HTML, and other resources).
@@ -1527,7 +1556,8 @@ pub(crate) mod tests {
                 "extensions": {
                     "io.modelcontextprotocol/ui": {
                         "mimeTypes": ["text/html;profile=mcp-app"]
-                    }
+                    },
+                    "io.modelcontextprotocol/tasks": {}
                 }
             })
         );

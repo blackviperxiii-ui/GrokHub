@@ -144,6 +144,18 @@ pub fn unalias_elicit(child: &str) {
     map.remove(child);
 }
 
+pub(crate) fn hook_session() -> Option<String> {
+    HOOK.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            None
+        } else {
+            // SAFETY: the frame lives on this thread's stack for the whole `with_elicit` body.
+            Some(unsafe { (*ptr).session.clone() })
+        }
+    })
+}
+
 pub(crate) fn wait_elicit(
     session: &str,
     id: &str,

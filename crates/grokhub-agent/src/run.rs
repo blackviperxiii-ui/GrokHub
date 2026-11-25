@@ -565,6 +565,15 @@ pub fn run_loop(
     // saved like that, and on the way out, so no provider ever sees a call
     // without its output.
     crate::client::pair_orphan_calls(history);
+    for line in crate::mcp::take_orphans(input.conversation_id) {
+        on_event(LoopEvent::Tool {
+            id: "mcp-task".into(),
+            name: "mcp".into(),
+            status: "failed".into(),
+            detail: line,
+            image: None,
+        });
+    }
     // Failover PR 7: a new run starts with a clean hand-off chain.
     crate::route::handoff::begin(input.conversation_id);
     let out = run_turn(input, history, user_text, image, on_event);
