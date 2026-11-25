@@ -114,13 +114,24 @@ fn a_message_is_capped_in_parts_and_bytes() {
     long_context.context_id = Some("c".repeat(128));
     assert_eq!(long_context.check(), Ok(()));
     let mut blank_task = ask("hi");
-    blank_task.task_id = Some(String::new());
+    blank_task.task_id = Some(" ".into());
     assert_eq!(
         blank_task.check(),
         Err(A2aError::InvalidParams(
             "taskId is 1 to 128 characters".into()
         ))
     );
+    // ProtoJSON sends an unset id as "".
+    let unset: Message = serde_json::from_value(json!({
+        "messageId": "m-1",
+        "contextId": "",
+        "taskId": "",
+        "role": "ROLE_USER",
+        "parts": [{ "text": "hi" }],
+    }))
+    .unwrap();
+    assert_eq!(unset.check(), Ok(()));
+    assert_eq!((unset.context_id, unset.task_id), (None, None));
 }
 
 #[test]

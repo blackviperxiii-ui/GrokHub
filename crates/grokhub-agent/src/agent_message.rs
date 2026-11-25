@@ -201,7 +201,17 @@ pub(crate) fn brief(
     let system = {
         let _home = ConfigGuard::set(&home);
         let rules = grokhub_core::cabin_rules::cabin_rules_for("", gate.desktop);
-        let mut system = crate::prompt::system_prompt(&rules, &workspace);
+        // A paired computer gets none of the person's own prompt layers.
+        let mut system = match from.peer {
+            Some(_) => crate::prompt::system_prompt_with(
+                crate::prompt::PromptProfile::Peer,
+                &rules,
+                "",
+                &workspace,
+                crate::prompt::PromptNeed::default(),
+            ),
+            None => crate::prompt::system_prompt(&rules, &workspace),
+        };
         if let Some(steps) = playbook_steps(&profile, message, &from.root) {
             system.push_str("\n\n");
             system.push_str(&steps);

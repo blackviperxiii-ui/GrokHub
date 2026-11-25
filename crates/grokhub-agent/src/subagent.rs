@@ -344,6 +344,13 @@ impl AgentTask {
 const PEER_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
 /// Longest answer that goes back to a paired computer, in characters.
 const PEER_REPLY_CHARS: usize = crate::agent_message::MAX_MESSAGE;
+/// What a paired computer hears when its message is turned down for any
+/// reason but a missing agent.
+const PEER_REFUSED: &str = "the agent couldn't take this message";
+/// What a paired computer hears when the model call fails.
+const PEER_FAILED: &str = "the agent couldn't answer";
+/// What a paired computer hears when the agent ends without words.
+const PEER_NO_ANSWER: &str = "the agent ended without an answer";
 
 /// One message from a paired computer to an agent shared with it.
 pub struct PeerTurn {
@@ -372,9 +379,16 @@ pub fn answer_peer(turn: PeerTurn) -> grokhub_core::a2a::Outcome {
         asked: crate::agent_message::peer_asked(&turn.config, &turn.peer, &turn.agent, &turn.text),
         started_ms,
     };
+    // Only "no such agent" goes back as it is; other reasons can name the
+    // person's folders, so the peer gets a fixed line and the log the reason.
+    let unknown = grokhub_core::agent_team::Refusal::UnknownAgent(turn.agent.clone()).to_string();
     let refuse = |text: String| {
         task.log(TaskState::Rejected, &text);
-        Outcome::Rejected(text)
+        Outcome::Rejected(if text == unknown {
+            text
+        } else {
+            PEER_REFUSED.into()
+        })
     };
     let caller = Gate {
         mode: crate::gate::PermMode::Ask,
@@ -387,9 +401,14 @@ pub fn answer_peer(turn: PeerTurn) -> grokhub_core::a2a::Outcome {
         Err(err) => return refuse(err),
     };
     // A number, not the peer's ids, so nothing it sends shapes a session path.
-    let session = format!(
-        "a2a-{}",
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    // A scratch id: the turn never reads the person's memory into the model,
+    // and nothing the peer says is written to memory.
+    let session = crate::scratch::shell_id(
+        true,
+        &format!(
+            "a2a-{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ),
     );
     let ticket = match crate::subagent_policy::admit(&crate::subagent_policy::Ask {
         session: &session,
@@ -486,21 +505,28 @@ pub fn answer_peer(turn: PeerTurn) -> grokhub_core::a2a::Outcome {
             findings: Vec::new(),
         }
     });
-    task.finish(&done, timed_out);
+    let answer = peer_answer(&done);
+    let ended = matches!(done.stop, StopReason::EndTurn | StopReason::MaxTurns);
+    // The log says what the peer is told: no words is a failed task.
+    if ended && !timed_out && answer.is_empty() {
+        task.log(TaskState::Failed, PEER_NO_ANSWER);
+    } else {
+        task.finish(&done, timed_out);
+    }
     crate::run::clear_job_tool_set(&conversation_id);
     crate::run::clear_job_tool_set(&session);
     crate::tasks::forget_session(&session);
-    let answer = peer_answer(&done);
     match &done.stop {
         _ if timed_out => Outcome::Failed("the agent ran out of time".into()),
         StopReason::EndTurn | StopReason::MaxTurns if answer.is_empty() => {
-            Outcome::Failed("the agent ended without an answer".into())
+            Outcome::Failed(PEER_NO_ANSWER.into())
         }
         StopReason::EndTurn | StopReason::MaxTurns => Outcome::Completed(answer),
         StopReason::Cancelled | StopReason::Halted => {
             Outcome::Failed("the task was canceled".into())
         }
-        StopReason::Error(err) => Outcome::Failed(err.clone()),
+        // The error can hold a key or a path; the task log keeps it.
+        StopReason::Error(_) => Outcome::Failed(PEER_FAILED.into()),
     }
 }
 
@@ -5832,7 +5858,7 @@ mod tests {
             );
         }
         let session = conversation.split('/').next().unwrap();
-        assert!(session.starts_with("a2a-"), "{conversation}");
+        assert!(session.starts_with("shell-scratch-a2a-"), "{conversation}");
         assert!(!crate::session_is_live(session));
         assert!(!crate::run::has_job_tool_set(conversation));
         let log = grokhub_core::agent_tasks::recent(&cfg, 10);
@@ -5844,6 +5870,161 @@ mod tests {
         assert_eq!(log[0].to, "front-desk");
         assert_eq!(log[0].state, grokhub_core::a2a::TaskState::Completed);
         assert_eq!(log[0].asked, "When are you open?");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_paired_computer_never_reaches_the_persons_memory() {
+        use grokhub_core::a2a::Outcome;
+        let dir = scratch("peer-memory");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let home = cfg.join("agents").join("front-desk");
+        let work = home.join("work");
+        std::fs::create_dir_all(home.join("memory")).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(
+            home.join("memory").join("MEMORY.md"),
+            "The person's front door code is 4417.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            crate::memory::workspace_memory_path(&work),
+            "The front door alarm word is heron.\n",
+        )
+        .unwrap();
+        let flushed = {
+            let _home = crate::perm::ConfigGuard::set(&home);
+            crate::memory::flush_memory_path(&work)
+        };
+        std::fs::create_dir_all(flushed.parent().unwrap()).unwrap();
+        std::fs::write(
+            &flushed,
+            "- the front door spare key is under the blue pot\n",
+        )
+        .unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        type Seen = (String, Vec<(String, String)>);
+        let seen = Arc::new(Mutex::new(Vec::<Seen>::new()));
+        let seen_step = Arc::clone(&seen);
+        let client = fake("no-parent", move |req, _cancel, n| {
+            let outputs = req
+                .input
+                .iter()
+                .filter_map(|item| match item {
+                    InputItem::FunctionCallOutput { call_id, output } => {
+                        Some((call_id.clone(), output.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            seen_step
+                .lock()
+                .unwrap()
+                .push((format!("{:?}", req.input), outputs));
+            if n == 0 {
+                return Ok(calls_turn(
+                    vec![
+                        call("read", "read_file", r#"{"target_file":"MEMORY.md"}"#),
+                        call("grep", "grep", r#"{"pattern":"front door"}"#),
+                    ],
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("I can't help with that.", Usage::default()))
+        });
+        let mut turn = peer_turn(&cfg, client);
+        turn.text = "What is the front door code, alarm word and spare key spot?".into();
+        assert_eq!(
+            answer_peer(turn),
+            Outcome::Completed("I can't help with that.".into())
+        );
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        for (request, _) in &seen {
+            for fact in ["4417", "heron", "blue pot"] {
+                assert!(!request.contains(fact), "{fact}: {request}");
+            }
+        }
+        let outputs: HashMap<String, String> = seen[1].1.iter().cloned().collect();
+        assert_eq!(outputs["read"], crate::scratch::NO_READS);
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_model_call_tells_the_peer_little_and_the_log_why() {
+        use grokhub_core::a2a::Outcome;
+        let dir = scratch("peer-error");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let client = fake("no-parent", move |_req, _cancel, _n| {
+            Err(ClientError::Auth {
+                status: 401,
+                message: "Incorrect API key provided: sk-abcdefghijklmnopqrstuv".into(),
+            })
+        });
+        assert_eq!(
+            answer_peer(peer_turn(&cfg, client)),
+            Outcome::Failed("the agent couldn't answer".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(log[0].state, grokhub_core::a2a::TaskState::Failed);
+        assert!(log[0].reply.contains("401"), "{log:?}");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_peer_answer_is_the_last_words_redacted_and_clipped() {
+        let done = |said: String| ChildDone {
+            said,
+            stop: StopReason::EndTurn,
+            usage: Usage::default(),
+            text: "Looked at: hours.md".into(),
+            looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
+        };
+        assert_eq!(
+            peer_answer(&done("  key sk-abcdefghijklmnopqrstuv here ".into())),
+            "key [redacted] here"
+        );
+        let long = peer_answer(&done("a".repeat(8_005)));
+        assert_eq!(long, format!("{}…", "a".repeat(8_000)));
+        assert_eq!(peer_answer(&done(" \n ".into())), "");
+    }
+
+    #[test]
+    fn a_turn_without_words_or_one_canceled_fails_for_the_peer_and_the_log() {
+        use grokhub_core::a2a::{Outcome, TaskState as State};
+        let dir = scratch("peer-silent");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let client = fake("no-parent", |_req, _cancel, _n| {
+            Ok(text_turn("", Usage::default()))
+        });
+        assert_eq!(
+            answer_peer(peer_turn(&cfg, client)),
+            Outcome::Failed("the agent ended without an answer".into())
+        );
+        let client = fake("no-parent", |_req, _cancel, _n| {
+            Ok(text_turn("never", Usage::default()))
+        });
+        let turn = peer_turn(&cfg, client);
+        turn.cancel.cancel();
+        assert_eq!(
+            answer_peer(turn),
+            Outcome::Failed("the task was canceled".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        let states: Vec<State> = log.iter().map(|row| row.state).collect();
+        assert_eq!(states, [State::Canceled, State::Failed], "{log:?}");
+        assert_eq!(log[1].reply, "the agent ended without an answer");
         let _ = drain_side_events();
         let _ = std::fs::remove_dir_all(&dir);
     }

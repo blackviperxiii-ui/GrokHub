@@ -104,14 +104,27 @@ impl<'de> Deserialize<'de> for Part {
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub message_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "empty_as_unset",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub context_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "empty_as_unset",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub task_id: Option<String>,
     pub role: Role,
     pub parts: Vec<Part>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub metadata: Value,
+}
+
+/// ProtoJSON reads an empty string field as unset.
+fn empty_as_unset<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(de)?.filter(|id| !id.is_empty()))
 }
 
 impl Message {

@@ -75,7 +75,13 @@ the hard floor and the sandbox). A customer profile can't be saved with
   `share_with` lists its device id. To that computer, any other agent looks
   missing. Its turn runs read only and unattended, with only `read_file`,
   `list_dir`, `grep` and `glob`, under the automation origin, and the
-  message is fenced as outside text (`grokhub_agent::answer_peer`).
+  message is fenced as outside text (`grokhub_agent::answer_peer`). The
+  turn is a scratch session, so it never reads the person's memory and
+  writes none. Its system prompt leaves out the person's own `AGENTS.md` and
+  `CLAUDE.md` layers, environment facts, skills and plugins. The computer
+  gets the agent's last words, secrets redacted and clipped to 8000
+  characters, or a fixed line when the message is turned down or the turn
+  fails; the task log keeps the reason.
 
 ## A2A shapes
 
