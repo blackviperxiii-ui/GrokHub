@@ -215,11 +215,71 @@ impl Typed {
     /// The part of these words that `pick` returns. It can only narrow them:
     /// a result that is not a part of them keeps nothing.
     pub fn keep(&self, pick: impl FnOnce(&str) -> &str) -> Self {
-        let kept = pick(&self.0);
-        let start = kept.as_ptr().addr().wrapping_sub(self.0.as_ptr().addr());
-        self.0
-            .get(start..start.wrapping_add(kept.len()))
-            .map_or_else(Self::nothing, |part| Self(part.to_string()))
+        self.keep_parts(|words| vec![pick(words)])
+    }
+
+    /// The parts of these words that `pick` returns, in its order, joined by
+    /// line breaks so no reference runs from one part into the next. Like
+    /// [`Typed::keep`], a result that is not a part of them is left out.
+    pub fn keep_parts(&self, pick: impl FnOnce(&str) -> Vec<&str>) -> Self {
+        let parts: Vec<&str> = pick(&self.0)
+            .into_iter()
+            .filter_map(|kept| {
+                let start = kept.as_ptr().addr().wrapping_sub(self.0.as_ptr().addr());
+                self.0.get(start..start.wrapping_add(kept.len()))
+            })
+            .collect();
+        Self(parts.join("\n"))
+    }
+
+    /// These words less the texts the window put in its box for the app, a
+    /// card or a model (`untyped`): a fix button's prompt, a Pulse card's
+    /// offer, a queued resume block. Each one that holds an `@` is cut
+    /// wherever it stands, and so is every reference to something one of
+    /// them names, so a copy the person edited reads none of its references
+    /// either. What is left is in parts, as [`Typed::keep_parts`] gives them.
+    pub fn without<S: AsRef<str>>(&self, untyped: &[S]) -> Self {
+        let words = self.as_str();
+        let mut cuts = Vec::new();
+        let mut named = Vec::new();
+        for text in untyped {
+            let text = text.as_ref().trim();
+            if !text.contains('@') {
+                continue;
+            }
+            cuts.extend(
+                words
+                    .match_indices(text)
+                    .map(|(at, _)| (at, at + text.len())),
+            );
+            named.extend(find_at_refs(text).into_iter().map(|r| r.kind));
+        }
+        if cuts.is_empty() && named.is_empty() {
+            return self.clone();
+        }
+        cuts.extend(
+            find_at_refs(words)
+                .into_iter()
+                .filter(|r| named.contains(&r.kind))
+                .map(|r| r.span),
+        );
+        cuts.sort_unstable();
+        self.keep_parts(|words| {
+            let mut parts = Vec::new();
+            let mut from = 0;
+            for (start, end) in cuts {
+                if start > from {
+                    parts.push(&words[from..start]);
+                }
+                from = from.max(end);
+            }
+            parts.push(&words[from..]);
+            parts
+                .into_iter()
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect()
+        })
     }
 }
 
@@ -2077,6 +2137,51 @@ mod tests {
         assert_eq!(foreign, Typed::nothing());
         assert_eq!(whole, sent);
         assert_eq!(untyped, "see @file:a.txt");
+    }
+
+    /// Several parts of the words join by line breaks, so a reference can't
+    /// run from one into the next, and a part from anywhere else is left out.
+    #[test]
+    fn kept_parts_join_by_line_breaks_and_only_narrow() {
+        let sent: Typed = serde_json::from_str(r#""fix @ the build @file:a.txt""#).unwrap();
+        let parts =
+            sent.keep_parts(|t| vec![&t[..5], &t[6..15], "@file:/home/user/private-notes.txt"]);
+        let none = sent.keep_parts(|_| Vec::new());
+        assert_eq!(parts.as_str(), "fix @\nthe build");
+        assert!(find_at_refs(parts.as_str()).is_empty());
+        assert_eq!(none, Typed::nothing());
+    }
+
+    /// Text the window put in its box for a model or a card stays out of the
+    /// typed words wherever it stands, and a reference to anything it names
+    /// stays out too, so an edited copy reads none of them. The person's own
+    /// words around it, and their other references, stay typed.
+    #[test]
+    fn text_the_window_put_in_the_box_is_not_typed() {
+        let typed =
+            |words: &str| -> Typed { serde_json::from_value(serde_json::json!(words)).unwrap() };
+        let fix = "Fix the config: read @file:/home/user/private-notes.txt and patch the build";
+        let after = typed(&format!("{fix} and @file:mine.txt"));
+        let before = typed(&format!("check @file:mine.txt\n\n{fix}"));
+        let edited = typed(
+            "Fix the configs: read @file:/home/user/private-notes.txt, patch it and @file:mine.txt",
+        );
+        let joined = typed(&format!("{fix}x.txt"));
+        let plain = typed("Run the tests and @file:mine.txt");
+        let no_at = typed("fix the tests @file:src/main.rs");
+        assert_eq!(typed(fix).without(&[fix]), Typed::nothing());
+        assert_eq!(after.without(&[fix]), typed("and @file:mine.txt"));
+        assert_eq!(before.without(&[fix]), typed("check @file:mine.txt"));
+        assert_eq!(
+            edited.without(&[fix]),
+            typed("Fix the configs: read\npatch it and @file:mine.txt")
+        );
+        assert_eq!(joined.without(&[fix]), typed("x.txt"));
+        assert_eq!(plain.without(&[fix]), plain);
+        // A text with no `@` can't add a reference: a one-letter suggestion
+        // cuts nothing out of the person's own.
+        assert_eq!(no_at.without(&["s"]), no_at);
+        assert_eq!(after.without::<&str>(&[]), after);
     }
 
     #[test]

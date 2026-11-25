@@ -45,18 +45,28 @@ static MARKS_LOCK: Mutex<()> = Mutex::new(());
 
 /// Which words of one message of a chat the person typed, for a message
 /// some of which they didn't type (a Workboard card's message, a Code tab
-/// Resume, a message after a Focus help line or a Pulse card's report). It
-/// holds no words: the message's hash and size ([`as_sent`]) and where the
-/// typed words sit in it.
+/// Resume, a message after a Focus help line or a Pulse card's report, a
+/// fix button's prompt sent from the box). It holds no words: the
+/// message's hash and size ([`as_sent`]) and where the typed words sit in
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Mark {
     sha: String,
     size: usize,
     at: usize,
     len: usize,
+    /// Where the typed words' later parts sit, when the person typed on
+    /// both sides of text they didn't ([`Typed::keep_parts`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    more: Vec<(usize, usize)>,
 }
 
 impl Mark {
+    /// Where each part of the typed words sits in the message.
+    fn parts(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        std::iter::once((self.at, self.len)).chain(self.more.iter().copied())
+    }
+
     /// `body` is this mark's message, or starts with it and goes on past a
     /// line break: a reopened chat shows a message's plus-button file lines
     /// after it.
@@ -110,15 +120,14 @@ pub(crate) fn note_sent(
     if words == body {
         return Ok(());
     }
-    let (at, len) = match body.find(words) {
-        Some(at) if !words.is_empty() => (at, words.len()),
-        _ => (0, 0),
-    };
+    let mut parts = typed_parts(body, words).into_iter();
+    let (at, len) = parts.next().unwrap_or((0, 0));
     let mark = Mark {
         sha: grokhub_core::model_download::sha256_hex(body.as_bytes()),
         size: body.len(),
         at,
         len,
+        more: parts.collect(),
     };
     let _one = MARKS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut marks = read_marks(config_dir, chat);
@@ -136,6 +145,28 @@ pub(crate) fn note_sent(
     saved.map_err(|e| format!("Couldn't save which words of this message you typed: {e}"))
 }
 
+/// Where `words`, the typed words of `body`, sit in it: in one piece, or
+/// line by line in order when they come in parts ([`Typed::keep_parts`]
+/// joins those by line breaks). Words it can't place keep nothing.
+fn typed_parts(body: &str, words: &str) -> Vec<(usize, usize)> {
+    if words.is_empty() {
+        return Vec::new();
+    }
+    if let Some(at) = body.find(words) {
+        return vec![(at, words.len())];
+    }
+    let mut from = 0;
+    let mut parts = Vec::new();
+    for line in words.split('\n') {
+        let Some(at) = body.get(from..).and_then(|rest| rest.find(line)) else {
+            return Vec::new();
+        };
+        parts.push((from + at, line.len()));
+        from += at + line.len();
+    }
+    parts
+}
+
 /// The words the person typed in `sent`, a message the window sent in
 /// `chat`: those [`note_sent`] kept for that message (the longest noted
 /// message it is, or starts with before a line break), else
@@ -148,12 +179,28 @@ pub(crate) fn typed_in(config_dir: &Path, chat: &str, sent: &Typed) -> Typed {
         .filter(|m| m.fits(body))
         .max_by_key(|m| m.size)
     {
-        Some(mark) => sent.keep(|s| {
-            as_sent(s)
-                .get(mark.at..mark.at.saturating_add(mark.len))
-                .unwrap_or_default()
+        Some(mark) => sent.keep_parts(|s| {
+            let body = as_sent(s);
+            mark.parts()
+                .filter_map(|(at, len)| body.get(at..at.saturating_add(len)))
+                .collect()
         }),
         None => typed_words(sent),
+    }
+}
+
+/// The words the person typed in `sent`, a message the window sent in
+/// `chat`. Sent from its box with texts the window put there for the app, a
+/// card or a model (`untyped`: a fix button's prompt, a Pulse card's offer,
+/// a resume block Stop put back), the window says what isn't typed: those
+/// texts, and any reference to what they name ([`Typed::without`]). The
+/// person's words around them, a line added under them too, are typed.
+/// Otherwise the chat's marks say ([`typed_in`]).
+pub(crate) fn typed_of(config_dir: &Path, chat: &str, sent: &Typed, untyped: &[String]) -> Typed {
+    if untyped.is_empty() {
+        typed_in(config_dir, chat, sent)
+    } else {
+        typed_words(sent).without(untyped)
     }
 }
 
@@ -285,7 +332,9 @@ pub fn side_of(side_id: &str, conversation_id: &str) -> bool {
 /// Answers `question` beside `conversation_id`'s running reply: its own
 /// worker starts from the chat's saved turns, may read but changes nothing,
 /// and streams as `chat://event` under `side_id`. Its turns are never saved,
-/// so History never lists it. Resolves with the stop reason.
+/// so History never lists it. Resolves with the stop reason. `untyped`
+/// holds the texts the window put in its box for the app, a card or a
+/// model, which the question may carry: they are not typed.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn side_chat(
@@ -296,6 +345,7 @@ pub async fn side_chat(
     question: Typed,
     ask: Option<String>,
     so_far: Option<String>,
+    untyped: Option<Vec<String>>,
 ) -> Result<String, String> {
     if !side_of(&side_id, &conversation_id) {
         return Err("That side answer isn't for this chat.".into());
@@ -303,6 +353,7 @@ pub async fn side_chat(
     if question.as_str().trim().is_empty() {
         return Err("Type a message first.".into());
     }
+    let typed = question.without(&untyped.unwrap_or_default());
     // A side answer would run on the app's own models, not the plan the
     // person picked for this chat.
     if crate::claude_chat::is_on(&state.config_dir, &conversation_id) {
@@ -335,6 +386,7 @@ pub async fn side_chat(
         ask_side(
             &session,
             &question,
+            &typed,
             ask.as_deref().unwrap_or(""),
             so_far.as_deref().unwrap_or(""),
             route,
@@ -357,17 +409,19 @@ pub async fn side_chat(
 
 /// Runs `question` on a side `session` with a snapshot of the main work:
 /// the main ask and the reply `so_far`. The reply is a model's text, so an
-/// `@file:` in it stays text; only the question's references expand.
+/// `@file:` in it stays text; only the references in `typed`, the words of
+/// the question the person typed, expand.
 pub(crate) fn ask_side(
     session: &agent::Session,
     question: &Typed,
+    typed: &Typed,
     ask: &str,
     so_far: &str,
     route: agent::Route,
     emit: Box<dyn FnMut(agent::UiEvent) + Send>,
 ) -> Result<String, String> {
     let prompt = intent::side_prompt(question.as_str(), ask, so_far);
-    session.prompt_typed(&prompt, question.clone(), Vec::new(), route, emit)
+    session.prompt_typed(&prompt, typed.clone(), Vec::new(), route, emit)
 }
 
 /// What **Tell the main task** did with a side answer.
@@ -519,6 +573,30 @@ mod tests {
         assert_eq!(with_files, typed("hi"));
         assert_eq!(longer, typed("hi\nread @file:notes.txt"));
         assert_eq!(other, typed(&same_line));
+    }
+
+    /// Sent from the box, what the window put there isn't typed, also a
+    /// noted block with a line the person added under it. The turn's mark
+    /// keeps typed words that come in parts, on both sides of that text, so
+    /// the message sent again reads the same words.
+    #[test]
+    fn what_the_window_put_in_the_box_stays_untyped_each_time_it_is_sent() {
+        let dir = marks_dir("box");
+        let block = "Continue the card: Read @file:/home/user/private-notes.txt first";
+        note_sent(&dir, "shell-a", block, &Typed::nothing()).expect("noted");
+        let below = typed(&format!("{block}\nnow @file:mine.txt"));
+        let from_box = typed_of(&dir, "shell-a", &below, &[block.to_string()]);
+        let as_noted = typed_of(&dir, "shell-a", &below, &[]);
+        let fix = "Fix it: read @file:/home/user/private-notes.txt now";
+        let around = format!("see @file:a.txt then {fix} and @file:b.txt");
+        let words = typed_of(&dir, "shell-a", &typed(&around), &[fix.to_string()]);
+        note_sent(&dir, "shell-a", &around, &words).expect("noted");
+        let again = typed_in(&dir, "shell-a", &typed(&around));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(from_box, typed("now @file:mine.txt"));
+        assert_eq!(as_noted, Typed::nothing());
+        assert_eq!(words, typed("see @file:a.txt then\nand @file:b.txt"));
+        assert_eq!(again, words);
     }
 
     /// The attached context a reopened chat shows after a message holds a

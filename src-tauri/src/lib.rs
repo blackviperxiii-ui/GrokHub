@@ -1059,6 +1059,7 @@ fn maybe_handle_bench_turn_to_disk(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn send_chat(
     app: AppHandle,
     state: State<'_, ShellState>,
@@ -1067,6 +1068,7 @@ async fn send_chat(
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
     clock: Option<automations::Clock>,
+    untyped: Option<Vec<String>>,
 ) -> Result<String, String> {
     set_last_chat(&state, &conversation_id);
     // A message you send ends a Halt's hold on the background passes.
@@ -1085,9 +1087,12 @@ async fn send_chat(
         );
     });
     // Only the words the window sent can hold the person's typing; what is
-    // put before them below can't. The same message sent again in this chat
-    // (`/retry`, after a restart) keeps the typed words it had.
-    let typed = turns::typed_in(&state.config_dir, &conversation_id, &text);
+    // put before them below can't. What the window put in its box for the
+    // app, a card or a model (`untyped`) isn't typed, and the same message
+    // sent again in this chat (`/retry`, after a restart) keeps the typed
+    // words it had.
+    let untyped = untyped.unwrap_or_default();
+    let typed = turns::typed_of(&state.config_dir, &conversation_id, &text, &untyped);
     // A chat opened from a Pulse card: its first message carries the card.
     let carry = state
         .card_carry
@@ -7895,9 +7900,10 @@ fn web_send(
         return Err(remote::NOT_YOURS.into());
     }
     let text: grokhub_core::Typed = arg(args, "text")?;
+    let untyped = arg::<Option<Vec<String>>>(args, "untyped")?.unwrap_or_default();
     let turn = Turn {
         text: text.as_str().to_string(),
-        typed: turns::typed_in(config_dir, &conversation_id, &text),
+        typed: turns::typed_of(config_dir, &conversation_id, &text, &untyped),
         mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
         attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
         clock: arg::<Option<automations::Clock>>(args, "clock")?,
@@ -9935,14 +9941,14 @@ mod command_tests {
         let send = item_after(&src, "async fn send_chat(");
         assert!(
             send.contains(&squeeze(
-                "let typed = turns::typed_in(&state.config_dir, &conversation_id, &text);"
+                "let typed = turns::typed_of(&state.config_dir, &conversation_id, &text, &untyped);"
             )),
             "{send}"
         );
         let web = item_after(&src, "fn web_send(");
         assert!(
             web.contains(&squeeze(
-                "typed: turns::typed_in(config_dir, &conversation_id, &text),"
+                "typed: turns::typed_of(config_dir, &conversation_id, &text, &untyped),"
             )),
             "{web}"
         );
@@ -10366,6 +10372,31 @@ mod web_command_tests {
         for name in ["cancel_chat", "close_chat"] {
             assert!(arm(&body, name).contains("own(args)?"), "{name}");
         }
+    }
+
+    /// A browser's box says what in a message it put there for the app, a
+    /// card or a model, as the desktop window's does: that text and the
+    /// references it names aren't typed, and the person's words after it
+    /// are.
+    #[test]
+    fn a_browser_send_keeps_what_its_box_put_there_untyped() {
+        use serde_json::json;
+        let web = crate::remote::WebAccess::default();
+        // Never made: a send only reads the chat's typed marks.
+        let dir =
+            std::env::temp_dir().join(format!("grokhub-shell-web-untyped-{}", std::process::id()));
+        let fix = "Fix the config: read @file:/home/user/private-notes.txt";
+        let args = json!({
+            "conversationId": "a3",
+            "text": format!("{fix} and @file:mine.txt"),
+            "untyped": [fix],
+        });
+        let (_, turn) = super::web_send(&dir, &web, |_| false, &args).expect("a message sends");
+        let typed: grokhub_core::Typed =
+            serde_json::from_value(json!("and @file:mine.txt")).expect("typed");
+        assert_eq!(turn.text, format!("{fix} and @file:mine.txt"));
+        assert_eq!(turn.typed, typed);
+        assert!(!dir.exists());
     }
 
     /// A send that is refused takes no chat: the browser's chats grow only

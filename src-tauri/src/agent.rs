@@ -3632,9 +3632,11 @@ mod tests {
             outside.display()
         );
         let session = Session::spawn_with("side-at", temp_dir("side-at-config"), fake_desktop);
+        let question = typed("is it done? @file:mine.txt");
         let stop = crate::turns::ask_side(
             &session,
-            &typed("is it done? @file:mine.txt"),
+            &question,
+            &question,
             "fix my build",
             &so_far,
             route,
@@ -3944,20 +3946,29 @@ mod tests {
         /// turn's message noted with the chat. Returns the user message the
         /// model got, without the volatile notes put before it.
         fn send(&self, sent: &str, line: Option<&str>) -> String {
-            self.send_with(sent, line, None, Vec::new())
+            self.send_with(sent, line, None, Vec::new(), &[])
+        }
+
+        /// [`Self::send`] from the box, where the window put `untyped` for
+        /// the app, a card or a model (a fix button's prompt, say).
+        fn send_box(&self, sent: &str, untyped: &[&str]) -> String {
+            let untyped: Vec<String> = untyped.iter().map(|t| t.to_string()).collect();
+            self.send_with(sent, None, None, Vec::new(), &untyped)
         }
 
         /// [`Self::send`] for the first message of a chat opened from a
-        /// Pulse card (its report `carry`), with plus-button `files`.
+        /// Pulse card (its report `carry`), with plus-button `files`, and
+        /// the texts the window put in its box (`untyped`).
         fn send_with(
             &self,
             sent: &str,
             line: Option<&str>,
             carry: Option<&str>,
             files: Vec<crate::attach::Staged>,
+            untyped: &[String],
         ) -> String {
             let sent = typed(sent);
-            let words = crate::turns::typed_in(self.config, self.chat, &sent);
+            let words = crate::turns::typed_of(self.config, self.chat, &sent, untyped);
             let (text, words) =
                 crate::turns::composed(&sent, words, carry, |_| line.map(str::to_string));
             crate::turns::note_sent(self.config, self.chat, &text, &words).expect("noted");
@@ -4215,7 +4226,7 @@ mod tests {
         );
         let window = WindowChat::open(&client, &config, chat, &route.workspace);
         let sent = "what does this mean for @file:mine.txt?";
-        let first = window.send_with(sent, None, Some(&report), vec![notes]);
+        let first = window.send_with(sent, None, Some(&report), vec![notes], &[]);
         let reopened = window.reopened();
         let after_restart = window.send(&reopened, None);
         let _ = std::fs::remove_dir_all(&root);
@@ -4230,6 +4241,172 @@ mod tests {
             after_restart,
             format!("{}\n\n{MINE_ATTACHED}", first.trim_end())
         );
+    }
+
+    /// A findings card's fix button puts its prompt, which the model wrote,
+    /// in the box. Sent as it is, with the person's words after it (on its
+    /// line or the next), or edited, its `@file:` stays text and the
+    /// person's own reference reads. `/retry`, and `/retry` after a
+    /// restart, read the same.
+    #[test]
+    fn a_fix_button_s_prompt_sent_from_the_box_reads_only_the_person_s_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("fix-pill", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("fix-pill-config");
+        let report = serde_json::json!({
+            "findings": [{ "severity": "high", "text": "The build reads a stale config." }],
+            "fixes": [{
+                "label": "Fix the config",
+                "goal": format!("read @file:{} and patch the build", outside.display()),
+            }],
+        });
+        let card = grokhub_core::findings::Findings::from_json(&report).expect("findings");
+        let UiEvent::Findings { fixes, .. } = findings_event(&card.to_body()) else {
+            panic!("a findings card");
+        };
+        let prompt = fixes[0].prompt.clone();
+        let window = WindowChat::open(&client, &config, "shell-fix-pill", &route.workspace);
+        let as_put = window.send_box(&prompt, &[&prompt]);
+        let after = format!("{prompt} and @file:mine.txt");
+        let added = window.send_box(&after, &[&prompt]);
+        let below = format!("{prompt}\nthen @file:mine.txt");
+        let next_line = window.send_box(&below, &[&prompt]);
+        let edited = format!(
+            "{} and @file:mine.txt",
+            prompt.replace("Fix the config", "Fix the configs")
+        );
+        let changed = window.send_box(&edited, &[&prompt]);
+        let retried = window.send(&edited, None);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert_eq!(
+            prompt,
+            format!(
+                "Fix the config: read @file:{} and patch the build",
+                outside.display()
+            )
+        );
+        assert_eq!(as_put, prompt);
+        assert_eq!(added, format!("{after}\n\n{MINE_ATTACHED}"));
+        assert_eq!(next_line, format!("{below}\n\n{MINE_ATTACHED}"));
+        assert_eq!(changed, format!("{edited}\n\n{MINE_ATTACHED}"));
+        assert_eq!(retried, changed);
+        assert_eq!(reopened, changed);
+        assert_eq!(
+            after_restart,
+            format!("{}\n\n{MINE_ATTACHED}", changed.trim_end())
+        );
+    }
+
+    /// A Pulse card's offer opens the card's chat with the card's prompt in
+    /// the box, and the chat's first message carries the card's report.
+    /// Sent as it is, the prompt's `@file:` stays text, as the report's
+    /// does; a reference the person adds after it reads.
+    #[test]
+    fn a_pulse_offer_sent_from_the_box_reads_only_the_person_s_reference() {
+        use grokhub_core::card_report::{CardReport, FixOffer, OfferKind};
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("pulse-offer", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("pulse-offer-config");
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&config);
+        let now = grokhub_core::now_ms();
+        let mut card = grokhub_core::automation_done_card(
+            "watch-bt",
+            "Crash watch",
+            "bluetoothd crashed",
+            now - 60_000,
+        );
+        card.id = "crash-1".into();
+        card.kind = grokhub_core::UpdateKind::Suggestion;
+        card.pulse.report = Some(CardReport {
+            found: "bluetoothd crashed 4 times today".into(),
+            summary: "Your Bluetooth service keeps restarting.".into(),
+            offers: vec![FixOffer {
+                label: "Check the token".into(),
+                prompt: format!("Check @file:{} for the crash token", outside.display()),
+                kind: OfferKind::Chat,
+                fix_type: None,
+                steps: vec![],
+            }],
+            ..Default::default()
+        });
+        std::fs::create_dir_all(&config).expect("config");
+        std::fs::write(
+            config.join("updates.json"),
+            serde_json::to_string(&[card]).expect("cards"),
+        )
+        .expect("updates.json");
+        let seed = crate::pulse::offer(&config, "crash-1", 0, now).expect("offer");
+        let carry = seed.carry.clone().expect("the card's report");
+        let window = WindowChat::open(&client, &config, &seed.conversation_id, &route.workspace);
+        let untyped = [seed.text.clone()];
+        let first = window.send_with(&seed.text, None, Some(&carry), Vec::new(), &untyped);
+        let after = format!("{} and @file:mine.txt", seed.text);
+        let added = window.send_box(&after, &[&seed.text]);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert_eq!(seed.conversation_id, "pulse-crash-1");
+        assert_eq!(
+            seed.text,
+            format!("Check @file:{} for the crash token", outside.display())
+        );
+        assert_eq!(
+            first,
+            format!(
+                "{}{}",
+                grokhub_core::card_report::card_carry(&carry),
+                seed.text
+            )
+        );
+        assert_eq!(added, format!("{after}\n\n{MINE_ATTACHED}"));
+    }
+
+    /// A Workboard Resume that comes while a reply runs waits, and Stop puts
+    /// the block back in the box after what the person had typed there.
+    /// Sent from the box, the block's `@file:` stays text and the person's
+    /// own reference before it reads, as one on a line they add under it
+    /// does.
+    #[test]
+    fn a_resume_block_stop_put_back_in_the_box_reads_only_the_person_s_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("stop-resume", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("stop-resume-config");
+        let chat = "shell-stop-resume";
+        blocked_card(
+            &config,
+            chat,
+            &format!("Read @file:{} first", outside.display()),
+        );
+        let always = grokhub_core::wire::PermissionMode::AlwaysApprove;
+        let resumed = crate::workboard::resume(&config, "c1", "shell-new", always).expect("resume");
+        let resumed = crate::noted_resume(&config, resumed).expect("noted");
+        let block = resumed.prompt.as_str();
+        let window = WindowChat::open(&client, &config, chat, &route.workspace);
+        let merged = format!("check @file:mine.txt\n\n{block}");
+        let before = window.send_box(&merged, &[block]);
+        let below = format!("{block}\nnow @file:mine.txt");
+        let added = window.send_box(&below, &[block]);
+        let alone = window.send_box(block, &[block]);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert!(
+            block.contains(&format!("Read @file:{} first", outside.display())),
+            "{block}"
+        );
+        assert_eq!(before, format!("{merged}\n\n{MINE_ATTACHED}"));
+        assert_eq!(added, format!("{below}\n\n{MINE_ATTACHED}"));
+        assert_eq!(alone, block);
     }
 
     /// `/retry` of a message the person typed reads its reference again.
