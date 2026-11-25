@@ -35,6 +35,8 @@ const COOKIE_NAME: &[u8] = b"MIT-MAGIC-COOKIE-1";
 /// Xauthority's wildcard family: the entry matches any host.
 const FAMILY_WILD: u16 = 0xffff;
 const READY_WITHIN: Duration = Duration::from_secs(10);
+/// Starts tried when another server takes the picked display first.
+const START_TRIES: usize = 4;
 /// The shared screen's size.
 pub const SHARED_SIZE: (u32, u32) = (1280, 800);
 
@@ -191,6 +193,11 @@ pub fn xauth_entry(display: u32, cookie: &[u8]) -> Vec<u8> {
 
 /// The first display number in `range` that no server holds in `socket_dir`
 /// (its socket) or `/tmp` (its lock file).
+/// Another X server holds `display`: its socket or its lock is there.
+fn display_in_use(display: u32) -> bool {
+    free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), display..=display).is_none()
+}
+
 pub fn free_display(
     socket_dir: &Path,
     lock_dir: &Path,
@@ -224,8 +231,38 @@ impl BotDesktop {
 
     /// [`BotDesktop::start`] with a chosen server.
     pub fn start_with(server: Server, dir: &Path, size: (u32, u32)) -> Result<Self, String> {
-        let display = free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), DISPLAYS)
-            .ok_or("no free display number for Bot Desktop")?;
+        Self::start_picking(server, dir, size, || {
+            free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), DISPLAYS)
+        })
+    }
+
+    /// Starts on the display `pick` names. Another server can take a free
+    /// number between the check and the start (two screens starting at
+    /// once): ours then stops at start with the number in use, so it picks
+    /// again, a few times at most.
+    fn start_picking(
+        server: Server,
+        dir: &Path,
+        size: (u32, u32),
+        mut pick: impl FnMut() -> Option<u32>,
+    ) -> Result<Self, String> {
+        let mut lost = None;
+        for _ in 0..START_TRIES {
+            let display = pick().ok_or("no free display number for Bot Desktop")?;
+            match Self::start_on(server, dir, size, display) {
+                Err(err) if display_in_use(display) => lost = Some(err),
+                started => return started,
+            }
+        }
+        Err(lost.unwrap_or_else(|| "no free display number for Bot Desktop".into()))
+    }
+
+    fn start_on(
+        server: Server,
+        dir: &Path,
+        size: (u32, u32),
+        display: u32,
+    ) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("Bot Desktop folder: {e}"))?;
         let cookie = random_cookie()?;
         let auth = dir.join(format!("bot-desktop-{display}.xauth"));
@@ -287,11 +324,20 @@ impl BotDesktop {
     /// on the screen lose their display and end. Safe to call twice.
     pub fn stop(&self) {
         let mut child = self.child();
+        let pid = child.id();
         if matches!(child.try_wait(), Ok(None)) {
             let _ = child.kill();
         }
         let _ = child.wait();
         drop(child);
+        // Killed, the server can't remove its own lock and socket, and a
+        // stale pair holds the number until a reboot. The lock names the
+        // server that made it, so another server's pair stays.
+        let lock = Path::new("/tmp").join(format!(".X{}-lock", self.display));
+        if std::fs::read_to_string(&lock).is_ok_and(|held| held.trim() == pid.to_string()) {
+            let _ = std::fs::remove_file(&lock);
+            let _ = std::fs::remove_file(Path::new(SOCKET_DIR).join(format!("X{}", self.display)));
+        }
         let _ = std::fs::remove_file(&self.auth);
         let _ = std::fs::remove_file(&self.rfb);
         // The shared screen's file, when it names this one.
@@ -570,6 +616,48 @@ mod tests {
         let auth = desk.xauthority().to_path_buf();
         drop(desk);
         assert!(!auth.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two screens starting at once can pick the same free number: the one
+    /// that loses it starts again on another, and the first keeps running.
+    #[test]
+    fn a_screen_that_loses_its_display_number_starts_on_another() {
+        if crate::resolve_bin("Xvfb").is_none() {
+            eprintln!("skipped: no Xvfb");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("grokhub-botdesk-race-{}", std::process::id()));
+        let first =
+            BotDesktop::start_with(Server::Xvfb, &dir.join("a"), (320, 240)).expect("starts");
+        let taken = first.display;
+        // The race: the first pick is the number the other screen just took.
+        let mut picks = vec![taken];
+        let second = BotDesktop::start_picking(Server::Xvfb, &dir.join("b"), (320, 240), || {
+            picks
+                .pop()
+                .or_else(|| free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), DISPLAYS))
+        })
+        .expect("starts on another number");
+        assert_ne!(second.display, taken);
+        assert!(first.connect().is_ok(), "the first screen still runs");
+        assert!(second.connect().is_ok());
+        // A number that stays taken is tried a few times, then named.
+        let mut tries = 0;
+        let lost = BotDesktop::start_picking(Server::Xvfb, &dir.join("c"), (320, 240), || {
+            tries += 1;
+            Some(taken)
+        })
+        .err()
+        .expect("never starts on a taken number");
+        assert_eq!(
+            (tries, lost.as_str()),
+            (START_TRIES, "Xvfb stopped at start (exit status: 1)")
+        );
+        let numbers = (first.display, second.display);
+        drop((first, second));
+        // A stopped screen frees its number for the next one.
+        assert!(!display_in_use(numbers.0) && !display_in_use(numbers.1));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
