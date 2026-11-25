@@ -55,7 +55,6 @@ mod post_check;
 mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;
-mod recovery;
 pub mod repair;
 mod repo_rules;
 pub mod research;
@@ -162,10 +161,6 @@ pub use plan_skills::{
 pub use prompt::{
     chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
     system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
-};
-pub use recovery::{
-    project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
-    RecoveryState,
 };
 pub use repo_rules::{
     discover as discover_repo_rules, resolve_preferred_branch,
