@@ -65,6 +65,7 @@ fn notes(dir: &Path, id: &str) -> Vec<String> {
 const ALWAYS: RunGate = RunGate {
     mode: PermMode::Always,
     desktop: false,
+    origin: grokhub_agent::web_origin::RunOrigin::Window,
 };
 
 fn intact_s1(session: &str) -> bool {

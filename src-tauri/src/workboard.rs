@@ -829,7 +829,7 @@ pub fn make_recurring(
     id: &str,
     choice: usize,
     clock: grokhub_core::LocalClock,
-    by: crate::automations::Author,
+    by: crate::automations::RunOrigin,
 ) -> Result<Page, String> {
     let cards = read_board(&path(config_dir))?;
     let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
@@ -1875,7 +1875,7 @@ mod tests {
 
     #[test]
     fn make_it_recurring_files_an_automation_that_owns_the_card() {
-        use crate::automations::Author;
+        use crate::automations::RunOrigin;
         let config = temp_dir("recur");
         cabin_writes(&config, &[board_card("a", BoardStatus::Todo)]);
         let clock = crate::automations::Clock {
@@ -1884,8 +1884,8 @@ mod tests {
             minute: 0,
         }
         .at(grokhub_core::now_ms());
-        assert!(make_recurring(&config, "a", 9, clock, Author::Here).is_err());
-        let page = make_recurring(&config, "a", 0, clock, Author::Here).unwrap();
+        assert!(make_recurring(&config, "a", 9, clock, RunOrigin::Window).is_err());
+        let page = make_recurring(&config, "a", 0, clock, RunOrigin::Window).unwrap();
         let list = crate::automations::load(&config).unwrap();
         assert_eq!(list.len(), 1);
         let card = &lane(&page, Lane::Todo)[0];
@@ -1894,7 +1894,7 @@ mod tests {
         let saved = on_disk(&config);
         assert_eq!(saved[0].automation.as_deref(), Some(list[0].id.as_str()));
         assert!(
-            make_recurring(&config, "a", 1, clock, Author::Here).is_err(),
+            make_recurring(&config, "a", 1, clock, RunOrigin::Window).is_err(),
             "one automation owns a card"
         );
         assert_eq!(crate::automations::load(&config).unwrap().len(), 1);

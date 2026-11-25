@@ -802,7 +802,8 @@ fn run_slash_line(
         slash::Action::Op(op) => op,
         other => return slash::apply(other, &workspace_of(state, conversation_id)),
     };
-    if let Some(done) = engine_op(state, &op, conversation_id)? {
+    let origin = slash_origin(&state.config_dir, remote, conversation_id);
+    if let Some(done) = engine_op(state, &op, conversation_id, origin)? {
         return Ok(done);
     }
     let bound = current(state).workspace;
@@ -829,12 +830,34 @@ fn run_slash_line(
     Ok(done.effect)
 }
 
+/// Whose words a run that a slash line starts goes on: a paired browser's
+/// when one sent the line, and a browser's too in a chat a browser started
+/// ([`grokhub_agent::web_origin`]), as that chat's own turns are.
+fn slash_origin(
+    config_dir: &Path,
+    remote: bool,
+    conversation_id: Option<&str>,
+) -> grokhub_agent::web_origin::RunOrigin {
+    use grokhub_agent::web_origin::{of_in, RunOrigin};
+    let typed = if remote {
+        RunOrigin::Browser
+    } else {
+        RunOrigin::Window
+    };
+    match conversation_id {
+        Some(chat) => typed.and(of_in(config_dir, Some(chat))),
+        None => typed,
+    }
+}
+
 /// The slash commands that run the model on their own: `/send`, `/bg`,
-/// `/consult`, and `/host`. Each is read only and unattended.
+/// `/consult`, and `/host`. Each is read only and unattended, and runs on
+/// `origin`'s words.
 fn engine_op(
     state: &ShellState,
     op: &slash::Op,
     conversation_id: Option<&str>,
+    origin: grokhub_agent::web_origin::RunOrigin,
 ) -> Result<Option<slash::Effect>, String> {
     let notice = |text: String| Ok(Some(slash::Effect::Notice { text }));
     // Typed in a Code tab session, the work runs in that session's folder.
@@ -856,6 +879,7 @@ fn engine_op(
                 own_folder.unwrap_or(route.workspace),
                 task,
                 scratch,
+                origin,
             )?;
             let sent = matches!(op, slash::Op::Send(_));
             notice(bg_runs::started_text(sent, &title))
@@ -874,6 +898,7 @@ fn engine_op(
                 ),
                 question.clone(),
                 grokhub_agent::CancelToken::new(),
+                origin,
             );
             let _ = grokhub_agent::delete_session(&done.session_id);
             if !done.error.is_empty() && done.text.trim().is_empty() {
@@ -1024,6 +1049,21 @@ fn route(
         // Only a session the agent window started leads (`chat_turn`).
         lead: false,
     })
+}
+
+/// A chat turn's route. A chat a paired browser started stays a browser's,
+/// so a turn in it gets no desktop, whoever typed it
+/// ([`grokhub_agent::web_origin`]).
+fn chat_route(
+    settings: &ShellSettings,
+    session: agent::SessionMode,
+    config_dir: &Path,
+    chat: &str,
+) -> Result<agent::Route, String> {
+    let mut route = route(settings, session, config_dir)?;
+    let origin = grokhub_agent::web_origin::of_in(config_dir, Some(chat));
+    route.desktop &= grokhub_agent::web_origin::desktop_allowed(origin);
+    Ok(route)
 }
 
 /// An unattended run's gate from a turn's route: your Approvals, and the
@@ -1232,7 +1272,7 @@ async fn chat_turn(
         chat_trials::said(&config_dir, &conversation_id, &text, started);
     }
     let stop = tauri::async_runtime::spawn_blocking(move || {
-        let mut route = route(&settings, mode, &config_dir)?;
+        let mut route = chat_route(&settings, mode, &config_dir, &conversation_id)?;
         // A resumed card's turn runs no looser than its run started.
         route.mode = card_chat::turn_mode(&conversation_id, route.mode);
         if let Some(dir) = own_folder {
@@ -2819,8 +2859,7 @@ async fn run_automation(
     state: State<'_, ShellState>,
     id: String,
 ) -> Result<automations::RunResult, String> {
-    let settings = current(&state);
-    let result = run_automation_now(state, id.clone(), settings).await;
+    let result = run_automation_now(state, id.clone(), automations::RunOrigin::Window).await;
     #[cfg(desktop)]
     if result.is_ok() {
         let name = automations::load(&app.state::<ShellState>().config_dir)
@@ -2835,17 +2874,17 @@ async fn run_automation(
     result
 }
 
-/// [`run_automation`] without the notification, with the settings of who
-/// started it: the window's own, or [`web_settings`] for a paired browser.
+/// [`run_automation`] without the notification, started by `by`: the window,
+/// or a paired browser.
 async fn run_automation_now(
     state: State<'_, ShellState>,
     id: String,
-    settings: ShellSettings,
+    by: automations::RunOrigin,
 ) -> Result<automations::RunResult, String> {
+    let settings = current(&state);
     let config_dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
-        let gate = run_gate(&route);
+        let (route, gate) = run_now_route(&settings, by, &config_dir)?;
         automations::run_now(
             &config_dir,
             &id,
@@ -2857,6 +2896,23 @@ async fn run_automation_now(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The route and gate a Run now started by `by` goes with. A browser's goes
+/// with the window's settings minus desktop control, as its chats do, and
+/// runs as a browser's, so what it starts and writes is a browser's too.
+fn run_now_route(
+    settings: &ShellSettings,
+    by: automations::RunOrigin,
+    config_dir: &Path,
+) -> Result<(agent::Route, unattended::RunGate), String> {
+    let settings = match by {
+        automations::RunOrigin::Window => settings.clone(),
+        automations::RunOrigin::Browser => web_settings(settings.clone()),
+    };
+    let route = route(&settings, agent::SessionMode::Chat, config_dir)?;
+    let gate = run_gate(&route).with_origin(by);
+    Ok((route, gate))
 }
 
 fn workspace(state: &ShellState) -> PathBuf {
@@ -4490,8 +4546,8 @@ fn sessions_board_facts(state: &ShellState, web: bool) -> Vec<sessions_board::Se
     let dir = &state.config_dir;
     let mut rows = history::list(dir);
     if web {
-        let started = web_chats::all(dir);
-        rows.retain(|row| started.contains(&row.id));
+        let readable = web_chats::readable(dir);
+        rows.retain(|row| readable.sees(&row.id));
     }
     let waiting: std::collections::HashSet<String> = {
         let mut set: std::collections::HashSet<String> = inbox::decisions(dir)
@@ -4753,8 +4809,8 @@ async fn workboard_recur(
 ) -> Result<workboard::Page, String> {
     let dir = state.config_dir.clone();
     let clock = now_clock(clock);
-    off_main(move || workboard::make_recurring(&dir, &id, choice, clock, automations::Author::Here))
-        .await?
+    let by = automations::RunOrigin::Window;
+    off_main(move || workboard::make_recurring(&dir, &id, choice, clock, by)).await?
 }
 
 #[tauri::command]
@@ -7889,13 +7945,14 @@ fn web_may_take(
 }
 
 /// The browser takes chat `id`, kept on file as a browser's so it stays the
-/// web's once this pairing ends. A job the chat's agent writes from now on
-/// is the browser's too, so it never runs with the desktop.
+/// web's once this pairing ends. Every run in it from now on is a browser's
+/// run (`grokhub_agent::web_origin`): no desktop, the jobs it writes are a
+/// browser's, and it reads only the chats a browser started.
 fn web_take(web: &remote::WebAccess, config_dir: &Path, id: &str) -> Result<(), String> {
     if !web.adopt(id) {
         return Err(remote::NOT_YOURS.into());
     }
-    grokhub_agent::web_jobs::set_web_chat(id);
+    grokhub_agent::web_origin::start_run(id, grokhub_agent::web_origin::RunOrigin::Browser);
     web_chats::note(config_dir, id)
 }
 
@@ -7904,18 +7961,15 @@ fn web_take(web: &remote::WebAccess, config_dir: &Path, id: &str) -> Result<(), 
 const WEB_REFLECT_NEEDS_CHAT: &str =
     "A browser reflects only its own chats. Reflect the window's chats on your computer.";
 
-/// The chat a browser's Reflect reads: one it holds or a browser started,
-/// never one the window started, open or closed, and never the window's
-/// last chat for want of an id. Reflect hands back the chat's lines.
-fn web_reflect_chat(
-    web: &remote::WebAccess,
-    config_dir: &Path,
-    id: Option<String>,
-) -> Result<String, String> {
+/// The chat a browser's Reflect reads: one a browser started (every chat a
+/// browser takes is noted so, [`web_take`]), never one the window started,
+/// open or closed, and never the window's last chat for want of an id.
+/// Reflect hands back the chat's lines.
+fn web_reflect_chat(config_dir: &Path, id: Option<String>) -> Result<String, String> {
     let id = id
         .filter(|id| !id.is_empty())
         .ok_or(WEB_REFLECT_NEEDS_CHAT)?;
-    if web.owns(&id) || web_chats::started_on_web(config_dir, &id) {
+    if web_chats::readable(config_dir).sees(&id) {
         Ok(id)
     } else {
         Err(remote::NOT_YOURS.into())
@@ -8076,7 +8130,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "add_automation" => {
             let clock = now_clock(arg(args, "clock")?);
             let text: String = arg(args, "text")?;
-            let by = automations::Author::Web;
+            let by = automations::RunOrigin::Browser;
             let list = automations::add_by(&state.config_dir, &text, clock, by)?;
             out(automations::rows(&list, clock))
         }
@@ -8085,7 +8139,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "add_suggested_automation" => {
             let clock = now_clock(arg(args, "clock")?);
             let seed: String = arg(args, "seed")?;
-            let by = automations::Author::Web;
+            let by = automations::RunOrigin::Browser;
             let list = suggested::add_suggested_by(&state.config_dir, &seed, clock, by)?;
             out(automations::rows(&list, clock))
         }
@@ -8103,13 +8157,13 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "edit_automation" => {
             let clock = now_clock(arg(args, "clock")?);
             let (id, text): (String, String) = (arg(args, "id")?, arg(args, "text")?);
-            let by = automations::Author::Web;
+            let by = automations::RunOrigin::Browser;
             let list = automations::edit_by(&state.config_dir, &id, &text, clock, by)?;
             out(automations::rows(&list, clock))
         }
         "run_automation" => {
-            let (id, settings) = (arg(args, "id")?, web_settings(current(&state)));
-            out(block_on(run_automation_now(state, id, settings))?)
+            let by = automations::RunOrigin::Browser;
+            out(block_on(run_automation_now(state, arg(args, "id")?, by))?)
         }
         "get_memory" => out(get_memory(state)?),
         "save_memory" => out(save_memory(
@@ -8160,7 +8214,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         )?),
         "restore_memory_file" => out(restore_memory_file(arg(args, "name")?)?),
         "reflect_memory" => {
-            let id = web_reflect_chat(&web, &state.config_dir, arg(args, "conversationId")?)?;
+            let id = web_reflect_chat(&state.config_dir, arg(args, "conversationId")?)?;
             out(reflect_memory(state, Some(id))?)
         }
         "tidy_memory_ledger" => out(tidy_memory_ledger()?),
@@ -8304,7 +8358,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "workboard_recur" => {
             let (dir, clock) = (state.config_dir.clone(), now_clock(arg(args, "clock")?));
             let (id, choice): (String, usize) = (arg(args, "id")?, arg(args, "choice")?);
-            let by = automations::Author::Web;
+            let by = automations::RunOrigin::Browser;
             out(block_on(off_main(move || {
                 workboard::make_recurring(&dir, &id, choice, clock, by)
             }))??)
@@ -10661,9 +10715,11 @@ mod web_command_tests {
     }
 
     /// A paired browser's Run now goes with the window's settings minus
-    /// desktop control, as its chats do, so its run gets no desktop tools.
+    /// desktop control, as its chats do, and runs as a browser's, so its run
+    /// gets no desktop tools and what it writes is a browser's.
     #[test]
     fn a_browsers_run_now_gets_no_desktop_tools() {
+        use crate::automations::RunOrigin;
         use crate::unattended::RunGate;
         use grokhub_agent::PermMode;
         let dir = temp_dir("run-now");
@@ -10678,23 +10734,23 @@ mod web_command_tests {
             workspace: dir.to_string_lossy().into_owned(),
             ..Default::default()
         };
-        // What `run_automation_now` builds from the settings it is handed.
-        let gate = |settings: &crate::settings::ShellSettings| {
-            super::run_gate(&super::route(settings, super::agent::SessionMode::Chat, &dir).unwrap())
-        };
+        // What `run_automation_now` builds from the window's settings.
+        let gate = |by: RunOrigin| super::run_now_route(&window, by, &dir).unwrap().1;
         assert_eq!(
-            gate(&window),
+            gate(RunOrigin::Window),
             RunGate {
                 mode: PermMode::Always,
-                desktop: true
+                desktop: true,
+                origin: RunOrigin::Window,
             }
         );
-        let web = gate(&super::web_settings(window.clone()));
+        let web = gate(RunOrigin::Browser);
         assert_eq!(
             web,
             RunGate {
                 mode: PermMode::Always,
-                desktop: false
+                desktop: false,
+                origin: RunOrigin::Browser,
             }
         );
         let clock = grokhub_core::LocalClock::at_offset(grokhub_core::now_ms(), 0);
@@ -10702,35 +10758,76 @@ mod web_command_tests {
             .unwrap()[0]
             .id
             .clone();
+        // Desktop control is on, so only the run's origin keeps the desktop
+        // from a browser's run.
+        crate::settings::save(&dir, &window).unwrap();
         assert_eq!(
             screenshot_result(&dir, &id, web),
             *grokhub_core::desktop_mcp::OFF_MSG
         );
+        // Desktop control alone doesn't give a browser's run the desktop.
+        let on_but_web = RunGate {
+            desktop: true,
+            ..web
+        };
+        assert_eq!(
+            screenshot_result(&dir, &id, on_but_web),
+            *grokhub_core::desktop_mcp::OFF_MSG
+        );
 
-        // The web's arm hands it those settings; the window's hands its own.
+        // The web's arm starts it as a browser's; the window's as its own.
         let body = remote_call_src();
         let run = arm(&body, "run_automation");
         assert!(
-            run.contains("web_settings(current(&state))")
-                && run.contains("run_automation_now(state, id, settings)"),
+            run.contains("let by = automations::RunOrigin::Browser;")
+                && run.contains("run_automation_now(state, arg(args, \"id\")?, by)"),
             "{run}"
         );
         let send = arm(&body, "send_chat");
         assert!(send.contains("web_settings(current(&state))"), "{send}");
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let start = src
-            .find("async fn run_automation_now(")
-            .expect("run_automation_now");
-        let now = &src[start..start + src[start..].find("\n}\n").expect("end")];
-        assert!(!now.contains("current("), "{now}");
-        let start = src
             .find("async fn run_automation(")
             .expect("run_automation");
         let window_run = &src[start..start + src[start..].find("\n}\n").expect("end")];
         assert!(
-            window_run.contains("let settings = current(&state);")
-                && window_run.contains("run_automation_now(state, id.clone(), settings)"),
+            window_run
+                .contains("run_automation_now(state, id.clone(), automations::RunOrigin::Window)"),
             "{window_run}"
+        );
+    }
+
+    /// A chat a browser started stays a browser's: a turn typed in it at
+    /// this computer gets no desktop either, and a chat started here does.
+    #[test]
+    fn a_turn_in_a_chat_a_browser_started_gets_no_desktop() {
+        let dir = temp_dir("chat-route");
+        grokhub_agent::harness::use_key_store_for(
+            &dir,
+            std::sync::Arc::new(grokhub_agent::harness::MemoryKeyStore::new()),
+        );
+        let _model = LoopbackModel::set();
+        let window = crate::settings::ShellSettings {
+            desktop_control: true,
+            workspace: dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        crate::web_chats::note(&dir, "shell-web-ct-1").unwrap();
+        let desktop = |chat: &str| {
+            super::chat_route(&window, crate::agent::SessionMode::Chat, &dir, chat)
+                .unwrap()
+                .desktop
+        };
+        assert_eq!(
+            [desktop("shell-web-ct-1"), desktop("shell-desk-ct-1")],
+            [false, true]
+        );
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("async fn chat_turn(").expect("chat_turn");
+        let turn = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            turn.contains("chat_route(&settings, mode, &config_dir, &conversation_id)?"),
+            "{turn}"
         );
     }
 
@@ -10746,7 +10843,7 @@ mod web_command_tests {
             "workboard_recur",
         ] {
             assert!(
-                arm(&body, name).contains("let by = automations::Author::Web;"),
+                arm(&body, name).contains("let by = automations::RunOrigin::Browser;"),
                 "{name}"
             );
         }
@@ -10872,7 +10969,10 @@ mod web_command_tests {
             crate::automations::add(&dir, "every day at 10am summarize the board", clock).unwrap();
         let (web_job, desk_job) = (list[0].id.clone(), list[1].id.clone());
         let on = RunGate::scheduled(PermMode::Always, true, None);
-        let off = RunGate::scheduled(PermMode::Always, false, None);
+        let browser = RunGate {
+            origin: crate::automations::RunOrigin::Browser,
+            ..on
+        };
 
         // What send_chat does before the browser's turn runs.
         let web = crate::remote::WebAccess::default();
@@ -10890,7 +10990,7 @@ mod web_command_tests {
             [jobs[0].instructions.as_str(), jobs[1].instructions.as_str()],
             ["take a screenshot and click the Send button in Mail"; 2]
         );
-        assert_eq!(crate::automations::gate_for(&dir, &web_job, on), off);
+        assert_eq!(crate::automations::gate_for(&dir, &web_job, on), browser);
         assert_eq!(crate::automations::gate_for(&dir, &desk_job, on), on);
 
         // The scheduler's run of the browser's job, with the window's
@@ -10923,6 +11023,326 @@ mod web_command_tests {
         assert_eq!(shot.as_deref(), Some(*grokhub_core::desktop_mcp::OFF_MSG));
     }
 
+    /// A model that makes `steps`' calls, one per turn that offers tools,
+    /// then is done.
+    struct Script {
+        steps: Vec<(&'static str, serde_json::Value)>,
+        asked: std::sync::Mutex<Vec<grokhub_agent::ResponsesRequest>>,
+    }
+
+    impl Script {
+        fn new(steps: Vec<(&'static str, serde_json::Value)>) -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                steps,
+                asked: std::sync::Mutex::default(),
+            })
+        }
+
+        /// What each step's call got back, in order.
+        fn outputs(&self) -> Vec<String> {
+            let asked = self.asked.lock().unwrap();
+            (0..self.steps.len())
+                .map(|n| {
+                    let id = format!("s{n}");
+                    asked
+                        .iter()
+                        .flat_map(|r| r.input.iter())
+                        .find_map(|item| match item {
+                            grokhub_agent::InputItem::FunctionCallOutput { call_id, output }
+                                if *call_id == id =>
+                            {
+                                Some(output.clone())
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| "<not run>".into())
+                })
+                .collect()
+        }
+    }
+
+    impl grokhub_agent::ModelClient for Script {
+        fn stream(
+            &self,
+            req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            let mut asked = self.asked.lock().unwrap();
+            let n = asked.iter().filter(|r| !r.tools.is_empty()).count();
+            asked.push(req.clone());
+            match self.steps.get(n).filter(|_| !req.tools.is_empty()) {
+                Some((name, args)) => Ok(grokhub_agent::TurnOutput {
+                    calls: vec![grokhub_agent::FunctionCall {
+                        call_id: format!("s{n}"),
+                        name: (*name).into(),
+                        arguments: args.to_string(),
+                    }],
+                    ..grokhub_agent::TurnOutput::default()
+                }),
+                None => {
+                    sink(grokhub_agent::StreamEvent::TextDelta("done".into()));
+                    Ok(grokhub_agent::TurnOutput {
+                        text: "done".into(),
+                        ..grokhub_agent::TurnOutput::default()
+                    })
+                }
+            }
+        }
+    }
+
+    /// A job a browser wrote runs as a browser's, so a job its run rewrites
+    /// (one the window made) is a browser's too: it never runs with the
+    /// desktop, until its words are saved again at this computer.
+    #[test]
+    fn a_job_a_browsers_job_rewrites_runs_without_the_desktop() {
+        use crate::automations::RunOrigin;
+        use crate::unattended::RunGate;
+        use grokhub_agent::PermMode;
+        use serde_json::json;
+        let dir = temp_dir("job-rewrite");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        let clock = grokhub_core::LocalClock::at_offset(grokhub_core::now_ms(), 0);
+        let desk = crate::automations::add(&dir, "every day at 10am summarize the board", clock)
+            .unwrap()[0]
+            .id
+            .clone();
+        let list = crate::automations::add_by(
+            &dir,
+            "every day at 9am use scheduler_create to update the other job",
+            clock,
+            RunOrigin::Browser,
+        )
+        .unwrap();
+        let web_job = list.iter().find(|j| j.id != desk).unwrap().clone();
+        let on = RunGate::scheduled(PermMode::Always, true, None);
+        let browser = RunGate {
+            origin: RunOrigin::Browser,
+            ..on
+        };
+        assert_eq!(crate::automations::gate_for(&dir, &desk, on), on);
+
+        // The scheduler's run of the browser's job rewrites the window's.
+        let model = Script::new(vec![
+            ("load_tool_schema", json!({ "name": "scheduler_create" })),
+            (
+                "scheduler_create",
+                json!({
+                    "interval": "1h",
+                    "prompt": "take a screenshot and click the Send button in Mail",
+                    "task_id": desk,
+                }),
+            ),
+        ]);
+        let ran = crate::automations::execute(
+            &dir,
+            &web_job,
+            model.clone(),
+            "grok-4.7",
+            temp_dir("job-rewrite-ws"),
+            on,
+        );
+        assert_eq!(ran.stop, "end_turn", "{}", ran.error);
+        assert_eq!(model.outputs()[1], format!("updated {desk}\nevery 60 min"));
+        let jobs = crate::automations::load(&dir).unwrap();
+        let desk_job = jobs.iter().find(|j| j.id == desk).unwrap().clone();
+        assert_eq!(
+            desk_job.instructions,
+            "take a screenshot and click the Send button in Mail"
+        );
+        assert_eq!(crate::automations::gate_for(&dir, &desk, on), browser);
+
+        // Its own run, with desktop control saved on, never reaches the desktop.
+        crate::settings::save(
+            &dir,
+            &crate::settings::ShellSettings {
+                desktop_control: true,
+                ..crate::settings::ShellSettings::default()
+            },
+        )
+        .unwrap();
+        let shot = Script::new(vec![("screenshot", json!({}))]);
+        let ws = temp_dir("job-rewrite-ws2");
+        crate::automations::execute(&dir, &desk_job, shot.clone(), "grok-4.7", ws, on);
+        assert_eq!(shot.outputs(), [*grokhub_core::desktop_mcp::OFF_MSG]);
+    }
+
+    /// Runs `text` in chat `chat` with `model` and the route a browser's send
+    /// gets (Ask, no desktop).
+    fn prompt_in_chat(
+        dir: &std::path::Path,
+        chat: &str,
+        model: std::sync::Arc<Script>,
+        text: &str,
+    ) -> Result<String, String> {
+        let route = crate::agent::Route {
+            client: model,
+            auth_kind: grokhub_agent::AuthKind::ApiKey,
+            workspace: temp_dir(&format!("{chat}-ws")),
+            mode: grokhub_agent::PermMode::Ask,
+            desktop: false,
+            session: crate::agent::SessionMode::Chat,
+            voice: String::new(),
+            voice_session: None,
+            suggestions: false,
+            lead: false,
+        };
+        let session = crate::agent::Session::spawn(chat, dir.to_path_buf());
+        session.prompt(text, Vec::new(), route, Box::new(|_| {}))
+    }
+
+    /// A browser's chat searches only the chats a browser started: the
+    /// agent's chat search, run as a browser's send runs it, finds nothing
+    /// of a chat the window started and closed, and can't read around it. A
+    /// window chat's search finds it.
+    #[test]
+    fn a_browsers_chat_searches_only_the_chats_a_browser_started() {
+        use serde_json::json;
+        let dir = temp_dir("web-search");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        crate::agent::save_bench_exchange(
+            "shell-desk-1",
+            "/home/user",
+            "my locker code is 4321",
+            "Noted.",
+        )
+        .unwrap();
+        let steps = || {
+            vec![
+                ("load_tool_schema", json!({ "name": "session_search" })),
+                ("session_search", json!({ "query": "locker" })),
+                (
+                    "session_search",
+                    json!({ "chat": "shell-desk-1", "line": 0 }),
+                ),
+            ]
+        };
+        let ask = "what did I say about my locker in my other chats?";
+        // What send_chat does before the browser's turn runs.
+        let web = crate::remote::WebAccess::default();
+        let (id, _) = super::web_send(
+            &web,
+            &dir,
+            |_| false,
+            &json!({ "conversationId": "shell-web-ss-1", "text": ask }),
+        )
+        .unwrap();
+        let model = Script::new(steps());
+        assert_eq!(
+            prompt_in_chat(&dir, &id, model.clone(), ask),
+            Ok("end_turn".to_string())
+        );
+        let outputs = model.outputs();
+        assert_eq!(
+            outputs[1..],
+            [
+                "No earlier chat has \"locker\".".to_string(),
+                "No earlier chat has the id shell-desk-1.".to_string(),
+            ]
+        );
+
+        let model = Script::new(steps());
+        prompt_in_chat(&dir, "shell-desk-2", model.clone(), ask).unwrap();
+        let outputs = model.outputs();
+        assert!(
+            outputs[1].contains("\n- chat shell-desk-1 \"Chat\" (")
+                && outputs[1].contains(", line 0, user: my locker code is 4321"),
+            "{outputs:?}"
+        );
+        assert!(
+            outputs[2].contains("[0] user: my locker code is 4321"),
+            "{outputs:?}"
+        );
+    }
+
+    /// A slash line a browser sends runs as a browser's: its `/consult` run
+    /// searches only the chats a browser started, never a window chat it
+    /// could hand back in the reply. A line typed in a browser's chat at
+    /// this computer runs as a browser's too, and one typed in a window chat
+    /// runs as this computer's.
+    #[test]
+    fn a_browsers_consult_searches_only_the_chats_a_browser_started() {
+        use crate::automations::RunOrigin;
+        use serde_json::json;
+        let dir = temp_dir("web-consult");
+        let _config = grokhub_agent::perm::ConfigGuard::set(&dir);
+        crate::agent::save_bench_exchange(
+            "shell-desk-1",
+            "/home/user",
+            "my locker code is 4321",
+            "Noted.",
+        )
+        .unwrap();
+        crate::web_chats::note(&dir, "shell-web-c1").unwrap();
+        let origin = |remote: bool, chat: Option<&str>| super::slash_origin(&dir, remote, chat);
+        assert_eq!(
+            [
+                origin(true, None),
+                origin(true, Some("shell-desk-1")),
+                origin(false, Some("shell-web-c1")),
+                origin(false, Some("shell-desk-1")),
+                origin(false, None),
+            ],
+            [
+                RunOrigin::Browser,
+                RunOrigin::Browser,
+                RunOrigin::Browser,
+                RunOrigin::Window,
+                RunOrigin::Window,
+            ]
+        );
+
+        // The consult run, as `engine_op` starts it for each origin.
+        let consult = |origin: RunOrigin, n: u32| {
+            let model = Script::new(vec![
+                ("load_tool_schema", json!({ "name": "session_search" })),
+                ("session_search", json!({ "query": "locker" })),
+                (
+                    "session_search",
+                    json!({ "chat": "shell-desk-1", "line": 0 }),
+                ),
+            ]);
+            let done = crate::bg_runs::ask_once(
+                model.clone(),
+                "grok-4.7",
+                temp_dir(&format!("web-consult-ws{n}")),
+                format!("shell-consult-test-{}-{n}", std::process::id()),
+                "what did I say about my locker in my other chats?".into(),
+                grokhub_agent::CancelToken::new(),
+                origin,
+            );
+            assert_eq!(done.stop_reason, "end_turn", "{}", done.error);
+            model.outputs()
+        };
+        assert_eq!(
+            consult(RunOrigin::Browser, 1)[1..],
+            [
+                "No earlier chat has \"locker\".".to_string(),
+                "No earlier chat has the id shell-desk-1.".to_string(),
+            ]
+        );
+        let window = consult(RunOrigin::Window, 2);
+        assert!(
+            window[1].contains(", line 0, user: my locker code is 4321")
+                && window[2].contains("[0] user: my locker code is 4321"),
+            "{window:?}"
+        );
+
+        // run_slash_line hands engine_op the origin, and engine_op hands it
+        // to both runs it starts.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = src.find("fn run_slash_line(").expect("run_slash_line");
+        let line = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert!(
+            line.contains("let origin = slash_origin(&state.config_dir, remote, conversation_id);")
+                && line.contains("engine_op(state, &op, conversation_id, origin)?"),
+            "{line}"
+        );
+        let start = src.find("fn engine_op(").expect("engine_op");
+        let op = &src[start..start + src[start..].find("\n}\n").expect("end")];
+        assert_eq!(op.matches("\n                origin,\n").count(), 2, "{op}");
+    }
+
     /// Reflect hands back a chat's lines and saves them to shared memory, so
     /// a browser reflects only a chat it holds or a browser started: never a
     /// saved chat the window started, and never the window's last chat when
@@ -10944,22 +11364,18 @@ mod web_command_tests {
             "A browser reflects only its own chats. Reflect the window's chats on your computer."
                 .to_string(),
         );
-        let reflect = |web: &crate::remote::WebAccess, id: Option<&str>| {
-            super::web_reflect_chat(web, &dir, id.map(str::to_string))
-        };
-        assert_eq!(reflect(&web, Some("shell-desk-1")), refused);
-        assert_eq!(reflect(&web, None), no_chat);
-        assert_eq!(reflect(&web, Some("")), no_chat);
+        let reflect = |id: Option<&str>| super::web_reflect_chat(&dir, id.map(str::to_string));
+        assert_eq!(reflect(Some("shell-desk-1")), refused);
+        assert_eq!(reflect(None), no_chat);
+        assert_eq!(reflect(Some("")), no_chat);
 
         super::web_take(&web, &dir, "shell-web-1").unwrap();
-        assert_eq!(reflect(&web, Some("shell-web-1")), Ok("shell-web-1".into()));
-        // A new pairing still reflects a chat a browser started.
-        let next = crate::remote::WebAccess::default();
-        assert_eq!(
-            reflect(&next, Some("shell-web-1")),
-            Ok("shell-web-1".into())
-        );
-        assert_eq!(reflect(&next, Some("shell-desk-1")), refused);
+        assert_eq!(reflect(Some("shell-web-1")), Ok("shell-web-1".into()));
+        // Once this pairing ends the browser's chat is still a browser's,
+        // and the window's still isn't.
+        drop(web);
+        assert_eq!(reflect(Some("shell-web-1")), Ok("shell-web-1".into()));
+        assert_eq!(reflect(Some("shell-desk-1")), refused);
 
         // The arm reflects only the chat the check handed back.
         let body = remote_call_src();

@@ -264,8 +264,8 @@ pub fn monitor(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     }
 }
 
-/// `session` is the chat that called it: a browser's chat writes the
-/// browser's words ([`crate::web_jobs`]).
+/// `session` is the run that called it: a browser run writes a browser's
+/// words ([`crate::web_origin`]).
 pub fn scheduler_create(args: &Value, session: Option<&str>) -> ToolOutput {
     let interval = text_field(args, "interval").unwrap_or_default();
     let prompt = text_field(args, "prompt").unwrap_or_default();
@@ -453,10 +453,10 @@ fn ledgered(
     Ok(change.map(|c| c.seq).unwrap_or(0))
 }
 
-/// Creates a job, or with `task_id` rewrites one. When `session` is a chat a
-/// paired browser drives, the job is marked as the browser's before its
-/// words are saved, so no run ever finds them unmarked; a write from any
-/// other chat leaves the mark as it was.
+/// Creates a job, or with `task_id` rewrites one, for the run `session`
+/// (`None` is the run whose tool runs on this thread). A browser run's job is
+/// marked as a browser's before its words are saved, so no run ever finds
+/// them unmarked ([`crate::web_origin::note_job_write`]).
 pub(crate) fn write_automation(
     prompt: &str,
     mins: u32,
@@ -468,14 +468,8 @@ pub(crate) fn write_automation(
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
-    let web = session.is_some_and(crate::web_jobs::web_chat);
-    let mark = |id: &str| {
-        if web {
-            crate::web_jobs::note(&crate::perm::config_dir(), id, true)
-        } else {
-            Ok(())
-        }
-    };
+    let mark =
+        |id: &str| crate::web_origin::note_job_write(&crate::perm::config_dir(), id, session);
     let mut now = clock();
     now.now_ms = now_ms;
     let name = auto_name(prompt);
@@ -629,6 +623,7 @@ fn auto_name(prompt: &str) -> String {
 mod tests {
     use super::*;
     use crate::tools::{dispatch, ToolCtx};
+    use crate::web_origin::RunOrigin;
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -788,7 +783,7 @@ mod tests {
     fn a_browsers_chat_marks_the_jobs_its_agent_writes() {
         let dir = scratch("web-jobs");
         let _guard = crate::perm::ConfigGuard::set(&dir);
-        crate::web_jobs::set_web_chat("shell-web-jobs-1");
+        crate::web_origin::start_run("shell-web-jobs-1", crate::web_origin::RunOrigin::Browser);
         let call = |session: &str, name: &str, args: &str| {
             let ctx = ToolCtx {
                 workspace: &dir,
@@ -803,14 +798,15 @@ mod tests {
             out.text
         };
         let id_in = |text: &str| text.lines().next().unwrap()["created ".len()..].to_string();
-        let marks = || std::fs::read_to_string(dir.join(crate::web_jobs::FILE));
+        let marks = || std::fs::read_to_string(dir.join(crate::web_origin::JOBS_FILE));
+        let web = |id: &str| crate::web_origin::job_origin(&dir, id) == RunOrigin::Browser;
 
         let here = id_in(&call(
             "shell-desk-jobs-1",
             "scheduler_create",
             r#"{"interval":"1h","prompt":"summarize my inbox"}"#,
         ));
-        assert!(!crate::web_jobs::web_wrote(&dir, &here));
+        assert!(!web(&here));
         assert_eq!(
             marks().map_err(|e| e.kind()),
             Err(std::io::ErrorKind::NotFound)
@@ -823,7 +819,7 @@ mod tests {
             &format!(r#"{{"interval":"1h","prompt":"click Send in Mail","task_id":"{here}"}}"#),
         );
         assert_eq!(up, format!("updated {here}\nevery 60 min"));
-        assert!(crate::web_jobs::web_wrote(&dir, &here));
+        assert!(web(&here));
 
         // A helper of the browser's chat makes one with the self-manage tool.
         let made = id_in(&call(
@@ -831,7 +827,7 @@ mod tests {
             "automation_create",
             r#"{"instructions":"take a screenshot","every":"1d","reason":"asked"}"#,
         ));
-        assert!(crate::web_jobs::web_wrote(&dir, &made));
+        assert!(web(&made));
         assert_eq!(marks().unwrap(), format!(r#"["{here}","{made}"]"#));
 
         // The window's chat writing again takes no mark away.
@@ -844,6 +840,124 @@ mod tests {
         let _ = take_automation_changes();
         let _ = crate::harness::take_self_changes(&dir);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Job `here`, made by a window chat, rewritten by the run `session`
+    /// while `on_thread`'s tool runs on this thread: what the rewrite said,
+    /// and whose words the job runs now.
+    fn rewritten_by(
+        tag: &str,
+        session: Option<&str>,
+        on_thread: Option<&str>,
+        tool: &str,
+    ) -> (String, RunOrigin) {
+        let dir = scratch(tag);
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        // A chat a browser started, on file only, as after a restart.
+        crate::web_origin::note_chat(&dir, "shell-web-run-1").unwrap();
+        // The run of a job a browser wrote.
+        crate::web_origin::start_run("shell-auto-webjob-7-1", RunOrigin::Browser);
+        let call = |session: Option<&str>, name: &str, args: &str| {
+            let ctx = ToolCtx {
+                workspace: &dir,
+                desktop: None,
+                stop: &|| false,
+                tasks: None,
+                owner: None,
+                session,
+            };
+            dispatch(&ctx, name, args)
+        };
+        let made = call(
+            Some("shell-desk-run-1"),
+            "scheduler_create",
+            r#"{"interval":"1h","prompt":"summarize my inbox"}"#,
+        );
+        let here = made.text.lines().next().unwrap()["created ".len()..].to_string();
+        let args = match tool {
+            "scheduler_create" => {
+                format!(r#"{{"interval":"1h","prompt":"click Send in Mail","task_id":"{here}"}}"#)
+            }
+            _ => {
+                format!(r#"{{"id":"{here}","instructions":"click Send in Mail","reason":"asked"}}"#)
+            }
+        };
+        let out = {
+            let _run = crate::web_origin::RunScope::enter(on_thread);
+            call(session, tool, &args)
+        };
+        let jobs = load_list(&store_path()).unwrap();
+        assert_eq!(jobs[0].instructions, "click Send in Mail", "{}", out.text);
+        let origin = crate::web_origin::job_origin(&dir, &here);
+        let said = out.text.replace(&here, "<id>");
+        let _ = take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        (said, origin)
+    }
+
+    /// Every run that started from a browser's words marks the jobs it
+    /// writes, whichever writer it uses: the browser's chat (after a restart
+    /// too), its helper, the run of a job a browser wrote (which rewrites a
+    /// window job), and a routine's step run inside one of those. A window
+    /// run's write is this computer's.
+    #[test]
+    fn every_run_of_a_browsers_words_marks_the_jobs_it_writes() {
+        use RunOrigin::{Browser, Window};
+        let updated = "updated <id>\nevery 60 min".to_string();
+        let modified = |by: &str| {
+            let (said, origin) = rewritten_by(by, Some(by), None, "automation_modify");
+            (said.lines().next().map(str::to_string), origin)
+        };
+        assert_eq!(
+            rewritten_by("w-desk", Some("shell-desk-run-1"), None, "scheduler_create"),
+            (updated.clone(), Window)
+        );
+        assert_eq!(
+            rewritten_by("w-chat", Some("shell-web-run-1"), None, "scheduler_create"),
+            (updated.clone(), Browser)
+        );
+        assert_eq!(
+            rewritten_by(
+                "w-help",
+                Some("shell-web-run-1/helper-3"),
+                None,
+                "scheduler_create"
+            ),
+            (updated.clone(), Browser)
+        );
+        assert_eq!(
+            rewritten_by(
+                "w-job",
+                Some("shell-auto-webjob-7-1"),
+                None,
+                "scheduler_create"
+            ),
+            (updated.clone(), Browser)
+        );
+        // A routine's step has no session of its own: it is the run whose
+        // tool ran the routine.
+        assert_eq!(
+            rewritten_by(
+                "w-step",
+                None,
+                Some("shell-auto-webjob-7-1"),
+                "scheduler_create"
+            ),
+            (updated.clone(), Browser)
+        );
+        assert_eq!(
+            rewritten_by(
+                "w-dstep",
+                None,
+                Some("shell-desk-run-1"),
+                "scheduler_create"
+            ),
+            (updated, Window)
+        );
+        // The self-manage writer, from the run of a browser's job.
+        assert_eq!(modified("shell-auto-webjob-7-1").1, Browser);
+        assert_eq!(modified("shell-desk-run-1").1, Window);
     }
 
     #[test]

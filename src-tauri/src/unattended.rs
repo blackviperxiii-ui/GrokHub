@@ -10,11 +10,14 @@
 //! Desktop tools come only while desktop control is on and no game holds it,
 //! and each desktop step still asks the game guard itself. Each desktop step
 //! also reads the saved switch again ([`SavedSwitch`]), so turning desktop
-//! control off stops a running job's next step.
+//! control off stops a running job's next step, a look at the screen too.
+//! A run that started from a paired browser's words ([`RunGate::origin`])
+//! has no desktop at all.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use grokhub_agent::web_origin::RunOrigin;
 use grokhub_agent::{
     AuthKind, CancelToken, DesktopOps, Gate, ModelClient, PermMode, ToolOutput, UnattendedDone,
     UnattendedRun,
@@ -26,6 +29,9 @@ use grokhub_core::wire::PermissionMode;
 pub struct RunGate {
     pub mode: PermMode,
     pub desktop: bool,
+    /// Whose words the run goes on: a browser's run gets no desktop, and
+    /// what it starts and writes is a browser's too.
+    pub origin: RunOrigin,
 }
 
 impl RunGate {
@@ -33,6 +39,7 @@ impl RunGate {
     pub const BACKGROUND: Self = Self {
         mode: PermMode::Ask,
         desktop: false,
+        origin: RunOrigin::Window,
     };
 
     /// A scheduled or resumed run: your Approvals, and the desktop while
@@ -41,6 +48,16 @@ impl RunGate {
         Self {
             mode,
             desktop: desktop_control && game.is_none(),
+            origin: RunOrigin::Window,
+        }
+    }
+
+    /// The same gate for a run that also goes on `origin`'s words: a
+    /// browser's anywhere makes it a browser's run.
+    pub fn with_origin(self, origin: RunOrigin) -> Self {
+        Self {
+            origin: self.origin.and(origin),
+            ..self
         }
     }
 
@@ -49,7 +66,7 @@ impl RunGate {
             mode: self.mode,
             readonly_session: self.mode == PermMode::Ask,
             attended: false,
-            desktop: self.desktop,
+            desktop: self.desktop && grokhub_agent::web_origin::desktop_allowed(self.origin),
         }
     }
 
@@ -106,9 +123,14 @@ pub struct Job {
 pub fn run(job: Job) -> UnattendedDone {
     let set = grokhub_agent::tool_set_from_job(job.tools_from.as_deref().unwrap_or(&job.prompt));
     let _set = grokhub_agent::bind_job_tool_set(job.session_id.clone(), set);
-    let gate = job.gate.gate();
     // The folder whose settings hold the switch: the caller pins it.
     let config_dir = grokhub_agent::perm::config_dir();
+    // The run starts here with its origin, which its helpers, its routine
+    // steps and the jobs it writes take on. A session that started as a
+    // browser's (a browser's chat, or a resumed browser run) stays one.
+    grokhub_agent::web_origin::start_run(&job.session_id, job.gate.origin);
+    let origin = grokhub_agent::web_origin::of_in(&config_dir, Some(&job.session_id));
+    let gate = job.gate.with_origin(origin).gate();
     let desktop_ops = gate.desktop.then(|| {
         Box::new(SavedSwitch {
             inner: crate::agent::native_desktop(),
@@ -174,8 +196,13 @@ impl DesktopOps for SavedSwitch {
         self.inner.hint(name, args)
     }
 
-    /// A look needs no desktop control, so it passes with the switch off.
+    /// In a chat a look asks each time and needs no desktop control. An
+    /// unattended run has nobody to ask, so with the switch off it reads
+    /// nothing off the screen either.
     fn look(&self, args: &serde_json::Value) -> ToolOutput {
+        if !self.on() {
+            return ToolOutput::err(*grokhub_core::desktop_mcp::OFF_MSG);
+        }
         self.inner.look(args)
     }
 }

@@ -229,11 +229,19 @@ fn each_desktop_step_reads_the_saved_switch_again() {
     assert!(off.failed);
     assert_eq!(off.text, *grokhub_core::desktop_mcp::OFF_MSG);
     assert_eq!(desk.hint("click", &args), args);
+    // A look reads the screen too, and nobody is there to ask.
+    let look = desk.look(&serde_json::json!({}));
+    assert!(look.failed);
+    assert_eq!(look.text, *grokhub_core::desktop_mcp::OFF_MSG);
     assert_eq!(*calls.lock().expect("calls"), ["click"]);
     // And back on: the next step goes through again.
     save_desktop_control(&config, true);
     assert_eq!(desk.call("screenshot", &args).text, "clicked");
-    assert_eq!(*calls.lock().expect("calls"), ["click", "screenshot"]);
+    assert_eq!(desk.look(&serde_json::json!({})).text, "clicked");
+    assert_eq!(
+        *calls.lock().expect("calls"),
+        ["click", "screenshot", "screenshot"]
+    );
 }
 
 /// Runs `before` on the first turn (the user's action mid-run), asks for
@@ -287,7 +295,11 @@ fn switching_desktop_control_off_stops_a_running_jobs_next_desktop_steps() {
     let flip = config.clone();
     let client = Arc::new(Flips {
         requests: Mutex::new(Vec::new()),
-        calls: vec![("click", r#"{"x":10,"y":10}"#), ("screenshot", "{}")],
+        calls: vec![
+            ("click", r#"{"x":10,"y":10}"#),
+            ("look_at_screen", "{}"),
+            ("screenshot", "{}"),
+        ],
         // As save_settings writes it.
         before: Box::new(move || save_desktop_control(&flip, false)),
     });
@@ -313,5 +325,62 @@ fn switching_desktop_control_off_stops_a_running_jobs_next_desktop_steps() {
         })
         .collect();
     let off = grokhub_core::desktop_mcp::OFF_MSG.to_string();
-    assert_eq!(outputs, [off.clone(), off]);
+    assert_eq!(outputs, [off.clone(), off.clone(), off]);
+}
+
+/// What a run behind `gate` in session `session` got back from a click and
+/// a look, with desktop control saved on.
+fn desktop_steps(name: &str, session: &str, gate: RunGate) -> Vec<String> {
+    let (config, workspace) = (
+        temp_dir(&format!("{name}-cfg")),
+        temp_dir(&format!("{name}-ws")),
+    );
+    let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+    save_desktop_control(&config, true);
+    grokhub_agent::web_origin::note_chat(&config, "shell-web-chat-u1").expect("web chat");
+    let client = Arc::new(Flips {
+        requests: Mutex::new(Vec::new()),
+        calls: vec![("click", r#"{"x":10,"y":10}"#), ("look_at_screen", "{}")],
+        before: Box::new(|| {}),
+    });
+    let done = run(Job {
+        client: client.clone(),
+        model: "grok-4.7".into(),
+        workspace,
+        session_id: session.to_string(),
+        prompt: "click at 10,10 then look at the screen".into(),
+        tools_from: None,
+        gate,
+        cancel: CancelToken::new(),
+        resume: false,
+    });
+    assert_eq!(done.stop_reason, "end_turn", "{}", done.error);
+    let requests = client.requests.lock().expect("requests");
+    requests[1]
+        .input
+        .iter()
+        .filter_map(|item| match item {
+            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A run that started from a paired browser's words has no desktop, with
+/// desktop control on: a browser's Run now or a job a browser wrote, and a
+/// run in a chat a browser started.
+#[test]
+fn a_browsers_run_gets_no_desktop_with_control_on() {
+    let on = RunGate::scheduled(PermMode::Always, true, None);
+    let none = [
+        grokhub_core::desktop_mcp::OFF_MSG.to_string(),
+        "There is no screen to look at here.".to_string(),
+    ];
+    let pid = std::process::id();
+    let browser = on.with_origin(RunOrigin::Browser);
+    assert_eq!(
+        desktop_steps("web-run", &format!("shell-auto-web-{pid}"), browser),
+        none
+    );
+    assert_eq!(desktop_steps("web-chat", "shell-web-chat-u1", on), none);
 }

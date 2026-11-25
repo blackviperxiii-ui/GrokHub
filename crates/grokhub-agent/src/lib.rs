@@ -91,7 +91,7 @@ mod turn_budget;
 mod unattended;
 pub mod voice_session;
 pub mod vstack_sync;
-pub mod web_jobs;
+pub mod web_origin;
 mod work;
 mod ws_mode;
 pub mod xai_keychain;
