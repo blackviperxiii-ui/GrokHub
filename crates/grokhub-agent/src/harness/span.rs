@@ -28,7 +28,8 @@ pub struct Span {
     /// True when a hard-class action was approved by user.
     #[serde(default)]
     pub hard_approved: bool,
-    /// Engine path that checked the call: A desktop MCP, B ACP ask, C headless, E native.
+    /// Engine path that checked the call: A desktop MCP or the Cua proxy, B a
+    /// repair step handed to Grok Build, E native, "model" a route call.
     #[serde(default)]
     pub path: String,
     #[serde(default)]
@@ -243,7 +244,7 @@ impl Span {
         }
     }
 
-    /// Tag the engine path (`"A"`, `"B"`, `"C"`, `"E"`).
+    /// Tag the engine path (`"A"`, `"B"`, `"E"`, `"model"`).
     pub fn on_path(mut self, path: &str) -> Self {
         self.path = path.into();
         self
