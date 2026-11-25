@@ -39,6 +39,8 @@ enum Act {
     /// Types this text.
     TypeText(&'static str),
     Zoom(&'static str),
+    /// Reads this workspace file.
+    Read(&'static str),
     Reads(usize),
     Done,
     /// Done, with a `VERIFY_OK` of its own: no detector finding on a reject.
@@ -213,6 +215,10 @@ impl ModelClient for FakeModel {
             Act::Zoom(id) => (
                 String::new(),
                 vec![call(n, "zoom", json!({"span_ref": id, "n": 1}))],
+            ),
+            Act::Read(path) => (
+                String::new(),
+                vec![call(n, "read_file", json!({"target_file": path}))],
             ),
             Act::Reads(k) => (
                 String::new(),
@@ -1240,6 +1246,107 @@ fn zoom_opens_a_fold_into_its_two_children_and_a_step_into_its_raw_span() {
     assert_eq!(r.desk.count("click"), 12);
 }
 
+/// Gap 1: the worker's next steps see a read's head and tail (redacted),
+/// past the 120 chars its step line and span keep. A click leaves it there;
+/// the next read replaces it.
+#[test]
+fn a_read_reaches_the_next_steps_head_and_tail_redacted_while_spans_keep_120() {
+    let r = rig(
+        "read-output",
+        Box::new(|n| match n {
+            0 => Act::Read("notes.txt"),
+            1 => Act::Click(5),
+            2 => Act::Read("short.txt"),
+            _ => Act::Done,
+        }),
+    );
+    let mut notes = String::from("HEAD-MARK key sk-abcdefghijklmnopqrstuv\n");
+    for i in 0..100 {
+        notes.push_str(&format!("row {i:03} {}\n", "x".repeat(60)));
+    }
+    notes.push_str("TAIL-MARK\n");
+    std::fs::write(r.dir.join("notes.txt"), notes).unwrap();
+    std::fs::write(r.dir.join("short.txt"), "only line\n").unwrap();
+    let mut ep = r.episode("Find the config file");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let nows = nows(&r.model);
+    assert_eq!(nows.len(), 4);
+    assert!(!nows[0].contains("Latest output of"), "{}", nows[0]);
+    for want in [
+        "Latest output of [s1] read_file:\n1|HEAD-MARK key [redacted]\n",
+        "|TAIL-MARK\n(Read a smaller part to see what was clipped.)\n",
+        " chars clipped …]",
+    ] {
+        assert!(nows[1].contains(want), "{want:?} in {}", nows[1]);
+    }
+    assert!(
+        !nows[1].contains("sk-abcdefghijklmnopqrstuv"),
+        "{}",
+        nows[1]
+    );
+    assert!(!nows[1].contains("row 050"), "the middle is clipped");
+    let shown = nows[1]
+        .split("Latest output of [s1] read_file:\n")
+        .nth(1)
+        .and_then(|t| t.split("\nLatest observation:").next())
+        .unwrap();
+    // The read is 7,234 chars once redacted: 2,000 from each end are kept.
+    let marker = "\n[… 3234 chars clipped …]\n";
+    let hint = "\n(Read a smaller part to see what was clipped.)";
+    assert!(shown.contains(marker), "{shown}");
+    assert_eq!(
+        shown.chars().count(),
+        OUTPUT_PROMPT_CAP + marker.chars().count() + hint.chars().count()
+    );
+    assert_eq!(OUTPUT_PROMPT_CAP, 4_000);
+    // A click shows nothing of its own: the read stays.
+    assert!(nows[2].contains("Latest output of [s1] read_file:\n1|HEAD-MARK"));
+    assert!(
+        nows[3].contains("Latest output of [s3] read_file:\n1|only line\nLatest observation:"),
+        "{}",
+        nows[3]
+    );
+    assert!(!nows[3].contains("[s1] read_file"), "{}", nows[3]);
+    // The step line and the span still keep 120 chars.
+    let spans = r.spans();
+    let first = spans.iter().find(|s| s.tool == "read_file").unwrap();
+    assert_eq!(first.result.chars().count(), STEP_RESULT_CAP);
+    assert_eq!(STEP_RESULT_CAP, 120);
+}
+
+/// Gap 1: what `zoom` opens reaches the next step whole, not 120 chars of it.
+#[test]
+fn zoom_output_reaches_the_next_step_whole() {
+    let r = rig(
+        "zoom-output",
+        Box::new(|n| match n {
+            n if n < 12 => Act::Click(n as u32),
+            12 => Act::Zoom("f1-2"),
+            _ => Act::Done,
+        }),
+    );
+    let mut ep = r.episode("Sort the photos in the Pictures folder by the date they were taken");
+    let mut view = EpisodeView::new(1_000);
+    let out = r.run(&mut ep, &mut view);
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let opened = view.zoom("f1-2", 1).unwrap();
+    assert!(opened.chars().count() > STEP_RESULT_CAP, "{opened}");
+    let nows = nows(&r.model);
+    assert_eq!(nows.len(), 14);
+    assert!(!nows[12].contains("Latest output of"), "{}", nows[12]);
+    assert!(
+        nows[13].contains(&format!(
+            "Latest output of [s13] zoom:\n{}\nLatest observation:",
+            opened.trim_end()
+        )),
+        "{}",
+        nows[13]
+    );
+    assert!(nows[13].contains("Latest output of [s13] zoom:\n[s1] #1 goal="));
+    assert!(nows[13].contains("\n[s2] #2 goal="));
+}
+
 #[test]
 fn folds_and_spans_never_hold_a_typed_value() {
     let r = rig(
@@ -1293,6 +1400,18 @@ fn a_fan_out_runs_at_most_20_reads_and_counts_its_returns() {
         reads[0].result
     );
     assert_eq!(ep.steps, 20);
+    // The next step sees every read it ran, and none it didn't.
+    let next = &nows(&r.model)[1];
+    assert!(
+        next.contains("Latest output of [s1] read_file:\n"),
+        "{next}"
+    );
+    assert!(
+        next.contains("Latest output of [s20] read_file:\n"),
+        "{next}"
+    );
+    assert!(!next.contains("[s21]"), "{next}");
+    assert_eq!(next.matches("Latest output of [").count(), 20);
     let outs = fan_out(vec![
         Box::new(|| ToolOutput::ok("a")),
         Box::new(|| -> ToolOutput { panic!("worker died") }),

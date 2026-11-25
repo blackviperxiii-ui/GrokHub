@@ -73,6 +73,9 @@ pub const GOAL_CAP: usize = 200;
 /// How much of a goal or Steer the worker and the checker see. A 400-char
 /// instruction must not reach them cut mid-sentence.
 pub const GOAL_PROMPT_CAP: usize = 4_000;
+/// How much of the latest non-desktop results the worker's next steps see,
+/// in all (head and tail; a fan-out splits it between its reads).
+pub const OUTPUT_PROMPT_CAP: usize = 4_000;
 
 /// A fresh episode id: `ep-<ms hex>-<n>`.
 pub fn new_episode_id(now_ms: u64) -> String {
@@ -143,7 +146,8 @@ pub struct StepShape {
     pub result: String,
 }
 
-/// How much of a result a step line keeps.
+/// How much of a result a step line keeps. The worker's own copy of the
+/// latest result is [`OUTPUT_PROMPT_CAP`].
 pub const STEP_RESULT_CAP: usize = 120;
 /// How much of a "Can't capture the screen" note a span keeps.
 pub const CAPTURE_NOTE_CAP: usize = 600;
@@ -168,6 +172,16 @@ impl StepShape {
             self.tool, self.decision
         )
     }
+}
+
+/// What a non-desktop step returned, as the worker's next steps see it:
+/// redacted, head and tail kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StepOutput {
+    /// The step's id in the view (`s3`, `s3r`).
+    pub(crate) view_ref: String,
+    pub(crate) tool: String,
+    pub(crate) text: String,
 }
 
 /// One supervised desktop episode.
@@ -203,6 +217,9 @@ pub struct Episode {
     pub step_up: u32,
     /// The `episode_id`s of the past lessons this episode started with.
     pub used_lessons: Vec<String>,
+    /// The latest non-desktop results (one step, or every read of a
+    /// fan-out). A desktop step, a park or a deny leaves them as they are.
+    pub(crate) outputs: Vec<StepOutput>,
 }
 
 fn cap_text(text: &str, held: &[String]) -> String {
@@ -233,6 +250,7 @@ impl Episode {
             ring: VecDeque::new(),
             step_up: 0,
             used_lessons: Vec::new(),
+            outputs: Vec::new(),
         }
     }
 

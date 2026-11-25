@@ -16,8 +16,8 @@ use super::verify::{
 };
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
 use super::{
-    Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE,
-    STALL_REPLAN, STEP_UP_STEPS,
+    Episode, EpisodeEnd, OpenPark, StepOutput, StepShape, FANOUT_CAP, GOAL_CAP, OUTPUT_PROMPT_CAP,
+    PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS,
 };
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
@@ -513,6 +513,14 @@ impl Run<'_, '_> {
         for park in self.ep.parks.iter().filter(|p| p.waiting) {
             now.push_str(&waiting_line(park));
         }
+        // The latest read in full (head and tail), after the view: the view
+        // line keeps only STEP_RESULT_CAP, and this tail is never cached.
+        for o in &self.ep.outputs {
+            now.push_str(&format!(
+                "Latest output of [{}] {}:\n{}\n",
+                o.view_ref, o.tool, o.text
+            ));
+        }
         let (step_text, image) = match &self.obs {
             Some(obs) => {
                 now.push_str(&format!("Latest observation:\n{}", obs.line()));
@@ -912,6 +920,9 @@ impl Run<'_, '_> {
                         out.image_data_url.clone(),
                         out.mcp_app.as_deref().cloned(),
                     );
+                    if !gate::is_desktop(&call.name) {
+                        self.ep.outputs = vec![self.kept(&id, &call.name, &out, OUTPUT_PROMPT_CAP)];
+                    }
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
                         tool: park.tool.clone(),
@@ -1027,6 +1038,7 @@ impl Run<'_, '_> {
         }
         let outs = fan_out(jobs);
         let returned = outs.iter().filter(|o| o.text != DEAD_WORKER).count();
+        self.ep.outputs.clear();
         for (c, out) in calls[..take].iter().zip(outs) {
             self.ep.steps += 1;
             if out.failed {
@@ -1047,6 +1059,8 @@ impl Run<'_, '_> {
                 result: format!("{} (fan-out {returned}/{take} returned)", result_text(&out)),
             };
             let id = format!("s{}", self.ep.steps);
+            let kept = self.kept(&id, &c.name, &out, OUTPUT_PROMPT_CAP / take);
+            self.ep.outputs.push(kept);
             self.record(&shape, &arg_line(&c.name, &c.arguments), "soft", &id);
         }
         for c in &calls[take..] {
@@ -1144,12 +1158,41 @@ impl Run<'_, '_> {
             out.image_data_url.clone(),
             out.mcp_app.as_deref().cloned(),
         );
+        // Zoom counts as a read here, so what it opens is readable.
+        if !gate::is_desktop(&call.name) {
+            self.ep.outputs = vec![self.kept(id, &call.name, &out, OUTPUT_PROMPT_CAP)];
+        }
         self.record(
             &shape("allow", ui, result_text(&out)),
             args_redacted,
             "soft",
             id,
         );
+    }
+
+    /// A result as the worker's next steps see it: redacted (held secrets
+    /// too), and over `share` chars its head and tail with the middle
+    /// clipped, so a fenced result keeps its close marker and a command its
+    /// exit line.
+    fn kept(&self, view_ref: &str, tool: &str, out: &ToolOutput, share: usize) -> StepOutput {
+        let clean = grokhub_core::redact_held_secrets(
+            &grokhub_core::redact_secrets(&out.text),
+            self.k.held,
+        );
+        let clean = clean.trim_end();
+        let text = if clean.chars().count() > share {
+            format!(
+                "{}\n(Read a smaller part to see what was clipped.)",
+                crate::auto_review::clip_middle(clean, share)
+            )
+        } else {
+            clean.to_string()
+        };
+        StepOutput {
+            view_ref: view_ref.into(),
+            tool: tool.into(),
+            text,
+        }
     }
 
     /// `harness::decide` first (the only hard gate; a desktop call is also
