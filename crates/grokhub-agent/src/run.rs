@@ -1431,6 +1431,8 @@ fn run_turn(
                             cancel: input.cancel,
                             drive: drive.as_ref(),
                             last_assistant: &last_assistant,
+                            ran: &ran,
+                            written: &modified_paths,
                             usage: &mut usage,
                         };
                         crate::close_check::before_end(&mut close_in)
@@ -7234,6 +7236,92 @@ mod tests {
                 "Not verified since your last change to notes.txt. Check it (run the tests or build, re-read the file, look at the result) before you finish.".to_string(),
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The close check in the real loop: the judge's request carries the
+    /// run's own work (the file it wrote, the red test and its exit code),
+    /// not only the reply's words.
+    #[test]
+    fn a_close_check_judges_the_runs_work_not_its_words() {
+        let dir = workspace("close-work");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let conv = format!("close-work-{}", std::process::id());
+        grokhub_core::save_intentions(
+            &config,
+            &conv,
+            &grokhub_core::Intentions {
+                items: vec![grokhub_core::Intention {
+                    id: "fix".into(),
+                    text: "fix the handler".into(),
+                    status: grokhub_core::IntentionStatus::Open,
+                }],
+            },
+        )
+        .unwrap();
+        let red = "echo 'test result: FAILED. 0 passed; 1 failed'; exit 1 # cargo test";
+        let script = scripted(vec![
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"src/handler.rs","content":"fn handler() {}"}"#,
+                )],
+            ),
+            turn(
+                "",
+                vec![call(
+                    "s1",
+                    "run_terminal_command",
+                    &serde_json::json!({ "command": red }).to_string(),
+                )],
+            ),
+            turn("Updated the handler.", Vec::new()),
+            turn(
+                r#"{"need_met":false,"open":["fix"],"next_steps":["make the failing test pass"],"status_updates":[]}"#,
+                Vec::new(),
+            ),
+            turn("The test still fails.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = script.seen.lock().unwrap().clone();
+        let judge: Vec<String> = seen
+            .iter()
+            .filter_map(|input| {
+                let text = |item: &InputItem| match item {
+                    InputItem::Message { content, .. } => match content.first() {
+                        Some(ContentPart::InputText(t)) => t.clone(),
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                };
+                (input.len() == 2 && text(&input[0]) == crate::close_check::CLOSE_SYSTEM)
+                    .then(|| text(&input[1]))
+            })
+            .collect();
+        assert_eq!(judge.len(), 1, "{seen:?}");
+        let work = format!(
+            "Files written: src/handler.rs\nCommands, newest last:\n- `{red}` → exit 1\nLast test run: `{red}` → exit 1\nLast assistant reply:\nUpdated the handler."
+        );
+        assert!(judge[0].contains(&work), "{}", judge[0]);
+        // The judge said not done: the model got its next step and answered again.
+        assert!(
+            user_texts(&history)
+                .iter()
+                .any(|t| t.contains("make the failing test pass")),
+            "{:?}",
+            user_texts(&history)
+        );
+        assert_eq!(seen.len(), 5);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

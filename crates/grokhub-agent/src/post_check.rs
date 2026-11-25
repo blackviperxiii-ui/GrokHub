@@ -114,12 +114,30 @@ impl Ran {
     fn opaque(&self) -> bool {
         self.name == "spawn_subagent"
             || self.name == "get_command_or_subagent_output"
-            || (self.name == "run_terminal_command"
-                && self
-                    .args
-                    .split_whitespace()
-                    .collect::<String>()
-                    .contains("\"is_background\":true"))
+            || self.background()
+    }
+
+    /// A command left running in the background.
+    fn background(&self) -> bool {
+        self.name == "run_terminal_command"
+            && self
+                .args
+                .split_whitespace()
+                .collect::<String>()
+                .contains("\"is_background\":true")
+    }
+
+    /// How this command ended, in the compaction ledger's words (`exit 0`,
+    /// `timed out after …`, `started in the background`). A failed call whose
+    /// result says no such thing never ran (a refusal, a denial, bad
+    /// arguments): `not run`.
+    pub fn ended(&self) -> String {
+        let status = crate::compact::shell_status(Some(&self.output), self.background());
+        if !self.ok && status == crate::compact::NOT_KEPT {
+            "not run".into()
+        } else {
+            status
+        }
     }
 }
 
@@ -560,7 +578,7 @@ fn evaluate(expr: &str) -> Option<(f64, usize, u32)> {
 
 // --- Counts --------------------------------------------------------------
 
-fn is_test_command(command: &str) -> bool {
+pub(crate) fn is_test_command(command: &str) -> bool {
     let c = command.to_lowercase();
     [
         "cargo test",

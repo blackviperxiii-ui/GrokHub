@@ -2242,6 +2242,7 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
 
 #[path = "compact_ledger.rs"]
 mod ledger;
+pub(crate) use ledger::{shell_status, NOT_KEPT};
 
 #[path = "compact_bg.rs"]
 pub mod bg;

@@ -17,6 +17,7 @@ use crate::client::{
     ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, TextFormat,
 };
 use crate::drive::Drive;
+use crate::post_check::Ran;
 use crate::session_tools::{todos_for, TodoItem};
 use crate::{CancelToken, Usage};
 
@@ -25,6 +26,10 @@ pub const CLOSE_CLASS: &str = crate::route::CLASS_JUDGE;
 
 const STEP_CAP: usize = 3;
 const STEP_CHARS: usize = 200;
+/// Files the judge sees by name before "and N more".
+const WORK_FILES: usize = 20;
+/// The newest commands the judge sees.
+const WORK_COMMANDS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloseReport {
@@ -43,6 +48,10 @@ pub struct CloseIn<'a> {
     pub cancel: &'a CancelToken,
     pub drive: Option<&'a Drive>,
     pub last_assistant: &'a str,
+    /// This run's tool calls and the files it wrote: the judge reads the
+    /// work beside the reply.
+    pub ran: &'a [Ran],
+    pub written: &'a [String],
     pub usage: &'a mut Usage,
 }
 
@@ -145,6 +154,8 @@ pub fn before_end(inp: &mut CloseIn<'_>) -> CloseGate {
         &intentions,
         &todos,
         inp.last_assistant,
+        inp.ran,
+        inp.written,
     );
     let turn = match crate::route::live::stream_routed(
         inp.client,
@@ -189,6 +200,8 @@ pub fn close_request(
     intentions: &Intentions,
     todos: &[TodoItem],
     last_assistant: &str,
+    ran: &[Ran],
+    written: &[String],
 ) -> ResponsesRequest {
     ResponsesRequest {
         text_format: Some(CLOSE_FORMAT),
@@ -205,6 +218,8 @@ pub fn close_request(
                     intentions,
                     todos,
                     last_assistant,
+                    ran,
+                    written,
                 ))],
             },
         ],
@@ -228,6 +243,10 @@ Keys: need_met (bool), open (array of ids still open), \
 next_steps (1 to 3 short grounded steps, or an empty array), \
 status_updates (array of objects with id and status). \
 status is open, done, or waiting. Change status only. \
+Judge the work list, not the reply's words: a change the reply \
+claims needs a file written or a command that made it, and a \
+passing check needs its command with exit 0; if they are missing, \
+need_met is false. \
 Before need_met is true, require a verification step \
 (create-verification-skill, maintain-verification-skill, \
 or the project's verify skill). Before a ship or release \
@@ -371,7 +390,13 @@ fn newly_done(before: &Intentions, after: &Intentions) -> Vec<String> {
         .collect()
 }
 
-fn judge_prompt(intentions: &Intentions, todos: &[TodoItem], last_assistant: &str) -> String {
+fn judge_prompt(
+    intentions: &Intentions,
+    todos: &[TodoItem],
+    last_assistant: &str,
+    ran: &[Ran],
+    written: &[String],
+) -> String {
     let (last, _) = grokhub_core::redact_recall(last_assistant);
     let last = clip_chars(last.trim(), 1500);
     let mut lines = vec!["Intentions:".to_string()];
@@ -398,9 +423,61 @@ fn judge_prompt(intentions: &Intentions, todos: &[TodoItem], last_assistant: &st
             clip_chars(&todo.content, INTENTION_CLIP)
         ));
     }
+    lines.extend(work_lines(ran, written));
     lines.push("Last assistant reply:".into());
     lines.push(last);
     lines.join("\n")
+}
+
+/// What this run did, from its own tool calls: the files it wrote, its newest
+/// commands with how each ended, and its last test run.
+fn work_lines(ran: &[Ran], written: &[String]) -> Vec<String> {
+    let mut lines = vec!["Work this run (from the tool calls, not the reply):".to_string()];
+    let files: Vec<String> = written
+        .iter()
+        .take(WORK_FILES)
+        .map(|path| clip_chars(path, INTENTION_CLIP))
+        .collect();
+    lines.push(match written.len() {
+        0 => "Files written: (none)".into(),
+        n if n > WORK_FILES => format!(
+            "Files written: {} and {} more",
+            files.join(", "),
+            n - WORK_FILES
+        ),
+        _ => format!("Files written: {}", files.join(", ")),
+    });
+    let command = |r: &Ran| {
+        let (text, _) = grokhub_core::redact_recall(&r.command);
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        format!(
+            "`{}` → {}",
+            clip_chars(&flat, INTENTION_CLIP).replace('`', "'"),
+            r.ended()
+        )
+    };
+    let shell: Vec<&Ran> = ran
+        .iter()
+        .filter(|r| r.name == "run_terminal_command")
+        .collect();
+    lines.push("Commands, newest last:".into());
+    if shell.is_empty() {
+        lines.push("(none)".into());
+    }
+    for r in &shell[shell.len().saturating_sub(WORK_COMMANDS)..] {
+        lines.push(format!("- {}", command(r)));
+    }
+    lines.push(
+        match shell
+            .iter()
+            .rev()
+            .find(|r| crate::post_check::is_test_command(&r.command))
+        {
+            Some(r) => format!("Last test run: {}", command(r)),
+            None => "Last test run: (none)".into(),
+        },
+    );
+    lines
 }
 
 const INTENTION_CLIP: usize = 160;
@@ -447,7 +524,15 @@ mod tests {
 
     #[test]
     fn the_close_request_asks_for_the_strict_report_and_its_reply_parses() {
-        let req = close_request("grok-4.3", "c", &Intentions::default(), &[], "done");
+        let req = close_request(
+            "grok-4.3",
+            "c",
+            &Intentions::default(),
+            &[],
+            "done",
+            &[],
+            &[],
+        );
         assert_eq!(req.text_format, Some(CLOSE_FORMAT));
         let report = parse_report(
             r#"{"need_met":false,"open":["t1"],"next_steps":["run the tests"],"status_updates":[{"id":"t1","status":"open"}]}"#,
@@ -542,7 +627,15 @@ mod tests {
 
     #[test]
     fn the_check_request_is_a_low_effort_judge_with_no_tools() {
-        let req = close_request("grok-4.7", "chat-1", &open_list(), &[], "All done.");
+        let req = close_request(
+            "grok-4.7",
+            "chat-1",
+            &open_list(),
+            &[],
+            "All done.",
+            &[],
+            &[],
+        );
         assert_eq!(req.effort.as_deref(), Some("low"));
         assert!(req.tools.is_empty());
         assert!(!req.hosted_search);
@@ -556,5 +649,156 @@ mod tests {
         };
         assert!(text.contains("ship the notes"), "{text}");
         assert!(text.contains("All done."), "{text}");
+    }
+
+    fn user_text(req: &ResponsesRequest) -> String {
+        match &req.input[1] {
+            InputItem::Message { content, .. } => match &content[0] {
+                ContentPart::InputText(text) => text.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        }
+    }
+
+    fn shell(command: &str, ok: bool, output: &str) -> Ran {
+        Ran::new(
+            "run_terminal_command",
+            &serde_json::json!({ "command": command }).to_string(),
+            ok,
+            output,
+        )
+    }
+
+    #[test]
+    fn the_judge_reads_the_runs_work_not_only_its_reply() {
+        let ran = [
+            Ran::new(
+                "search_replace",
+                r#"{"file_path":"src/handler.rs","old_string":"a","new_string":"b"}"#,
+                true,
+                "ok",
+            ),
+            shell("git status", true, "exit 0\nnothing to commit"),
+            shell(
+                "cargo test -p app",
+                false,
+                "exit 101\ntest result: FAILED. 3 passed; 1 failed",
+            ),
+        ];
+        let written = ["src/handler.rs".to_string()];
+        let req = close_request(
+            "judge",
+            "chat-1",
+            &open_list(),
+            &[],
+            "Updated the handler.",
+            &ran,
+            &written,
+        );
+        assert_eq!(
+            user_text(&req),
+            "Intentions:\n- [open] ship: ship the notes\nTodos:\n(none)\n\
+             Work this run (from the tool calls, not the reply):\n\
+             Files written: src/handler.rs\n\
+             Commands, newest last:\n\
+             - `git status` → exit 0\n\
+             - `cargo test -p app` → exit 101\n\
+             Last test run: `cargo test -p app` → exit 101\n\
+             Last assistant reply:\nUpdated the handler."
+        );
+        // No work: the block says so.
+        let none = close_request(
+            "judge",
+            "chat-1",
+            &open_list(),
+            &[],
+            "Updated the handler.",
+            &[],
+            &[],
+        );
+        assert_eq!(
+            user_text(&none),
+            "Intentions:\n- [open] ship: ship the notes\nTodos:\n(none)\n\
+             Work this run (from the tool calls, not the reply):\n\
+             Files written: (none)\n\
+             Commands, newest last:\n\
+             (none)\n\
+             Last test run: (none)\n\
+             Last assistant reply:\nUpdated the handler."
+        );
+        // A fenced result still says how it ended; a refused command never ran;
+        // a backquote can't end the command's span early.
+        let fenced = "<<<UNTRUSTED source=shell:network nonce=n1>>>\nexit 0\n200 OK\n<<<END_UNTRUSTED nonce=n1>>>";
+        let ran = [
+            shell("curl -s https://example.com/health", true, fenced),
+            shell(
+                "rm -rf build",
+                false,
+                &crate::gate::user_rejected("run_terminal_command"),
+            ),
+            shell("echo `date`", true, "exit 0\nnow"),
+        ];
+        let text = user_text(&close_request(
+            "judge",
+            "chat-1",
+            &open_list(),
+            &[],
+            "Done.",
+            &ran,
+            &[],
+        ));
+        assert!(
+            text.contains(
+                "Commands, newest last:\n\
+                 - `curl -s https://example.com/health` → exit 0\n\
+                 - `rm -rf build` → not run\n\
+                 - `echo 'date'` → exit 0\n\
+                 Last test run: (none)\n"
+            ),
+            "{text}"
+        );
+        // Secrets never reach the judge.
+        let ran = [shell(
+            r#"curl -H "Authorization: Bearer sk-abcdefghijklmnopqrstuv" x"#,
+            true,
+            "exit 0",
+        )];
+        let text = user_text(&close_request(
+            "judge",
+            "chat-1",
+            &open_list(),
+            &[],
+            "Done.",
+            &ran,
+            &[],
+        ));
+        assert!(!text.contains("sk-abcdefghijklmnopqrstuv"), "{text}");
+        assert!(text.contains("- `curl -H "), "{text}");
+        // Long runs: the newest 8 commands and the first 20 files by name.
+        let ran: Vec<Ran> = (1..=9)
+            .map(|n| shell(&format!("echo {n}"), true, "exit 0"))
+            .collect();
+        let written: Vec<String> = (1..=22).map(|n| format!("f{n}.txt")).collect();
+        let text = user_text(&close_request(
+            "judge",
+            "chat-1",
+            &open_list(),
+            &[],
+            "Done.",
+            &ran,
+            &written,
+        ));
+        let files: Vec<String> = (1..=20).map(|n| format!("f{n}.txt")).collect();
+        assert!(
+            text.contains(&format!("Files written: {} and 2 more\n", files.join(", "))),
+            "{text}"
+        );
+        assert!(!text.contains("`echo 1`"), "{text}");
+        assert!(
+            text.contains("- `echo 2` → exit 0\n")
+                && text.contains("- `echo 9` → exit 0\nLast test run: (none)"),
+            "{text}"
+        );
     }
 }

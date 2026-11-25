@@ -1,0 +1,1 @@
+- Chat: the finish check that runs before a multi-step turn ends now reads what the turn did, not only its reply: the files it wrote, its last eight commands with their exit codes, and its last test run. A reply that says "Updated the handler." with no write behind it, or after a failing test, now reads as not done.

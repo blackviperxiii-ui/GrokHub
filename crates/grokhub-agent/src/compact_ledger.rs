@@ -78,8 +78,12 @@ fn prior_ledger(items: &[InputItem]) -> Ledger {
     ledger
 }
 
-/// How a shell call ended, read from the first lines of its result.
-fn shell_status(output: Option<&str>, background: bool) -> String {
+/// What [`shell_status`] says when a result holds no line saying how it ended.
+pub(crate) const NOT_KEPT: &str = "result not kept";
+
+/// How a shell call ended, read from the first lines of its result (a
+/// fenced result's `exit N` is on its second line).
+pub(crate) fn shell_status(output: Option<&str>, background: bool) -> String {
     if background {
         return "started in the background".into();
     }
@@ -97,7 +101,7 @@ fn shell_status(output: Option<&str>, background: bool) -> String {
             return line.to_string();
         }
     }
-    "result not kept".into()
+    NOT_KEPT.into()
 }
 
 fn is_background(arguments: &serde_json::Value) -> bool {
