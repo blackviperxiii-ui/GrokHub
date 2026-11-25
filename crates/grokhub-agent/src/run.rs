@@ -2701,6 +2701,15 @@ fn dispatch_tool_call(
         session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
+    // A job's tool set holds for the tools the loop runs itself too: a
+    // helper, a message to an agent, plan mode and the todo list.
+    let job_set = bound_job_tool_set(input.conversation_id);
+    if job_set.as_ref().is_some_and(|set| !set.allows(&call.name)) {
+        return (
+            ToolOutput::err(tools::tool_set_refusal(&call.name)),
+            Usage::default(),
+        );
+    }
     if let Some(done) = crate::session_tools::try_run(crate::session_tools::SessionCall {
         name: &call.name,
         arguments: &call.arguments,
@@ -2743,7 +2752,6 @@ fn dispatch_tool_call(
         on_event(LoopEvent::Elicit(view));
     };
     let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
-    let job_set = bound_job_tool_set(input.conversation_id);
     let output =
         crate::mcp::with_elicit(attended, &session, &mut emit_card, &mut wait_card, || {
             tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())

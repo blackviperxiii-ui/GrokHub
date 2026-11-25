@@ -49,7 +49,7 @@ export type AgentTaskState =
 /** One message to an agent and what came back. */
 export interface AgentTask {
   id: string;
-  from: "person" | { agent: string };
+  from: "person" | { agent: string } | { peer: string };
   to: string;
   state: AgentTaskState;
   asked: string;

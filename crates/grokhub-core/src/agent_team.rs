@@ -20,6 +20,8 @@ const MAX_ID: usize = 40;
 const MAX_NAME: usize = 60;
 const MAX_ABOUT: usize = 4000;
 const MAX_TOOL: usize = 64;
+const MAX_SHARE_WITH: usize = 16;
+const MAX_DEVICE_ID: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +94,9 @@ pub struct Profile {
     /// Offer its agent card to paired peers.
     #[serde(default)]
     pub share: bool,
+    /// The paired computers (device ids) that may message it while `share` is on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub share_with: Vec<String>,
 }
 
 impl Profile {
@@ -110,6 +115,7 @@ impl Profile {
             model_tier: String::new(),
             talks_to: Vec::new(),
             share: false,
+            share_with: Vec::new(),
         }
     }
 
@@ -167,6 +173,9 @@ pub enum Sender<'a> {
     /// The person, in the main chat or the app.
     Person,
     Agent(&'a str),
+    /// A paired computer, by its device id. It reaches only an agent shared
+    /// with it, and can't tell an unshared agent from a missing one.
+    Peer(&'a str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -440,6 +449,11 @@ impl TeamFile {
         let target = self
             .agent(to)
             .ok_or_else(|| Refusal::UnknownAgent(to.to_string()))?;
+        if let Sender::Peer(peer) = from {
+            if !target.share || !target.share_with.iter().any(|p| p == peer) {
+                return Err(Refusal::UnknownAgent(to.to_string()));
+            }
+        }
         if let Sender::Agent(id) = from {
             let sender = self
                 .agent(id)
@@ -532,6 +546,24 @@ fn check_agent(
         }
         if !seen.insert(to.as_str()) {
             return Err(format!("`{id}` lists `{to}` twice in talks_to."));
+        }
+    }
+    if agent.share_with.len() > MAX_SHARE_WITH {
+        return Err(format!(
+            "`{id}` is shared with more than {MAX_SHARE_WITH} computers."
+        ));
+    }
+    let mut shared = BTreeSet::new();
+    for peer in &agent.share_with {
+        if peer.trim().is_empty() || peer.len() > MAX_DEVICE_ID {
+            return Err(format!(
+                "`{id}` lists a computer id that is empty or longer than {MAX_DEVICE_ID} characters."
+            ));
+        }
+        if !shared.insert(peer.as_str()) {
+            return Err(format!(
+                "`{id}` lists computer `{peer}` twice in share_with."
+            ));
         }
     }
     if let Some(bad) = agent.tools.iter().find(|t| !valid_tool(t)) {
