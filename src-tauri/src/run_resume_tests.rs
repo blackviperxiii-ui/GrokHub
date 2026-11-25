@@ -94,7 +94,7 @@ fn an_automation_card_continues_its_session_with_the_block_and_keeps_ask() {
     seed(&dir, vec![c]);
 
     let p = prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW).expect("prepared");
-    assert_eq!((p.session_id.as_str(), p.resume), ("s-1", true));
+    assert!(((p.session_id.as_str(), p.resume)) == (("s-1", true)));
     // Started in Ask: the resume stays in Ask though Approvals is Always now.
     assert_eq!(p.gate.mode, PermMode::Ask);
     assert_eq!(
@@ -142,7 +142,7 @@ fn another_model_or_a_lost_session_starts_fresh_and_a_chat_card_is_not_unattende
     );
     let p = prepare(&dir, "b-1", "grok-5", ALWAYS, false, &intact_s1, 0, NOW).expect("b-1");
     assert!(!p.resume);
-    assert_eq!(p.session_id, format!("shell-resume-b-1-{NOW}"));
+    assert!((p.session_id) == (format!("shell-resume-b-1-{NOW}")));
     assert_eq!(p.gate.mode, PermMode::Always);
     assert_eq!(notes(&dir, "b-1"), ["resume: fresh session", "attempt 2"]);
 

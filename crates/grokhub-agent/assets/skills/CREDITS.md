@@ -94,4 +94,4 @@ Left out:
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `17e63c0f24fa2d7ded82e986b2e6988008fc98b81a63df04772eda445ad55f31`
+Bundle SHA-256: `70171695247be34ee1e61b9ae3b3c0842622f9f08c691a9621068e44c0860096`

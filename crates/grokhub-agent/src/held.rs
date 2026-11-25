@@ -231,11 +231,11 @@ mod tests {
         let chat = "held-keeps-once";
         hold_secret(chat, "abc");
         hold_secret(chat, "  ");
-        assert_eq!(held_secrets(chat), Vec::<String>::new());
+        assert!((held_secrets(chat)) == (Vec::<String>::new()));
         hold_secret(chat, &format!(" {TOKEN} "));
         hold_secret(chat, TOKEN);
-        assert_eq!(held_secrets(chat), vec![TOKEN.to_string()]);
-        assert_eq!(held_secrets("held-other-chat"), Vec::<String>::new());
+        assert!((held_secrets(chat)) == (vec![TOKEN.to_string()]));
+        assert!((held_secrets("held-other-chat")) == (Vec::<String>::new()));
         assert_eq!(
             redact(chat, &format!("Saved {TOKEN} for you.")),
             "Saved [redacted] for you."
