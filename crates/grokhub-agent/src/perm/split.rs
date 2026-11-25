@@ -61,15 +61,62 @@ pub fn analyze_with(script: &str, powershell: bool) -> Facts {
     analyze_depth(script, powershell, 0)
 }
 
-/// The peeled command when the script is one plain segment. `None` when it does not peel cleanly.
-pub fn peeled_primary(script: &str) -> Option<String> {
-    let facts = analyze(script);
-    let segs = facts.segments?;
-    if segs.len() == 1 {
-        Some(segs[0].command.clone())
-    } else {
-        None
-    }
+/// The words of `script` when it is one plain command run as written: one
+/// segment, with no `NAME=value` before it and no wrapper (`env`, `nice`,
+/// `timeout`, …) peeled off it. `None` otherwise.
+pub fn bare_command(script: &str) -> Option<Vec<String>> {
+    let [seg] = <[Seg; 1]>::try_from(analyze(script).segments?).ok()?;
+    let [raw] = <[RawSeg; 1]>::try_from(split_words(script, cfg!(windows))?).ok()?;
+    (raw.words == seg.words).then_some(seg.words)
+}
+
+/// `words` as one command that reads back as the same words, in sh and in
+/// PowerShell: a word with anything but plain characters goes in single
+/// quotes, and a `'` in it in double quotes (`'it'"'"'s'`). A remembered
+/// grant is stored this way, so `git commit -m "a && b"` stays one command.
+pub fn render(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| {
+            let plain = !word.is_empty()
+                && word.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '-' | '_'
+                                | '.'
+                                | '/'
+                                | ':'
+                                | ','
+                                | '+'
+                                | '@'
+                                | '%'
+                                | '='
+                                | '~'
+                                | '*'
+                                | '?'
+                                | '['
+                                | ']'
+                                | '^'
+                        )
+                });
+            if plain {
+                word.clone()
+            } else {
+                let quoted: Vec<String> =
+                    word.split('\'').map(|part| format!("'{part}'")).collect();
+                quoted.join("\"'\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The words of `grant` when it is one plain command, as [`Seg::words`]
+/// holds them; `None` otherwise.
+pub fn grant_words(grant: &str) -> Option<Vec<String>> {
+    let segs = analyze(grant).segments?;
+    <[Seg; 1]>::try_from(segs).ok().map(|[seg]| seg.words)
 }
 
 fn analyze_depth(script: &str, powershell: bool, depth: usize) -> Facts {

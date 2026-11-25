@@ -1806,10 +1806,20 @@ fn folded(path: &str) -> String {
     parts.join("/")
 }
 
-/// A command that names the consent ledger, or a routine consent store.
+/// A command that names the consent ledger, or a routine consent store, in
+/// any way a shell could read it ([`host_safety::shell_readings`]): quoted
+/// (`"consent".jsonl`), or through a glob that could match it in the GrokHub
+/// folder (`GrokHub/consent.json?`, `cd GrokHub && … consent.js?nl`).
 fn names_consent(cmd: &str) -> bool {
-    let c = cmd.to_ascii_lowercase();
-    c.contains("consent.jsonl") || (c.contains("consent.json") && c.contains("routines"))
+    host_safety::shell_readings(cmd).iter().any(|c| {
+        let names_app_folder = c.contains("grokhub") || host_safety::glob_names(c, &["grokhub"]);
+        c.contains("consent.jsonl")
+            || (c.contains("consent.json") && c.contains("routines"))
+            || host_safety::glob_names(c, &["grokhub", "consent.jsonl"])
+            || host_safety::glob_names(c, &["grokhub", "routines", "consent.json"])
+            || (names_app_folder && host_safety::glob_names(c, &["consent.jsonl"]))
+            || (c.contains("routines") && host_safety::glob_names(c, &["consent.json"]))
+    })
 }
 
 fn command_floor(cmd: &str) -> Option<String> {
@@ -3613,6 +3623,113 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Quotes, globs and doubled slashes don't hide a key path or the
+    /// consent ledger from the floor.
+    #[test]
+    fn the_floor_sees_quoted_globbed_and_doubled_slash_paths() {
+        let floor = |reason: &str| {
+            Some(HardFloor {
+                reason: reason.into(),
+            })
+        };
+        let ledger = floor("hard floor: consent ledger (only your click changes it)");
+        for (cmd, want) in [
+            ("cat ~/.ssh/id_rsa", floor("forbidden path: ssh keys")),
+            (r#"cat ~/."ssh"/id_rsa"#, floor("forbidden path: ssh keys")),
+            ("cat ~/.ss?/id_rsa", floor("forbidden path: ssh keys")),
+            ("cat /etc//shadow", floor("forbidden path: /etc/shadow")),
+            (
+                concat!("cat ~/.grok//auth", ".json"),
+                floor("forbidden path: grok login"),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json?",
+                ledger.clone(),
+            ),
+            (
+                r#"echo '{}' >> ~/.config/GrokHub/"consent".jsonl"#,
+                ledger.clone(),
+            ),
+            (
+                r"echo '{}' >> ~/.config/GrokHub/consent.json\l",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub//consent.js[o]nl",
+                ledger.clone(),
+            ),
+            (
+                "cp x.json ~/.config/GrokHub/routines/consent.js?n",
+                ledger.clone(),
+            ),
+            (
+                r#"cd ~/.config/GrokHub/"routines" && printf '{}' > "consent".json"#,
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub && echo '{}' >> consent.js?nl",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/Grok?ub && echo '{}' >> c*.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/Grok?ub/consent.json?",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub/routines && cp x.json consent.js?n",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json[[:lower:]]",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json$'l'",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json$\"l\"",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.js\\\nonl",
+                ledger.clone(),
+            ),
+            (
+                "echo '{}' >> ~/.config/GrokHub/consent.json{l..l}",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub && echo '{}' | tee -a *.jsonl",
+                ledger.clone(),
+            ),
+            (
+                "cd ~/.config/GrokHub/routines && cp x.json *.json",
+                ledger.clone(),
+            ),
+            ("cat ~/.s{s..s}h/id_rsa", floor("forbidden path: ssh keys")),
+            (
+                "cd ~/.config/GrokHub && sed -i 's/x/y/' *",
+                floor("forbidden path: app secrets"),
+            ),
+            ("wc -l logs/*.jsonl", None),
+            ("wc -l /home/user/GrokHub/logs/*.jsonl", None),
+            ("cd /home/user/GrokHub && wc -l logs/*.jsonl", None),
+            ("cd ~/.config/GrokHub && ls logs", None),
+            ("cat */*.json", None),
+            ("ls src/consent.*", None),
+        ] {
+            assert_eq!(hard_floor("run_terminal_command", &sh(cmd)), want, "{cmd}");
+        }
     }
 
     #[test]

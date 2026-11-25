@@ -970,6 +970,24 @@ pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput
     serve_within(class, text, HEAVY_WAIT, cancel)
 }
 
+/// The task kind a device turn picks its model for. A typed chat turn
+/// reads its own kind, as the router's pick did: a debugging question
+/// typed in chat is coding work for the model on disk too, not everyday
+/// chat.
+pub(crate) fn turn_kind(class: &str, tokens: u64, text: &str, picture: bool) -> Option<TaskKind> {
+    let lane = if class == super::ask::CHAT_CLASS && !text.trim().is_empty() {
+        let cx = super::ask::AskContext {
+            ctx_tokens: tokens,
+            needs_image: picture,
+            ..super::ask::AskContext::default()
+        };
+        super::ask::read(text, &cx).lane()
+    } else {
+        class
+    };
+    super::local_task::kind(lane, tokens, text)
+}
+
 /// Chat path that keeps function tools (cabin `web_search` / `web_fetch`) so the
 /// agent loop can run them and round-trip results. Background classes stay
 /// text-only via [`serve`].
@@ -988,7 +1006,7 @@ pub fn serve_request(
     let tokens = (text.len() as u64).div_ceil(4);
     let _need =
         super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
-    let kind = super::local_task::kind(class_norm, tokens, &text);
+    let kind = turn_kind(class_norm, tokens, &text, picture);
     let _kind = super::local_task::KindGuard::set(kind);
     // The chat's tier: the person's words this turn, else the chat's setting.
     // The router decides the model from it; the model never picks it.

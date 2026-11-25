@@ -4,6 +4,7 @@
 
 pub mod doctor;
 pub mod mcp_bridge;
+pub mod node_host;
 pub mod oauth_cli;
 mod server;
 pub mod update;
