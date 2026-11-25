@@ -275,6 +275,11 @@ impl NodeHost {
         self.port
     }
 
+    /// The key this app's MCP client sends to `/mcp/<id>`.
+    pub fn local_key(&self) -> &str {
+        &self.shared.key
+    }
+
     /// Where this app's MCP client reaches a companion.
     pub fn mcp_url(&self, id: &str) -> String {
         format!("http://127.0.0.1:{}{PREFIX}/mcp/{id}", self.port)
@@ -283,6 +288,15 @@ impl NodeHost {
     /// A new one-time pairing code (15 minutes).
     pub fn open_pairing(&self) -> PairCode {
         lock(&self.shared.book).open_pairing(grokhub_core::now_ms())
+    }
+
+    /// The pairing code still open: not spent, burned or expired.
+    pub fn pairing(&self) -> Option<PairCode> {
+        let now = grokhub_core::now_ms();
+        lock(&self.shared.book)
+            .pair
+            .clone()
+            .filter(|p| p.expires_at >= now)
     }
 
     pub fn close_pairing(&self) {
