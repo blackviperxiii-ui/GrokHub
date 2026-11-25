@@ -46,8 +46,9 @@ fn is_spool_name(name: &str) -> bool {
     name.starts_with(PREFIX) && name.ends_with(SUFFIX)
 }
 
-/// Save `text` whole, secrets taken out (line for line, so the numbers a
-/// marker names still hold), owner-only on unix. The path, with `/`
+/// Save `text` whole, secrets taken out the way text that leaves the
+/// computer has them taken out (line for line, so the numbers a marker
+/// names still hold), owner-only on unix. The path, with `/`
 /// separators, or `None` when it could not be written.
 pub(crate) fn save(keep: &Keep<'_>, text: &str) -> Option<String> {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed) % 10_000;
@@ -58,7 +59,7 @@ pub(crate) fn save(keep: &Keep<'_>, text: &str) -> Option<String> {
         std::process::id()
     );
     let path = spool_dir(keep.workspace).join(name);
-    let mut body = grokhub_core::redact_secrets(text);
+    let mut body = grokhub_core::redact_for_share(text);
     if let Some(session) = keep.session.filter(|s| !s.is_empty()) {
         body = crate::held::redact(session, &body);
     }
@@ -203,12 +204,24 @@ mod tests {
         };
         let plain = save(
             &held,
-            "line one\nOPENAI_KEY sk-abcdefghijklmnopqrstuv\ntyped held-value-4321\nlast",
+            "line one\nOPENAI_KEY sk-abcdefghijklmnopqrstuv\ntyped held-value-4321\nAWS_SECRET_ACCESS_KEY=fakeFAKEfake0123456789fakeFAKEfake0123456\nlast",
         )
         .expect("saved");
+        let lines: Vec<String> = std::fs::read_to_string(&plain)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        // Line for line, so a marker's line numbers still hold.
         assert_eq!(
-            std::fs::read_to_string(&plain).unwrap(),
-            "line one\nOPENAI_KEY [redacted]\ntyped [redacted]\nlast"
+            lines,
+            [
+                "line one",
+                "OPENAI_KEY [redacted]",
+                "typed [redacted]",
+                "AWS_SECRET_ACCESS_KEY=[redacted]",
+                "last"
+            ]
         );
         assert_eq!(find(&ws, &plain).map(|(_, outside)| outside), Some(false));
         #[cfg(unix)]
