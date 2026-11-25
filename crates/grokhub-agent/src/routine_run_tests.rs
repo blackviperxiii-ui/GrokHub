@@ -332,10 +332,20 @@ fn a_script_step_reaches_the_sandbox_with_its_args() {
         call["script"],
         "import json as _json\nARGS = _json.loads(\"{\\\"mount\\\":\\\"/srv\\\"}\")\nprint(ARGS['mount'])\n"
     );
-    // The sandboxed script tool is read-only, so it runs unattended.
+    // A tool script runs unattended only where the OS sandbox fully holds it
+    // (writes fenced, the network only through the proxy). Elsewhere, as on
+    // Windows or a Linux without unprivileged namespaces, it asks, and with
+    // nobody here to answer it is refused.
+    let refused =
+        "Tool `run_tool_script` was not executed: Denied by permission policy: deny rule on edit";
+    let want = if tools::ptc::sandbox_holds(&dir) {
+        Ok(())
+    } else {
+        Err(refused.to_string())
+    };
     assert_eq!(
         runner.cleared("check", tools::ptc::NAME, &call.to_string()),
-        Ok(())
+        want
     );
 }
 

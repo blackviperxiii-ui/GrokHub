@@ -8066,12 +8066,6 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
         "get_chat_archive" => out(get_chat_archive()),
         "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
-        "mcp_app_initialize" => out(mcp_app_initialize()),
-        "mcp_app_call_tool" => out(block_on(mcp_app_call_tool(
-            arg(args, "server")?,
-            arg(args, "name")?,
-            arg::<Option<Value>>(args, "arguments")?,
-        ))?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -8976,6 +8970,7 @@ pub fn run() {
             home_assistant::register(app.state::<ShellState>().config_dir.clone());
             #[cfg(desktop)]
             start_scheduler(app);
+            #[cfg(desktop)]
             start_channel_inbox(app.handle().clone());
             // Questions from helpers that outlive their chat's reply.
             // Only this shell watches task changes; the cabin leaves it off.

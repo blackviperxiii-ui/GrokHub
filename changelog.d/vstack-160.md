@@ -1,0 +1,2 @@
+- Sync built-in vstack skills to v1.6.0 (adds 12 skills, among them reframe and vstack-help).
+- Update the desktop shell's cookie crate to 0.18.3 (RUSTSEC-2026-0594).

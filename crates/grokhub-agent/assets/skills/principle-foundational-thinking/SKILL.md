@@ -1,8 +1,12 @@
 ---
 name: principle-foundational-thinking
-description: Before writing logic. Data structures first; scaffold before features.
+description: "Apply before writing logic: choosing core types and data structures, sequencing scaffold-vs-feature work, asking what concurrent actors share. Get the data structures right so downstream code becomes obvious."
 ---
 
 # Foundational Thinking
 
-Data shape first: core types, every access pattern. DRY structure, not every line; explicit over clever. Before sharing state, ask what a concurrent writer does. Scaffold first (CI, lint, tests, shared types); tests before fixes; small commits. Subtract dead code before foundations.
+Get the data shape right before writing logic. Define core types early, trace every access pattern, and choose structures that match the dominant paths. DRY the structure, not every line. Prefer explicit over clever.
+
+Before sharing state between actors, ask what happens if another actor modifies it concurrently. If the answer is not "nothing", isolate.
+
+Scaffold first. Whatever helps every later phase (CI, lint, tests, shared types) goes first, after removing dead code. Tests go before fixes. Keep commits small and single-purpose.

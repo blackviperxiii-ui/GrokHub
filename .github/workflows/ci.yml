@@ -272,7 +272,7 @@ jobs:
         run: python3 .github/scripts/test_model_profiles.py
       - name: Built-in vstack skills match their manifest
         run: python3 .github/scripts/test_vstack_sync.py
-      - name: Bundled vstack skills match upstream main
+      - name: Bundled vstack skills match the newest vstack tag
         run: python3 .github/scripts/vstack_sync.py check-upstream
       - name: Local model profiles are up to date
         run: python3 .github/scripts/test_local_profiles.py

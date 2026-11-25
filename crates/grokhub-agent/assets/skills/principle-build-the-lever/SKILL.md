@@ -1,15 +1,16 @@
 ---
 name: principle-build-the-lever
-description: Non-trivial work. Build the script, codemod, or check that does or proves it.
+description: "Apply to any non-trivial work, not just bulk work: edits, migrations, analyses, checks. Build the tool that does it or proves it (codemod, script, generator, or a skill your subagents follow) instead of working by hand. The tool is the artifact a reviewer can rerun."
 ---
 
 # Build the Lever
 
-A tool works the same way every time, reruns free, and turns "trust me" into "run this". Skip only for a couple of obvious edits.
+When the work isn't trivial, build the tool that does it (a codemod, script, generator, or rerunnable check) instead of doing it by hand. The bar is triviality, not repetition. Skip the tool only for a couple of obvious edits.
 
-- Do one unit by hand, then build the tool; rerun on that unit and diff. Make it rerun-safe.
-- Codemod for edits, generator for files, query for analysis, rerunnable check for verification.
-- A script beats fan-out; don't have delegates hand-apply it.
-- Fanning out? Recipe, checks, and fences in one skill delegates read but can't edit.
-- No tool in the diff? Not applied.
-- Smallest script, never a framework. Commit it if it outlives the session.
+A tool works the same way every time, reruns for free, and turns "trust me" into "run this".
+
+- Do the first unit by hand, then build the tool and prove it by rerunning it on that unit and diffing the result against the hand-made one. Make it safe to rerun.
+- Match the tool to the job. A codemod for edits, a generator for files, a query for analysis, a rerunnable check for verification.
+- A deterministic tool beats fan-out. Do not have delegates apply by hand what a script can apply. When you do fan out, write the recipe, the verification contract, and the fences as one skill the delegates read and cannot edit.
+- Applying this produces a file. No script, codemod, generator, or delegate skill in the diff means you didn't apply it. Commit it when the work outlives the session.
+- Build the smallest script that does or proves the job, never a framework.

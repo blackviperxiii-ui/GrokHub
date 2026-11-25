@@ -229,7 +229,7 @@ mod tests {
         assert!(!names_deferred.contains(&SHOW_PANEL));
         let index = tools_deferred
             .iter()
-            .find(|t| t["name"] == registry::LOAD_TOOL_SCHEMA)
+            .find(|t| t["name"] == registry::TOOL_SEARCH)
             .and_then(|t| t["description"].as_str())
             .unwrap_or("");
         assert!(!index.contains(SHOW_PANEL));
@@ -269,7 +269,7 @@ mod tests {
         );
         let index = before
             .iter()
-            .find(|t| t["name"] == registry::LOAD_TOOL_SCHEMA)
+            .find(|t| t["name"] == registry::TOOL_SEARCH)
             .and_then(|t| t["description"].as_str())
             .unwrap_or("");
         assert!(index.contains(SHOW_PANEL));
