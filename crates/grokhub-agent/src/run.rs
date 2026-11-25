@@ -2785,6 +2785,10 @@ fn action_line(name: &str, arguments: &str) -> String {
             .or_else(|| field("url")),
         // `message` is what gets sent when both are set.
         "send_subagent_message" if field("message").is_some() => None,
+        // Who gets the work, then the work.
+        "message_agent" => field("agent")
+            .zip(field("message"))
+            .map(|(agent, message)| format!("{agent}: {message}")),
         _ if name.contains("__") && crate::self_manage::self_tool(name).is_none() => {
             lone_field(&value)
         }
@@ -8414,6 +8418,11 @@ mod tests {
                 r#"{"name":"disk-report","about":"Disk use"}"#,
                 ALL,
             ),
+            (
+                "message_agent",
+                r#"{"agent":"researcher","message":"Which router has the best range?"}"#,
+                "researcher: Which router has the best range?",
+            ),
         ];
         for (name, arguments, line) in rows {
             let line = if *line == ALL { arguments } else { line };
@@ -8436,7 +8445,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 81);
+        assert_eq!(native.len(), 82);
     }
 
     #[test]
