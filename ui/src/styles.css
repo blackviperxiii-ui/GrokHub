@@ -7519,11 +7519,11 @@ button.primary:not(.quick-chip) {
 .local-library-job {
   display: inline-block;
   margin-right: 8px;
-  padding: 0 6px;
+  padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
 }
 
 /* The model a Pulse card's Open in Settings landed on. */

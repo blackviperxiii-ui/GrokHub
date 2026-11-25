@@ -1762,6 +1762,35 @@ impl Drop for StepOnDeviceForTests {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static FORCE_SCHEMA_CHECK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The loop's schema check, pinned on for a test that keeps the scripted
+/// client. A `local:` model id would send the turn to the sidecar instead.
+#[cfg(test)]
+pub(crate) fn schema_check_forced() -> bool {
+    FORCE_SCHEMA_CHECK.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) struct ForceSchemaCheck(bool);
+
+#[cfg(test)]
+impl ForceSchemaCheck {
+    pub(crate) fn on() -> Self {
+        Self(FORCE_SCHEMA_CHECK.with(|c| c.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ForceSchemaCheck {
+    fn drop(&mut self) {
+        FORCE_SCHEMA_CHECK.with(|c| c.set(self.0));
+    }
+}
+
 thread_local! {
     static HELPER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
