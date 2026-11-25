@@ -92,6 +92,7 @@ The default answer is `/viper-mode`, which runs most of the others when its step
 | Get several attempts at one brief, merged into the best one | [`/arena`](../arena/SKILL.md) |
 | Run parallel checks over slices, or race workers, and get one report | [`/swarm`](../swarm/SKILL.md) |
 | Have several fresh reviewers go at a diff and try to break it, keeping only findings a run proves | [`/interrogate`](../interrogate/SKILL.md) |
+| Make slow or costly CI fast and cheap without weakening its required checks | [`/lean-ci`](../lean-ci/SKILL.md) |
 | Fix a bug test-first when a cheap local test exists | [`/tdd`](../tdd/SKILL.md) |
 | Apply TypeScript rules to `.ts` or `.tsx` work | [`/typescript-best-practices`](../typescript-best-practices/SKILL.md) |
 | Follow Google Chrome's modern web platform guides while writing or changing web frontend code | [`/modern-web-guidance`](../modern-web-guidance/SKILL.md) |
