@@ -64,53 +64,40 @@ pub const SECRET_FILES: &[&str] = &[
 
 /// The folders and files to hide, existing ones only, for this home and
 /// config folder. The sign-in folder and the config folder are added to the
-/// fixed lists.
+/// fixed lists. The workspace and the folders above it are never hidden (no
+/// work gets done): a secret folder that holds the workspace (a helper's
+/// tree in `<config>/helper-work`) has everything else in it hidden, at
+/// each level down to the workspace.
 pub fn hidden(home: Option<&Path>, config_dir: &Path, workspace: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let ws = workspace.canonicalize().ok();
-    let mut push = |p: PathBuf| {
-        let Ok(p) = p.canonicalize() else { return };
-        // Never hide the workspace or anything above it: no work gets done.
-        if ws.as_ref().is_some_and(|ws| ws.starts_with(&p)) || out.contains(&p) {
-            return;
-        }
-        out.push(p);
-    };
+    let mut todo = std::collections::VecDeque::new();
     if let Some(home) = home {
-        for rel in SECRET_DIRS.iter().chain(SECRET_FILES) {
-            push(home.join(rel));
+        todo.extend(
+            SECRET_DIRS
+                .iter()
+                .chain(SECRET_FILES)
+                .map(|rel| home.join(rel)),
+        );
+    }
+    todo.extend(grokhub_core::cli_history::grok_home());
+    todo.push_back(config_dir.to_path_buf());
+    // An agent's home sits inside the app's folder: the app's folder is
+    // hidden too, except the way down to the agent's workspace (the person's
+    // chats and memory and the other agents' homes are beside that way).
+    todo.extend(grokhub_core::agent_team::agent_turn(config_dir).map(|(root, _)| root));
+    while let Some(p) = todo.pop_front() {
+        let Ok(p) = p.canonicalize() else { continue };
+        if out.contains(&p) || ws.as_ref() == Some(&p) {
+            continue;
         }
-    }
-    if let Some(sign_in) = grokhub_core::cli_history::grok_home() {
-        push(sign_in);
-    }
-    push(config_dir.to_path_buf());
-    // An agent's workspace is inside its home, inside the app's folder, so
-    // neither folder can be hidden whole. Hide what's next to the way down
-    // instead: the app's own files (the person's chats and memory), the
-    // other agents' homes, and the agent's own files outside its workspace.
-    if let Some((root, me)) = grokhub_core::agent_team::agent_turn(config_dir) {
-        let entries = |dir: &Path| {
-            std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| e.path())
-                .collect::<Vec<_>>()
-        };
-        let mine = grokhub_core::agent_team::home(&root, &me.id);
-        for path in entries(&root) {
-            if path.file_name() != Some(std::ffi::OsStr::new(grokhub_core::agent_team::HOMES_DIR)) {
-                push(path);
-                continue;
+        match &ws {
+            Some(ws) if ws.starts_with(&p) => {
+                // Each entry beside the way down to the workspace.
+                let entries = std::fs::read_dir(&p).into_iter().flatten().flatten();
+                todo.extend(entries.map(|e| e.path()));
             }
-            for other in entries(&path) {
-                if Some(&other) == mine.as_ref() {
-                    entries(&other).into_iter().for_each(&mut push);
-                } else {
-                    push(other);
-                }
-            }
+            _ => out.push(p),
         }
     }
     out
@@ -210,5 +197,51 @@ mod tests {
         assert_eq!(hidden(None, &app, &elsewhere).last(), Some(&canon(&app)));
         let _ = std::fs::remove_dir_all(&app);
         let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+
+    /// A helper's tree sits inside the config folder: the folder stays
+    /// open on the way down to the tree, and everything beside that way
+    /// (the app's secrets, the ledger, other helpers' trees) is hidden.
+    #[test]
+    fn a_workspace_inside_a_secret_folder_hides_what_sits_beside_it() {
+        let home =
+            std::env::temp_dir().join(format!("grokhub-secrets-beside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let config = home.join(".config/GrokHub");
+        let tree = config.join("helper-work/chat/k1");
+        let other = config.join("helper-work/chat/k2");
+        for dir in [&tree, &other, &config.join("routines"), &home.join(".ssh")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for file in [
+            "secrets.json",
+            "app.json",
+            "hub-state.json",
+            "consent.jsonl",
+        ] {
+            std::fs::write(config.join(file), "{}").unwrap();
+        }
+        std::fs::write(home.join(".ssh/id_rsa"), "x").unwrap();
+        std::fs::write(config.join("helper-work/chat/work.json"), "{}").unwrap();
+        std::fs::write(tree.join("main.rs"), "fn main() {}").unwrap();
+        let real = |rel: &str| home.join(rel).canonicalize().unwrap();
+
+        let mut got = hidden(Some(&home), &config, &tree);
+        // The sign-in folder of whoever runs the test lies elsewhere.
+        got.retain(|p| p.starts_with(real("")));
+        got.sort();
+        let mut want = vec![
+            real(".ssh"),
+            real(".config/GrokHub/app.json"),
+            real(".config/GrokHub/consent.jsonl"),
+            real(".config/GrokHub/helper-work/chat/k2"),
+            real(".config/GrokHub/helper-work/chat/work.json"),
+            real(".config/GrokHub/hub-state.json"),
+            real(".config/GrokHub/routines"),
+            real(".config/GrokHub/secrets.json"),
+        ];
+        want.sort();
+        assert_eq!(got, want);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
