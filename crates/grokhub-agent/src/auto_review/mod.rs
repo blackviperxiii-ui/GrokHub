@@ -2162,6 +2162,10 @@ mod tests {
     /// The gate's decision for a supervised shell command with a policy
     /// loaded, as the app always has: a read runs with no card.
     fn supervised_with_policy(cmd: &str) -> Decision {
+        supervised_under(cmd, &Policy::empty())
+    }
+
+    fn supervised_under(cmd: &str, policy: &Policy) -> Decision {
         let gate = Gate {
             mode: PermMode::Ask,
             readonly_session: false,
@@ -2176,7 +2180,7 @@ mod tests {
             false,
             None,
             Path::new("/home/user/my-app"),
-            Some(&Policy::empty()),
+            Some(policy),
         )
     }
 
@@ -2263,7 +2267,10 @@ mod tests {
 
     /// A word that a glob leads (`*`, `?x`, `[a-]*`), or an option whose
     /// name holds one (`--o*`, `-n*`), can expand to an option the check
-    /// never read, before the `--` that ends them. A command with an option
+    /// never read, before the `--` that ends them. A `--` right after an
+    /// option that may read it as its value (`-e`, `--author`, `-m`, `-U`,
+    /// `-k`), a cluster that ends in one (`-ie`) or a long name git expands
+    /// from a prefix (`--max-d`) ends nothing. A command with an option
     /// that runs a program or writes a file then asks, and gets no fast
     /// path; `uniq` writes its second file, which any glob can name.
     #[test]
@@ -2278,6 +2285,14 @@ mod tests {
             "git diff [a-]*",
             "git grep -e -- *",
             "git log -L -- *",
+            "git log --author -- *",
+            "git log -n -- *",
+            "git grep -m -- *",
+            "git grep -ie -- *",
+            "git grep --max-d -- *",
+            "git diff -U -- *",
+            "rg -e -- *",
+            "sort -k -- *",
             "git log --o*",
             "git grep -n* needle",
             "rg needle *",
@@ -2304,10 +2319,12 @@ mod tests {
     }
 
     /// A glob after a path (`src/*`, `./*`) or a letter (`a*`), after the
-    /// `--` that ends the options, or in a stuck value (`--glob=*.rs`)
-    /// only expands to words that start the way they are typed. Those
-    /// reads, and every glob for a command with no option that runs a
-    /// program or writes a file, still run as they did.
+    /// `--` that ends the options (also right after an option that takes
+    /// no value: `--oneline`, `--stat`, `-p`, `-5`, `-m` for ls-files, `-n`
+    /// for grep, `-u` for sort, `-i` for rg), or in a stuck value
+    /// (`--glob=*.rs`) only expands to words that start the way they are
+    /// typed. Those reads, and every glob for a command with no option
+    /// that runs a program or writes a file, still run as they did.
     #[test]
     fn reads_whose_globs_cannot_fill_an_option_still_run() {
         for cmd in [
@@ -2324,14 +2341,26 @@ mod tests {
             "git grep -e needle -- *",
             "git log -- '*.rs'",
             "git log --format=%H -- '*.rs'",
+            "git log --oneline -- '*.rs'",
+            "git log -p -- '*.rs'",
+            "git log --oneline -5 -- '*.rs'",
+            "git diff --stat -- '*.rs'",
+            "git diff --name-only -- '*.ts'",
+            "git diff --cached -- '*.md'",
+            "git ls-files -m -- '*.rs'",
+            "git grep -n TODO -- '*.rs'",
+            "git grep -e needle -n -- *",
+            "git status --short -- '*.rs'",
             "git diff --stat src/*.rs",
             "git log -p ./*",
             "git branch --list 'feat/*'",
             "rg needle src/*.rs",
             "rg --glob=*.rs needle",
             "rg needle -- *",
+            "rg -i -- needle *",
             "sort a*",
             "sort -- *.txt",
+            "sort -u -- *.txt",
             "uniq a.txt",
         ] {
             assert_eq!(supervised_with_policy(cmd), Decision::Run, "{cmd}");
@@ -2340,6 +2369,8 @@ mod tests {
             "git grep -e x -- '*.rs'",
             "git grep -e needle -- *",
             "git log -- '*.rs'",
+            "git log --oneline -- '*.rs'",
+            "git diff --stat -- '*.rs'",
             "git diff --stat src/*.rs",
             "git add src/*.rs",
             "git add -- '*.rs'",
@@ -2348,6 +2379,155 @@ mod tests {
             "gh pr view 42",
         ] {
             assert!(command_fast_allows(cmd), "{cmd} should fast-allow");
+        }
+    }
+
+    /// A repository that commits `0` and `sh` (both empty) and `zz`, a
+    /// script that writes `PWNED_<its first two words>` in the workspace.
+    /// `*` lists them in that order, so the shell turns `timeout * git log`
+    /// into `timeout 0 sh zz git log`: `sh` runs `zz`.
+    fn planted_wrapper_value(tag: &str) -> PathBuf {
+        let dir = workspace(tag);
+        std::fs::write(dir.join("0"), "").unwrap();
+        std::fs::write(dir.join("sh"), "").unwrap();
+        std::fs::write(dir.join("zz"), "touch \"$PWD/PWNED_$1_$2\"\n").unwrap();
+        git_ok(&dir, &["init", "-q"]);
+        git_ok(&dir, &["add", "-A"]);
+        git_ok(&dir, &["commit", "-qm", "x"]);
+        dir
+    }
+
+    /// The shell fills a glob in a wrapper's own words (timeout's duration,
+    /// the name `env -u` unsets, the value `nice -n` reads) before the
+    /// wrapped `git log` runs, so the file names it lists name the program
+    /// that runs. Unattended Auto mode sends each spelling to the judge,
+    /// which blocks it; a supervised run with a policy loaded shows the
+    /// card, which is denied. The planted script never runs.
+    #[test]
+    fn a_loop_sends_a_glob_in_a_wrapper_word_to_the_judge_or_a_card() {
+        let policy = Policy::empty();
+        let supervised = Gate {
+            mode: PermMode::Ask,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        for (n, cmd) in ["timeout * git log", "env -u * git log", "nice -n * git log"]
+            .into_iter()
+            .enumerate()
+        {
+            for (tag, gate, perms, judged, asks) in [
+                ("auto", auto_gate(false), None, 1, 0),
+                ("supervised", supervised, Some(&policy), 0, 1),
+            ] {
+                let dir = planted_wrapper_value(&format!("wrap-glob-{tag}-{n}"));
+                let fake = LoopFake {
+                    turns: Mutex::new(vec![
+                        Turn {
+                            text: String::new(),
+                            calls: vec![call(
+                                "g",
+                                "run_terminal_command",
+                                &serde_json::json!({ "command": cmd, "timeout": 10000 })
+                                    .to_string(),
+                            )],
+                            usage: Usage::default(),
+                        },
+                        done(),
+                    ]),
+                    judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                    judge_usage: Usage::default(),
+                    judge_err: false,
+                    seen: Mutex::new(Vec::new()),
+                };
+                let permits = Answer {
+                    answer: PermAnswer::Deny,
+                    asks: AtomicUsize::new(0),
+                };
+                let (_, history, _) = drive_gated(&fake, &dir, gate, perms, &permits);
+                let markers: Vec<String> = std::fs::read_dir(&dir)
+                    .unwrap()
+                    .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                    .filter(|name| name.starts_with("PWNED_"))
+                    .collect();
+                let _ = std::fs::remove_dir_all(&dir);
+                assert_eq!(judge_calls(&fake), judged, "{tag}: {cmd}");
+                assert_eq!(permits.asks.load(Ordering::SeqCst), asks, "{tag}: {cmd}");
+                assert_eq!(markers, Vec::<String>::new(), "{tag}: {cmd}");
+                let blocked = history.iter().any(|item| {
+                    matches!(
+                        item,
+                        InputItem::FunctionCallOutput { output, .. }
+                            if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                    )
+                });
+                assert_eq!(blocked, tag == "auto", "{tag}: {cmd}");
+            }
+        }
+    }
+
+    /// Every word before the peeled command counts, not only the command:
+    /// a glob in a wrapper's word or value (`timeout *`, `env -u *`, `nice
+    /// -n *`, `stdbuf -o *`, `ionice -c *`, `chrt -o *`) or in an
+    /// assignment can name the program that runs, so the segment earns no
+    /// pass: no read-only run, no fast path, no allow rule, no Always
+    /// grant. The same wrappers with plain values still get each one.
+    #[test]
+    fn a_glob_in_a_wrapper_word_earns_no_pass() {
+        for cmd in [
+            "timeout * git log",
+            "timeout -s * 5 git log",
+            "timeout 5 nice -n ? git log",
+            "timeout * git status",
+            "env -u * git log",
+            "env -u* git log",
+            "env --unset * git log",
+            "env --unset=* git log",
+            "env NO_COLOR=* git log",
+            "NO_COLOR=* git log",
+            "nice -n * git log",
+            "stdbuf -o * git log",
+            "ionice -c * git log",
+            "chrt -o * git log",
+        ] {
+            assert_eq!(supervised_with_policy(cmd), Decision::Ask, "{cmd}");
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+            assert!(!perm::shell_is_readonly(cmd), "{cmd} must not be a read");
+        }
+        for cmd in [
+            "timeout 5 git log",
+            "timeout 5 git status",
+            "env -u PAGER git log",
+            "env NO_COLOR=1 git log",
+            "NO_COLOR=1 git log",
+            "nice -n 5 git log",
+            "stdbuf -o L git log",
+            "ionice -c 3 git log",
+            "chrt -o 0 git log",
+        ] {
+            assert_eq!(supervised_with_policy(cmd), Decision::Run, "{cmd}");
+            assert!(command_fast_allows(cmd), "{cmd} should fast-allow");
+            assert!(perm::shell_is_readonly(cmd), "{cmd} should be a read");
+        }
+        let granted = Policy {
+            rules: Vec::new(),
+            grants: vec!["git commit -m x".into()],
+        };
+        let allowed = Policy {
+            rules: vec![parse_rule("Bash(git commit -m x)", Action::Allow).unwrap()],
+            grants: Vec::new(),
+        };
+        for (tag, policy) in [("grant", &granted), ("allow rule", &allowed)] {
+            assert_eq!(
+                supervised_under("timeout 5 git commit -m x", policy),
+                Decision::Run,
+                "{tag}"
+            );
+            assert_eq!(
+                supervised_under("timeout * git commit -m x", policy),
+                Decision::Ask,
+                "{tag}"
+            );
         }
     }
 }

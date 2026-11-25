@@ -115,7 +115,16 @@ fn analyze_depth(script: &str, powershell: bool, depth: usize) -> Facts {
                 dangerous: true,
             };
         }
-        let eligible = peel.eligible && assign_risk == EnvRisk::Safe;
+        // The words peeled off before the command (assignments, wrappers
+        // and the values they read) are never read as the command, so a
+        // glob there can expand into the program that runs (`timeout *
+        // git log` runs `timeout 0 sh zz git log`). Such a segment earns
+        // no pass.
+        let peeled_off = raw_seg.words.len().saturating_sub(peel.words.len());
+        let globbed = raw_seg.words[..peeled_off]
+            .iter()
+            .any(|word| word.contains(risk::GLOB));
+        let eligible = peel.eligible && assign_risk == EnvRisk::Safe && !globbed;
         let seg_danger = risk::is_dangerous(&peel.words)
             || peel.dangerous_env
             || assign_risk == EnvRisk::Injection;
