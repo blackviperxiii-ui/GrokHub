@@ -83,6 +83,8 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/outbound_hooks.rs", 1, "outbound signed lifecycle webhooks: offline::refuse + guard_quiet + public_only before each POST"),
     ("grokhub-agent/src/vstack_sync.rs", 1, "runtime upstream vstack skills sync: offline::refuse + github host allowlist + guard_quiet (no user data) on every hop"),
     ("grokhub-core/src/home_assistant.rs", 1, "Home Assistant local control: offline::check_url / LAN host check before each http::agent call (Order 973)"),
+    ("grokhub-core/src/at_context.rs", 1, "@url: fetch_url (expand_at_context on a desktop chat turn): offline::check_url + public_http_url before the GET, then a public_only agent (public_only_resolve on every hop, at most 3 redirects)"),
+    ("grokhub-core/src/skills_hub.rs", 1, "hub_agent (Skills Hub search, SKILL.md fetch and install GETs): get_text runs ensure_public_https first (offline::refuse, https only, public_http_url), then a public_only agent (public_only_resolve on every hop, at most 2 redirects)"),
 ];
 
 /// The part of a source file that ships: CRLF normalized, `#[cfg(test)] mod …` cut off.
