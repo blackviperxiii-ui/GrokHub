@@ -25,7 +25,8 @@ pub use rules::{parse_rule, Action, PatMode, Rule, RuleParseError, Tool};
 pub use split::{analyze, peeled_primary, Facts, Seg};
 
 pub(crate) use risk::{
-    git_words_are_read_only_query, git_words_have_unsafe_query_option, trusted_head,
+    git_words_are_read_only_query, git_words_have_unsafe_query_option, glob_may_add_option,
+    trusted_head,
 };
 pub use store::{
     add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules,

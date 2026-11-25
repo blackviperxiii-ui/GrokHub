@@ -198,25 +198,25 @@ pub fn is_readonly(words: &[String]) -> bool {
         return true;
     }
     if head == "sort" {
-        return !sort_compress(words) && !sort_writes(words);
+        return !sort_compress(words) && !sort_writes(words) && !glob_may_add_option(words);
     }
     if head == "uniq" {
         return !uniq_writes(words);
     }
     if head == "date" {
-        return !date_sets(words);
+        return !date_sets(words) && !glob_may_add_option(words);
     }
     if head == "hostname" {
         return !hostname_sets(words);
     }
     if head == "rg" {
-        return !rg_pre(words);
+        return !rg_pre(words) && !glob_may_add_option(words);
     }
     if head_tok == "git" {
         return git_readonly(words);
     }
     if head == "kubectl" {
-        return kubectl_reads(words);
+        return kubectl_reads(words) && !glob_may_add_option(words);
     }
     false
 }
@@ -269,7 +269,7 @@ fn git_readonly(words: &[String]) -> bool {
     if words.first().map(String::as_str) != Some("git") {
         return false;
     }
-    if git_has_exec_risk(words) || git_unsafe_query_option(words) {
+    if git_has_exec_risk(words) || git_unsafe_query_option(words) || glob_may_add_option(words) {
         return false;
     }
     let Some(idx) = git_verb_index(words) else {
@@ -434,6 +434,42 @@ fn git_unsafe_query_option(words: &[String]) -> bool {
             .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('O'))
 }
 
+/// The characters that make a word a glob.
+const GLOB: &[char] = &['*', '?', '['];
+
+/// The shell fills a glob with file names after this check has read the
+/// words, and a clone can carry a file named `-O<program>`, which `git grep`
+/// then reads as its pager, or `--pre=<program>`, `--output=<file>` and so
+/// on. True when a word before the `--` that ends the options could expand
+/// into such an option: one a glob leads (`*`, `?x`, `[a-]*`), or an option
+/// whose name holds one (`--o*`, `-n*`). `src/*`, `./*`, `a*` and the value
+/// in `--glob=*.rs` only expand to words that start as typed. A `--` right
+/// after a word that starts with `-` may be that option's value (`git grep
+/// -e --`), so it ends the options only after a word that can't take one
+/// there. The splitter drops quotes, so a quoted glob counts too.
+pub(crate) fn glob_may_add_option(words: &[String]) -> bool {
+    let may_expand = |word: &str| {
+        let name = match word.strip_prefix("--") {
+            Some(long) => long.split('=').next().unwrap_or(long),
+            None => word.strip_prefix('-').unwrap_or(""),
+        };
+        word.starts_with(GLOB) || name.contains(GLOB)
+    };
+    let mut prev = words.first().map_or("", String::as_str);
+    for word in words.iter().skip(1).map(String::as_str) {
+        if word == "--"
+            && (!prev.starts_with('-') || (prev.starts_with("--") && prev.contains('=')))
+        {
+            return false;
+        }
+        if may_expand(word) {
+            return true;
+        }
+        prev = word;
+    }
+    false
+}
+
 fn git_verb_index(words: &[String]) -> Option<usize> {
     let mut i = 1usize;
     loop {
@@ -591,8 +627,12 @@ fn sort_writes(words: &[String]) -> bool {
     false
 }
 
-/// `uniq IN OUT` writes OUT: a second file name means it is not a read.
+/// `uniq IN OUT` writes OUT: a second file name means it is not a read,
+/// and any glob can expand to two.
 fn uniq_writes(words: &[String]) -> bool {
+    if words.iter().skip(1).any(|word| word.contains(GLOB)) {
+        return true;
+    }
     let mut files = 0usize;
     let mut i = 1usize;
     let mut only_files = false;
