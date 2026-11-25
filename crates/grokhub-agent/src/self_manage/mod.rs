@@ -118,7 +118,12 @@ fn base_class(tool: &str) -> Option<SelfClass> {
 
 /// Path E: run one call on the native engine. A token is asked on the
 /// cabin's masked elicit card, as Spike-5b's `connection_add` does.
-pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
+/// `session` is the chat that called it.
+pub(crate) fn run_native(
+    name: &str,
+    args: &Value,
+    session: Option<&str>,
+) -> crate::tools::ToolOutput {
     let dir = crate::perm::config_dir();
     let mut ask = |msg: &str| {
         crate::mcp::ask_secret(
@@ -127,7 +132,11 @@ pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
             crate::tools::connections::TOKEN_TITLE,
         )
     };
-    run(&SelfCtx::new(&dir), name, args, &mut ask)
+    let ctx = SelfCtx {
+        session,
+        ..SelfCtx::new(&dir)
+    };
+    run(&ctx, name, args, &mut ask)
 }
 
 /// A list tool: runs like the read-only tools.

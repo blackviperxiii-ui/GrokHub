@@ -22,12 +22,171 @@ pub(super) fn git_words_are_routine(words: &[String]) -> bool {
         return false;
     };
     match verb {
-        "add" | "commit" | "pull" | "fetch" => true,
+        "add" | "commit" => true,
+        "fetch" | "pull" => is_routine_fetch(args),
         "worktree" => args.first().map(String::as_str) == Some("list"),
         "checkout" | "switch" => is_routine_branch_switch(args),
         "stash" => is_routine_stash(args),
         _ => false,
     }
+}
+
+/// The only options a routine `fetch` or `pull` may carry, spelled exactly.
+/// None takes a value from the next word, so every word of the command is
+/// read on its own: an option that takes one (`--depth`, `-j`, whose `pull`
+/// value is optional and must be stuck to it), an abbreviation
+/// (`--upload-p`), a cluster (`-pq`), `--`, and every option that names a
+/// program, a merge strategy, an editor or signing go to the review.
+const FETCH_FLAGS: &[&str] = &[
+    "-q",
+    "--quiet",
+    "-v",
+    "--verbose",
+    "--progress",
+    "--no-progress",
+    "--all",
+    "-a",
+    "--append",
+    "-f",
+    "--force",
+    "-t",
+    "--tags",
+    "-n",
+    "--no-tags",
+    "-p",
+    "--prune",
+    "--no-prune",
+    "-P",
+    "--prune-tags",
+    "--atomic",
+    "--dry-run",
+    "-k",
+    "--keep",
+    "--unshallow",
+    "--update-shallow",
+    "--set-upstream",
+    "--show-forced-updates",
+    "--no-show-forced-updates",
+    "--recurse-submodules",
+    "--no-recurse-submodules",
+    "--recurse-submodules=yes",
+    "--recurse-submodules=on-demand",
+    "--recurse-submodules=no",
+    "-4",
+    "--ipv4",
+    "-6",
+    "--ipv6",
+    // `pull` only.
+    "-r",
+    "--rebase",
+    "--rebase=true",
+    "--rebase=false",
+    "--rebase=merges",
+    "--no-rebase",
+    "--ff",
+    "--no-ff",
+    "--ff-only",
+    "--stat",
+    "--no-stat",
+    "--log",
+    "--no-log",
+    "--squash",
+    "--no-squash",
+    "--commit",
+    "--no-commit",
+    "--no-edit",
+    "--autostash",
+    "--no-autostash",
+    "--allow-unrelated-histories",
+    "--signoff",
+];
+
+/// `git fetch` / `git pull` as `[<flag>...] [<repository> [<refspec>...]]`
+/// with every flag on [`FETCH_FLAGS`], a plain repository and plain
+/// refspecs. Flags and operands may mix, as git allows. `--multiple`, which
+/// reads every operand as a repository, is not listed.
+fn is_routine_fetch(args: &[String]) -> bool {
+    let mut operands = args
+        .iter()
+        .map(String::as_str)
+        .filter(|word| !FETCH_FLAGS.contains(word));
+    operands.next().is_none_or(is_plain_repository) && operands.all(is_plain_refspec)
+}
+
+/// A remote name or a local path (no `:`, so git reads no transport into
+/// it), an `https://` or `ssh://` URL, or an scp-style `user@host:path`.
+/// Every part starts with a letter, a digit or `_` where ssh would read a
+/// leading `-` as an option, and no word holds a character the shell
+/// expands (`*`, `?`, `[`, `{`, `~`, `$`) or quotes.
+fn is_plain_repository(word: &str) -> bool {
+    if let Some(rest) = word
+        .strip_prefix("https://")
+        .or_else(|| word.strip_prefix("ssh://"))
+    {
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (login, port) = authority.split_once(':').unwrap_or((authority, ""));
+        let (user, host) = login
+            .split_once('@')
+            .map_or((None, login), |(u, h)| (Some(u), h));
+        return user.is_none_or(is_plain_name)
+            && is_plain_host(host)
+            && port.bytes().all(|b| b.is_ascii_digit())
+            && path.bytes().all(path_byte);
+    }
+    if let Some((login, path)) = word.split_once(':') {
+        let Some((user, host)) = login.split_once('@') else {
+            return false;
+        };
+        return is_plain_name(user)
+            && is_plain_host(host)
+            && path
+                .bytes()
+                .next()
+                .is_some_and(|b| b == b'/' || name_start(b))
+            && path.bytes().all(path_byte);
+    }
+    word.bytes()
+        .next()
+        .is_some_and(|b| b == b'.' || b == b'/' || name_start(b))
+        && word.bytes().all(path_byte)
+}
+
+/// `[+]<ref>[:<ref>]`, each ref a `/`-joined list of plain names: no glob,
+/// no `::` or `://` (a URL `--multiple` would read as a repository), no
+/// leading `-` or `.`.
+fn is_plain_refspec(word: &str) -> bool {
+    let spec = word.strip_prefix('+').unwrap_or(word);
+    let is_ref = |r: &str| r.split('/').all(is_plain_name);
+    match spec.split_once(':') {
+        Some((src, dst)) => is_ref(src) && is_ref(dst),
+        None => is_ref(spec),
+    }
+}
+
+/// A remote, branch, user or path component: a letter, digit or `_`, then
+/// letters, digits, `_`, `.` and `-`.
+fn is_plain_name(name: &str) -> bool {
+    name.bytes().next().is_some_and(name_start)
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+}
+
+fn is_plain_host(host: &str) -> bool {
+    host.bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphanumeric())
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+}
+
+fn name_start(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn path_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'/')
 }
 
 /// Exact spellings only, so clusters (`-qf`) and abbreviations (`--fo`) fail closed.

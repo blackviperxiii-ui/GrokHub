@@ -198,25 +198,25 @@ pub fn is_readonly(words: &[String]) -> bool {
         return true;
     }
     if head == "sort" {
-        return !sort_compress(words) && !sort_writes(words);
+        return !sort_compress(words) && !sort_writes(words) && !glob_may_add_option(words);
     }
     if head == "uniq" {
         return !uniq_writes(words);
     }
     if head == "date" {
-        return !date_sets(words);
+        return !date_sets(words) && !glob_may_add_option(words);
     }
     if head == "hostname" {
         return !hostname_sets(words);
     }
     if head == "rg" {
-        return !rg_pre(words);
+        return !rg_pre(words) && !glob_may_add_option(words);
     }
     if head_tok == "git" {
         return git_readonly(words);
     }
     if head == "kubectl" {
-        return kubectl_reads(words);
+        return kubectl_reads(words) && !glob_may_add_option(words);
     }
     false
 }
@@ -269,7 +269,7 @@ fn git_readonly(words: &[String]) -> bool {
     if words.first().map(String::as_str) != Some("git") {
         return false;
     }
-    if git_has_exec_risk(words) || git_unsafe_query_option(words) {
+    if git_has_exec_risk(words) || git_unsafe_query_option(words) || glob_may_add_option(words) {
         return false;
     }
     let Some(idx) = git_verb_index(words) else {
@@ -434,6 +434,335 @@ fn git_unsafe_query_option(words: &[String]) -> bool {
             .any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('O'))
 }
 
+/// The characters that make a word a glob.
+pub(crate) const GLOB: &[char] = &['*', '?', '['];
+
+/// The shell fills a glob with file names after this check has read the
+/// words, and a clone can carry a file named `-O<program>`, which `git grep`
+/// then reads as its pager, or `--pre=<program>`, `--output=<file>` and so
+/// on. True when a word before the `--` that ends the options could expand
+/// into such an option: one a glob leads (`*`, `?x`, `[a-]*`), or an option
+/// whose name holds one (`--o*`, `-n*`). `src/*`, `./*`, `a*` and the value
+/// in `--glob=*.rs` only expand to words that start as typed. A `--` right
+/// after an option may be that option's value (`git grep -e --`, `git log
+/// --author --`), so it ends the options only after a word that can't take
+/// one: a word that isn't an option, or one [`leaves_next_word`] knows.
+/// The splitter drops quotes, so a quoted glob counts too.
+pub(crate) fn glob_may_add_option(words: &[String]) -> bool {
+    let may_expand = |word: &str| {
+        let name = match word.strip_prefix("--") {
+            Some(long) => long.split('=').next().unwrap_or(long),
+            None => word.strip_prefix('-').unwrap_or(""),
+        };
+        word.starts_with(GLOB) || name.contains(GLOB)
+    };
+    for (i, word) in words.iter().enumerate().skip(1) {
+        let prev = words[i - 1].as_str();
+        if word == "--" && (!prev.starts_with('-') || leaves_next_word(words, i - 1)) {
+            return false;
+        }
+        if may_expand(word) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Options that never read the next word as their value: long names
+/// without the `--`, one-letter flags (a cluster of them counts too), and
+/// whether `-<digits>` is a count.
+struct NoValue {
+    long: &'static [&'static str],
+    short: &'static str,
+    count: bool,
+}
+
+const GIT_LOG_NO_VALUE: NoValue = NoValue {
+    long: &[
+        "abbrev",
+        "abbrev-commit",
+        "all",
+        "all-match",
+        "author-date-order",
+        "basic-regexp",
+        "binary",
+        "boundary",
+        "branches",
+        "cached",
+        "cc",
+        "check",
+        "cherry-mark",
+        "cherry-pick",
+        "children",
+        "color",
+        "color-words",
+        "compact-summary",
+        "date-order",
+        "decorate",
+        "exit-code",
+        "extended-regexp",
+        "find-copies",
+        "find-renames",
+        "first-parent",
+        "fixed-strings",
+        "follow",
+        "full-history",
+        "full-index",
+        "function-context",
+        "graph",
+        "histogram",
+        "ignore-all-space",
+        "ignore-blank-lines",
+        "ignore-space-at-eol",
+        "ignore-space-change",
+        "invert-grep",
+        "left-right",
+        "merges",
+        "minimal",
+        "name-only",
+        "name-status",
+        "no-color",
+        "no-decorate",
+        "no-ext-diff",
+        "no-index",
+        "no-merges",
+        "no-patch",
+        "no-prefix",
+        "no-renames",
+        "no-textconv",
+        "numstat",
+        "oneline",
+        "parents",
+        "patch",
+        "patience",
+        "perl-regexp",
+        "pretty",
+        "quiet",
+        "raw",
+        "regexp-ignore-case",
+        "relative",
+        "remotes",
+        "reverse",
+        "shortstat",
+        "simplify-merges",
+        "source",
+        "staged",
+        "stat",
+        "summary",
+        "tags",
+        "text",
+        "topo-order",
+        "use-mailmap",
+        "walk-reflogs",
+        "word-diff",
+    ],
+    // Not `-n`, `-L`, `-S`, `-G`, `-O`, `-U`, `-I` or `-l`, which read one.
+    short: "abBcCDEFgimMpPrRstuwWz",
+    count: true,
+};
+
+const GIT_GREP_NO_VALUE: NoValue = NoValue {
+    long: &[
+        "all-match",
+        "and",
+        "basic-regexp",
+        "break",
+        "cached",
+        "color",
+        "column",
+        "count",
+        "exclude-standard",
+        "extended-regexp",
+        "files-with-matches",
+        "files-without-match",
+        "fixed-strings",
+        "full-name",
+        "function-context",
+        "heading",
+        "ignore-case",
+        "invert-match",
+        "line-number",
+        "name-only",
+        "no-color",
+        "no-exclude-standard",
+        "no-index",
+        "not",
+        "null",
+        "only-matching",
+        "or",
+        "perl-regexp",
+        "quiet",
+        "recurse-submodules",
+        "show-function",
+        "text",
+        "untracked",
+        "word-regexp",
+    ],
+    // Not `-e`, `-f`, `-A`, `-B`, `-C`, `-m` or `-O`.
+    short: "acEFGhHiIlLnopPqrvwWz",
+    count: true,
+};
+
+const GIT_LS_FILES_NO_VALUE: NoValue = NoValue {
+    long: &[
+        "abbrev",
+        "cached",
+        "debug",
+        "deduplicate",
+        "deleted",
+        "directory",
+        "eol",
+        "error-unmatch",
+        "exclude-standard",
+        "full-name",
+        "ignored",
+        "killed",
+        "modified",
+        "no-empty-directory",
+        "others",
+        "recurse-submodules",
+        "resolve-undo",
+        "sparse",
+        "stage",
+        "unmerged",
+    ],
+    // Not `-x` or `-X`.
+    short: "cdfikmostuvz",
+    count: false,
+};
+
+const GIT_STATUS_NO_VALUE: NoValue = NoValue {
+    long: &[
+        "ahead-behind",
+        "branch",
+        "column",
+        "find-renames",
+        "ignore-submodules",
+        "ignored",
+        "long",
+        "no-ahead-behind",
+        "no-column",
+        "no-renames",
+        "null",
+        "porcelain",
+        "renames",
+        "short",
+        "show-stash",
+        "untracked-files",
+        "verbose",
+    ],
+    short: "bsuvz",
+    count: false,
+};
+
+const SORT_NO_VALUE: NoValue = NoValue {
+    long: &[
+        "check",
+        "debug",
+        "dictionary-order",
+        "general-numeric-sort",
+        "human-numeric-sort",
+        "ignore-case",
+        "ignore-leading-blanks",
+        "ignore-nonprinting",
+        "merge",
+        "month-sort",
+        "numeric-sort",
+        "random-sort",
+        "reverse",
+        "stable",
+        "unique",
+        "version-sort",
+        "zero-terminated",
+    ],
+    // Not `-k`, `-t`, `-o`, `-S` or `-T`.
+    short: "bcCdfghimMnrRsuVz",
+    count: false,
+};
+
+const RG_NO_VALUE: NoValue = NoValue {
+    long: &[
+        "byte-offset",
+        "case-sensitive",
+        "column",
+        "count",
+        "count-matches",
+        "files",
+        "files-with-matches",
+        "files-without-match",
+        "fixed-strings",
+        "follow",
+        "heading",
+        "hidden",
+        "ignore-case",
+        "invert-match",
+        "json",
+        "line-number",
+        "line-regexp",
+        "multiline",
+        "no-filename",
+        "no-heading",
+        "no-ignore",
+        "no-line-number",
+        "null",
+        "only-matching",
+        "pcre2",
+        "quiet",
+        "smart-case",
+        "stats",
+        "text",
+        "trim",
+        "unrestricted",
+        "vimgrep",
+        "with-filename",
+        "word-regexp",
+    ],
+    // Not `-e`, `-f`, `-g`, `-t`, `-T`, `-A`, `-B`, `-C`, `-m`, `-M`, `-j`,
+    // `-E`, `-r` or `-d`.
+    short: "acFHiIlLnNopPqsSuUvwxz",
+    count: false,
+};
+
+/// Whether the option at `at` leaves the next word alone: a `--name=value`,
+/// or an option the command's [`NoValue`] table lists (`git log --oneline`,
+/// `git diff --stat`, `git log -p`, `git log -5`). Any other option may
+/// read it (`git grep -e`, `git log --author`, `sort -k`), and so may a
+/// long name the parser expands from a prefix (`git grep --max-d`). For
+/// git the table is the verb's, and only after the verb.
+fn leaves_next_word(words: &[String], at: usize) -> bool {
+    let Some(word) = words.get(at).map(String::as_str) else {
+        return false;
+    };
+    if word.starts_with("--") && word.contains('=') {
+        return true;
+    }
+    let Some(head) = words.first() else {
+        return false;
+    };
+    let table = match program_name(head).as_str() {
+        "git" => match git_verb_index(words) {
+            Some(verb) if verb < at => match words[verb].as_str() {
+                "log" | "show" | "diff" => &GIT_LOG_NO_VALUE,
+                "grep" => &GIT_GREP_NO_VALUE,
+                "ls-files" => &GIT_LS_FILES_NO_VALUE,
+                "status" => &GIT_STATUS_NO_VALUE,
+                _ => return false,
+            },
+            _ => return false,
+        },
+        "sort" => &SORT_NO_VALUE,
+        "rg" => &RG_NO_VALUE,
+        _ => return false,
+    };
+    if let Some(name) = word.strip_prefix("--") {
+        return table.long.contains(&name);
+    }
+    let letters = word.strip_prefix('-').unwrap_or("");
+    !letters.is_empty()
+        && (letters.chars().all(|c| table.short.contains(c))
+            || (table.count && letters.bytes().all(|b| b.is_ascii_digit())))
+}
+
 fn git_verb_index(words: &[String]) -> Option<usize> {
     let mut i = 1usize;
     loop {
@@ -444,11 +773,20 @@ fn git_verb_index(words: &[String]) -> Option<usize> {
         if !tok.starts_with('-') {
             return Some(i);
         }
+        // Any folder but `.` may hold a repository of its own (a bare one
+        // is plain files a clone can carry), whose config names programs a
+        // read runs: a text conversion, a signature check, an fsmonitor.
         if tok == "-C" {
+            if words.get(i + 1).map(String::as_str) != Some(".") {
+                return None;
+            }
             i += 2;
             continue;
         }
         if tok.starts_with("-C") && !tok.starts_with("--") && tok.len() > 2 {
+            if tok != "-C." {
+                return None;
+            }
             i += 1;
             continue;
         }
@@ -582,8 +920,12 @@ fn sort_writes(words: &[String]) -> bool {
     false
 }
 
-/// `uniq IN OUT` writes OUT: a second file name means it is not a read.
+/// `uniq IN OUT` writes OUT: a second file name means it is not a read,
+/// and any glob can expand to two.
 fn uniq_writes(words: &[String]) -> bool {
+    if words.iter().skip(1).any(|word| word.contains(GLOB)) {
+        return true;
+    }
     let mut files = 0usize;
     let mut i = 1usize;
     let mut only_files = false;
