@@ -2,8 +2,10 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod a2a;
 pub mod action_mode;
 pub mod adult_guard;
+pub mod agent_team;
 pub mod amr;
 pub mod app_json;
 pub mod app_lock;
