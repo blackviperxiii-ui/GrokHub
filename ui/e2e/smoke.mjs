@@ -2213,7 +2213,7 @@ async function main() {
     await codeAgent(s, config, workspace);
     await codeShip(s, config, workspace);
     await team(s, config);
-    if (process.env.SMOKE_WEB === "1") await web(s);
+    if (process.env.SMOKE_WEB === "1") await web(s, config);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.
@@ -2422,7 +2422,7 @@ async function webStallReport(origin, pending) {
   }
 }
 
-async function web(s) {
+async function web(s, config) {
   const { chromium } = createRequire(import.meta.url)("playwright");
   await tab(s, "Settings");
   await section(s, "Web access");
@@ -2490,9 +2490,12 @@ async function web(s) {
     console.log(`the web can't set the key: ${JSON.stringify(refused.paired.error)}`);
 
     // Port 4620 is HTTPS with the certificate whose fingerprint Settings shows.
+    // Trusting only the certificate the app saved, the handshake also proves
+    // it is valid for 127.0.0.1.
     const shown = await textOf(s, "[aria-label='Certificate fingerprint']");
+    const ca = readFileSync(join(config, "web-access", "cert.pem"));
     const served = await new Promise((done, fail) => {
-      const sock = tlsConnect({ host: "127.0.0.1", port: 4620, rejectUnauthorized: false }, () => {
+      const sock = tlsConnect({ host: "127.0.0.1", port: 4620, ca }, () => {
         done(sock.getPeerCertificate().fingerprint256);
         sock.end();
       });
