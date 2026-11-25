@@ -93,7 +93,6 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok (desktop app and grokhub-hub --oauth) to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
     ("crates/grokhub-agent/src/channels_net.rs", 4, "messaging channels: Telegram's agent and Discord's REST agent (guard_quiet before every poll and send; the guard target leaves the token out), and Discord's Gateway (TCP connect, then the TLS WebSocket upgrade; guard_quiet before each connect, only Discord's own hosts)"),
     ("crates/grokhub-agent/src/outbound_hooks.rs", 1, "outbound signed lifecycle webhooks: offline::refuse + guard_quiet + public_only before each POST"),
-    ("crates/grokhub-core/src/home_assistant.rs", 1, "Home Assistant local control: offline::check_url / LAN host check before each call (Order 973)"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-agent/src/mods_net.rs", 1, "mod sources (both shells): offline::refuse + guard_quiet on every hop"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
@@ -120,6 +119,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/route/local_spec.rs", 2, "speed test and refusal check against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
     ("crates/grokhub-hub/src/doctor.rs", 1, "--doctor reads its own hub's /v1/health on 127.0.0.1 only"),
+    ("crates/grokhub-hub/src/node_client.rs", 1, "`node` companion dials only the app's companion host at a private number address (host_address refuses public ones), so Offline only never blocks it and it never leaves the LAN"),
     ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     ("src-tauri/src/hub_join.rs", 1, "Join another computer: pairs with and sends the machine card to a hub on this network or this computer only (number address checked before every call), no redirects"),
@@ -132,6 +132,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/auto_review/routine_git.rs", 2, "routine git verbs list"),
     ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
     ("crates/grokhub-agent/src/routine_draft.rs", 1, "saved-step tool label list (web_fetch is \"fetch\")"),
+    ("src-tauri/src/sessions_board.rs", 1, "Sessions board PR link parser: the /pull/ segment of a github.com URL in transcript text"),
 ];
 
 /// Scanners name every exit pattern themselves.

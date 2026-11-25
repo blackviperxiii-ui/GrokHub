@@ -243,6 +243,10 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
         .collect();
     stable.extend(crate::session_tools::schemas());
     stable.push(crate::subagent::spawn_schema());
+    // A read-only chat can't start an agent, so it isn't offered one.
+    if !gate.readonly_session {
+        stable.extend(crate::agent_message::schema());
+    }
     let selfs = if gate.readonly_session {
         Vec::new()
     } else {
@@ -299,6 +303,7 @@ fn legacy_schemas(gate: &Gate) -> Vec<Value> {
         tools.extend(web_lookup_defs().map(|def| (def.schema)()));
         return tools;
     }
+    tools.extend(crate::agent_message::schema());
     for def in action_defs().iter().chain(desktop_tail_defs().iter()) {
         if (def.visible)(gate) {
             tools.push((def.schema)());

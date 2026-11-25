@@ -55,6 +55,16 @@ pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSet
     JobToolSetGuard { session }
 }
 
+/// Binds `names` for `session`, kept inside the set its nearest bound
+/// ancestor already has, so a child's own list never widens a job's.
+pub(crate) fn bind_narrower_tool_set(session: &str, names: &[String]) {
+    let inherited = bound_job_tool_set(session);
+    let kept = names
+        .iter()
+        .filter(|name| inherited.as_ref().is_none_or(|set| set.allows(name)));
+    let _ = bind_job_tool_set(session, ToolSet::only(kept.cloned()));
+}
+
 /// Remove a session's job [`ToolSet`] (tests / explicit teardown).
 pub fn clear_job_tool_set(session: &str) {
     if let Ok(mut map) = job_tool_sets().lock() {
@@ -2775,6 +2785,10 @@ fn action_line(name: &str, arguments: &str) -> String {
             .or_else(|| field("url")),
         // `message` is what gets sent when both are set.
         "send_subagent_message" if field("message").is_some() => None,
+        // Who gets the work, then the work.
+        "message_agent" => field("agent")
+            .zip(field("message"))
+            .map(|(agent, message)| format!("{agent}: {message}")),
         _ if name.contains("__") && crate::self_manage::self_tool(name).is_none() => {
             lone_field(&value)
         }
@@ -3390,6 +3404,28 @@ mod tests {
         clear_job_tool_set(parent);
         clear_job_tool_set(&child);
         clear_job_tool_set(&nested);
+    }
+
+    #[test]
+    fn an_agents_own_tool_list_stays_inside_its_parents() {
+        let parent = "native-agent-tools-parent";
+        let agent = format!("{parent}/agent-1");
+        let names = ["read_file".to_string(), "grep".to_string()];
+        // Unbound parent: the agent gets its own list.
+        bind_narrower_tool_set(&agent, &names);
+        assert_eq!(
+            bound_job_tool_set(&agent),
+            Some(ToolSet::only(["grep", "read_file"]))
+        );
+        // A job's list: only what both allow.
+        let _job = bind_job_tool_set(parent, ToolSet::only(["read_file", "write"]));
+        bind_narrower_tool_set(&agent, &names);
+        assert_eq!(
+            bound_job_tool_set(&agent),
+            Some(ToolSet::only(["read_file"]))
+        );
+        clear_job_tool_set(parent);
+        clear_job_tool_set(&agent);
     }
 
     #[test]
@@ -8069,6 +8105,7 @@ mod tests {
                 r#"{"query":"notes","path":"README.md"}"#,
                 ALL,
             ),
+            ("tool_search", r#"{"query":"cron","path":"README.md"}"#, ALL),
             (
                 "load_tool_schema",
                 r#"{"name":"work_add","path":"README.md"}"#,
@@ -8381,6 +8418,11 @@ mod tests {
                 r#"{"name":"disk-report","about":"Disk use"}"#,
                 ALL,
             ),
+            (
+                "message_agent",
+                r#"{"agent":"researcher","message":"Which router has the best range?"}"#,
+                "researcher: Which router has the best range?",
+            ),
         ];
         for (name, arguments, line) in rows {
             let line = if *line == ALL { arguments } else { line };
@@ -8403,7 +8445,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 80);
+        assert_eq!(native.len(), 82);
     }
 
     #[test]

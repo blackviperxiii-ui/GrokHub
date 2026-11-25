@@ -38,6 +38,8 @@ mod code_keep;
 mod code_rollback;
 mod code_sessions;
 pub mod command_box;
+#[cfg(desktop)]
+mod companions;
 // The Code tab's logic lives in grokhub-code (shared with the cabin); the
 // old module names stay so the commands below and settings read the same.
 pub use grokhub_code::activity as code_activity;
@@ -8066,12 +8068,6 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "set_memory_retention" => out(set_memory_retention(arg(args, "days")?)?),
         "get_chat_archive" => out(get_chat_archive()),
         "set_chat_archive" => out(set_chat_archive(arg(args, "days")?)?),
-        "mcp_app_initialize" => out(mcp_app_initialize()),
-        "mcp_app_call_tool" => out(block_on(mcp_app_call_tool(
-            arg(args, "server")?,
-            arg(args, "name")?,
-            arg::<Option<Value>>(args, "arguments")?,
-        ))?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -8947,6 +8943,18 @@ pub fn run() {
                 app.state::<ShellState>().config_dir.clone(),
                 Arc::clone(&app.state::<Arc<hub_share::HubShare>>()),
             );
+            #[cfg(desktop)]
+            {
+                let host = Arc::new(companions::Companions::open(
+                    &app.state::<ShellState>().config_dir,
+                ));
+                app.manage(Arc::clone(&host));
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    host.resume();
+                    companions::watch(handle, host);
+                });
+            }
             let web = Arc::new(remote::WebAccess::default());
             app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
@@ -8976,6 +8984,7 @@ pub fn run() {
             home_assistant::register(app.state::<ShellState>().config_dir.clone());
             #[cfg(desktop)]
             start_scheduler(app);
+            #[cfg(desktop)]
             start_channel_inbox(app.handle().clone());
             // Questions from helpers that outlive their chat's reply.
             // Only this shell watches task changes; the cabin leaves it off.
@@ -9510,6 +9519,20 @@ pub fn run() {
             new_share_code,
             #[cfg(desktop)]
             fleet_machines,
+            #[cfg(desktop)]
+            companions::get_companions,
+            #[cfg(desktop)]
+            companions::start_companions,
+            #[cfg(desktop)]
+            companions::stop_companions,
+            #[cfg(desktop)]
+            companions::new_companion_code,
+            #[cfg(desktop)]
+            companions::approve_companion,
+            #[cfg(desktop)]
+            companions::set_companion_allowed,
+            #[cfg(desktop)]
+            companions::remove_companion,
             #[cfg(desktop)]
             get_hub_join,
             #[cfg(desktop)]

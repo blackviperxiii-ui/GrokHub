@@ -323,11 +323,13 @@ fn a_default_that_reads_as_an_option_is_refused_when_saved() {
 
 #[test]
 fn a_command_cant_put_a_value_where_the_shell_runs_it_as_code() {
-    let problem = |command: &str| {
-        routine(json!([
-            { "id": "a", "tool": "run_terminal_command", "args": { "command": command } }
-        ]))
-        .problems(&tools)
+    // Bash rules, so read as Linux and macOS read it on every OS (Windows
+    // reads a routine's command as PowerShell).
+    let problem = |command: &str| -> Vec<String> {
+        command::problem(command, Quote::Posix)
+            .map(|why| format!("step \"a\": {why}"))
+            .into_iter()
+            .collect()
     };
     let refused = |why: &str, commands: &[&str]| {
         for command in commands {
@@ -568,11 +570,13 @@ fn a_command_cant_put_a_value_where_the_shell_runs_it_as_code() {
 
 #[test]
 fn a_value_in_a_nested_part_or_a_variable_name_is_refused() {
-    let problem = |command: &str| {
-        routine(json!([
-            { "id": "a", "tool": "run_terminal_command", "args": { "command": command } }
-        ]))
-        .problems(&tools)
+    // Bash rules, so read as Linux and macOS read it on every OS (Windows
+    // reads a routine's command as PowerShell).
+    let problem = |command: &str| -> Vec<String> {
+        command::problem(command, Quote::Posix)
+            .map(|why| format!("step \"a\": {why}"))
+            .into_iter()
+            .collect()
     };
     let refused = |why: &str, commands: &[&str]| {
         for command in commands {

@@ -1309,6 +1309,21 @@ fn model_line_event(session: SessionMode, conversation_id: &str) -> Option<UiEve
     (session != SessionMode::Btw).then_some(UiEvent::ModelLine { text })
 }
 
+/// The card offering a download that would do `kind` better than every
+/// chat model on this PC; its Yes runs `/download <id>`.
+fn install_offer_event(
+    config_dir: &std::path::Path,
+    kind: grokhub_core::local_skills::TaskKind,
+) -> Option<UiEvent> {
+    let (prompt, yes) =
+        crate::model_library::install_offer(config_dir, kind, grokhub_core::now_ms())?;
+    Some(UiEvent::Confirm {
+        command: "/download".into(),
+        prompt,
+        yes,
+    })
+}
+
 fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
     let Worker {
         id: conversation_id,
@@ -1632,6 +1647,7 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                     // line naming the on-device model that answered. The
                     // line is taken either way, so it never outlives its turn.
                     let model_line = model_line_event(route.session, &conversation_id);
+                    let device_kind = grokhub_agent::route::local_live::take_kind(&conversation_id);
                     if route.session != SessionMode::Btw {
                         if let Some(card) = recap_event(&reply, &tool_rows) {
                             emit(card);
@@ -1641,6 +1657,13 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
                         }
                         if let Some(line) = model_line {
                             emit(line);
+                            // A model not on this PC that would have done
+                            // this task clearly better: one card, asked once.
+                            if let Some(card) =
+                                device_kind.and_then(|k| install_offer_event(&config_dir, k))
+                            {
+                                emit(card);
+                            }
                         }
                     }
                     let btw = route.session == SessionMode::Btw;

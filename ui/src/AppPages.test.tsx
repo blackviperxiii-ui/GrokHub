@@ -71,6 +71,7 @@ vi.mock("./api", async () => {
   onAutomationRan: () => Promise.resolve(() => {}),
   onUpdateAvailable: () => Promise.resolve(() => {}),
   onLocalEngineEvent: () => Promise.resolve(() => {}),
+  onCompanionEvent: () => Promise.resolve(() => {}),
   workboardSweepUndo: () => Promise.resolve({}),
   shareSchedulerClock: () => Promise.resolve(),
   onFileDrop: () => Promise.resolve(() => {}),

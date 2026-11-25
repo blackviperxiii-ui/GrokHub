@@ -1,0 +1,1 @@
+- Sync built-in vstack skills to v1.7.0 (adds lean-ci).

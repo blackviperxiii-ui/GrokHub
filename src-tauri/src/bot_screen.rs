@@ -23,6 +23,7 @@ pub struct BotDesktopView {
 
 /// The folder for the screen's cookie, preview socket and the file that
 /// names it for the Cua child.
+#[cfg(desktop)]
 pub fn dir(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join(grokhub_desktop::BOT_DESKTOP_DIR)
 }

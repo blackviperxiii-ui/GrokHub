@@ -9,6 +9,7 @@ import {
   listChats,
   onAutomationRan,
   onChatEvent,
+  onCompanionEvent,
   onHalt,
   onLocalEngineEvent,
   onUpdateAvailable,
@@ -483,6 +484,28 @@ export function App() {
     const timer = window.setInterval(share, CLOCK_SHARE_MS);
     return () => window.clearInterval(timer);
   }, []);
+  // A companion's wake opens a new chat; what it heard is sent in the open one.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onCompanionEvent((event) => {
+      if (event.kind === "heard") {
+        if (!event.text.trim()) return;
+        setPrefill((now) => ({ text: event.text, n: (now?.n ?? 0) + 1, send: true }));
+      } else {
+        setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: newConversationId() }));
+        notify("info", `${event.name} woke this app.`, undefined, "Devices");
+      }
+      setView("chat");
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [notify]);
   // An auto-resume stopped for the day: the card waits in Blocked, and the
   // bell says so.
   useEffect(() => {
