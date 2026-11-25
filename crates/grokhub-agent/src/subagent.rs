@@ -205,6 +205,7 @@ fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         worktree: false,
         lead_model: call.model,
         objective: &brief.message,
+        agent: true,
     }) {
         Ok(ticket) => ticket,
         Err(text) => return refuse(text),
@@ -418,6 +419,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         worktree: spec.worktree,
         lead_model: call.model,
         objective: &spec.prompt,
+        agent: false,
     }) {
         Ok(ticket) => ticket,
         Err(text) => return (ToolOutput::err(text), Usage::default()),
@@ -5369,6 +5371,9 @@ mod tests {
         .unwrap();
         let _guard = crate::perm::ConfigGuard::set(&cfg);
         let sid = session("agentmsg");
+        // "Ask the researcher ..." is a small turn; the person named the
+        // agent, so its size doesn't stop the message.
+        crate::subagent_policy::pin_size(&sid, crate::route::sizing::TaskSize::Tiny);
         let parent_id = sid.clone();
         type Seen = (usize, PathBuf, String, Vec<String>);
         let seen = Arc::new(Mutex::new(Vec::<Seen>::new()));
