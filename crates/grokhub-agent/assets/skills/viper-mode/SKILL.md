@@ -31,7 +31,7 @@ The remaining triggers live only here:
 - Prose, your reply included → **unslop**. Docs, PR descriptions, commit messages → **technical-writing**.
 - Before commit → remove code slop (`/deslop` where the host has it; otherwise apply **no-comments** and the Laziness Protocol to the diff). Before review → **no-comments**.
 - Shipping UI, IDE or CLI → drive the real thing with the host's browser, computer-use or terminal tool. Full ship gate → **qa-walkthrough**. Audio or video → **av-qa-walkthrough**.
-- A number you measured → **benchmark-checklist**. Making the app faster → **optimize**.
+- A number you measured → **benchmark-checklist**. Making the app faster → **optimize**. Making CI faster or cheaper → **lean-ci**.
 - The app works but does not feel right → **land-it**. Raise UI craft → **elevate**.
 - Dependencies, toolchains, model ids or APIs to bring up to date → **updater**.
 - PR status → the **Babysit** playbook, not a host's built-in babysit skill. Landing a green stack → the **Shipping** playbook. Promote beta to main, tag and release → **bag-and-tag**, only on an explicit user ask.
