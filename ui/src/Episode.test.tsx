@@ -318,7 +318,7 @@ describe("Episode", () => {
       stepWords(step("approve", ""), true),
     ]).toEqual(["allowed, not run yet", "not run", "ran: click ok", "ran"]);
     expect(endedLine("verified")).toBe("Done, and checked.");
-    expect(endedLine("unconfirmed")).toBe("Ended: the check couldn't confirm it.");
+    expect(endedLine("unconfirmed")).toBe("Ended: it couldn't be confirmed done.");
     expect(endedLine("whatever")).toBe("Ended.");
   });
 });

@@ -18,8 +18,10 @@
 //! checker reject, or a checker that can't run, re-plans with its reason
 //! instead of waiting; the same reject on an unchanged screen
 //! [`SAME_REJECT_END`] times ends the episode with a named note. Every
-//! step goes through `harness::decide`; the episode adds no executor and no
-//! bypass. Hard class always parks.
+//! re-plan is counted ([`Episode::note_replan`]): the [`REPLAN_END`]th in a
+//! row with no step that moved, and no Steer, ends the episode with a named
+//! note instead. Every step goes through `harness::decide`; the episode adds
+//! no executor and no bypass. Hard class always parks.
 
 mod kernel;
 pub mod lessons;
@@ -59,6 +61,9 @@ take a fresh screenshot and go on.";
 /// The same checker reject, on an unchanged screen, this many times in a row
 /// ends the episode with a named note instead of re-planning again.
 pub const SAME_REJECT_END: u32 = 3;
+/// Re-plans in a row with no step that moved: the last one ends the episode
+/// with a named note instead (the chat's own drive stops after 3 too).
+pub const REPLAN_END: u32 = 3;
 /// An open episode with no step for this long ends.
 pub const EPISODE_IDLE: Duration = Duration::from_secs(10 * 60);
 /// Most independent reads one fan-out runs side by side.
@@ -99,8 +104,9 @@ pub enum EpisodeEnd {
     Halt,
     Stop,
     Idle,
-    /// The checker kept rejecting for the same reason on an unchanged
-    /// screen ([`SAME_REJECT_END`] times): ended with a named note.
+    /// Ended without a confirmed done: the same reject [`SAME_REJECT_END`]
+    /// times, or [`REPLAN_END`] re-plans in a row with no progress. Ended
+    /// with a named note.
     Unconfirmed,
 }
 
@@ -215,6 +221,12 @@ pub struct Episode {
     pub(crate) ring: VecDeque<loops::LoopEntry>,
     /// Worker calls still stepped up after the latest re-plan.
     pub step_up: u32,
+    /// Re-plans in a row with no step that moved, and the newest one's
+    /// reason. A move or a Steer clears it.
+    pub(crate) replans: Option<(u32, String)>,
+    /// The worker has not been asked since the latest counted re-plan: one
+    /// more before then (the same batch) is the same re-plan.
+    pub(crate) replan_unheard: bool,
     /// The `episode_id`s of the past lessons this episode started with.
     pub used_lessons: Vec<String>,
     /// The latest non-desktop results (one step, or every read of a
@@ -249,6 +261,8 @@ impl Episode {
             last_reject: None,
             ring: VecDeque::new(),
             step_up: 0,
+            replans: None,
+            replan_unheard: false,
             used_lessons: Vec::new(),
             outputs: Vec::new(),
         }
@@ -273,6 +287,8 @@ impl Episode {
         };
         if moved {
             self.stall = 0;
+            self.replans = None;
+            self.replan_unheard = false;
             return false;
         }
         self.stall = self.stall.saturating_add(1);
@@ -281,6 +297,31 @@ impl Episode {
             return true;
         }
         false
+    }
+
+    /// Count a re-plan. True on the [`REPLAN_END`]th in a row with nothing
+    /// moved since the first: the episode is stuck and ends instead. A
+    /// re-plan before the worker was asked again ([`Self::note_asked`]) is
+    /// the same one: a batch the worker sent all at once counts once.
+    pub fn note_replan(&mut self, why: &str) -> bool {
+        let n = match &self.replans {
+            Some((n, _)) if self.replan_unheard => *n,
+            Some((n, _)) => n.saturating_add(1),
+            None => 1,
+        };
+        self.replans = Some((n, why.to_string()));
+        self.replan_unheard = true;
+        n >= REPLAN_END
+    }
+
+    /// The worker was asked for its next step: the next re-plan counts.
+    pub fn note_asked(&mut self) {
+        self.replan_unheard = false;
+    }
+
+    /// [`REPLAN_END`] re-plans in a row moved nothing.
+    pub fn stuck(&self) -> bool {
+        self.replans.as_ref().is_some_and(|(n, _)| *n >= REPLAN_END)
     }
 
     /// Count a checker reject. True when the same reason on the same
@@ -301,10 +342,13 @@ impl Episode {
     }
 
     /// A Steer or a new message: same episode, same parks, new goal step.
+    /// It also starts the re-plan count over.
     pub fn steer(&mut self, note: &str, held: &[String]) {
         let note = cap_text(note, held);
         if !note.is_empty() {
             self.goal_step = note;
+            self.replans = None;
+            self.replan_unheard = false;
         }
     }
 

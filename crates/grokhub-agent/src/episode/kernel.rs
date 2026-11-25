@@ -17,7 +17,7 @@ use super::verify::{
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
 use super::{
     Episode, EpisodeEnd, OpenPark, StepOutput, StepShape, FANOUT_CAP, GOAL_CAP, OUTPUT_PROMPT_CAP,
-    PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS,
+    PARK_PREFIX, REPLAN_END, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS,
 };
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
@@ -244,8 +244,8 @@ struct Run<'a, 'b> {
 
 /// Drive one turn of an episode. It returns when the episode ends, the
 /// ladder pauses, the worker waits on the user, or it errors. No step count
-/// or wall time stops it. Call again with the same `ep` and `view`
-/// for the next turn.
+/// or wall time stops it; [`REPLAN_END`] re-plans in a row with no progress
+/// do. Call again with the same `ep` and `view` for the next turn.
 pub fn run_episode(
     k: &KernelIn<'_>,
     ep: &mut Episode,
@@ -291,6 +291,10 @@ pub fn run_episode(
         run.settle_parks(on_event);
         for note in k.steer.drain() {
             run.ep.steer(&note, k.held);
+        }
+        // After the Steer drain: the user's own new words rescue it.
+        if run.ep.stuck() {
+            return run.end_stuck(on_event);
         }
         if run.obs.is_none() {
             run.obs = run.observe();
@@ -349,7 +353,7 @@ pub fn run_episode(
             }
         }
         run.batch(&turn.calls, on_event);
-        if k.halt.halted() {
+        if k.halt.halted() || run.ep.stuck() {
             continue;
         }
         if let Some(stop) = run.check_loop() {
@@ -457,8 +461,7 @@ impl Run<'_, '_> {
     }
 
     /// A loop or [`STALL_REPLAN`] steps that moved nothing: a quiet repair
-    /// span and a re-plan note for the next step. No card, nothing counted,
-    /// no pause.
+    /// span and a re-plan note for the next step. No card, no pause.
     fn replan(&mut self, detector: &str, reason: String) {
         let step = LadderStep {
             rung: Rung::Replan,
@@ -469,10 +472,44 @@ impl Run<'_, '_> {
             reason,
             prompt: Some(REPLAN_NOTE.into()),
         };
-        let span = ladder_span(&self.ep.chat_id, &step);
+        self.replan_with(&step, REPLAN_NOTE.into());
+    }
+
+    /// Every re-plan lands here: a loop, a stall, a checker reject, or the
+    /// ladder's `Rung::Replan`. It counts the re-plan; the [`REPLAN_END`]th
+    /// in a row with no progress writes nothing and leaves the episode
+    /// stuck, which ends it ([`Self::end_stuck`]). Otherwise a quiet repair
+    /// span, the worker's note, and a step up.
+    fn replan_with(&mut self, step: &LadderStep, note: String) {
+        if self.ep.note_replan(&step.reason) {
+            return;
+        }
+        let span = ladder_span(&self.ep.chat_id, step);
         self.write(span);
-        self.ep.note = Some(REPLAN_NOTE.into());
+        self.ep.note = Some(note);
         self.ep.step_up = STEP_UP_STEPS;
+    }
+
+    /// [`REPLAN_END`] re-plans in a row moved nothing: end with a note that
+    /// names the goal and the last reason. An open card is withdrawn and
+    /// denied (fail-closed), as on Stop.
+    fn end_stuck(&mut self, on_event: &mut dyn FnMut(LoopEvent)) -> EpisodeOut {
+        let goal: String = self.ep.goal.chars().take(GOAL_CAP).collect();
+        let why = self
+            .ep
+            .replans
+            .as_ref()
+            .map(|(_, why)| why.clone())
+            .unwrap_or_default();
+        let note = format!(
+            "Couldn't finish: {goal} — stopped after {REPLAN_END} re-plans without progress ({why})"
+        );
+        self.end_with_parks_denied(
+            EpisodeEnd::Unconfirmed,
+            "ended: no progress — fail-closed Deny",
+        );
+        on_event(LoopEvent::Text(note.clone()));
+        self.out(EpisodeStop::Ended(EpisodeEnd::Unconfirmed), note)
     }
 
     /// A screenshot through the same gate as any step. Not a step itself;
@@ -583,6 +620,7 @@ impl Run<'_, '_> {
         self.usage.add(&routed.out.usage);
         self.tokens = Some(routed.tokens);
         self.ep.note = None;
+        self.ep.note_asked();
         Ok(routed.out)
     }
 
@@ -703,10 +741,10 @@ impl Run<'_, '_> {
             reason: format!("{VERIFY_REJECT}: {why}"),
             prompt: Some(REPLAN_NOTE.into()),
         };
-        let span = ladder_span(&self.ep.chat_id, &step);
-        self.write(span);
-        self.ep.note = Some(format!("{REPLAN_NOTE} The independent check said: {why}"));
-        self.ep.step_up = STEP_UP_STEPS;
+        self.replan_with(
+            &step,
+            format!("{REPLAN_NOTE} The independent check said: {why}"),
+        );
         None
     }
 
@@ -724,22 +762,21 @@ impl Run<'_, '_> {
         // E1: a detector finding lifts the worker's next step one rung.
         crate::route::ladder::note_tool_error();
         let step = self.ep.ladder.next(&finding, &self.ep.trail);
+        let mut note = step.prompt.clone().unwrap_or_default();
+        if let Some(why) = why {
+            note.push_str(&format!(" The independent check said: {why}"));
+        }
+        if step.rung == Rung::Replan {
+            self.replan_with(&step, note);
+            return None;
+        }
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
-        if step.rung == Rung::Replan {
-            self.ep.step_up = STEP_UP_STEPS;
+        if step.rung == Rung::Pause {
+            return Some(EpisodeStop::LadderPause(step));
         }
-        match step.rung {
-            Rung::Retry | Rung::Backtrack | Rung::Replan => {
-                let mut note = step.prompt.clone().unwrap_or_default();
-                if let Some(why) = why {
-                    note.push_str(&format!(" The independent check said: {why}"));
-                }
-                self.ep.note = Some(note);
-                None
-            }
-            Rung::Pause => Some(EpisodeStop::LadderPause(step)),
-        }
+        self.ep.note = Some(note);
+        None
     }
 
     /// 1a still catches looping steps mid-episode.
@@ -999,10 +1036,12 @@ impl Run<'_, '_> {
             return;
         }
         for (i, call) in calls.iter().enumerate() {
-            // A Pause stops before the next step; the top of the loop spends it.
+            // A Pause stops before the next step; the top of the loop spends
+            // it. A stuck episode runs nothing more; the top of the loop ends it.
             if self.k.halt.halted()
                 || self.k.cancel.is_cancelled()
                 || self.k.pause.load(Ordering::SeqCst)
+                || self.ep.stuck()
             {
                 return;
             }
