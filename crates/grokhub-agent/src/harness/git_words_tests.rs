@@ -663,7 +663,8 @@ fn git_run_under_another_name_is_hidden() {
 }
 
 /// A variable that moves git is set by more than `NAME=value`, and git reads
-/// its config, hooks and refs from files a command can write.
+/// its config, hooks and refs from files a command can write. These are sh
+/// forms, read as sh reads them on every platform.
 #[test]
 fn an_editor_set_by_read_printf_or_a_written_config_file_may_push() {
     let commit = "git commit -q --allow-empty -e -m 'git push --force origin main'";
@@ -676,7 +677,7 @@ fn an_editor_set_by_read_printf_or_a_written_config_file_may_push() {
         "read -r \"$n\" <<< sh",
     ] {
         let command = format!("{setup}; {commit}");
-        assert!(command_may_push(&command), "{command}");
+        assert!(command_may_push_as(&command, false), "{command}");
     }
     assert!(read_shell_as("read -r GIT_EDITOR <<< sh", false)
         .sets
@@ -706,7 +707,7 @@ fn an_editor_set_by_read_printf_or_a_written_config_file_may_push() {
         "git config --get user.name > /tmp/name.txt",
         "git log -1 > notes.txt",
     ] {
-        assert!(!command_may_push(command), "{command}");
+        assert!(!command_may_push_as(command, false), "{command}");
     }
 }
 

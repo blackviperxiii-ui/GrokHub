@@ -3639,7 +3639,13 @@ pub fn git_path_changed(run: &Run, sets: &[String]) -> bool {
 /// of it could run git that [`read_shell`] doesn't read, or a git in it may
 /// push ([`git_may_push`]).
 pub fn command_may_push(command: &str) -> bool {
-    let read = read_shell(command);
+    command_may_push_as(command, cfg!(windows))
+}
+
+/// [`command_may_push`] as sh (`ps` false) or PowerShell (`ps` true) reads
+/// `command`.
+fn command_may_push_as(command: &str, ps: bool) -> bool {
+    let read = read_shell_as(command, ps);
     read.hidden.is_some() || read.runs.iter().any(|run| git_may_push(run, &read.sets))
 }
 
