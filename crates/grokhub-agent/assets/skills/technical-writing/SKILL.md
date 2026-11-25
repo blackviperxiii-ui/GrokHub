@@ -1,37 +1,79 @@
 ---
 name: technical-writing
-description: Layered writing standard (Diátaxis, Google developer style, STE, Global English) for docs, RFCs, readmes, PR descriptions, commit messages. /technical-writing.
+description: "Layered technical-writing standard: Diátaxis structure, Google developer style sentences, STE instruction rules, Global English syntax. Use for /technical-writing or when writing or reviewing docs, RFCs, readmes, PR descriptions, or commit messages."
 ---
 
 # Technical writing
 
-Write so a tired engineer gets it on first read. Above all layers:
+Write so a tired engineer understands on the first read. These rules sit above every layer below.
 
-- Cut every word that does no work. "In order to" → "to".
-- Short everyday words: "use", not "utilize".
-- If a rule makes a sentence worse, fix it another way or leave it.
-- The codebase is the word list: real symbol, file, flag, command names. No invented jargon; define a named pattern on first use.
+- Cut every word that does no work. "In order to" becomes "to".
+- Use the short, everyday word: "use", not "utilize".
+- When a rule makes a sentence worse, fix the sentence another way or leave it alone.
+- The codebase is the word list. Write the real symbol, file, flag, or command name, not a synonym or a description of it.
+- Don't invent jargon. Use the words a developer would say out loud. Say what a named pattern means the first time.
 
-**Rhythm.** Mix sentence lengths. Split a sentence with two thoughts; keep a long one with one. Have a view where the mode allows. Specific beats sterile: "a column rename fails the build".
+## Vary the rhythm
 
-## 1. Pick the mode (Diátaxis)
+- Mix sentence lengths. Split the sentence that carries two thoughts. Keep the long sentence that carries one.
+- Have a view in explanation, where the mode allows one. Keep reference dry.
+- Be specific. Specific beats sterile. Not "schema changes can cause issues" but "a column rename fails the build".
 
-One doc, one mode. Action+learning **tutorial**: say what they'll build, visible result every step, show expected output, "we" + commands. Action+work **how-to**: a real problem, assume competence, action only, forks allowed, title by task. Understanding+work **reference**: describe only, dry, complete, mirror the code's structure, generate from code when possible. Understanding+learning **explanation**: one bounded topic, the why, trade-offs; opinion only here. Don't mix; split and link.
+## Pick the mode first (Diátaxis)
 
-## 2. Sentences (Google style)
+One document, one mode. Don't mix modes. Split and link instead. Two questions pick the mode. Does the reader want to act or to understand? Is the reader learning or at work?
 
-"You", present tense, active voice. Instructions as commands. Condition before instruction. Common case first. No "simply", "easy", "please", no pre-announcing. Link text names the destination, never "click here". Headings carry the point, sentence case; tasks are verb phrases. Numbered lists for sequences, bullets otherwise, introduced by a full sentence, items parallel. Code in code font, UI in bold, serial commas, no "etc.".
+- **Tutorial: learning by doing.** Action while learning. Say what the learner will build. Every step produces a visible result, and you say what they should see, with the expected output. Write "we" plus commands. Explanation gets one clause and a link.
+- **How-to: steps to a goal.** Action at work. Solve the reader's real problem. Assume competence. Action only. Allow forks. Name the guide by the task.
+- **Reference: facts for lookup.** Understanding at work. Only describe. Be dry, complete, and sure. Mirror the structure of the thing described, such as the code. Generate reference from the code when you can.
+- **Explanation: understanding and why.** Understanding while learning. One bounded topic. Give context: design decisions, history, constraints, alternatives, trade-offs. Opinion is allowed here and nowhere else.
 
-## 3. One statement at a time (STE)
+## Write sentences to the reader (Google developer style)
 
-One instruction per sentence. Split instructions over ~20 words, others over ~25. Warning before the step. Keep "the" and "a". One meaning per word, one word per action. Avoid "-ing" where you can.
+- Talk to the reader as "you", in the present tense.
+- Say who does what. Passive is fine only when the actor is unknown or beside the point.
+- Write instructions as commands. Put the condition before the instruction and the common case first.
+- No buzzwords, no figurative language, no "please", and never "simply", "easy", or "quickly" in a procedure.
+- Don't pre-announce, and don't start consecutive sentences with the same phrase.
+- Link with words that say where the link goes, never "click here".
+- Headings carry the point, in sentence case. A task heading is a verb phrase. One h1 per page, no skipped levels.
+- Numbered lists for sequences, bullets for everything else. Introduce a list with a complete sentence. Keep items parallel.
+- Code goes in code font. UI elements go in bold. Use serial commas. Drop "etc.".
 
-## 4. One reading only (Global English)
+## Make statements load one at a time (STE rules)
 
-Keep "only"/"not" next to what they modify. Break noun stacks. Every "it"/"this" points at one thing; never "this" for a whole clause. Don't drop verbs. Keep "that". Periods, not semicolons or em dashes. No slashes, no "(s)", no idioms or Latin abbreviations. One name per thing everywhere.
+- One instruction per sentence. One thought per sentence everywhere else.
+- Split instructions longer than about 20 words and other sentences longer than about 25.
+- Put the warning or condition before the step it guards.
+- Keep "the" and "a".
+- Give each word one meaning, and pick one word per action.
+- Write procedures as direct commands, never as narration and never in the passive.
+- Avoid "-ing" words where you can.
 
-## Repo specifics
+## Leave no sentence open to two readings (Global English)
 
-Run **unslop** on everything. PR bodies and commits: all layers but Diátaxis; a reviewer reads the PR body in under a minute; link logs and tables, don't paste. UI strings follow product copy rules. Real paths; every count true at the commit, with the command that regenerates it.
+- Keep words like "only" and "not" next to the word they change.
+- Break up long noun strings.
+- Make every "it", "they", and "this" point at one obvious thing. Never use "this" or "which" to point at a whole clause.
+- Don't drop verbs, or the small words that show structure, such as "that".
+- Repeat the article in a series when it prevents a misread. Say which parts "and" or "or" joins.
+- Use periods, not semicolons or em dashes. No slashes, and no "(s)". Make text in parentheses a full grammatical unit.
+- Call each thing by one name, everywhere.
+- Skip idioms, colloquialisms, Latin abbreviations, and metaphors.
 
-**Before:** "Configuration of the budget script parameters is performed via budget.json. Note that running with --write should only be done when lowering it." **After:** "`budget.mjs` reads the budget from `budget.json`. Run `budget.mjs --write` only to lower it."
+## Voice and repo specifics
+
+- Apply the **unslop** skill to every doc this skill touches. That skill owns the slop-pattern catalog: AI vocabulary, filler, hedging, formatting tells.
+- PR descriptions and commit messages are writing too. Every layer except Diátaxis applies to them. A PR body is a briefing that a reviewer can read in under a minute. Do not paste swarm logs, SHA lists, or metric tables. Link them.
+- Product UI strings are not documentation. Use your product's copy guidelines for those.
+- Indent code snippets with tabs. Write real paths. Make every count or tree claim true at the commit that lands it, and include the command that regenerates it.
+
+## Example
+
+Before:
+
+> Configuration of the budget script parameters is performed via budget.json. Note that running with --write should only be done when lowering it.
+
+After:
+
+> `budget.mjs` reads the budget from `budget.json`. Run `budget.mjs --write` only to lower the budget.

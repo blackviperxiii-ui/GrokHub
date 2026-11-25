@@ -838,12 +838,14 @@ mod tests {
         let none = |_: &str| None;
         let mut attach = github();
         attach.allow("https://docs.rs/serde").unwrap();
+        // Beside the profile, joined the OS's way (a backslash on Windows).
+        let output = Path::new("/cfg/browser").join("attached-output");
         assert_eq!(
             agent_defaults(&args(&[]), &none, profile, false, Some(&attach)),
             args(&[
                 "--cdp-endpoint=http://127.0.0.1:9222",
                 "--allowed-origins=https://github.com;https://docs.rs",
-                "--output-dir=/cfg/browser/attached-output",
+                &format!("--output-dir={}", output.display()),
             ])
         );
         // A server that names its own endpoint keeps it.

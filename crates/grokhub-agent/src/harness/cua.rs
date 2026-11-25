@@ -433,11 +433,7 @@ pub struct StdioChild {
 
 /// Bounded env, strip loose vars, and put the child on `screen` (Bot Desktop
 /// `DISPLAY` and the like; a `None` value is removed).
-fn apply_cua_launch_env(
-    cmd: &mut Command,
-    manifest: &Path,
-    screen: &[(&str, Option<String>)],
-) {
+fn apply_cua_launch_env(cmd: &mut Command, manifest: &Path, screen: &[(&str, Option<String>)]) {
     cmd.envs(cua_spawn_env(manifest));
     for k in CUA_ENV_REMOVE {
         cmd.env_remove(k);

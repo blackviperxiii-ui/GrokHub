@@ -1,40 +1,44 @@
 ---
 name: create-verification-skill
-description: Project skill that drives the real app and proves behavior. /create-verification-skill.
+description: "Generate a project-local verification skill that drives your app the way a user does, in any language, framework, or platform. Use for /create-verification-skill, a request to make a control skill for this repo, or when a project has no scripted way to prove UI/CLI/service behavior."
 disable-model-invocation: true
 ---
 
-# Create Verification Skill
+# Create a verification skill
 
-Scripted real-app proof: launch, user-path drive, evidence. Write a cold-agent skill at `.cursor/skills/verify-<app>/`.
+Every serious project needs a scripted way to drive the real app and prove behavior. It launches the app, exercises a feature the way a user would, and captures evidence. This skill generates that as a project-local skill named `verify-<app>`, tailored to the repo. It lives in the host's project skills folder. That folder is `.cursor/skills/` in Cursor and `.claude/skills/` in Claude Code. On another host, use the folder that host reads project skills from. The rest of this file writes it as `<project skills>/verify-<app>/`. You write the generator's output for the next agent, not for a human. It will be read cold, mid-task, by an agent that has never seen the app.
 
-## Interview (repo first)
+## 1. Interview the repo, not the user
 
-Ask only what code cannot answer:
+Answer these from the codebase and only ask the user what you cannot observe:
 
-- **Surface** — primary UI/CLI/API/desktop/mobile/lib; note others
-- **Run** — repo start command; ports, env, seed, auth
-- **Drive** — existing harness first; else CDP/tmux/HTTP
-- **Observe** — screenshots, transcripts, bodies, logs, exits, DB
-- **Isolate** — side-by-side? If not, refuse double-drive
+- **Surface:** what does a user actually touch? A web UI, a CLI/TUI, a desktop app, an API, a mobile app, a library? A repo can have several. Pick the primary one and note the rest.
+- **Run:** how does the app start locally? Prefer the repo's own documented dev command (package scripts, Makefile, README quickstart). Note ports, env vars, seed data, auth.
+- **Drive:** how can an agent interact with it programmatically? Existing harnesses come first, such as Playwright/Cypress specs, expect scripts, PTY helpers, curl-able endpoints, a debug port. Only then pick a generic recipe: browser/CDP for web and Electron, a tmux/PTY harness for CLI/TUI, plain HTTP for services.
+- **Observe:** what evidence can be captured? Screenshots, terminal transcripts, response bodies, logs, exit codes, DB state.
+- **Isolate:** can two instances run side by side (ports, data dirs, profiles)? If not, say so in the generated skill. Refusing to double-drive a shared instance beats corrupting the user's session.
 
-Fix a broken checkout before generating. Verification-only scaffolding OK if cleanup removes it.
+If the checkout doesn't build or start as-is, fix that first (or report it precisely) before generating. A skill written against a broken base teaches wrong steps. When an irrelevant missing asset blocks startup (a static dir the API never serves, a sample config), the generated skill may create it, clearly marked as verification scaffolding, and remove it in cleanup.
 
-## Generate
+## 2. Generate the skill
 
-`SKILL.md` with frontmatter (`name: verify-<app>`, app + surface in description). No placeholders.
+Write `<project skills>/verify-<app>/SKILL.md` with YAML frontmatter (`name: verify-<app>` and a `description` that names the app, the surface, and when to reach for it). Without frontmatter the skill never registers. Give it these sections, each grounded in what the interview actually found, with no placeholders left:
 
-- **Launch** — exact start + usable readiness; migrations/seed; teardown. CLI: build once; each drive in its own PTY/tmux.
-- **Doctor** — read-only process/build/port/auth check.
-- **Drive** — real selectors/commands; stable handles.
-- **Evidence** — what/where; real user path; action + result; side effects; mocks only at prod boundaries; observe dry-run skips.
-- **Cleanup** — kill what you started; keep evidence at a named path.
-- **Helpers** — executable; invocation in the skill body.
+- **Launch:** the exact command that starts the app for verification, and how to tell it's ready (a log line, a prompt). Launch must reach a usable state from an empty data dir, including any migrations and seed data. Ready means usable, not just that a process answers. A database health check can pass while its init scripts are still running. Include teardown. For a short-lived CLI or TUI there is no server to keep alive. Launch then means build the binary (or install deps) once, then start each drive in its own isolated PTY or tmux session.
+- **Doctor:** one read-only check that answers "is this instance worth driving?" It covers process up, right version/build, port owned by us, auth valid. An agent runs this first whenever anything looks off.
+- **Drive:** the harness recipe with real selectors/commands from this repo, not examples. Prefer stable handles (ARIA labels, data attributes, prompt strings, route paths) over coordinates and tab order.
+- **Evidence:** what to capture for a proof and where it goes. State the proof standards. Exercise the real user path, not internal setters or test-only endpoints. Capture the action and the resulting state, not just the final screen. Verify side effects (files written, rows inserted, messages sent) alongside what's visible. Use mocks only where a production boundary already isolates the external system. When the safe path is a dry-run or test mode, verify what it actually skips by observing (files, network, git refs) rather than trusting its name. Some dry-runs still touch the network or open a browser.
+- **Cleanup:** how to tear down instances the run created. Never kill by process name. Kill what you started. Cleanup removes instances and scratch state, never the evidence. Proof artifacts survive the teardown, in a location the skill names.
+- **Helpers:** any script the skill ships is executable and its invocation is shown in the skill body. A helper the reader has to reverse-engineer is not a helper.
 
-## Feature map
+## 3. Seed the feature map
 
-`features/README.md` + one file per top feature (start 3–5). H2s: `Sub-features`, `How to get to it (user POV)`, `Driving it with <harness>`, `Gotchas`. Cover reach, drive, observable proof. Missing seed → fail + Gotcha; never weaken. Map is source of truth.
+Create `<project skills>/verify-<app>/features/README.md` plus one file per user-facing feature you can identify (aim for the top 3-5 to start, from routes, commands, menus, or docs). Follow the shape in [`references/feature-map-example/`](references/feature-map-example/), with a README index and one file per feature. Each file answers, from the user's point of view: what the feature is, how to reach it, how to drive it with the harness, and what observable end state proves it works. The four H2s are `Sub-features`, `How to get to it (user POV)`, `Driving it with <harness>`, and `Gotchas`. If the seed data lacks a precondition that a journey needs, the journey reports a failure and the reason goes in that feature's `Gotchas`. Never weaken the journey to make it pass. The map is the repo's maintained verification source. A proof that drives one convenient entry point is incomplete when the map lists others.
 
-## Prove then hand off
+## 4. Prove the generated skill before handing it over
 
-Once: launch → doctor → one mapped feature → evidence → cleanup; evidence must survive. Cleanup after failed tries. Stand-ins: list unverified setup. Point at `/maintain-verification-skill`.
+Run its own instructions end to end once: launch, doctor, drive ONE mapped feature (one is enough, because the map exists so later runs can cover the rest), capture evidence, clean up. After cleanup, confirm the evidence still exists at the named location. A cleanup that eats the proof fails this step. Fix what fails, and run the generated cleanup after every failed iteration too, so broken attempts don't strand processes and ports. A generated skill that was never executed is a draft, not a deliverable. If you proved it in a stand-in for the real target (a container in place of a fresh VM, a local stack in place of a remote one), list every setup step the stand-in did that the target will not. Those steps stay unverified until a run on the real target covers them.
+
+## 5. Offer the maintenance loop
+
+Point the user at `/maintain-verification-skill` for keeping the map honest as the app changes. Suggest a cadence only if they ask.
