@@ -1135,51 +1135,31 @@ async function localAi(s, config) {
       console.log("Get engine absent; download skipped, shot the state as found");
     }
 
-    // 4) Gemma 4 12B → Install and run draft model offer (its paired 12B drafter not on disk).
-    await click(s, ".local-ai button.mode-manual");
-    const showAll = await wd("POST", `${s}/elements`, {
+    // 4) The draft model offer for the model Auto picked, under Advanced.
+    // Auto picks by this PC's hardware, so a runner may get no offer.
+    await openAdvanced(s);
+    const offers = await wd("POST", `${s}/elements`, {
       using: "css selector",
-      value: ".local-ai button.link",
+      value: ".local-ai .local-draft-offer",
     });
-    for (const el of showAll) {
-      const label = await wd("GET", `${s}/element/${el[ELEMENT]}/text`);
-      if (/Show all/i.test(label)) {
-        await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
-        break;
-      }
+    if (offers.length > 0) {
+      const offer = await textOf(s, ".local-ai .local-draft-offer");
+      await scrollIntoView(s, ".local-ai .local-draft-offer");
+      await shot(s, "settings-local-ai-draft-offer");
+      console.log(`shot draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
+    } else {
+      console.log("no draft offer for the model Auto picked here");
     }
-    const gemma = await waitFor("Gemma 4 12B in the picker", async () => {
-      const el = await wd("POST", `${s}/element`, {
-        using: "xpath",
-        value: "//li[contains(@class,'local-model')][@aria-label='Gemma 4 12B']//input",
-      });
-      return el[ELEMENT];
-    });
-    await wd("POST", `${s}/element/${gemma}/click`, {});
-    const offer = await waitFor("the Gemma 4 12B draft offer", async () => {
-      const t = await textOf(s, ".local-ai .local-draft-offer");
-      const paired = /Gemma 4 12B draft model makes Gemma 4 12B/.test(t);
-      return /Install and run draft model/i.test(t) && paired ? t : null;
-    });
-    await scrollIntoView(s, ".local-ai .local-draft-offer");
-    await shot(s, "settings-local-ai-gemma-draft-offer");
-    console.log(`shot Gemma draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
-
-    await click(s, ".local-ai button.reset-local");
-    await waitFor("the reset note after the draft offer", async () => {
-      const t = await textOf(s, ".local-ai .local-note");
-      return t === "Back to Auto." ? t : null;
-    });
   }
 
+  // Model files and the tuning sit under Advanced: Auto picks the model, and
+  // an added file loads when no downloaded model is on this PC. The Windows
+  // proof above can leave the page scrolled to the top, where the heading
+  // covers the card's buttons, so these clicks centre first.
   const modelFile = join(config, "Llama-3-8B-abliterated.Q4_K_M.gguf");
   writeFileSync(modelFile, "GGUF");
-  // The Windows proof above leaves the draft offer scrolled to the top, where
-  // the page heading covers the card's buttons, so these clicks centre first.
-  await clickCentered(s, ".local-ai button.mode-manual");
-  const input = await waitFor("the model file field", () =>
-    find(s, "input[aria-label='Model file path']"),
-  );
+  await openAdvanced(s);
+  const input = await find(s, "input[aria-label='Model file path']");
   await typeInto(s, input, modelFile);
   await clickCentered(s, ".local-ai button.use-file");
   const notice = await waitFor("the model notice", async () => {
@@ -1188,6 +1168,18 @@ async function localAi(s, config) {
   });
   console.log(`notice shown: ${JSON.stringify(notice.split("\n")[0])}`);
   await clickCentered(s, ".local-ai .notice button.accept");
+  await waitFor("the added model file", async () => {
+    const t = await textOf(s, ".local-ai ul[aria-label='Added model files']");
+    return t.includes("Llama-3-8B-abliterated.Q4_K_M.gguf") ? t : null;
+  });
+  const allow = await waitFor("the never-pause apps box", async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//label[contains(normalize-space(),'Never pause for these apps')]//textarea",
+    });
+    return el[ELEMENT];
+  });
+  await typeInto(s, allow, "smoke.exe");
   await clickCentered(s, ".local-ai button.save-local");
   await waitFor("the saved note", async () => {
     const t = await textOf(s, ".local-ai .local-note");
@@ -1195,9 +1187,9 @@ async function localAi(s, config) {
   });
   const saved = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
   if (
-    saved.mode !== "manual" ||
-    saved.localModel?.selected !== modelFile ||
-    !saved.noticeSeen?.includes(modelFile)
+    !saved.ownFiles?.includes(modelFile) ||
+    !saved.noticeSeen?.includes(modelFile) ||
+    saved.manual?.allowApps?.join() !== "smoke.exe"
   ) {
     throw new Error(`local_ai.json holds ${JSON.stringify(saved)}`);
   }
@@ -1206,18 +1198,43 @@ async function localAi(s, config) {
     throw new Error(`governor.json holds ${JSON.stringify(rules)}`);
   }
   await shot(s, "settings-local-ai");
-  console.log("model file picked after the notice");
+  console.log("model file added after the notice");
 
-  await click(s, ".local-ai button.reset-local");
+  // Reset Advanced puts the tuning and app lists back and keeps added files.
+  await clickCentered(s, ".local-ai button.reset-local");
   await waitFor("the reset note", async () => {
     const t = await textOf(s, ".local-ai .local-note");
-    return t === "Back to Auto." ? t : null;
+    return t === "Advanced settings are back to their defaults." ? t : null;
   });
   const reset = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
-  if (reset.mode !== "auto" || reset.localModel?.selected !== "") {
-    throw new Error(`Reset to Auto left ${JSON.stringify(reset)}`);
+  if (reset.manual?.allowApps?.length !== 0 || !reset.ownFiles?.includes(modelFile)) {
+    throw new Error(`Reset Advanced left ${JSON.stringify(reset)}`);
   }
-  console.log("reset to Auto");
+  console.log("Reset Advanced cleared the app list and kept the file");
+
+  // Remove the file again. On Windows the engine proof installed
+  // llama-server, and with an engine, a model file and no sign-in, Auto sends
+  // the next chats to this PC (local:no_keys) instead of the mock model.
+  await clickCentered(s, ".local-ai ul[aria-label='Added model files'] button.remove-file");
+  await clickCentered(s, ".local-ai button.save-local");
+  const removed = await waitFor("the file gone from local_ai.json", async () => {
+    const now = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
+    return now.ownFiles?.includes(modelFile) ? null : now;
+  });
+  if ((removed.ownFiles ?? []).length !== 0) {
+    throw new Error(`Remove left ${JSON.stringify(removed.ownFiles)}`);
+  }
+  console.log("model file removed and saved");
+}
+
+/** Opens Settings → Local AI's Advanced part, once. */
+async function openAdvanced(s) {
+  const open = await wd("POST", `${s}/execute/sync`, {
+    script: "const d = document.querySelector('.local-ai details.local-advanced'); return d ? d.open : null;",
+    args: [],
+  });
+  if (open === false) await clickCentered(s, ".local-ai details.local-advanced > summary");
+  await waitFor("the Advanced settings", () => find(s, "input[aria-label='Model file path']"));
 }
 
 // Labs: a folder bundle installs off and untrusted into the config folder,
@@ -2139,11 +2156,12 @@ async function main() {
 }
 
 // A tool counts as offered when the model gets its schema or, with deferred
-// tools on, its line in load_tool_schema's index ("name — blurb").
+// tools on, its line in the deferred index in tool_search's description
+// ("name — blurb [toolset]").
 function offeredTools(body) {
   const tools = JSON.parse(body).tools ?? [];
-  const index = tools.find((t) => t.name === "load_tool_schema")?.description ?? "";
-  const deferred = (index.split("Deferred tools (index):\n")[1] ?? "")
+  const index = tools.find((t) => t.name === "tool_search")?.description ?? "";
+  const deferred = (index.split("Full deferred index:\n")[1] ?? "")
     .split("\n")
     .map((line) => line.split(" — ")[0].trim())
     .filter(Boolean);
@@ -2167,8 +2185,8 @@ async function desktop(s, config) {
       value: "//label[contains(., 'Let Loadout control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
+  // The switch saves on the flip.
   await wd("POST", `${s}/element/${desk}/click`, {});
-  await click(s, ".settings > form button[type='submit']");
   await waitFor("the saved desktop switch", () => {
     const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
     return saved.desktopControl === true;
