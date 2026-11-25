@@ -812,6 +812,21 @@ jobs:
 
   # Marks a green nightly so the next one skips the build jobs while beta's
   # HEAD stays the same. Any failed or cancelled job leaves no mark.
+  # Last step for PRs into beta: once the gate finished green, merge the PR
+  # if it is ready (auto-merge.yml's rules: not a draft, no hold label, no
+  # requested changes). Covers PRs that left draft after CI was already green,
+  # where GitHub refuses to turn on auto-merge.
+  auto-merge:
+    needs: [changes, fmt, guards, linux, ui-shots]
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'beta' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/auto-merge.yml
+    secrets: inherit
+
   nightly-green:
     needs: [changes, fmt, guards, linux, deny, cross-check, shell, phone-android, phone-ios, windows, windows-release]
     if: >-
