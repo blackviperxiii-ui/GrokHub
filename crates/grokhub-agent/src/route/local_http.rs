@@ -131,6 +131,17 @@ impl HttpLocalRuntime {
         self
     }
 
+    /// File name the sampling limits follow, else this runtime's model id.
+    fn sample_key(&self) -> String {
+        let loaded = super::local_sidecar::loaded().and_then(|running| {
+            running
+                .model
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+        super::local_repeat::sample_model(&self.model, loaded.as_deref()).into_owned()
+    }
+
     /// A throttled model (sharing the GPU with a game, or on battery) can take
     /// minutes over a long answer; Stop and the router's own call timeout still
     /// end a turn, so the socket read waits well past the old two minutes.
@@ -157,6 +168,7 @@ impl HttpLocalRuntime {
         }
         super::local_sidecar::touch_global();
         let mut body = chat_body(&self.model, messages, stream, &self.effort(effort));
+        super::local_repeat::apply_sample(&mut body, &self.sample_key());
         if let Some(id) = slot {
             body["id_slot"] = json!(id);
         }
@@ -499,6 +511,7 @@ impl LocalRuntime for HttpLocalRuntime {
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
         self.effort(req.effort.as_deref()).apply(&mut body);
+        super::local_repeat::apply_sample(&mut body, &self.sample_key());
         // Stop also hangs up while the server is still reading the prompt,
         // before any token, so the GPU goes back to the game at once.
         let stop = cancel.stop_switch();
@@ -560,6 +573,8 @@ fn assemble_sse(reader: impl BufRead, cancelled: &dyn Fn() -> bool) -> Result<Va
     let mut finish = Value::Null;
     let mut usage = Value::Null;
     let mut timings = Value::Null;
+    let mut content_guard = super::local_repeat::LoopGuard::default();
+    let mut reason_guard = super::local_repeat::LoopGuard::default();
     for line in reader.lines() {
         if cancelled() {
             return Err("cancelled".into());
@@ -589,10 +604,10 @@ fn assemble_sse(reader: impl BufRead, cancelled: &dyn Fn() -> bool) -> Result<Va
         }
         let delta = &choice["delta"];
         if let Some(t) = delta["content"].as_str() {
-            content.push_str(t);
+            content.push_str(super::local_repeat::keep_prefix(&mut content_guard, t));
         }
         if let Some(t) = delta["reasoning_content"].as_str() {
-            reasoning.push_str(t);
+            reasoning.push_str(super::local_repeat::keep_prefix(&mut reason_guard, t));
         }
         for c in delta["tool_calls"].as_array().into_iter().flatten() {
             let at = c["index"]
@@ -613,9 +628,17 @@ fn assemble_sse(reader: impl BufRead, cancelled: &dyn Fn() -> bool) -> Result<Va
                 part.arguments.push_str(a);
             }
         }
+        if content_guard.stopped() || reason_guard.stopped() {
+            break;
+        }
     }
     if cancelled() {
         return Err("cancelled".into());
+    }
+    let cut = content_guard.stopped() || reason_guard.stopped();
+    super::local_repeat::with_note(&mut content, cut);
+    if cut && finish.is_null() {
+        finish = json!("stop");
     }
     let calls: Vec<Value> = calls
         .into_iter()
@@ -709,6 +732,7 @@ fn read_sse(
 ) -> Result<String, String> {
     let reader = BufReader::new(resp.into_reader());
     let mut full = String::new();
+    let mut guard = super::local_repeat::LoopGuard::default();
     // llama-server puts the reply's timings on its last chunk.
     let mut timings = None;
     for line in reader.lines() {
@@ -733,11 +757,19 @@ fn read_sse(
             .and_then(|d| d.get("content"))
             .and_then(Value::as_str)
         {
-            if !piece.is_empty() {
-                on_delta(piece);
-                full.push_str(piece);
+            let kept = super::local_repeat::keep_prefix(&mut guard, piece);
+            if !kept.is_empty() {
+                on_delta(kept);
+                full.push_str(kept);
+            }
+            if guard.stopped() {
+                break;
             }
         }
+    }
+    if guard.stopped() {
+        on_delta(super::local_repeat::REPEAT_NOTE);
+        full.push_str(super::local_repeat::REPEAT_NOTE);
     }
     if let Some(v) = timings {
         note_chat_timings(&v);
@@ -847,6 +879,32 @@ mod tests {
         let reply = assemble_sse(text, &|| false).unwrap();
         assert_eq!(reply["choices"][0]["message"]["content"], "hello");
         assert!(reply["choices"][0]["message"].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn a_repeated_emoji_stream_is_cut_at_32_and_a_normal_one_is_not() {
+        let mut lines = Vec::new();
+        for _ in 0..80 {
+            lines.push(r#"{"choices":[{"delta":{"content":"😀"}}]}"#.to_string());
+        }
+        lines.push(r#"{"choices":[{"delta":{"content":"TAIL"}}]}"#.to_string());
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let reply = assemble_sse(sse(&refs), &|| false).unwrap();
+        let content = reply["choices"][0]["message"]["content"].as_str().unwrap();
+        assert_eq!(content.chars().filter(|ch| *ch == '😀').count(), 32);
+        assert!(!content.contains("TAIL"));
+        assert!(content.ends_with("(Stopped. This reply was repeating.)"));
+        assert_eq!(reply["choices"][0]["finish_reason"], "stop");
+
+        let prose = sse(&[
+            r#"{"choices":[{"delta":{"content":"I went to the store "}}]}"#,
+            r#"{"choices":[{"delta":{"content":"and then I went home."}}]}"#,
+        ]);
+        let reply = assemble_sse(prose, &|| false).unwrap();
+        assert_eq!(
+            reply["choices"][0]["message"]["content"],
+            "I went to the store and then I went home."
+        );
     }
 
     /// Stop while the local server still reads a long prompt (no token
@@ -1141,6 +1199,78 @@ mod tests {
             ),
             super::super::local_effort::Thinking::default()
         );
+    }
+
+    /// The hangout request carries a penalty and a cap taken from the model name.
+    #[test]
+    fn a_local_chat_sends_repetition_penalty_and_max_tokens_for_that_model() {
+        fn sent(model: &str) -> Value {
+            use std::io::{Read, Write};
+            use std::time::Duration;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut sock, _) = listener.accept().unwrap();
+                sock.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match sock.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            raw.extend_from_slice(&buf[..n]);
+                            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                                let header = String::from_utf8_lossy(&raw[..pos]);
+                                let len = header.lines().find_map(|line| {
+                                    line.split_once(':')
+                                        .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                                        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                                });
+                                let body_at = pos + 4;
+                                if len.is_some_and(|len| raw.len() >= body_at + len) {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let answer = r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}"#;
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+                let _ = sock.write_all(http.as_bytes());
+                String::from_utf8(raw).unwrap_or_default()
+            });
+            let rt = HttpLocalRuntime::new(format!("http://{addr}"), "t").with_model(model);
+            let req = ResponsesRequest {
+                model: "local".into(),
+                effort: None,
+                input: Vec::new(),
+                conversation_id: "c".into(),
+                tools: Vec::new(),
+                hosted_search: false,
+                call_timeout: None,
+                text_format: None,
+            };
+            let out = rt.chat_tools(&req, &CancelToken::new()).unwrap();
+            assert_eq!(out.text, "ok");
+            let raw = server.join().unwrap();
+            let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+            serde_json::from_str(body).unwrap()
+        }
+
+        let hermes = sent("Hermes-4-14B-Q4_K_M.gguf");
+        assert_eq!(hermes["model"], "Hermes-4-14B-Q4_K_M.gguf");
+        assert_eq!(hermes["repetition_penalty"].as_f64(), Some(1.15));
+        assert_eq!(hermes["repeat_penalty"].as_f64(), Some(1.15));
+        assert_eq!(hermes["max_tokens"], json!(1024));
+
+        let plain = sent("local");
+        assert_eq!(plain["repetition_penalty"].as_f64(), Some(1.1));
+        assert_eq!(plain["repeat_penalty"].as_f64(), Some(1.1));
+        assert_eq!(plain["max_tokens"], json!(2048));
     }
 
     #[test]
