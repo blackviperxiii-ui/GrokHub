@@ -429,9 +429,21 @@ impl AmrStore {
         }
         let marker = self.node_path(&id)?.with_extension(PAUSED_EXT);
         if paused {
+            // A dream that read this line first writes its report first.
+            let _held = self.hold_reports()?;
             if !marker.is_file() {
                 fs::write(&marker, "paused: you asked\n").map_err(io_err)?;
             }
+            // No copy of a paused line stays in a dream report: each Merged
+            // or Retired line naming it, and its USER.md proposal, go.
+            let quoted = fs::read_to_string(self.node_path(&id)?)
+                .ok()
+                .and_then(|text| Node::from_markdown(&text).ok())
+                .filter(|node| !node.sensitivity.sealed())
+                .map(|node| super::dream::report_quote(&node));
+            self.drop_dream_lines(&|named| named == id.as_str(), &|line| {
+                quoted.as_deref() == Some(line)
+            })?;
             return self.unindex(id.as_str());
         }
         match fs::remove_file(&marker) {
@@ -963,6 +975,15 @@ impl AmrStore {
             return Ok(false);
         }
         self.link(from, to, rel).map(|()| true)
+    }
+
+    /// True while `id` has a node file (`.md` or `.sealed`), tombstoned or
+    /// not: Wipe's purge is what deletes one. An id that won't parse counts
+    /// as there.
+    pub(super) fn has_node_file(&self, id: &str) -> bool {
+        NodeId::parse(id)
+            .and_then(|id| self.node_exists(&id))
+            .unwrap_or(true)
     }
 
     fn node_exists(&self, id: &NodeId) -> Result<bool, AmrError> {

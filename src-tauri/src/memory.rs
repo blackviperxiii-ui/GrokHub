@@ -240,6 +240,9 @@ pub struct Wiped {
     pub notes: Notes,
 }
 
+const WIPE_WHILE_DREAMING: &str =
+    "A memory dream is running. Nothing was wiped; try Wipe again when it's done.";
+
 /// The notes files about the user that Wipe empties, beside the learned lines.
 /// SOUL.md is how the app talks, not about the user, so it stays.
 const WIPED_NOTES: [&str; 2] = ["USER.md", "MEMORY.md"];
@@ -248,8 +251,16 @@ const WIPED_NOTES: [&str; 2] = ["USER.md", "MEMORY.md"];
 /// USER.md and MEMORY.md, leaving no copy of them: not the `.prev` copy a
 /// save keeps, dream's backup or the recall index. Project notes in the work
 /// folder are the project's, so they stay, and so does session memory, the
-/// chats' own words; `/forget <topic>` takes lines out of both.
+/// chats' own words; `/forget <topic>` takes lines out of both. A running
+/// dream holds lines it read before the Wipe and would write them back after
+/// it (its report, its proposals), so Wipe doesn't run beside one: while a
+/// dream runs it says so and changes nothing.
 pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
+    let _one = match DREAM.try_lock() {
+        Ok(one) => one,
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Err(WIPE_WHILE_DREAMING.into()),
+    };
     let store = open_store()?;
     let report =
         grokhub_core::amr::wipe_user_model(&store, grokhub_core::amr::UserForget::from_click())
@@ -545,6 +556,17 @@ fn without_topic(text: &str, topic: &str) -> (String, Vec<String>) {
     (kept, gone)
 }
 
+/// The non-blank lines of `before` that `after` no longer holds, whole.
+fn dropped_lines(before: &str, after: &str) -> Vec<String> {
+    let kept: std::collections::BTreeSet<&str> = after.lines().map(str::trim).collect();
+    before
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !kept.contains(l))
+        .map(str::to_string)
+        .collect()
+}
+
 /// What a forget on a topic would remove.
 struct ForgetHits {
     /// Learned lines it would tombstone.
@@ -657,7 +679,8 @@ pub fn forget_plan(workspace: &Path, topic: Option<&str>) -> Result<Plan, String
 pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     let path = grokhub_agent::global_memory_path();
     let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
-        read(&path)?;
+        let before = read(&path)?;
+        grokhub_agent::note_forgotten_lines(&dropped_lines(&before, ""))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -668,7 +691,8 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     // link, not text) stops the command with nothing half done.
     let before = read(&path)?;
     let local = grokhub_agent::workspace_memory_path(workspace);
-    let (local_after, local_gone) = without_topic(&read(&local)?, topic);
+    let local_before = read(&local)?;
+    let (local_after, local_gone) = without_topic(&local_before, topic);
     // Session memory reads all its files before it writes any, so one it
     // can't read also stops the command here with nothing changed.
     let session_gone = grokhub_agent::forget_session_topic(topic)?;
@@ -686,6 +710,11 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
         }
     }
     let after = grokhub_core::forget_topic(&before, topic);
+    // Kept in the same record session memory keeps, before the lines leave:
+    // a Restore of an older copy (`MEMORY.md.prev`) then leaves them out.
+    let mut gone = dropped_lines(&before, &after);
+    gone.extend(dropped_lines(&local_before, &local_after));
+    grokhub_agent::note_forgotten_lines(&gone)?;
     if after != before {
         std::fs::write(&path, after).map_err(|e| e.to_string())?;
     }
@@ -957,7 +986,8 @@ pub fn save_file(name: &str, text: &str, base: &str) -> Result<(MemoryFiles, boo
     Ok((load_files()?, redacted))
 }
 
-/// Restore `{name}.prev` over the current tab file.
+/// Restore `{name}.prev` over the current tab file. The copy can be older
+/// than a `/forget`: a line that forget took out stays out.
 pub fn restore_file(name: &str) -> Result<MemoryFiles, String> {
     let path = tab_path(name)?;
     let prev_path = memory_dir().join(format!("{name}.prev"));
@@ -965,6 +995,7 @@ pub fn restore_file(name: &str) -> Result<MemoryFiles, String> {
     if prev.is_empty() {
         return Err(format!("no {name}.prev"));
     }
+    let prev = grokhub_agent::without_forgotten_lines(&prev, &read(&path)?)?;
     // Restore replaces the current body; keep a .prev of what was open first.
     write_notes_file(&path, &prev)?;
     load_files()
@@ -1776,6 +1807,152 @@ mod tests {
         );
         // The learned notes' index is still there, rebuilt from what is left.
         assert!(store.index_path().is_file());
+    }
+
+    /// Every file under `root` holding `needle` (any case), as `/` paths
+    /// relative to `root`, with a dream report's date spelled `<day>`.
+    fn files_holding(root: &Path, needle: &str) -> Vec<String> {
+        let needle = needle.to_ascii_lowercase().into_bytes();
+        let mut found = Vec::new();
+        let mut todo = vec![root.to_path_buf()];
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    todo.push(path);
+                    continue;
+                }
+                let bytes = std::fs::read(&path).unwrap().to_ascii_lowercase();
+                if bytes.windows(needle.len()).any(|w| w == needle.as_slice()) {
+                    let parts: Vec<String> = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect();
+                    let mut rel = parts.join("/");
+                    if let Some(name) = rel.strip_prefix("amr/dreams/") {
+                        if name.len() == "2026-10-07.md".len() && name.ends_with(".md") {
+                            rel = "amr/dreams/<day>.md".into();
+                        }
+                    }
+                    found.push(rel);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// The real `/dream` merges two copies of a learned line and quotes both
+    /// in `amr/dreams/<day>.md`; Wipe then leaves no byte of it there either.
+    #[test]
+    fn wipe_after_a_dream_leaves_no_byte_of_a_merged_line() {
+        let d = dirs("wipe-dreamed");
+        let config = grokhub_agent::perm::config_dir();
+        let store = open_store().unwrap();
+        let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(grokhub_core::now_ms());
+        for (id, body, confidence) in [
+            (
+                "fact-tortoise-a",
+                "I keep a pet tortoise named Quillfeather",
+                0.8,
+            ),
+            (
+                "fact-tortoise-b",
+                "i keep a pet tortoise named Quillfeather.",
+                0.6,
+            ),
+        ] {
+            store
+                .remember(&grokhub_core::amr::NodeDraft {
+                    id: id.into(),
+                    node_type: grokhub_core::amr::NodeType::Fact,
+                    created: stamp.clone(),
+                    updated: stamp.clone(),
+                    source: "user".into(),
+                    confidence,
+                    tags: Vec::new(),
+                    body: format!("{body}\n"),
+                    sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                    consent_ref: String::new(),
+                })
+                .unwrap();
+        }
+        let said = dream_now(&config).unwrap();
+        assert!(said.starts_with("Memory dream "), "{said}");
+        assert!(said.contains(": merged 1, retired 0,"), "{said}");
+        assert_eq!(
+            files_holding(&config, "quillfeather"),
+            [
+                "amr/dreams/<day>.md",
+                "amr/nodes/fact-tortoise-a.md",
+                "amr/nodes/fact-tortoise-b.md"
+            ]
+        );
+        assert_eq!(wipe(&d.workspace).unwrap().removed, 2);
+        assert_eq!(files_holding(&config, "quillfeather"), Vec::<String>::new());
+        // The report itself stays, with its counts.
+        let (_, report) = grokhub_core::amr::latest_dream(&config.join("amr")).unwrap();
+        assert!(report.contains("- Merged: 1\n"), "{report}");
+    }
+
+    /// A dream holds lines it read before a Wipe and writes after it, so
+    /// Wipe does nothing while one runs and says so.
+    #[test]
+    fn wipe_while_a_dream_runs_changes_nothing() {
+        let d = dirs("wipe-mid-dream");
+        add_fact(
+            &d.workspace,
+            "My sister lives on Quillfeather Lane",
+            "about",
+        )
+        .unwrap();
+        let running = DREAM.lock().unwrap();
+        assert_eq!(
+            wipe(&d.workspace).unwrap_err(),
+            "A memory dream is running. Nothing was wiped; try Wipe again when it's done."
+        );
+        assert_eq!(load(&d.workspace).unwrap().rows.len(), 1);
+        drop(running);
+        assert_eq!(wipe(&d.workspace).unwrap().removed, 1);
+        assert_eq!(load(&d.workspace).unwrap().rows.len(), 0);
+    }
+
+    /// `/forget <topic>` takes a line out of MEMORY.md, but an older copy
+    /// (`MEMORY.md.prev`, kept by an earlier save) still holds it. Restore
+    /// brings that copy back without the forgotten line.
+    #[test]
+    fn restore_after_forget_leaves_the_forgotten_line_out() {
+        let d = dirs("forget-restore");
+        let first = "I like short answers\nI am quietly leaving Contoso for Fabrikam in March\n";
+        save_file("MEMORY.md", first, "").unwrap();
+        let second = format!("{first}The harbor build needs node 22\n");
+        save_file("MEMORY.md", &second, first).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(memory_dir().join("MEMORY.md.prev")).unwrap(),
+            first
+        );
+        assert_eq!(
+            forget(&d.workspace, Some("Fabrikam")).unwrap(),
+            "Forgot Fabrikam: 0 notes in the memory repo"
+        );
+        assert_eq!(
+            load_files().unwrap().memory,
+            "I like short answers\nThe harbor build needs node 22\n"
+        );
+        let restored = restore_file("MEMORY.md").unwrap();
+        assert_eq!(restored.memory, "I like short answers\n");
+        assert_eq!(
+            grokhub_agent::search_memory(&d.workspace, "Fabrikam").unwrap(),
+            Vec::new()
+        );
+        // A plain edit, then Restore: the line the edit took out comes back.
+        save_file("MEMORY.md", "", "I like short answers\n").unwrap();
+        assert_eq!(
+            restore_file("MEMORY.md").unwrap().memory,
+            "I like short answers\n"
+        );
     }
 
     #[cfg(unix)]

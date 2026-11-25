@@ -233,17 +233,22 @@ pub fn flush_pending(workspace: &Path, history: &[InputItem]) -> Result<bool, St
     // The marker names the chat text as it stands, so the same text is still
     // a no-op once a forgotten line is left out of what is saved.
     let marker = format!("<!-- flush:{:016x} -->", fnv(body.as_bytes()));
-    let forgotten = forgotten_session_keys()?;
+    let path = flush_memory_path(workspace);
+    ensure_allowed(&path, workspace)?;
+    // Held from the read of the forgotten lines through the write: a
+    // `/forget` waits, then finds and takes out what this flush saved.
+    let _one = lock_forgotten()?;
+    let forgotten = forgotten_keys()?;
+    #[cfg(test)]
+    tests::session_step(tests::SessionStep::FlushReadForgotten);
     let kept: String = body
         .split_inclusive('\n')
-        .filter(|line| !forgotten.contains(&session_line_key(line)))
+        .filter(|line| !forgotten.contains(&line_key(line)))
         .collect();
     let kept = kept.trim_end_matches(['\n', '\r']);
     if kept.trim().is_empty() {
         return Ok(false);
     }
-    let path = flush_memory_path(workspace);
-    ensure_allowed(&path, workspace)?;
     let existing = read_capped(&path);
     if existing.contains(&marker) {
         return Ok(false);
@@ -313,12 +318,17 @@ pub fn dream(
         .ok_or_else(|| "Dream reply was not usable. MEMORY.md was left unchanged.".to_string())?;
     let ws = judge_rewrite(&workspace_body, &reply.workspace, &reply.dropped);
     let global = judge_rewrite(&global_body, &reply.global, &reply.dropped);
+    // The reply was written from the files as they were before the call: a
+    // line a `/forget` took out meanwhile stays out of what is written back.
+    let _one = lock_forgotten()?;
     if let DreamVerdict::Accept { .. } = ws {
-        replace_with_backup(&workspace_path, workspace, &reply.workspace)?;
+        let kept = without_forgotten_lines(&reply.workspace, &read_capped(&workspace_path))?;
+        replace_with_backup(&workspace_path, workspace, &kept)?;
         reindex_file(&workspace_path, "workspace")?;
     }
     if let DreamVerdict::Accept { .. } = global {
-        replace_with_backup(&global_path, workspace, &reply.global)?;
+        let kept = without_forgotten_lines(&reply.global, &read_capped(&global_path))?;
+        replace_with_backup(&global_path, workspace, &kept)?;
         reindex_file(&global_path, "global")?;
     }
     let report = [("Project memory", &ws), ("Global memory", &global)]
@@ -1198,14 +1208,14 @@ pub fn recall_hybrid(
     model: Option<&grokhub_core::static_embed::StaticModel>,
 ) -> Result<Vec<Hit>, String> {
     let lexical = recall(query, now, paths)?;
-    let Some(model) = model else {
-        return Ok(lexical);
+    let hits = match model.and_then(|model| model.encode(query).map(|v| (model, v))) {
+        Some((model, query_vec)) => {
+            let near = nearest_entries(model, &query_vec, paths)?;
+            fuse(lexical, near, now)
+        }
+        None => lexical,
     };
-    let Some(query_vec) = model.encode(query) else {
-        return Ok(lexical);
-    };
-    let near = nearest_entries(model, &query_vec, paths)?;
-    Ok(fuse(lexical, near, now))
+    Ok(leave_out_forgotten(hits))
 }
 
 /// A note and its cosine to the ask.
@@ -1422,6 +1432,20 @@ fn flush_files() -> Vec<PathBuf> {
     files
 }
 
+/// A line [`flush_pending`] writes around chat text: the `## Session`
+/// heading, or a marker (`<!-- flush:`, 16 hex digits, ` -->`), exactly.
+/// Nothing else is one, so a chat line that only starts the same way is
+/// chat text and a forget can take it.
+fn is_session_frame(line: &str) -> bool {
+    line == "## Session"
+        || line
+            .strip_prefix("<!-- flush:")
+            .and_then(|rest| rest.strip_suffix(" -->"))
+            .is_some_and(|hex| {
+                hex.len() == 16 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+}
+
 /// `body` without the chat lines a forget on `topic` drops, and those lines.
 /// The `## Session` heading and the flush marker stay, so the same chat text
 /// is not flushed again. Every other byte stays as it was.
@@ -1430,8 +1454,10 @@ fn without_session_topic(body: &str, topic: &str) -> (String, Vec<String>) {
     let mut gone = Vec::new();
     for line in body.split_inclusive('\n') {
         let bare = line.trim_end_matches(['\n', '\r']);
-        let frame = bare == "## Session" || bare.starts_with("<!-- flush:");
-        if !frame && !bare.trim().is_empty() && grokhub_core::forget_topic(bare, topic).is_empty() {
+        if !is_session_frame(bare)
+            && !bare.trim().is_empty()
+            && grokhub_core::forget_topic(bare, topic).is_empty()
+        {
             gone.push(bare.to_string());
         } else {
             kept.push_str(line);
@@ -1449,20 +1475,48 @@ pub fn session_lines_about(topic: &str) -> Vec<String> {
         .collect()
 }
 
-/// Session memory's tombstones: one hash per chat line `/forget <topic>`
-/// took out of a flush file. [`flush_pending`] leaves those lines out, so the
-/// same chat's next `/flush` or compaction, which still holds the line, does
-/// not save it again. Only the hash is kept, never the words. It is not a
-/// `.md` file, so it is not session memory itself.
-fn forgotten_session_path() -> PathBuf {
+/// The one record of what `/forget` took out of the notes: one hash per
+/// line it dropped from session memory, the global `MEMORY.md` or a
+/// project's `MEMORY.md`. Only the hash is kept, never the words. A line in
+/// it is checked where one could come back: [`flush_pending`] leaves it out
+/// of what a chat saves, recall leaves it out of a session hit, and a
+/// restore of an older copy of the notes leaves it out
+/// ([`without_forgotten_lines`]).
+fn forgotten_path() -> PathBuf {
     crate::perm::config_dir()
         .join("memory")
-        .join("flush")
         .join("forgotten.txt")
 }
 
-/// The key a forgotten session line is kept under: its SHA-256, trimmed.
-fn session_line_key(line: &str) -> String {
+/// Held while the record is read for a flush or changed, and through that
+/// flush's or forget's write, so the two never interleave. A lock file
+/// beside the record covers other processes too.
+fn lock_forgotten() -> Result<fs::File, String> {
+    let path = forgotten_path().with_extension("lock");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            #[cfg(test)]
+            tests::session_step(tests::SessionStep::Waiting);
+            file.lock()
+                .map_err(|err| format!("{}: {err}", path.display()))?;
+        }
+        Err(fs::TryLockError::Error(err)) => return Err(format!("{}: {err}", path.display())),
+    }
+    Ok(file)
+}
+
+/// The key a forgotten line is kept under: its SHA-256, trimmed.
+fn line_key(line: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(line.trim().as_bytes())
         .iter()
@@ -1470,10 +1524,10 @@ fn session_line_key(line: &str) -> String {
         .collect()
 }
 
-/// The keys in [`forgotten_session_path`]. No file is none. One that can't
-/// be read is an error, so a flush can't save a line it should leave out.
-fn forgotten_session_keys() -> Result<std::collections::BTreeSet<String>, String> {
-    let path = forgotten_session_path();
+/// The keys in [`forgotten_path`]. No file is none. One that can't be read
+/// is an error, so nothing can hand out or save a line it should leave out.
+fn forgotten_keys() -> Result<std::collections::BTreeSet<String>, String> {
+    let path = forgotten_path();
     match fs::read_to_string(&path) {
         Ok(text) => Ok(text
             .lines()
@@ -1486,14 +1540,95 @@ fn forgotten_session_keys() -> Result<std::collections::BTreeSet<String>, String
     }
 }
 
+/// Add `lines`' keys to the record. The caller holds [`lock_forgotten`].
+/// The file is replaced whole (a temp file renamed over it), so a reader
+/// that takes no lock never sees half of it.
+fn add_forgotten(lines: &[String]) -> Result<(), String> {
+    let mut keys = forgotten_keys()?;
+    let before = keys.len();
+    keys.extend(lines.iter().map(|line| line_key(line)));
+    if keys.len() == before {
+        return Ok(());
+    }
+    let path = forgotten_path();
+    let body: String = keys.iter().map(|key| format!("{key}\n")).collect();
+    let tmp = path.with_extension("txt.tmp");
+    write_capped(&tmp, &body)?;
+    fs::rename(&tmp, &path).map_err(|err| format!("{}: {err}", path.display()))
+}
+
+/// Keep `lines` (what `/forget` took out of the global or a project
+/// `MEMORY.md`) in the record of forgotten lines.
+pub fn note_forgotten_lines(lines: &[String]) -> Result<(), String> {
+    if lines.iter().all(|line| line.trim().is_empty()) {
+        return Ok(());
+    }
+    let _one = lock_forgotten()?;
+    add_forgotten(lines)
+}
+
+/// `text` without the lines the record of forgotten lines holds, every
+/// other byte as it was: what a restore of an older copy of the notes, or a
+/// dream's rewrite of them, may write back over the file as it is now
+/// (`now`). A line `now` holds stays: someone put it back on purpose.
+pub fn without_forgotten_lines(text: &str, now: &str) -> Result<String, String> {
+    let keys = forgotten_keys()?;
+    if keys.is_empty() {
+        return Ok(text.to_string());
+    }
+    let here: std::collections::BTreeSet<String> = now.lines().map(line_key).collect();
+    Ok(text
+        .split_inclusive('\n')
+        .filter(|line| {
+            let key = line_key(line);
+            line.trim().is_empty() || !keys.contains(&key) || here.contains(&key)
+        })
+        .collect())
+}
+
+/// `hits` with the forgotten lines taken out of session-memory hits, and a
+/// session hit with no chat line left dropped. A copy a forget missed (an
+/// older build's flush, a file put back by hand) still never reaches the
+/// model. With no readable record, no session hit is shown.
+fn leave_out_forgotten(hits: Vec<Hit>) -> Vec<Hit> {
+    if !hits.iter().any(|hit| hit.scope == "session") {
+        return hits;
+    }
+    let keys = forgotten_keys().ok();
+    hits.into_iter()
+        .filter_map(|mut hit| {
+            if hit.scope != "session" {
+                return Some(hit);
+            }
+            let keys = keys.as_ref()?;
+            let kept: Vec<&str> = hit
+                .body
+                .lines()
+                .filter(|line| !keys.contains(&line_key(line)))
+                .collect();
+            if kept
+                .iter()
+                .all(|line| line.trim().is_empty() || is_session_frame(line.trim_end()))
+            {
+                return None;
+            }
+            hit.body = kept.join("\n");
+            Some(hit)
+        })
+        .collect()
+}
+
 /// `/forget <topic>` over session memory: drop every line that mentions
 /// `topic` from every workspace's flush file and reindex each file it
-/// changed, so recall stops finding them, and keep each line's key in
-/// [`forgotten_session_path`] so no later flush saves it again. Every file is
-/// read before any is written: one that can't be read stops it with nothing
+/// changed, so recall stops finding them, and keep each line's key in the
+/// record of forgotten lines ([`forgotten_path`]) so no later flush saves it
+/// again. It holds [`lock_forgotten`] throughout, so a flush that started
+/// first finishes first and its lines are taken out too. Every file is read
+/// before any is written: one that can't be read stops it with nothing
 /// changed. The keys are written before the lines leave. Returns the lines
 /// it dropped.
 pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
+    let _one = lock_forgotten()?;
     let mut rewrites = Vec::new();
     for path in flush_files() {
         let (kept, gone) = without_session_topic(&read_for_rewrite(&path)?, topic);
@@ -1501,14 +1636,11 @@ pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
             rewrites.push((path, kept, gone));
         }
     }
-    if !rewrites.is_empty() {
-        let mut keys = forgotten_session_keys()?;
-        for (_, _, gone) in &rewrites {
-            keys.extend(gone.iter().map(|line| session_line_key(line)));
-        }
-        let body: String = keys.iter().map(|key| format!("{key}\n")).collect();
-        write_capped(&forgotten_session_path(), &body)?;
-    }
+    let gone: Vec<String> = rewrites
+        .iter()
+        .flat_map(|(_, _, gone)| gone.iter().cloned())
+        .collect();
+    add_forgotten(&gone)?;
     let mut dropped = Vec::new();
     for (path, kept, gone) in rewrites {
         write_capped(&path, &kept)?;
@@ -2597,6 +2729,204 @@ mod tests {
         );
     }
 
+    /// Where a session-memory writer is, for a test that lines two up.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum SessionStep {
+        /// A flush read the forgotten lines and holds the lock.
+        FlushReadForgotten,
+        /// A writer found the lock held and waits for it.
+        Waiting,
+    }
+
+    type StepHook = std::sync::Arc<dyn Fn(SessionStep) + Send + Sync>;
+
+    /// One hook per config folder, so tests side by side never see each
+    /// other's: a step is reported under the folder its thread pinned.
+    static SESSION_HOOKS: Mutex<Vec<(PathBuf, StepHook)>> = Mutex::new(Vec::new());
+
+    pub(super) fn session_step(step: SessionStep) {
+        let here = crate::perm::config_dir();
+        let hook = SESSION_HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(at, _)| *at == here)
+            .map(|(_, hook)| hook.clone());
+        if let Some(hook) = hook {
+            hook(step);
+        }
+    }
+
+    struct HookGuard(PathBuf);
+
+    impl Drop for HookGuard {
+        fn drop(&mut self) {
+            SESSION_HOOKS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|(at, _)| *at != self.0);
+        }
+    }
+
+    fn on_session_step(
+        config: &Path,
+        hook: impl Fn(SessionStep) + Send + Sync + 'static,
+    ) -> HookGuard {
+        SESSION_HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((config.to_path_buf(), std::sync::Arc::new(hook)));
+        HookGuard(config.to_path_buf())
+    }
+
+    fn say(role: &str, text: &str) -> InputItem {
+        InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        }
+    }
+
+    fn bodies_for(ws: &Path, q: &str) -> Vec<String> {
+        search(ws, q).unwrap().into_iter().map(|h| h.body).collect()
+    }
+
+    /// `/forget <topic>` at the moment a flush of a chat that still holds
+    /// the line runs: the flush has read the forgotten lines (none yet) and
+    /// is about to save. The forget waits for it, then takes out both
+    /// copies, so the line is not left in session memory.
+    #[test]
+    fn a_flush_running_while_forget_runs_does_not_put_the_line_back() {
+        use std::sync::mpsc;
+        let (cfg, ws, _guard) = temp_pair("forget-race");
+        let line = "User: I am quietly leaving Contoso for Fabrikam in March";
+        let mut history = vec![say(
+            "user",
+            "I am quietly leaving Contoso for Fabrikam in March",
+        )];
+        assert!(flush_pending(&ws, &history).unwrap());
+        history.push(say("assistant", "Noted."));
+        let (event_tx, events) = mpsc::channel::<&'static str>();
+        let (go_tx, go) = mpsc::channel::<()>();
+        let hook_tx = Mutex::new(event_tx.clone());
+        let go = Mutex::new(go);
+        let _hook = on_session_step(&cfg, move |step| {
+            let tx = hook_tx.lock().unwrap().clone();
+            match step {
+                SessionStep::FlushReadForgotten => {
+                    tx.send("flush read").unwrap();
+                    go.lock().unwrap().recv().unwrap();
+                }
+                SessionStep::Waiting => tx.send("forget waits").unwrap(),
+            }
+        });
+        let flush = {
+            let (cfg, ws, history) = (cfg.clone(), ws.clone(), history.clone());
+            std::thread::spawn(move || {
+                let _config = ConfigGuard::set(&cfg);
+                flush_pending(&ws, &history)
+            })
+        };
+        assert_eq!(events.recv().unwrap(), "flush read");
+        let forget = {
+            let (cfg, done) = (cfg.clone(), event_tx.clone());
+            std::thread::spawn(move || {
+                let _config = ConfigGuard::set(&cfg);
+                let out = forget_session_topic("Fabrikam");
+                done.send("forget done").unwrap();
+                out
+            })
+        };
+        // With no lock across both, the forget runs to its end right here,
+        // before the flush has saved.
+        let next = events.recv().unwrap();
+        go_tx.send(()).unwrap();
+        let flushed = flush.join().unwrap();
+        let forgot = forget.join().unwrap();
+        assert_eq!(
+            (next, flushed, forgot),
+            (
+                "forget waits",
+                Ok(true),
+                Ok(vec![line.to_string(), line.to_string()])
+            )
+        );
+        assert_eq!(bodies_for(&ws, "Fabrikam"), Vec::<String>::new());
+        let text = fs::read_to_string(flush_memory_path(&ws)).unwrap();
+        assert!(!text.contains("Fabrikam"), "{text}");
+        assert_eq!(
+            bodies_for(&ws, "Noted"),
+            ["<!-- flush:a9c38206a9a78e23 -->\nAssistant: Noted."]
+        );
+    }
+
+    /// A chat line that only starts like a flush marker is chat text: the
+    /// `/forget` preview lists it and the forget takes it out. The frames are
+    /// the exact heading and the exact marker shape.
+    #[test]
+    fn a_chat_line_shaped_like_a_flush_marker_is_chat_text_forget_takes() {
+        let (_cfg, ws, _guard) = temp_pair("forget-spoof");
+        let pasted = "<!-- flush: I am quietly leaving Contoso for Fabrikam in March -->";
+        let history = vec![say(
+            "user",
+            &format!("Here is the note I pasted:\n{pasted}"),
+        )];
+        assert!(flush_pending(&ws, &history).unwrap());
+        assert_eq!(session_lines_about("Fabrikam"), [pasted]);
+        assert_eq!(forget_session_topic("Fabrikam").unwrap(), [pasted]);
+        assert_eq!(bodies_for(&ws, "Fabrikam"), Vec::<String>::new());
+        assert_eq!(
+            fs::read_to_string(flush_memory_path(&ws)).unwrap(),
+            "## Session\n\n<!-- flush:27efd86396f93809 -->\nUser: Here is the note I pasted:\n"
+        );
+        assert_eq!(
+            [
+                "## Session",
+                "<!-- flush:0123456789abcdef -->",
+                "## Session notes",
+                "<!-- flush:0123456789ABCDEF -->",
+                "<!-- flush: 0123456789abcdef -->",
+                "<!-- flush:0123456789abcdef --> and more",
+            ]
+            .map(is_session_frame),
+            [true, true, false, false, false, false]
+        );
+    }
+
+    /// The record of forgotten lines is checked when session memory is read
+    /// too: a copy no forget saw (the flush file put back from a backup) is
+    /// not handed out, and the rest of that chat still is.
+    #[test]
+    fn recall_leaves_out_a_forgotten_line_put_back_in_session_memory() {
+        let (_cfg, ws, _guard) = temp_pair("forget-read");
+        let history = vec![
+            say("user", "I am quietly leaving Contoso for Fabrikam in March"),
+            say("assistant", "Noted. The harbor build still needs node 22"),
+        ];
+        assert!(flush_pending(&ws, &history).unwrap());
+        let path = flush_memory_path(&ws);
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            forget_session_topic("Fabrikam").unwrap(),
+            ["User: I am quietly leaving Contoso for Fabrikam in March"]
+        );
+        fs::write(&path, &saved).unwrap();
+        let fabrikam_lines = |q: &str| -> Vec<String> {
+            bodies_for(&ws, q)
+                .iter()
+                .flat_map(|b| b.lines().filter(|l| l.contains("Fabrikam")))
+                .map(str::to_string)
+                .collect()
+        };
+        assert_eq!(fabrikam_lines("Fabrikam"), Vec::<String>::new());
+        assert_eq!(fabrikam_lines("Contoso harbor"), Vec::<String>::new());
+        assert_eq!(
+            bodies_for(&ws, "harbor"),
+            ["<!-- flush:dea68be8e6cdfbd1 -->\nAssistant: Noted. The harbor build still needs node 22"]
+        );
+        let pack = first_turn_injection(&ws, "when do I start at Fabrikam").unwrap_or_default();
+        assert!(!pack.contains("Fabrikam"), "{pack}");
+    }
+
     #[test]
     fn the_recall_pack_masks_pii_but_keeps_code() {
         let (_cfg, ws, _guard) = temp_pair("pii");
@@ -3000,6 +3330,82 @@ mod tests {
         assert!(backup.contains("prefer the harbor light"));
         let global = fs::read_to_string(global_memory_path()).unwrap();
         assert!(global.contains("quiet mornings"));
+    }
+
+    /// A model that answers with the notes as they were, after a `/forget`
+    /// took a line out while it was thinking (the same two steps the shell's
+    /// forget takes: record the line, then write the file without it).
+    /// With `forget` false it only answers.
+    struct ForgetMidCall {
+        forget: bool,
+    }
+
+    impl ModelClient for ForgetMidCall {
+        fn stream(
+            &self,
+            _req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(crate::client::StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            if self.forget {
+                note_forgotten_lines(&["user is leaving Contoso for Fabrikam".to_string()])
+                    .unwrap();
+                fs::write(global_memory_path(), "user likes quiet mornings\n").unwrap();
+            }
+            Ok(TurnOutput {
+                text: "<<<GH_WORKSPACE>>>\nprefer the harbor light\n<<<GH_GLOBAL>>>\nuser likes quiet mornings\nuser is leaving Contoso for Fabrikam\n<<<GH_END>>>\n".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// The dream writes its rewrite back and leaves out the line forgotten
+    /// during its call, and its backup is the file as forget left it. A line
+    /// the user puts back by hand afterwards is theirs: the next dream keeps
+    /// it.
+    #[test]
+    fn a_dream_does_not_write_back_a_line_forgotten_during_its_call() {
+        let (_cfg, ws, _guard) = temp_pair("dream-forget");
+        fs::write(workspace_memory_path(&ws), "prefer the harbor light\n").unwrap();
+        let global = global_memory_path();
+        fs::create_dir_all(global.parent().unwrap()).unwrap();
+        fs::write(
+            &global,
+            "user likes quiet mornings\nuser is leaving Contoso for Fabrikam\n",
+        )
+        .unwrap();
+        let run = |forget: bool| {
+            dream(
+                &ForgetMidCall { forget },
+                &CancelToken::new(),
+                "grok-4.7",
+                &ws,
+                "conv",
+                &mut crate::Usage::default(),
+            )
+            .unwrap()
+        };
+        let status = run(true);
+        assert!(status.starts_with("Consolidated MEMORY.md."), "{status}");
+        assert_eq!(
+            [
+                fs::read_to_string(&global).unwrap(),
+                fs::read_to_string(dream_backup_path(&global)).unwrap(),
+            ],
+            ["user likes quiet mornings\n", "user likes quiet mornings\n"]
+        );
+        assert_eq!(bodies_for(&ws, "Fabrikam"), Vec::<String>::new());
+        fs::write(
+            &global,
+            "user likes quiet mornings\nuser is leaving Contoso for Fabrikam\n",
+        )
+        .unwrap();
+        run(false);
+        // The reply as the model wrote it, its last line kept.
+        assert_eq!(
+            fs::read_to_string(&global).unwrap(),
+            "user likes quiet mornings\nuser is leaving Contoso for Fabrikam"
+        );
     }
 
     #[test]
