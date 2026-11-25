@@ -153,7 +153,10 @@ pub fn say(config_dir: &Path, id: &str, text: &str, new_chat: &str) -> Result<Sa
         return Err("That chat isn't one of this app's chats.".into());
     }
     let (said, page) = workboard::change(config_dir, |cards| {
-        wc::say_on_card(cards, id, text, new_chat, ours)
+        let said = wc::say_on_card(cards, id, text, new_chat, ours)?;
+        // The cards' words go with it: a browser's make it a browser's run.
+        workboard::start_card_run(config_dir, cards, id, &said.chat)?;
+        Ok(said)
     })?;
     note_card_chat(&said.chat);
     Ok(Say {
@@ -234,7 +237,13 @@ impl Queue {
         self.idle_at = None;
         let new_chat = (look.new_chat)();
         let started = workboard::change(config_dir, |cards| {
-            wc::start_queued_chat(cards, &id, &new_chat, ours, HOST_SHELL, look.mode, look.now)
+            let say = wc::start_queued_chat(
+                cards, &id, &new_chat, ours, HOST_SHELL, look.mode, look.now,
+            )?;
+            // A card whose words a paired browser wrote runs as a browser's
+            // run: no desktop, in that chat from now on.
+            workboard::start_card_run(config_dir, cards, &id, &say.chat)?;
+            Ok(say)
         });
         match started {
             Ok((say, _)) => {

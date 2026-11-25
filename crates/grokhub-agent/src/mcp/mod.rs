@@ -2,6 +2,7 @@
 //! One worker thread per stdio child or HTTP read. No tokio.
 
 mod apps;
+mod tasks;
 pub use apps::{McpAppView, UiMeta, MIME as MCP_APP_MIME};
 mod browser;
 pub use browser::{loopback_endpoint, origin_of, Attach as BrowserAttach};
@@ -41,6 +42,8 @@ use crate::tools::{fence, ToolOutput};
 use config::TransportDef;
 use rpc::RawTool;
 pub use rpc::{ToolHints, ToolIcon};
+pub(crate) use tasks::take_orphans;
+pub use tasks::{binding_refusal, cancel_task, seed_open_task};
 
 /// Individual tool schemas at this count. Above it, `search_tool` and
 /// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
@@ -296,8 +299,20 @@ impl Conn {
         retry_safe: bool,
     ) -> Result<(String, bool, Value), String> {
         match self {
-            Conn::Stdio(conn) => conn.call(name, args, key, timeout),
+            Conn::Stdio(conn) => conn.call(name, args, key, timeout, stop),
             Conn::Http(conn) => conn.call(name, args, key, timeout, stop, retry_safe),
+        }
+    }
+
+    fn raw_rpc(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value, String> {
+        match self {
+            Conn::Stdio(conn) => conn.raw_rpc(method, params, timeout),
+            Conn::Http(conn) => conn.raw_rpc(method, params, timeout),
         }
     }
 
@@ -409,6 +424,38 @@ pub fn connect_in_background(workspace: &Path) {
     });
 }
 
+pub(crate) fn cancel_open_tasks(session: &str) {
+    let plan = tasks::open_by_server(session);
+    if plan.is_empty() {
+        return;
+    }
+    let slots = {
+        let held = lock_state();
+        held.slots.clone()
+    };
+    for (server, ids) in plan {
+        let Some(slot) = slots.get(&server) else {
+            continue;
+        };
+        let Ok(mut inner) = slot.try_lock() else {
+            continue;
+        };
+        if let Some(conn) = inner.conn.as_mut() {
+            for id in &ids {
+                let _ = conn.raw_rpc(
+                    "tasks/cancel",
+                    json!({ "taskId": id }),
+                    std::time::Duration::from_secs(2),
+                );
+            }
+        }
+        drop(inner);
+        for id in ids {
+            tasks::finish_id(&id);
+        }
+    }
+}
+
 pub fn shutdown_all() {
     let mut held = lock_state();
     for slot in held.slots.values() {
@@ -416,6 +463,7 @@ pub fn shutdown_all() {
     }
     held.slots.clear();
     held.loaded = false;
+    tasks::clear_memory();
 }
 
 pub fn configured() -> Vec<DoctorRow> {

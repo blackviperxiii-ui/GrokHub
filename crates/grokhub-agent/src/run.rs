@@ -565,6 +565,15 @@ pub fn run_loop(
     // saved like that, and on the way out, so no provider ever sees a call
     // without its output.
     crate::client::pair_orphan_calls(history);
+    for line in crate::mcp::take_orphans(input.conversation_id) {
+        on_event(LoopEvent::Tool {
+            id: "mcp-task".into(),
+            name: "mcp".into(),
+            status: "failed".into(),
+            detail: line,
+            image: None,
+        });
+    }
     // Failover PR 7: a new run starts with a clean hand-off chain.
     crate::route::handoff::begin(input.conversation_id);
     let out = run_turn(input, history, user_text, image, on_event);
@@ -993,19 +1002,24 @@ fn run_turn(
         let mut held_text = String::new();
         let mut thoughts =
             casual.then(|| grokhub_core::conversation::CasualThoughts::new(user_text));
+        // Hermes 4 (and similar) put `<think>` in content; fold those into the
+        // Thought panel even when the tags split across chunks or never close.
+        let mut think_tags = grokhub_core::ThinkTagFold::new();
         let streamed = crate::route::live::stream_routed(
             input.client,
             &req,
             input.cancel,
             &mut |ev| match ev {
                 StreamEvent::TextDelta(text) => {
-                    flush_thoughts(&mut thoughts, &mut *on_event);
-                    shown.push_str(&text);
-                    if hold_stream {
-                        held_text.push_str(&text);
-                    } else {
-                        on_event(LoopEvent::Text(text))
-                    }
+                    emit_content_delta(
+                        &text,
+                        &mut think_tags,
+                        &mut thoughts,
+                        &mut shown,
+                        &mut held_text,
+                        hold_stream,
+                        &mut *on_event,
+                    );
                 }
                 StreamEvent::ReasoningDelta(text) => match thoughts.as_mut() {
                     Some(t) => {
@@ -1019,6 +1033,14 @@ fn run_turn(
                 StreamEvent::RateWait(wait) => on_event(LoopEvent::Thought(rate_wait_note(wait))),
             },
             class,
+        );
+        emit_think_tag_out(
+            think_tags.finish(),
+            &mut thoughts,
+            &mut shown,
+            &mut held_text,
+            hold_stream,
+            &mut *on_event,
         );
         flush_thoughts(&mut thoughts, &mut *on_event);
         if hold_stream && !held_text.is_empty() {
@@ -1195,14 +1217,17 @@ fn run_turn(
         // back so the model keeps its working and the prompt cache keeps matching.
         history.extend(turn.reasoning_items.iter().cloned());
         if !turn.text.is_empty() {
-            history.push(InputItem::Message {
-                role: "assistant".into(),
-                content: vec![ContentPart::InputText(
-                    grokhub_core::tool_tags::strip_tool_tags(&grokhub_core::strip_turn_labels(
-                        &turn.text,
-                    )),
-                )],
-            });
+            // Strip Hermes `<think>` (and THINKING:) so stored assistant text
+            // never paints raw tags; the panel already got them as Thoughts.
+            let text = grokhub_core::strip_thinking(&grokhub_core::tool_tags::strip_tool_tags(
+                &grokhub_core::strip_turn_labels(&turn.text),
+            ));
+            if !text.is_empty() {
+                history.push(InputItem::Message {
+                    role: "assistant".into(),
+                    content: vec![ContentPart::InputText(text)],
+                });
+            }
         }
         if turn.truncated {
             if turn.out_of_budget() {
@@ -2049,6 +2074,57 @@ fn flush_thoughts(
     }
 }
 
+/// Fold Hermes-style think tags out of a content delta into Thought vs Text.
+fn emit_content_delta(
+    text: &str,
+    think_tags: &mut grokhub_core::ThinkTagFold,
+    thoughts: &mut Option<grokhub_core::conversation::CasualThoughts>,
+    shown: &mut String,
+    held_text: &mut String,
+    hold_stream: bool,
+    on_event: &mut dyn FnMut(LoopEvent),
+) {
+    emit_think_tag_out(
+        think_tags.push(text),
+        thoughts,
+        shown,
+        held_text,
+        hold_stream,
+        on_event,
+    );
+}
+
+fn emit_think_tag_out(
+    out: grokhub_core::ThinkTagOut,
+    thoughts: &mut Option<grokhub_core::conversation::CasualThoughts>,
+    shown: &mut String,
+    held_text: &mut String,
+    hold_stream: bool,
+    on_event: &mut dyn FnMut(LoopEvent),
+) {
+    if !out.thought.is_empty() {
+        match thoughts.as_mut() {
+            Some(t) => {
+                let keep = t.push(&out.thought);
+                if !keep.is_empty() {
+                    on_event(LoopEvent::Thought(keep));
+                }
+            }
+            None => on_event(LoopEvent::Thought(out.thought)),
+        }
+    }
+    if out.body.is_empty() {
+        return;
+    }
+    flush_thoughts(thoughts, on_event);
+    shown.push_str(&out.body);
+    if hold_stream {
+        held_text.push_str(&out.body);
+    } else {
+        on_event(LoopEvent::Text(out.body));
+    }
+}
+
 fn cabin_note(text: &str) -> InputItem {
     user_message(&crate::compact::cabin_note_text(text), None)
 }
@@ -2692,6 +2768,15 @@ fn dispatch_tool_call(
         session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
+    // A job's tool set holds for the tools the loop runs itself too: a
+    // helper, a message to an agent, plan mode and the todo list.
+    let job_set = bound_job_tool_set(input.conversation_id);
+    if job_set.as_ref().is_some_and(|set| !set.allows(&call.name)) {
+        return (
+            ToolOutput::err(tools::tool_set_refusal(&call.name)),
+            Usage::default(),
+        );
+    }
     if let Some(done) = crate::session_tools::try_run(crate::session_tools::SessionCall {
         name: &call.name,
         arguments: &call.arguments,
@@ -2734,7 +2819,6 @@ fn dispatch_tool_call(
         on_event(LoopEvent::Elicit(view));
     };
     let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
-    let job_set = bound_job_tool_set(input.conversation_id);
     let output =
         crate::mcp::with_elicit(attended, &session, &mut emit_card, &mut wait_card, || {
             tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())

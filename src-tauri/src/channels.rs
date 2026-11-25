@@ -629,7 +629,7 @@ mod tests {
             Some("Added deploys. Copy the secret now: it isn't shown again.")
         );
         let later = view(&dir, &store, None);
-        assert_eq!(later.new_secret, None);
+        assert!(later.new_secret.is_none());
         assert!(!serde_json::to_string(&later).unwrap().contains(&secret));
         let removed = remove_webhook(&dir, &store, "deploys").unwrap();
         assert_eq!(removed.webhooks, vec![]);

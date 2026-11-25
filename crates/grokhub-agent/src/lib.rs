@@ -92,6 +92,7 @@ mod turn_budget;
 mod unattended;
 pub mod voice_session;
 pub mod vstack_sync;
+pub mod web_origin;
 mod work;
 mod ws_mode;
 pub mod xai_keychain;
@@ -196,7 +197,7 @@ pub use skills::{
     SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
 pub use sse::SseParser;
-pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
+pub use subagent::{answer_peer, drain_side_events, requeue_side_events, PeerTurn, SideEvent};
 pub use tasks::{
     drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,
     link_child, session_is_live, set_task_watch, watch_cancel, TaskPeek, TaskProgress, TaskRow,

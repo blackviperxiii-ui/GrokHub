@@ -163,7 +163,7 @@ mod tests {
         let body = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap();
         assert!(
             !body.contains(secret) && body.contains("[redacted]"),
-            "{body}"
+            "the memory file still holds a secret"
         );
         let out = dispatch(
             &ctx,
@@ -171,10 +171,7 @@ mod tests {
             &serde_json::json!({"path": "fixture.txt", "content": secret}).to_string(),
         );
         assert!(!out.failed, "{}", out.text);
-        assert_eq!(
-            std::fs::read_to_string(dir.join("fixture.txt")).unwrap(),
-            secret
-        );
+        assert!((std::fs::read_to_string(dir.join("fixture.txt")).unwrap()) == (secret));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

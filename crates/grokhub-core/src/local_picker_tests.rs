@@ -590,7 +590,7 @@ fn an_added_file_wins_auto_home_when_it_scores_best() {
     // Both are capable (≥ CAPABLE_QUALITY); the added one is much faster.
     let slow = local_models()
         .iter()
-        .find(|m| m.id == "bytedance-seed-oss-36b-heretic-q4_k_m")
+        .find(|m| m.id == "qwen3.8-27b-heretic-q4_k_m")
         .expect("slow catalog model");
     let fast = local_models()
         .iter()

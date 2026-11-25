@@ -2356,7 +2356,7 @@ mod tests {
             }),
         );
         assert!(secret.secret);
-        assert_eq!(secret.field_name.as_deref(), Some("api_token"));
+        assert!((secret.field_name.as_deref()) == (Some("api_token")));
         assert!(field_asks_for_secret(
             "password",
             "Password",

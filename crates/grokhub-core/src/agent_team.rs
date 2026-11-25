@@ -20,6 +20,8 @@ const MAX_ID: usize = 40;
 const MAX_NAME: usize = 60;
 const MAX_ABOUT: usize = 4000;
 const MAX_TOOL: usize = 64;
+const MAX_SHARE_WITH: usize = 16;
+const MAX_DEVICE_ID: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +94,9 @@ pub struct Profile {
     /// Offer its agent card to paired peers.
     #[serde(default)]
     pub share: bool,
+    /// The paired computers (device ids) that may message it while `share` is on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub share_with: Vec<String>,
 }
 
 impl Profile {
@@ -110,6 +115,7 @@ impl Profile {
             model_tier: String::new(),
             talks_to: Vec::new(),
             share: false,
+            share_with: Vec::new(),
         }
     }
 
@@ -167,6 +173,9 @@ pub enum Sender<'a> {
     /// The person, in the main chat or the app.
     Person,
     Agent(&'a str),
+    /// A paired computer, by its device id. It reaches only an agent shared
+    /// with it, and can't tell an unshared agent from a missing one.
+    Peer(&'a str),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +305,83 @@ impl TeamFile {
         self.teams.iter().find(|t| t.id == id)
     }
 
+    /// Adds `profile` (`add`) or replaces the agent with its id. Adding never
+    /// writes over an agent that has the id already.
+    pub fn put_agent(&mut self, profile: Profile, add: bool) -> Result<(), String> {
+        match self.agents.iter_mut().find(|a| a.id == profile.id) {
+            Some(_) if add => Err(format!("An agent already uses the id `{}`.", profile.id)),
+            Some(slot) => {
+                *slot = profile;
+                Ok(())
+            }
+            None if add => {
+                self.agents.push(profile);
+                Ok(())
+            }
+            None => Err(format!("`{}` isn't an agent.", profile.id)),
+        }
+    }
+
+    /// Removes an agent and every mention of it: no agent talks to it any
+    /// more, and a team it leads goes too. Its home folder stays on disk.
+    pub fn remove_agent(&mut self, id: &str) {
+        self.agents.retain(|a| a.id != id);
+        for agent in &mut self.agents {
+            agent.talks_to.retain(|to| to != id);
+        }
+        let led: Vec<String> = self
+            .teams
+            .iter()
+            .filter(|t| t.lead == id)
+            .map(|t| t.id.clone())
+            .collect();
+        for team in led {
+            self.remove_team(&team);
+        }
+    }
+
+    /// Adds `team` (`add`) or replaces the team with its id, and puts its
+    /// lead on it.
+    pub fn put_team(&mut self, team: Team, add: bool) -> Result<(), String> {
+        let at = self.teams.iter().position(|t| t.id == team.id);
+        match at {
+            Some(_) if add => return Err(format!("A team already uses the id `{}`.", team.id)),
+            None if !add => return Err(format!("`{}` isn't a team.", team.id)),
+            _ => {}
+        }
+        if let Some(other) = self
+            .teams
+            .iter()
+            .find(|t| t.lead == team.lead && t.id != team.id)
+        {
+            return Err(format!(
+                "`{}` already leads `{}`. Pick another lead, or remove that team first.",
+                team.lead, other.id
+            ));
+        }
+        let lead = self
+            .agents
+            .iter_mut()
+            .find(|a| a.id == team.lead)
+            .ok_or_else(|| format!("Team `{}`'s lead `{}` isn't an agent.", team.id, team.lead))?;
+        lead.team = team.id.clone();
+        match at {
+            Some(i) => self.teams[i] = team,
+            None => self.teams.push(team),
+        }
+        Ok(())
+    }
+
+    /// Removes a team. Its members stay, on no team.
+    pub fn remove_team(&mut self, id: &str) {
+        self.teams.retain(|t| t.id != id);
+        for agent in &mut self.agents {
+            if agent.team == id {
+                agent.team.clear();
+            }
+        }
+    }
+
     /// Every rule a saved file keeps. The first broken one is the error.
     pub fn check(&self) -> Result<(), String> {
         if self.version != VERSION {
@@ -363,6 +449,11 @@ impl TeamFile {
         let target = self
             .agent(to)
             .ok_or_else(|| Refusal::UnknownAgent(to.to_string()))?;
+        if let Sender::Peer(peer) = from {
+            if !target.share || !target.share_with.iter().any(|p| p == peer) {
+                return Err(Refusal::UnknownAgent(to.to_string()));
+            }
+        }
         if let Sender::Agent(id) = from {
             let sender = self
                 .agent(id)
@@ -457,6 +548,24 @@ fn check_agent(
             return Err(format!("`{id}` lists `{to}` twice in talks_to."));
         }
     }
+    if agent.share_with.len() > MAX_SHARE_WITH {
+        return Err(format!(
+            "`{id}` is shared with more than {MAX_SHARE_WITH} computers."
+        ));
+    }
+    let mut shared = BTreeSet::new();
+    for peer in &agent.share_with {
+        if peer.trim().is_empty() || peer.len() > MAX_DEVICE_ID {
+            return Err(format!(
+                "`{id}` lists a computer id that is empty or longer than {MAX_DEVICE_ID} characters."
+            ));
+        }
+        if !shared.insert(peer.as_str()) {
+            return Err(format!(
+                "`{id}` lists computer `{peer}` twice in share_with."
+            ));
+        }
+    }
     if let Some(bad) = agent.tools.iter().find(|t| !valid_tool(t)) {
         return Err(format!(
             "`{id}` lists a tool name `{bad}` the app can't have."
@@ -479,7 +588,7 @@ fn check_agent(
 }
 
 /// The tiers `model_profiles.toml` (and any override) uses.
-fn known_tiers() -> BTreeSet<String> {
+pub fn known_tiers() -> BTreeSet<String> {
     crate::model_registry::builtin::all()
         .into_iter()
         .filter_map(|p| p.tier)

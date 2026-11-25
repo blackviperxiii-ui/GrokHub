@@ -84,6 +84,25 @@ fn build_info(manifest: &Path) {
 }
 
 fn main() {
-    build_info(Path::new(env!("CARGO_MANIFEST_DIR")));
-    tauri_build::build()
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    build_info(dir);
+    let mut attributes = tauri_build::Attributes::new();
+    let target = |key: &str| std::env::var(key).unwrap_or_default();
+    if target("CARGO_CFG_TARGET_OS") == "windows" && target("CARGO_CFG_TARGET_ENV") == "msvc" {
+        // tauri-build links its Common Controls 6 manifest into the app's
+        // binaries only. Without it the lib's test program loads the old
+        // comctl32, which lacks entry points tauri's menus and dialogs
+        // import, and Windows won't start it (0xc0000139,
+        // STATUS_ENTRYPOINT_NOT_FOUND). Link the same manifest into every
+        // program this crate builds instead.
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+        let manifest = dir.join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+    }
+    if let Err(error) = tauri_build::try_build(attributes) {
+        panic!("tauri-build: {error:#}");
+    }
 }
