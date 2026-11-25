@@ -20,10 +20,13 @@ type Key = (String, PathBuf);
 static SEEN: LazyLock<Mutex<HashMap<Key, u64>>> = LazyLock::new(Mutex::default);
 
 /// The key for `path` in `session`'s chat. No session, or an empty one (a
-/// bare loop, most tests), records and refuses nothing.
+/// bare loop, most tests), records and refuses nothing. The path is the
+/// real one, so `README.md` and `readme.md` on a case-blind disk, or a path
+/// through a link, are one file.
 fn key(session: Option<&str>, path: &Path) -> Option<Key> {
     let chat = session.filter(|s| !s.is_empty())?;
-    Some((chat.to_string(), path.to_path_buf()))
+    let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Some((chat.to_string(), real))
 }
 
 fn seen(key: &Key) -> Option<u64> {
@@ -99,6 +102,29 @@ pub(crate) fn after_hook(session: &str, workspace: &Path, name: &str, arguments:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_reached_through_a_link_is_one_file() {
+        let root = crate::harness::test_dir("seen-link");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        let file = root.join("real").join("a.txt");
+        std::fs::write(&file, "one\n").unwrap();
+        note(
+            Some("seen-link"),
+            &root.join("link").join("a.txt"),
+            b"one\n",
+        );
+        assert!(changed(Some("seen-link"), &file, b"two\n"));
+        assert!(!changed(Some("seen-link"), &file, b"one\n"));
+        std::fs::write(&file, "two\n").unwrap();
+        assert!(changed_on_disk(
+            Some("seen-link"),
+            &root.join("link").join("a.txt")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn only_a_chat_that_saw_other_bytes_counts_a_change() {
