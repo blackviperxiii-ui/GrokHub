@@ -7237,6 +7237,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Gap 3 in the real loop: a source edit is pushed back after a re-read,
+    /// and only a command that runs (here a test run) lets the turn end.
+    #[test]
+    fn a_code_edit_is_pushed_back_until_a_test_runs_not_a_reread() {
+        let dir = workspace("verify-code");
+        let conv = format!("verify-code-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]),
+        );
+        let script = scripted(vec![
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"src/handler.rs","content":"fn handler() {}"}"#,
+                )],
+            ),
+            turn("Done.", Vec::new()),
+            turn(
+                "",
+                vec![call(
+                    "r1",
+                    "read_file",
+                    r#"{"target_file":"src/handler.rs"}"#,
+                )],
+            ),
+            turn("I re-read it.", Vec::new()),
+            turn(
+                "",
+                vec![call(
+                    "s1",
+                    "run_terminal_command",
+                    r#"{"command":"echo test ok"}"#,
+                )],
+            ),
+            turn("Done, and the test run passed.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 6);
+        let code_note = "Not verified since your last change to src/handler.rs. Run the tests, a build or a linter (or run the changed file) before you finish: a re-read or git status doesn't check code.";
+        assert_eq!(
+            user_texts(&history),
+            ["scan my computer", code_note, code_note]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_search_typed_into_the_shell_runs_as_the_search_tool() {
         let dir = workspace("shell-search");

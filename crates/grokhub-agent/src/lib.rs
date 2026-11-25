@@ -75,6 +75,7 @@ pub mod scratch;
 pub mod self_manage;
 mod session;
 mod session_tools;
+mod shell_redirect;
 pub mod ship_tree;
 pub mod skill_write;
 mod skills;

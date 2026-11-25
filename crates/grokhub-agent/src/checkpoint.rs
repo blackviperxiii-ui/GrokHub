@@ -1,13 +1,17 @@
 //! Brain 2 checkpoints: what a run must still show before it may end, beyond
-//! its own checklist ([`crate::drive`]). A change (a file write or edit, a
-//! shell command that isn't read-only, a desktop action) needs a check after
-//! it: a test, build or lint run, a re-read of the changed file, a read-only
-//! look after a shell change, or a screenshot after a desktop change. A
-//! careful or critical task, repair or research run must cover each item of
-//! its Brief's done list in the checklist, and a critical system change needs
-//! a backup. Only a run with a Brief (a chat or background turn) owes these.
-//! Nothing here caps steps; the drive's stall count ends a run that
-//! can't make progress, naming what is left.
+//! its own checklist ([`crate::drive`]). Each change (a file write or edit, a
+//! shell command that isn't read-only, a desktop action) waits for the check
+//! that fits it ([`Needs`]): an edit to source code for a command that runs
+//! (a test, build or lint run, or any other command that is neither a look
+//! nor a change, such as running the changed file), any other file for a run
+//! or a re-read of that same path, a shell change for a run or a read-only
+//! look, and a desktop action for a run or a screenshot. A re-read, `git
+//! status`, `git diff` or `cat` never checks code. Every change waits on its
+//! own, by its full path. A careful or critical task, repair or research run
+//! must cover each item of its Brief's done list in the checklist, and a
+//! critical system change needs a backup. Only a run with a Brief (a chat or
+//! background turn) owes these. Nothing here caps steps; the drive's stall
+//! count ends a run that can't make progress, naming what is left.
 //!
 //! Brain 5: a careful repair or research run also owes a findings card, and
 //! a long task in a progress style gets a short note at each phase boundary
@@ -34,28 +38,21 @@ pub use crate::file_checkpoint::before_write;
 pub const CHECKPOINT_EVERY: usize = 8;
 /// Task tool calls at least between two progress notes (and before the first).
 pub const PROGRESS_GAP: usize = 3;
-/// Items a progress note names before "and N more".
+/// Items a progress note or the unchecked list names before "and N more".
 const PROGRESS_ITEMS: usize = 3;
 /// Longest item text in a progress note or fallback card, in characters.
 const ITEM_CHARS: usize = 60;
 
 // Word lists are lowercase; commands are compared lowercased (PowerShell names too).
 
-/// Words in a shell command that make it a check: tests, builds, linters, status.
-const VERIFY_WORDS: &[&str] = &[
-    "test",
-    "tests",
-    "nextest",
-    "pytest",
-    "check",
-    "build",
-    "clippy",
-    "lint",
-    "eslint",
-    "tsc",
-    "mypy",
-    "ruff",
-    "verify",
+/// Words in a shell command that make it a check run: tests, builds, linters.
+const RUN_WORDS: &[&str] = &[
+    "test", "tests", "nextest", "pytest", "check", "build", "clippy", "lint", "eslint", "tsc",
+    "mypy", "ruff", "verify",
+];
+/// Words in a shell command that make it a read-only look: it checks a shell
+/// change, never code.
+const LOOK_WORDS: &[&str] = &[
     "status",
     "is-active",
     "is-enabled",
@@ -63,6 +60,12 @@ const VERIFY_WORDS: &[&str] = &[
     "diff",
     "test-path",
     "get-service",
+];
+/// Source code extensions: an edit to one needs a command that runs. Shell
+/// scripts, docs and config files stay checkable by a re-read.
+const CODE_EXTS: &[&str] = &[
+    "rs", "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "go", "c", "h", "cc", "cpp", "hpp", "cs",
+    "java", "kt", "swift", "rb", "php", "vue", "svelte",
 ];
 /// Words in a shell command that save the state before a change.
 const BACKUP_WORDS: &[&str] = &[
@@ -156,28 +159,76 @@ const MUTATING_HEADS: &[&str] = &[
 const DESKTOP_ACTIONS: &[&str] = &["click", "move", "drag", "scroll", "type", "key"];
 const STOP_WORDS: &[&str] = &["the", "is", "it", "a", "an", "in", "of", "and", "to"];
 
+/// What proves one change was checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Needs {
+    /// Source code: a test, build or lint run, or any command that runs.
+    Run,
+    /// Any other file: a run, or a re-read of the same path.
+    Reread,
+    /// A shell change: a run, or any read-only look.
+    Look,
+    /// A desktop action: a run, or a screenshot.
+    Screenshot,
+}
+
+impl Needs {
+    /// `step` checks the change to `what` that needs this.
+    fn checked_by(self, what: &str, step: &Step) -> bool {
+        match (self, step) {
+            (_, Step::Run) | (Needs::Run, Step::Exec) => true,
+            (Needs::Reread, Step::Reread(path)) => same_path(what, path),
+            (Needs::Look, Step::Look) | (Needs::Screenshot, Step::Screenshot) => true,
+            _ => false,
+        }
+    }
+}
+
 /// What one finished tool call was, for the checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
-    /// Changed this (a file path, a command, "the screen"). `checked`: the
-    /// same command ran a check after the change (`edit && cargo test`).
+    /// Changed this (a file path, a command, "the screen").
     Change {
         what: String,
         system: bool,
-        checked: bool,
+        needs: Needs,
     },
-    /// A check: re-read this path, or a check run (`None`) that covers any change.
-    Verify(Option<String>),
-    /// A read-only look that checks a shell change but not a file change.
-    Look(String),
+    /// A test, build or lint run: it checks every change.
+    Run,
+    /// A re-read of this path.
+    Reread(String),
+    Screenshot,
+    /// A read-only look (`git status`, `ls`, `cat`).
+    Look,
+    /// Any other command that ran: neither a look nor a change.
+    Exec,
     Backup,
     Other,
 }
 
+/// Each word of `s` and the byte it starts at.
+fn words_at(s: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in s.char_indices() {
+        let split = c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '"' | '\'');
+        match (split, start) {
+            (true, Some(at)) => {
+                out.push((at, &s[at..i]));
+                start = None;
+            }
+            (false, None) => start = Some(i),
+            _ => {}
+        }
+    }
+    if let Some(at) = start {
+        out.push((at, &s[at..]));
+    }
+    out
+}
+
 fn words(s: &str) -> Vec<&str> {
-    s.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '"' | '\''))
-        .filter(|w| !w.is_empty())
-        .collect()
+    words_at(s).into_iter().map(|(_, w)| w).collect()
 }
 
 fn path_arg(args: &Value, keys: &[&str]) -> String {
@@ -193,6 +244,14 @@ fn system_path(p: &str) -> bool {
     SYSTEM_PATHS.iter().any(|s| p.starts_with(s))
 }
 
+/// A source code file, by its extension.
+fn is_code(path: &str) -> bool {
+    let name = path.replace('\\', "/");
+    let name = name.rsplit('/').next().unwrap_or("");
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| CODE_EXTS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 fn classify(name: &str, args: &Value) -> Vec<Step> {
     let one = |step| vec![step];
     match name {
@@ -206,19 +265,23 @@ fn classify(name: &str, args: &Value) -> Vec<Step> {
             }
             one(Step::Change {
                 system: system_path(&path),
+                needs: if is_code(&path) {
+                    Needs::Run
+                } else {
+                    Needs::Reread
+                },
                 what: path,
-                checked: false,
             })
         }
-        "read_file" => one(Step::Verify(Some(path_arg(
+        "read_file" => one(Step::Reread(path_arg(
             args,
             &["target_file", "path", "file_path"],
-        )))),
-        "screenshot" => one(Step::Verify(Some(DESKTOP_WHAT.into()))),
+        ))),
+        "screenshot" => one(Step::Screenshot),
         n if DESKTOP_ACTIONS.contains(&n) => one(Step::Change {
             what: DESKTOP_WHAT.into(),
             system: false,
-            checked: false,
+            needs: Needs::Screenshot,
         }),
         "run_terminal_command" => shell_steps(
             args.get("command")
@@ -230,46 +293,73 @@ fn classify(name: &str, args: &Value) -> Vec<Step> {
     }
 }
 
-/// A shell command, in order: a backup it takes, the change it makes (and
-/// whether a check word comes after the change), or a check or a read-only look.
+/// A shell command, in order: a backup it takes, a check run before its
+/// change, the change it makes and a run or look after it; or, with no
+/// change, a check run, a read-only look or another command that ran.
 fn shell_steps(cmd: &str) -> Vec<Step> {
     let lower = cmd.to_ascii_lowercase();
-    let ws = words(&lower);
+    let ws = words_at(&lower);
     let mut steps = Vec::new();
-    if ws.iter().any(|w| BACKUP_WORDS.contains(w))
-        || (ws.iter().any(|w| COPY_WORDS.contains(w))
+    if ws.iter().any(|(_, w)| BACKUP_WORDS.contains(w))
+        || (ws.iter().any(|(_, w)| COPY_WORDS.contains(w))
             && (lower.contains(".bak") || lower.contains(".orig")))
     {
         steps.push(Step::Backup);
     }
     let system = ws
         .iter()
-        .any(|w| SYSTEM_WORDS.contains(w) || system_path(w));
-    // Only a command that clearly changes something owes a check (not a fetch or a query).
-    let changes = |w: &&str| w.contains('>') || *w == "-i" || MUTATING_HEADS.contains(w);
-    let first_change = ws.iter().position(&changes);
-    let last_check = ws.iter().rposition(|w| VERIFY_WORDS.contains(w));
-    match (first_change, last_check) {
-        (Some(c), check) => {
+        .any(|(_, w)| SYSTEM_WORDS.contains(w) || system_path(w));
+    // Only a command that clearly changes something owes a check (not a fetch
+    // or a query). A redirect counts only when it writes a file (`2>&1` and
+    // `> /dev/null` don't).
+    let changes = |w: &str| w == "-i" || MUTATING_HEADS.contains(&w);
+    let writes: Vec<usize> = crate::shell_redirect::redirects(cmd)
+        .into_iter()
+        .filter(|r| r.file.is_some())
+        .map(|r| r.at)
+        .collect();
+    let first_change = ws
+        .iter()
+        .filter(|(_, w)| changes(w))
+        .map(|(at, _)| *at)
+        .chain(writes.iter().copied())
+        .min();
+    let at_word = |list: &[&str]| -> Vec<usize> {
+        ws.iter()
+            .filter(|(_, w)| list.contains(w))
+            .map(|(at, _)| *at)
+            .collect()
+    };
+    let (runs, looks) = (at_word(RUN_WORDS), at_word(LOOK_WORDS));
+    match first_change {
+        Some(c) => {
             // `sudo cp /etc/fstab /etc/fstab.bak` is the backup, not a change to check.
-            let backup_only =
-                !steps.is_empty() && ws.iter().all(|w| !changes(w) || COPY_WORDS.contains(w));
+            let backup_only = !steps.is_empty()
+                && writes.is_empty()
+                && ws
+                    .iter()
+                    .all(|(_, w)| !changes(w) || COPY_WORDS.contains(w));
             if !backup_only {
+                // `cargo test > test.log`: the tests ran before the log was written.
+                if runs.iter().any(|r| *r < c) {
+                    steps.push(Step::Run);
+                }
                 steps.push(Step::Change {
                     what: short(cmd),
                     system,
-                    checked: check.is_some_and(|v| v > c),
+                    needs: Needs::Look,
                 });
+                // `restart && is-active` checks itself; `edit && cargo test` checks everything.
+                if runs.iter().any(|r| *r > c) {
+                    steps.push(Step::Run);
+                } else if looks.iter().any(|l| *l > c) {
+                    steps.push(Step::Look);
+                }
             }
         }
-        (None, Some(_)) => steps.push(Step::Verify(None)),
-        (None, None) if crate::perm::shell_is_readonly(cmd) => {
-            steps.push(Step::Look(cmd.to_string()))
-        }
-        (None, None) => {}
-    }
-    if steps.is_empty() {
-        steps.push(Step::Other);
+        None if !runs.is_empty() => steps.push(Step::Run),
+        None if !looks.is_empty() || crate::perm::shell_is_readonly(cmd) => steps.push(Step::Look),
+        None => steps.push(Step::Exec),
     }
     steps
 }
@@ -285,23 +375,35 @@ fn short(cmd: &str) -> String {
     }
 }
 
-/// A file change is checked by a re-read of that file (by its name).
-fn rereads(changed: &str, read: &str) -> bool {
-    let name = |p: &str| {
-        p.replace('\\', "/")
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .to_string()
+/// Two spellings of one file: equal once trimmed, with `/` for `\`, no
+/// leading `./` and in lowercase, or one absolute path (`/`, `//` or `x:/`)
+/// that ends with `/` and the other. A file name alone never matches.
+fn same_path(a: &str, b: &str) -> bool {
+    let norm = |p: &str| {
+        let p = p.trim().replace('\\', "/").to_ascii_lowercase();
+        p.strip_prefix("./").map(str::to_string).unwrap_or(p)
     };
-    !changed.is_empty() && (read == changed || name(read) == name(changed))
+    let absolute = |p: &str| {
+        p.starts_with('/') || (p.len() > 2 && p.as_bytes()[1] == b':' && p.as_bytes()[2] == b'/')
+    };
+    let (a, b) = (norm(a), norm(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let tail = |long: &str, short: &str| long.ends_with(&format!("/{short}"));
+    a == b
+        || match (absolute(&a), absolute(&b)) {
+            (true, false) => tail(&a, &b),
+            (false, true) => tail(&b, &a),
+            _ => false,
+        }
 }
 
 /// The run's changes and checks so far.
 #[derive(Debug, Clone, Default)]
 pub struct Fresh {
-    /// The newest change no check has covered yet, and whether it was a file.
-    unchecked: Option<(String, bool)>,
+    /// Every change no check has covered yet, oldest first, and what checks it.
+    unchecked: Vec<(String, Needs)>,
     /// The first system change, while no backup came before or after it.
     unbacked: Option<String>,
     backed_up: bool,
@@ -347,34 +449,18 @@ impl Fresh {
 
     /// Note one tool call that ran without failing.
     pub fn note(&mut self, name: &str, args: &Value) {
-        let file = matches!(name, "write" | "search_replace");
         for step in classify(name, args) {
             match step {
                 Step::Change {
                     what,
                     system,
-                    checked,
+                    needs,
                 } => {
                     if system && !self.backed_up && self.unbacked.is_none() {
                         self.unbacked = Some(what.clone());
                     }
-                    self.unchecked = (!checked).then_some((what, file));
-                }
-                Step::Verify(None) => self.unchecked = None,
-                Step::Verify(Some(read)) => {
-                    if self.unchecked.as_ref().is_some_and(|(what, _)| {
-                        rereads(what, &read) || (what == DESKTOP_WHAT && read == DESKTOP_WHAT)
-                    }) {
-                        self.unchecked = None;
-                    }
-                }
-                Step::Look(_) => {
-                    if self
-                        .unchecked
-                        .as_ref()
-                        .is_some_and(|(what, file)| !file && what != DESKTOP_WHAT)
-                    {
-                        self.unchecked = None;
+                    if !self.unchecked.iter().any(|(w, _)| same_path(w, &what)) {
+                        self.unchecked.push((what, needs));
                     }
                 }
                 Step::Backup => {
@@ -386,14 +472,16 @@ impl Fresh {
                         }
                     }
                 }
-                Step::Other => {}
+                step => self
+                    .unchecked
+                    .retain(|(what, n)| !n.checked_by(what, &step)),
             }
         }
     }
 
-    /// The change no check has covered since it ran.
-    pub fn unchecked(&self) -> Option<&str> {
-        self.unchecked.as_ref().map(|(w, _)| w.as_str())
+    /// The changes no check has covered since they ran, oldest first.
+    pub fn unchecked(&self) -> &[(String, Needs)] {
+        &self.unchecked
     }
 
     /// Note that `report_findings` posted this run's card.
@@ -447,8 +535,8 @@ pub fn uncovered(brief: Option<&Brief>, todos: &[TodoItem], evidence: usize) -> 
 pub struct Gaps {
     /// The Brief's done items not covered yet.
     pub uncovered: Vec<String>,
-    /// The newest change with no check after it.
-    pub unchecked: Option<String>,
+    /// Every change with no check after it, oldest first, and what checks it.
+    pub unchecked: Vec<(String, Needs)>,
     /// A system change in a critical run with no backup.
     pub unbacked: Option<String>,
     /// A repair or research run that has not posted its findings card.
@@ -461,10 +549,11 @@ impl Gaps {
         let critical = brief.is_some_and(|b| b.care == Care::Critical);
         Self {
             uncovered: uncovered(brief, todos, evidence),
-            unchecked: fresh
-                .unchecked()
-                .filter(|_| brief.is_some())
-                .map(str::to_string),
+            unchecked: if brief.is_some() {
+                fresh.unchecked().to_vec()
+            } else {
+                Vec::new()
+            },
             unbacked: fresh.unbacked.clone().filter(|_| critical),
             findings: !fresh.findings && owes_findings(brief, evidence),
         }
@@ -472,7 +561,7 @@ impl Gaps {
 
     pub fn is_empty(&self) -> bool {
         self.uncovered.is_empty()
-            && self.unchecked.is_none()
+            && self.unchecked.is_empty()
             && self.unbacked.is_none()
             && !self.findings
     }
@@ -480,7 +569,7 @@ impl Gaps {
     /// Stable names for the drive's stall count.
     pub fn keys(&self) -> Vec<String> {
         let mut k: Vec<String> = self.uncovered.iter().map(|u| format!("done:{u}")).collect();
-        k.extend(self.unchecked.iter().map(|u| format!("unchecked:{u}")));
+        k.extend(self.unchecked.iter().map(|(u, _)| format!("unchecked:{u}")));
         k.extend(self.unbacked.iter().map(|u| format!("unbacked:{u}")));
         if self.findings {
             k.push("findings".into());
@@ -491,11 +580,9 @@ impl Gaps {
     /// Plain names for the blocked line.
     pub fn names(&self) -> Vec<String> {
         let mut n: Vec<String> = self.uncovered.iter().map(|u| format!("\"{u}\"")).collect();
-        n.extend(
-            self.unchecked
-                .iter()
-                .map(|u| format!("a check after the change to {u}")),
-        );
+        if !self.unchecked.is_empty() {
+            n.push(format!("a check after the change to {}", self.listed()));
+        }
         n.extend(self.unbacked.iter().map(|u| format!("a backup for {u}")));
         if self.findings {
             n.push("the findings card".into());
@@ -511,10 +598,17 @@ impl Gaps {
                 "Changed {what} with no backup first. Save a copy of the current state now and say how to undo the change."
             ));
         }
-        if let Some(what) = &self.unchecked {
-            parts.push(format!(
-                "Not verified since your last change to {what}. Check it (run the tests or build, re-read the file, look at the result) before you finish."
-            ));
+        if !self.unchecked.is_empty() {
+            let what = self.listed();
+            parts.push(if self.unchecked.iter().any(|(_, n)| *n == Needs::Run) {
+                format!(
+                    "Not verified since your last change to {what}. Run the tests, a build or a linter (or run the changed file) before you finish: a re-read or git status doesn't check code."
+                )
+            } else {
+                format!(
+                    "Not verified since your last change to {what}. Check it (run the tests or build, re-read the file, look at the result) before you finish."
+                )
+            });
         }
         if !self.uncovered.is_empty() {
             let list = self
@@ -534,6 +628,20 @@ impl Gaps {
             );
         }
         parts.join(" ")
+    }
+
+    /// The unchecked changes: "a.rs", "a.rs and b.md", "a.rs, b.rs, c.rs and 2 more".
+    fn listed(&self) -> String {
+        let mut out: Vec<String> = self
+            .unchecked
+            .iter()
+            .take(PROGRESS_ITEMS)
+            .map(|(w, _)| w.clone())
+            .collect();
+        if self.unchecked.len() > PROGRESS_ITEMS {
+            out.push(format!("{} more", self.unchecked.len() - PROGRESS_ITEMS));
+        }
+        join_and(out)
     }
 }
 
@@ -587,6 +695,11 @@ fn named(items: &[&TodoItem]) -> String {
             if rest == 1 { "other" } else { "others" }
         ));
     }
+    join_and(out)
+}
+
+/// "a", "a and b", "a, b and c".
+fn join_and(out: Vec<String>) -> String {
     match out.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
         _ => out.join(""),
@@ -691,10 +804,10 @@ pub fn fallback_findings(todos: &[TodoItem], gaps: &Gaps) -> Option<Findings> {
             text: format!("Not shown yet: {}", clip(u)),
         });
     }
-    if let Some(u) = &gaps.unchecked {
+    if !gaps.unchecked.is_empty() {
         items.push(Finding {
             severity: Severity::Medium,
-            text: format!("Not checked since the change to {u}"),
+            text: format!("Not checked since the change to {}", gaps.listed()),
         });
     }
     if let Some(u) = &gaps.unbacked {
@@ -816,64 +929,172 @@ mod tests {
         }
     }
 
+    /// The changes still waiting on a check, oldest first.
+    fn names(f: &Fresh) -> Vec<&str> {
+        f.unchecked().iter().map(|(w, _)| w.as_str()).collect()
+    }
+
     #[test]
     fn a_change_waits_for_a_check_that_fits_it() {
         let mut f = Fresh::default();
         f.note("search_replace", &json!({ "file_path": "src/main.rs" }));
-        assert_eq!(f.unchecked(), Some("src/main.rs"));
+        assert_eq!(names(&f), ["src/main.rs"]);
         // A look at something else doesn't check a file edit.
         f.note("run_terminal_command", &shell("ls -la"));
         f.note("read_file", &json!({ "target_file": "src/lib.rs" }));
-        assert_eq!(f.unchecked(), Some("src/main.rs"));
-        // Re-reading the changed file does, and so does a test run.
+        assert_eq!(names(&f), ["src/main.rs"]);
+        // Re-reading changed code doesn't check it either; a test run does.
         f.note("read_file", &json!({ "target_file": "./src/main.rs" }));
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), ["src/main.rs"]);
         f.note("write", &json!({ "path": "a.txt" }));
         f.note(
             "run_terminal_command",
             &shell("cargo test -p grokhub-agent"),
         );
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), Vec::<&str>::new());
         // A shell change is checked by any read-only look; a desktop action by a screenshot.
         f.note("run_terminal_command", &shell("systemctl restart nginx"));
-        assert_eq!(f.unchecked(), Some("systemctl restart nginx"));
+        assert_eq!(names(&f), ["systemctl restart nginx"]);
         f.note("run_terminal_command", &shell("ls /etc/nginx"));
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), Vec::<&str>::new());
         f.note("click", &json!({ "x": 1, "y": 2 }));
         f.note("run_terminal_command", &shell("ls"));
-        assert_eq!(f.unchecked(), Some("the screen"));
+        assert_eq!(names(&f), ["the screen"]);
         f.note("screenshot", &json!({}));
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), Vec::<&str>::new());
         // A fetch or a query changes nothing; an install or a redirect does.
         f.note(
             "run_terminal_command",
             &shell("curl -s https://wttr.in/?format=3"),
         );
         f.note("run_terminal_command", &shell("python3 -c 'print(1)'"));
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), Vec::<&str>::new());
         f.note("run_terminal_command", &shell("pip install requests"));
-        assert_eq!(f.unchecked(), Some("pip install requests"));
+        assert_eq!(names(&f), ["pip install requests"]);
         f.note("run_terminal_command", &shell("echo hi > out.txt"));
-        assert_eq!(f.unchecked(), Some("echo hi > out.txt"));
-        // A check word only counts after the change in the same command.
+        assert_eq!(names(&f), ["pip install requests", "echo hi > out.txt"]);
+        // A check word after the change in the same command checks it.
         f.note(
             "run_terminal_command",
             &shell("sed -i 's/a/b/' x.py && pytest"),
         );
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), Vec::<&str>::new());
         f.note("run_terminal_command", &shell("pytest && rm -rf build/"));
-        assert_eq!(f.unchecked(), Some("pytest && rm -rf build/"));
+        assert_eq!(names(&f), ["pytest && rm -rf build/"]);
         // PowerShell names in any case.
         f.note("run_terminal_command", &shell("Get-Service spooler"));
-        assert_eq!(f.unchecked(), None);
+        assert_eq!(names(&f), Vec::<&str>::new());
         f.note(
             "run_terminal_command",
             &shell("remove-item C:\\temp\\x.txt"),
         );
-        assert_eq!(f.unchecked(), Some("remove-item C:\\temp\\x.txt"));
+        assert_eq!(names(&f), ["remove-item C:\\temp\\x.txt"]);
         // A workspace file named like a backup is still a change.
         f.note("write", &json!({ "path": "notes/backup-plan.md" }));
-        assert_eq!(f.unchecked(), Some("notes/backup-plan.md"));
+        assert_eq!(
+            names(&f),
+            ["remove-item C:\\temp\\x.txt", "notes/backup-plan.md"]
+        );
+    }
+
+    #[test]
+    fn a_code_change_needs_a_run_not_a_reread_or_a_status_look() {
+        let mut f = Fresh::default();
+        f.note("search_replace", &json!({ "file_path": "src/handler.rs" }));
+        f.note("read_file", &json!({ "target_file": "src/handler.rs" }));
+        for look in [
+            "git status",
+            "git diff src/handler.rs",
+            "cat src/handler.rs",
+        ] {
+            f.note("run_terminal_command", &shell(look));
+        }
+        assert_eq!(names(&f), ["src/handler.rs"]);
+        assert_eq!(f.unchecked()[0].1, Needs::Run);
+        // Each change waits on its own, oldest first.
+        f.note("write", &json!({ "path": "docs/notes.md" }));
+        f.note("search_replace", &json!({ "file_path": "tools/gen.py" }));
+        assert_eq!(
+            names(&f),
+            ["src/handler.rs", "docs/notes.md", "tools/gen.py"]
+        );
+        // A file name alone is not the file; the same file by its full path is.
+        f.note("read_file", &json!({ "target_file": "other/notes.md" }));
+        assert_eq!(
+            names(&f),
+            ["src/handler.rs", "docs/notes.md", "tools/gen.py"]
+        );
+        f.note(
+            "read_file",
+            &json!({ "target_file": "/home/user/ws/docs/notes.md" }),
+        );
+        assert_eq!(names(&f), ["src/handler.rs", "tools/gen.py"]);
+        // Any command that runs checks code, but not a doc: that takes a re-read or a check run.
+        f.note("write", &json!({ "path": "docs/notes.md" }));
+        f.note("run_terminal_command", &shell("python3 tools/gen.py"));
+        assert_eq!(names(&f), ["docs/notes.md"]);
+        f.note("run_terminal_command", &shell("cargo build -p app"));
+        assert_eq!(names(&f), Vec::<&str>::new());
+        // A redirect that only moves or drops output is no change: these are runs.
+        for run in [
+            "cargo test 2>&1 | tail -20",
+            "npm test > /dev/null 2>&1",
+            "npm test 2>/dev/null",
+            "cargo build | Out-Null",
+            "cargo test *>$null",
+            "Invoke-Pester >$null",
+        ] {
+            f.note("search_replace", &json!({ "file_path": "src/handler.rs" }));
+            f.note("run_terminal_command", &shell(run));
+            assert_eq!(names(&f), Vec::<&str>::new(), "{run}");
+        }
+        // A redirect to a file is a change: the run before it still checks the code.
+        f.note("search_replace", &json!({ "file_path": "src/handler.rs" }));
+        f.note("run_terminal_command", &shell("cargo test > test.log"));
+        assert_eq!(names(&f), ["cargo test > test.log"]);
+        f.note("run_terminal_command", &shell("cat test.log"));
+        assert_eq!(names(&f), Vec::<&str>::new());
+        // Windows spellings of the same file.
+        f.note("write", &json!({ "path": "C:\\ws\\docs\\Notes.md" }));
+        f.note("read_file", &json!({ "target_file": "docs/notes.md" }));
+        assert_eq!(names(&f), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn the_note_names_every_unchecked_change_and_says_code_needs_a_run() {
+        let task = Brief {
+            intent: Intent::Task,
+            care: Care::Casual,
+            ..Brief::default()
+        };
+        let mut f = Fresh::default();
+        f.note("search_replace", &json!({ "file_path": "src/handler.rs" }));
+        f.note("read_file", &json!({ "target_file": "src/handler.rs" }));
+        let gaps = Gaps::of(Some(&task), &[], 2, &f);
+        assert_eq!(gaps.keys(), ["unchecked:src/handler.rs"]);
+        assert_eq!(gaps.names(), ["a check after the change to src/handler.rs"]);
+        assert_eq!(
+            gaps.note(),
+            "Not verified since your last change to src/handler.rs. Run the tests, a build or a linter (or run the changed file) before you finish: a re-read or git status doesn't check code."
+        );
+        let mut many = Fresh::default();
+        for path in ["a.rs", "b.rs", "c.rs", "d.rs"] {
+            many.note("write", &json!({ "path": path }));
+        }
+        let gaps = Gaps::of(Some(&task), &[], 4, &many);
+        assert_eq!(
+            gaps.names(),
+            ["a check after the change to a.rs, b.rs, c.rs and 1 more"]
+        );
+        assert_eq!(gaps.keys().len(), 4);
+        // A doc and a shell change keep the plain note, naming both.
+        let mut plain = Fresh::default();
+        plain.note("write", &json!({ "path": "docs/notes.md" }));
+        plain.note("run_terminal_command", &shell("systemctl restart nginx"));
+        assert_eq!(
+            Gaps::of(Some(&task), &[], 2, &plain).note(),
+            "Not verified since your last change to docs/notes.md and systemctl restart nginx. Check it (run the tests or build, re-read the file, look at the result) before you finish."
+        );
     }
 
     #[test]
@@ -895,7 +1116,7 @@ mod tests {
             gaps.unbacked.as_deref(),
             Some("sudo sed -i 's/a/b/' /etc/fstab")
         );
-        assert_eq!(gaps.unchecked, None);
+        assert_eq!(gaps.unchecked, []);
         assert_eq!(
             gaps.note(),
             "Changed sudo sed -i 's/a/b/' /etc/fstab with no backup first. Save a copy of the current state now and say how to undo the change."
@@ -923,7 +1144,7 @@ mod tests {
             Gaps::of(Some(&critical), &[], 2, &h).unbacked.as_deref(),
             Some("sudo systemctl restart nginx && systemctl is-active nginx")
         );
-        assert_eq!(h.unchecked(), None);
+        assert_eq!(h.unchecked(), []);
         // Writing a .bak in the workspace is not a system backup.
         h.note("write", &json!({ "path": "fstab.bak" }));
         assert!(Gaps::of(Some(&critical), &[], 3, &h).unbacked.is_some());
@@ -1154,7 +1375,7 @@ mod tests {
         ];
         let gaps = Gaps {
             uncovered: vec!["ports".into()],
-            unchecked: Some("systemctl restart nginx".into()),
+            unchecked: vec![("systemctl restart nginx".into(), Needs::Look)],
             unbacked: Some("sudo sed -i x /etc/fstab".into()),
             findings: true,
         };
