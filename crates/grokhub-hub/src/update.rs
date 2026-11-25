@@ -132,7 +132,12 @@ mod tests {
             InstallKind::Source
         );
         assert_eq!(
-            install_kind("macos", Path::new("/Applications/x/grokhub-hub"), None, None),
+            install_kind(
+                "macos",
+                Path::new("/Applications/x/grokhub-hub"),
+                None,
+                None
+            ),
             InstallKind::Dmg
         );
         let _ = std::fs::remove_dir_all(&dir);

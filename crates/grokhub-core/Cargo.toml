@@ -40,6 +40,10 @@ url = "2"
 # Routine `expect` steps: the same regex build as grokhub-agent.
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
 
+# `@file:` opens without waiting on a FIFO (`O_NONBLOCK`). Already in the tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
 # User-only DACL for hub-state.json (pair tokens) — matches secrets.json on Windows.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

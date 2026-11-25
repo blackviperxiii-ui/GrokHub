@@ -23,7 +23,7 @@ const MONTHS: [&str; 12] = [
 ];
 
 /// Days since 1 Jan 1970 → (year, month 1-12, day 1-31).
-fn civil(day: i64) -> (i32, u32, u32) {
+pub(crate) fn civil(day: i64) -> (i32, u32, u32) {
     // Howard Hinnant's civil_from_days.
     let z = day + 719_468;
     let era = z.div_euclid(146_097);

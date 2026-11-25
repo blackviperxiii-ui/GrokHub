@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use grokhub_core::local_draft::Decision;
 use grokhub_core::local_setup;
+use grokhub_core::local_skills::TaskKind;
 
 use super::local_autoconfig::LaunchArgs;
 use super::local_scale::Mode;
@@ -348,6 +349,8 @@ pub fn loading_note(reason: Option<&str>) -> String {
 
 /// The line for each chat's last on-device reply, until the chat takes it.
 static LAST_LINE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+/// The task kind of each chat's last on-device reply, kept beside its line.
+static LAST_KIND: Mutex<BTreeMap<String, TaskKind>> = Mutex::new(BTreeMap::new());
 /// Why the chat's current step was routed locally, for display on the reply/loading note.
 static ROUTE_REASON: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
@@ -389,6 +392,12 @@ pub fn note_reply(conversation_id: &str, ask: Option<(AskOutcome, PathBuf)>) {
         conversation_id,
         chat_line_with_reason(&name, draft, l.stand_in, ask, reason.as_deref()),
     );
+    if let Ok(mut kinds) = LAST_KIND.lock() {
+        match super::local_task::current_kind() {
+            Some(kind) => kinds.insert(conversation_id.to_string(), kind),
+            None => kinds.remove(conversation_id),
+        };
+    }
 }
 
 /// Keep `line` for `conversation_id`'s turn, until [`take_line`] takes it.
@@ -428,12 +437,20 @@ pub fn forget_line(conversation_id: &str) {
     if let Ok(mut reasons) = ROUTE_REASON.lock() {
         reasons.remove(conversation_id);
     }
+    if let Ok(mut kinds) = LAST_KIND.lock() {
+        kinds.remove(conversation_id);
+    }
 }
 
 /// The line for `conversation_id`'s turn that just ended, once: it clears,
 /// so a later turn that ran elsewhere shows none.
 pub fn take_line(conversation_id: &str) -> Option<String> {
     LAST_LINE.lock().ok()?.remove(conversation_id)
+}
+
+/// The task kind of `conversation_id`'s last on-device reply, once.
+pub fn take_kind(conversation_id: &str) -> Option<TaskKind> {
+    LAST_KIND.lock().ok()?.remove(conversation_id)
 }
 
 /// Where each chat's newest step ran, written when the step is decided so
@@ -922,11 +939,20 @@ mod tests {
             Some("Answered by Gemma 4 E2B, your pick.")
         );
         assert_eq!(take_line(id), None);
+        if let Ok(mut kinds) = LAST_KIND.lock() {
+            kinds.insert(id.to_string(), TaskKind::Code);
+        }
+        assert_eq!(take_kind(id), Some(TaskKind::Code));
+        assert_eq!(take_kind(id), None);
         if let Ok(mut lines) = LAST_LINE.lock() {
             lines.insert(id.to_string(), "stale".into());
         }
+        if let Ok(mut kinds) = LAST_KIND.lock() {
+            kinds.insert(id.to_string(), TaskKind::Code);
+        }
         forget_line(id);
         assert_eq!(take_line(id), None);
+        assert_eq!(take_kind(id), None);
     }
 
     #[test]

@@ -136,10 +136,9 @@ pub use consent::{
 pub use cua::{
     check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_platform, cua_serve_args,
     cua_socket_path, cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child,
-    verify_cua_driver, CuaAsset,
-    CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG,
-    CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE,
-    CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
+    verify_cua_driver, CuaAsset, CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS,
+    CUA_DRIVER_LICENSE, CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG,
+    CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
 };
 pub use detect::{
     action_loop, approval_gate_violation, claimed_click_no_change, claims_done, claims_success,
@@ -149,6 +148,7 @@ pub use detect::{
     Evidence, Finding, SpanKind, ACTION_LOOP, APPROVAL_GATE_VIOLATION, CLAIMED_CLICK_NO_CHANGE,
     DONE_WITHOUT_CRITERIA, UNSUPPORTED_ASSURANCE,
 };
+pub(crate) use egress::shared_dir;
 pub use egress::{
     append_egress, current_origin, current_recall, egress_dest, egress_path, guard_egress,
     guard_or_park, guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,

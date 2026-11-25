@@ -55,6 +55,7 @@ grokhub-hub bench local  on-device speed + eval\n  \
 grokhub-hub routine run <name> [--dry-run] [--set key=value]  a saved routine, no model\n  \
 grokhub-hub routine allow|revoke <name>  let its change steps run unattended, or not\n  \
 grokhub-hub routine undo <name>  take back its newest save\n  \
+grokhub-hub node <pair|offer|run|wake|status|forget>  lend this device to the app on another computer\n  \
 grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n  \
 grokhub-hub --version\n  \
 grokhub-hub --help\n"
@@ -139,6 +140,9 @@ fn main() {
                 &grokhub_core::paths::config_dir(),
             ));
         }
+        Launch::Node => {
+            std::process::exit(grokhub_hub::node_client::run_cli(&args[2..]));
+        }
         Launch::Serve => {
             let port = hub_port();
             let banner = format!("grokhub-hub {}", env!("CARGO_PKG_VERSION"));
@@ -189,6 +193,7 @@ mod tests {
             "  grokhub-hub routine run <name> [--dry-run] [--set key=value]  a saved routine, no model\n",
             "  grokhub-hub routine allow|revoke <name>  let its change steps run unattended, or not\n",
             "  grokhub-hub routine undo <name>  take back its newest save\n",
+            "  grokhub-hub node <pair|offer|run|wake|status|forget>  lend this device to the app on another computer\n",
             "  grokhub-hub --askpass <socket>  answer a sudo prompt (the app runs this)\n",
             "  grokhub-hub --mcp-desktop  desktop tools on stdin (Settings switch and hard gate)\n",
             "  grokhub-hub --mcp-cua    Cua Driver gate on stdin (Linux, cuaDriver flag)\n",

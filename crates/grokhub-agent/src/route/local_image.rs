@@ -67,7 +67,7 @@ pub fn kit(config_dir: &Path, models_dir: &Path) -> Option<Kit> {
 /// The kit in the usual places: `{config}/bin/sd-cpp` and `~/GrokHub/models`.
 pub fn kit_here() -> Option<Kit> {
     kit(
-        &crate::perm::config_dir(),
+        &crate::perm::app_config_dir(),
         &grokhub_core::local_draft::models_root()?,
     )
 }
@@ -417,7 +417,7 @@ fn judge(
     picture: &Path,
     stop: &dyn Fn() -> bool,
 ) -> Result<bool, String> {
-    let config = crate::perm::config_dir();
+    let config = crate::perm::app_config_dir();
     let bin = sidecar::find_binary(&config).ok_or("The local engine isn't installed.")?;
     let (model, mmproj) = ie::guard_files(models_dir, g).ok_or("The guard's files are missing.")?;
     let port = sidecar::free_loopback_port()?;

@@ -53,7 +53,9 @@ pub fn embedder() -> Option<Arc<StaticModel>> {
         return Some(model);
     }
     // Tests never reach the network: they set a model with `set_test_model`.
-    embedder_at(&crate::perm::config_dir(), !cfg!(test))
+    // The model and its switch are the app's, shared with the router's bank,
+    // also in an agent's turn.
+    embedder_at(&crate::perm::app_config_dir(), !cfg!(test))
 }
 
 #[cfg(test)]

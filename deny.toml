@@ -31,6 +31,11 @@ ignore = [
     # proc-macro-error is unmaintained. Build-time proc-macro only, pulled in by
     # glib-macros and gtk3-macros 0.18. No runtime code. Drop with the gtk4 move.
     { id = "RUSTSEC-2024-0370", reason = "build-time only, via glib-macros and gtk3-macros 0.18" },
+    # chrono is unmaintained (2026-11) and no release fixes that. The root lockfile
+    # gets it through mxc-sdk 1.0.1 (grokhub-agent); src-tauri also uses it for one
+    # local UTC offset in scheduler.rs. Drop this once mxc-sdk moves off it and the
+    # shell uses time or jiff.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, no safe upgrade; via mxc-sdk 1.0.1 and one offset read in src-tauri" },
 ]
 
 [licenses]

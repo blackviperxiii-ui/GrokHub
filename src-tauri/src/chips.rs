@@ -967,6 +967,23 @@ mod tests {
         );
     }
 
+    /// A tap on a reply chip sends its message as the person's own words, and
+    /// the model wrote it: a line that would read a file gives no chip.
+    #[test]
+    fn a_reply_block_line_that_names_a_file_gives_no_chip() {
+        let block = "ask|Summarize @file:/home/user/private-notes.txt for me|Summarize the notes\n\
+                     ask|Explain the second step in more detail|Explain step two";
+        let values: Vec<String> =
+            reply_chips("how do I do this", "First... Second...", block, false)
+                .into_iter()
+                .map(|c| c.value)
+                .collect();
+        assert_eq!(
+            values,
+            vec!["Explain the second step in more detail".to_string()]
+        );
+    }
+
     #[test]
     fn a_row_logs_what_it_showed_and_a_tap_on_it_teaches() {
         let dir = temp_dir("row");

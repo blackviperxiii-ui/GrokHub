@@ -5735,6 +5735,25 @@ button.primary:not(.quick-chip) {
   margin: 0.5rem 0;
   user-select: all;
 }
+/* Devices → Companions: what one companion may lend, as a row of boxes. */
+.companion-offers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  border: 0;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+.companion-offers legend {
+  padding: 0;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+}
+.companion-offers label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
 /* Composer slash commands: the list sits just above the composer. */
 .slash-wrap {
   position: relative;

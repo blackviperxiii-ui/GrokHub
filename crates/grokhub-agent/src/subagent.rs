@@ -164,8 +164,126 @@ pub fn try_run(call: SpawnCall<'_>) -> Option<(ToolOutput, Usage)> {
     match call.name {
         "spawn_subagent" => Some(spawn(call)),
         "send_subagent_message" => Some((send(&call), Usage::default())),
+        crate::agent_message::TOOL => Some(message(call)),
         _ => None,
     }
+}
+
+/// `message_agent`: one of the person's agents answers as a helper pinned to
+/// its own home, with its own gate, rules and system text
+/// ([`crate::agent_message::brief`]). It sees only the message.
+fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
+    let refuse = |text: String| (ToolOutput::err(text), Usage::default());
+    if call.depth >= DEPTH_LIMIT {
+        return refuse("depth limit reached: a helper's helper can't message an agent".into());
+    }
+    let (Some(tasks), Some(client)) = (call.tasks.clone(), call.client.clone()) else {
+        return refuse("agents need a task hub and a shared model client".into());
+    };
+    let brief = match crate::agent_message::brief(call.arguments, call.gate, call.policy) {
+        Ok(brief) => brief,
+        Err(err) => return refuse(err),
+    };
+    let ticket = match crate::subagent_policy::admit(&crate::subagent_policy::Ask {
+        session: root_session(call.session),
+        explore: false,
+        background: false,
+        worktree: false,
+        lead_model: call.model,
+        objective: &brief.message,
+    }) {
+        Ok(ticket) => ticket,
+        Err(text) => return refuse(text),
+    };
+    let child_cancel = CancelToken::child_of(call.cancel);
+    let kill_cancel = child_cancel.clone();
+    let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || kill_cancel.cancel());
+    let title = format!("Agent: {}", brief.profile.name.trim());
+    let id = match tasks.register_agent(call.agent_id.map(str::to_string), &title, kill, call.model)
+    {
+        Ok(id) => id,
+        Err(err) => return refuse(err),
+    };
+    (call.on_event)(LoopEvent::Task {
+        id: id.clone(),
+        title: title.clone(),
+        done: false,
+    });
+    let conversation_id = format!("{}/{}", call.session, id);
+    if !brief.profile.tools.is_empty() {
+        crate::run::bind_narrower_tool_set(&conversation_id, &brief.profile.tools);
+    }
+    let job = ChildJob {
+        client: Arc::clone(&client),
+        permits: call
+            .permits
+            .clone()
+            .unwrap_or_else(|| Arc::new(crate::gate::ClosedPermits)),
+        desktop: call.desktop.clone().filter(|_| brief.gate.desktop),
+        workspace: brief.workspace,
+        model: call.model.to_string(),
+        effort: call.effort.map(str::to_string),
+        system: brief.system,
+        conversation_id,
+        parent_session: call.session.to_string(),
+        parent_workspace: call.workspace.to_path_buf(),
+        fence: crate::tools::fence::capture(),
+        max_turns: crate::subagent_policy::child_turns(call.max_turns, false),
+        context_length: call.context_length,
+        cancel: child_cancel.clone(),
+        steer: SteerQueue::new(),
+        gate: brief.gate,
+        policy: Some(brief.policy),
+        depth: call.depth.saturating_add(1),
+        tasks: Arc::clone(&tasks),
+        prompt: brief.message,
+        agent_id: id.clone(),
+        kind_name: "agent".to_string(),
+        title: title.clone(),
+        background: false,
+        shared_client: client,
+        ports: crate::tools::ports::current(),
+        origin: crate::harness::current_origin(),
+        fork: None,
+        config: Some(brief.home),
+        class: child_class(crate::route::live::current_class(), false),
+        ticket,
+        work: None,
+        review: None,
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || run_job(job, Some(tx)));
+    let deadline = std::time::Instant::now() + crate::subagent_policy::wall(false);
+    let (done, _) = pump(
+        &rx,
+        call.on_event,
+        call.cancel,
+        call.halt,
+        &child_cancel,
+        deadline,
+    );
+    let done = done.unwrap_or_else(|| {
+        child_cancel.cancel();
+        let _ = tasks.kill(&id);
+        ChildDone {
+            stop: StopReason::Cancelled,
+            usage: Usage::default(),
+            text: "the agent ended without an answer".into(),
+            looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
+        }
+    });
+    (call.on_event)(LoopEvent::Task {
+        id: id.clone(),
+        title,
+        done: true,
+    });
+    if crate::tools::fence::holds_outside(&done.text) {
+        crate::tools::fence::note_untrusted_seen();
+    }
+    let text = format_result(&done.text, &id, None, &done.stop);
+    (ToolOutput::ok(text), done.usage)
 }
 
 struct Spec {
@@ -227,7 +345,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let briefed = !spec.explore
         && !spec.worktree
         && spec.persona.trim().is_empty()
-        && crate::route::boundary::enabled(&crate::perm::config_dir());
+        && crate::route::boundary::enabled(&crate::perm::app_config_dir());
     if briefed {
         let missing = crate::route::boundary::missing_brief(&spec.prompt);
         if !missing.is_empty() {
@@ -5178,5 +5296,89 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn an_agent_answers_from_its_own_home_and_sees_only_the_message() {
+        use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+        let dir = scratch("agentmsg");
+        let cfg = dir.join("app-config");
+        let mut researcher = Profile::new(Kind::Role, "researcher", "Researcher");
+        researcher.about = "Finds sources.".into();
+        TeamFile {
+            version: VERSION,
+            agents: vec![researcher],
+            teams: Vec::new(),
+        }
+        .save(&cfg)
+        .unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("agentmsg");
+        let parent_id = sid.clone();
+        type Seen = (usize, PathBuf, String, Vec<String>);
+        let seen = Arc::new(Mutex::new(Vec::<Seen>::new()));
+        let seen_step = Arc::clone(&seen);
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            let tools = req
+                .tools
+                .iter()
+                .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()))
+                .map(str::to_string)
+                .collect();
+            seen_step.lock().unwrap().push((
+                depth,
+                crate::perm::config_dir(),
+                format!("{:?}", req.input),
+                tools,
+            ));
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "m",
+                        "message_agent",
+                        r#"{"agent":"researcher","message":"Which router has the best range?"}"#,
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth >= 1 {
+                return Ok(text_turn(
+                    "The mesh one, by a wide margin.",
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("parent-done", Usage::default()))
+        });
+        let (out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = seen.lock().unwrap().clone();
+        let parent: Vec<&Seen> = seen.iter().filter(|s| s.0 == 0).collect();
+        let child: Vec<&Seen> = seen.iter().filter(|s| s.0 >= 1).collect();
+        assert!(
+            parent[0].3.iter().any(|t| t == "message_agent"),
+            "{:?}",
+            parent[0].3
+        );
+        assert_eq!(child.len(), 1, "{seen:?}");
+        assert_eq!(child[0].1, cfg.join("agents").join("researcher"));
+        assert!(child[0].2.contains("Which router has the best range?"));
+        assert!(child[0]
+            .2
+            .contains("You are Researcher, one of the person's agents"));
+        assert!(!child[0].2.contains("parent-system"), "{}", child[0].2);
+        // The researcher may message nobody, so it isn't offered the tool.
+        assert!(!child[0].3.iter().any(|t| t == "message_agent"));
+        assert!(joined_outputs(&history).contains("The mesh one, by a wide margin."));
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
