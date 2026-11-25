@@ -156,6 +156,9 @@ jobs:
           name: shell-${{ runner.os }}
           path: dist-release/*
           if-no-files-found: error
+          # Only publish (same run) reads these; the release keeps the files.
+          # The 90-day default filled the account's artifact storage.
+          retention-days: 3
 
   publish:
     needs: [plan, shell-bundles]
