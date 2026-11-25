@@ -86,6 +86,25 @@ fn a_home_is_under_the_agents_folder_and_only_for_a_real_id() {
 }
 
 #[test]
+fn only_a_listed_agents_home_is_an_agent_turn() {
+    let config = scratch("turn");
+    let kid = home(&config, "kid").unwrap();
+    // A folder shaped like a home, with no team file yet, is not a turn.
+    assert_eq!(agent_turn(&kid), None);
+    let mut file = household();
+    file.agents[1].model_tier = "fast".into();
+    file.save(&config).unwrap();
+    let (root, profile) = agent_turn(&kid).unwrap();
+    assert_eq!(root, config);
+    assert_eq!(
+        (profile.id.as_str(), profile.model_tier.as_str()),
+        ("kid", "fast")
+    );
+    assert_eq!(agent_turn(&home(&config, "ghost").unwrap()), None);
+    assert_eq!(agent_turn(&config), None);
+}
+
+#[test]
 fn the_person_may_message_any_agent_and_an_unknown_one_is_named() {
     let file = household();
     for id in ["planner", "kid", "front-desk", "researcher"] {

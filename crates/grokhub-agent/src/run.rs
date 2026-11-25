@@ -578,7 +578,9 @@ fn run_turn(
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
     let config_dir = crate::perm::config_dir();
-    let soft_caps = crate::brain::care_first_enabled(&config_dir);
+    // Care-first is the router's setting, read from the app's folder as the
+    // router reads it, also in an agent's turn.
+    let soft_caps = crate::brain::care_first_enabled(&crate::perm::app_config_dir());
     let intention_block = (input.depth == 0)
         .then(|| crate::close_check::prompt_block(input.conversation_id))
         .filter(|block| !block.is_empty());
@@ -830,7 +832,11 @@ fn run_turn(
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
         let trigger = crate::compact::trigger_tokens(history, prompt_mark);
-        let long = crate::route::live::crosses_long_context(&config_dir, input.model, trigger);
+        let long = crate::route::live::crosses_long_context(
+            &crate::perm::app_config_dir(),
+            input.model,
+            trigger,
+        );
         // xAI bills the whole request at about 2x from 200k prompt tokens, so a
         // Grok chat compacts before that, whatever the model's window.
         let projected = crate::compact::projected_prompt_tokens(history, prompt_mark);
@@ -2007,7 +2013,7 @@ fn repair_shell_lookup(input: &LoopIn<'_>, call: &FunctionCall) -> FunctionCall 
     let model = crate::route::handoff::last_served(input.conversation_id)
         .unwrap_or_else(|| input.model.to_string());
     crate::route::session_metrics::note_repair(
-        &crate::perm::config_dir(),
+        &crate::perm::app_config_dir(),
         input.conversation_id,
         &model,
         tool,

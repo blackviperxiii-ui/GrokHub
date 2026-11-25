@@ -221,6 +221,15 @@ pub fn whose_home(config: &Path) -> Option<(PathBuf, String)> {
     Some((agents.parent()?.to_path_buf(), id.to_string()))
 }
 
+/// Inside an agent's turn: the app's config folder and the agent's profile,
+/// when `config` is the home of an agent the team file lists. A folder that
+/// only looks like a home (`…/agents/<id>` with no such agent) is not one.
+pub fn agent_turn(config: &Path) -> Option<(PathBuf, Profile)> {
+    let (root, id) = whose_home(config)?;
+    let profile = TeamFile::load(&root).ok()?.agent(&id)?.clone();
+    Some((root, profile))
+}
+
 /// `{home}/work`: the folder its tools work in.
 pub fn workspace(config: &Path, id: &str) -> Option<PathBuf> {
     home(config, id).map(|h| h.join("work"))

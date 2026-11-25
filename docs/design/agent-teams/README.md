@@ -23,7 +23,13 @@ Profiles and teams live in `{config}/agent-team.json` (`grokhub_core::agent_team
 Each agent turn runs with the config folder pinned to the agent's home (the
 same `ConfigGuard` the app's helpers already carry across threads). What
 moves with the pin is the agent's own; what the core crate keeps under the
-app's folder stays shared.
+app's folder stays shared. Every thread a turn starts for its own work
+(batched tool calls, background compaction, MCP connects) takes the pin with
+it. Shared state the agent crate keeps is read from the app's folder inside a
+turn too: the router's (`perm::app_config_dir`), and egress consent, its log
+and its cards, which the egress guard and the consent ledger resolve to the
+app's folder for an agent's home. The person's chat words ("use low effort
+for debugging") steer their chat and its helpers, not an agent.
 
 | Its own (under its home) | Shared with the app | Never crosses a message |
 |---|---|---|
@@ -98,10 +104,18 @@ task that hasn't ended can be canceled.
   caller's allow rules and grants stay the caller's.
 - **Tools.** A profile's `tools` list binds the helper's tool set, kept
   inside any job tool set the caller already runs under.
-- **Playbooks.** A profile can list the playbooks it may use. The usual pick
-  then chooses only among those.
-- **Model profiles.** A profile can name a `model_profiles.toml` tier (for
-  example `fast`). The router picks within that tier, else as usual.
+- **Playbooks.** The agent's message is sorted without a model, and the
+  usual pick chooses from the app's playbooks the one that fits. A profile
+  that lists `playbooks` picks only among those. An unclear message gets
+  none, as in a chat. The steps go into the agent's system text, before its
+  persona.
+- **Models.** The router's state stays the app's: an agent's calls route
+  over the app's model list, local models, spend and benches
+  (`perm::app_config_dir`), not over its home. A profile can name a
+  `model_profiles.toml` tier (for example `workhorse`). Auto then picks
+  among that tier's models it could send (rule `agent:tier`); the device
+  has no tier and stays in reach. A tier no such model carries picks as
+  usual (rule `agent:tier:missing`).
 
 ## Build order
 

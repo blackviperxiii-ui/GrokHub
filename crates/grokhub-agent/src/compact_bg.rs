@@ -119,7 +119,9 @@ pub fn start_unless_fresh(key: &str, history: &[InputItem], make: impl FnOnce() 
     let start = make();
     let shapes = start.history.iter().map(shape).collect();
     // The worker keeps the run's fence, origin and recall lines, as a batch
-    // worker does, so its calls are logged like the run's own.
+    // worker does, so its calls are logged like the run's own, and its config
+    // folder, so an agent's summary stays the agent's.
+    let config = crate::perm::pinned_config();
     let fence = crate::tools::fence::capture();
     let origin = crate::harness::current_origin();
     let recall = crate::harness::current_recall();
@@ -127,6 +129,7 @@ pub fn start_unless_fresh(key: &str, history: &[InputItem], make: impl FnOnce() 
     let spawned = std::thread::Builder::new()
         .name("grokhub-compact-bg".into())
         .spawn(move || -> Outcome {
+            let _config = config.map(crate::perm::ConfigGuard::set);
             let _fence = crate::tools::fence::enter(&fence);
             let _origin = crate::harness::OriginScope::enter(origin);
             let _recall = crate::harness::RecallScope::enter(recall);

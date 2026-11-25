@@ -201,3 +201,156 @@ fn an_agent_gets_its_own_folders_and_system_text_with_only_the_message() {
         brief.system
     );
 }
+
+#[test]
+fn an_agent_follows_the_playbook_that_fits_its_message_among_those_it_lists() {
+    let config = scratch("playbook");
+    household(&config);
+    let _pin = ConfigGuard::set(&config);
+    let steps = |message: &str| {
+        let args = json!({"agent": "researcher", "message": message}).to_string();
+        let system = brief(&args, &gate(PermMode::Auto, false, false), None)
+            .unwrap()
+            .system;
+        system
+            .lines()
+            .find(|line| line.starts_with(grokhub_core::playbook::PLAYBOOK_HEAD))
+            .map(str::to_string)
+    };
+    const CODE: &str = "add a retry to fetch() in src/net.rs";
+    const CODE_STEPS: &str = "Steps for this turn: Code changes. Reproduce first, make the smallest change, prove it with tests, then give a short summary.";
+    assert_eq!(steps(CODE).as_deref(), Some(CODE_STEPS));
+    // An unclear message gets none, as in a chat.
+    assert_eq!(steps("zxq blorp"), None);
+    // A listed set limits the pick: research doesn't fit a code change.
+    let mut file = TeamFile::load(&config).unwrap();
+    file.agents[3].playbooks = Some(vec!["research".into()]);
+    file.save(&config).unwrap();
+    assert_eq!(steps(CODE), None);
+    file.agents[3].playbooks = Some(vec!["research".into(), "code-dev".into()]);
+    file.save(&config).unwrap();
+    assert_eq!(steps(CODE).as_deref(), Some(CODE_STEPS));
+}
+
+/// An agent's model calls route over the app's model list (its home has
+/// none) and within the tier its profile names.
+/// The app's model list: `grok-4.7` (flagship) and `grok-4.3` (workhorse),
+/// both priced so Auto may send them.
+fn two_models(config: &Path) {
+    use grokhub_core::model_registry::store::save_registry;
+    use grokhub_core::model_registry::{
+        Credential, Listing, ModelMeta, Prices, Registry, SourceKind,
+    };
+    let meta = |id: &str| ModelMeta {
+        id: id.into(),
+        tool_calling: Some(true),
+        api_shape: Some("responses".into()),
+        context_length: Some(256_000),
+        prices: Prices {
+            prompt: Some(1),
+            cached: Some(1),
+            completion: Some(1),
+            ..Prices::default()
+        },
+        ..ModelMeta::default()
+    };
+    let mut reg = Registry::default();
+    reg.entitlement.credential = Credential::Plan;
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::XaiApi,
+            vec![meta("grok-4.7"), meta("grok-4.3")],
+        )],
+        &[],
+        1,
+    );
+    save_registry(config, &reg).unwrap();
+}
+
+#[test]
+fn an_agents_calls_route_over_the_apps_models_within_its_tier() {
+    use crate::route::live::{decide, RouteCall};
+    let config = scratch("route");
+    household(&config);
+    two_models(&config);
+    let call = RouteCall {
+        provider: "xai",
+        class: "chat:default",
+        model: "grok-4.7",
+        session: "agent-route/1",
+        text: "Which router has the best range?",
+        needs_tools: true,
+        ..RouteCall::default()
+    };
+    let routed = |pin: &Path| {
+        let _pin = ConfigGuard::set(pin);
+        let d = decide(&crate::perm::app_config_dir(), &call, 1_000_000);
+        let tiered = d
+            .route
+            .rule_ids
+            .iter()
+            .any(|id| id == crate::route::AGENT_TIER_RULE);
+        (crate::perm::app_config_dir(), d.route.model, tiered)
+    };
+    let home = home_of(&config, "researcher");
+    // No tier: routed as usual, over the app's models.
+    let (dir, _, tiered) = routed(&home);
+    assert_eq!((dir, tiered), (config.clone(), false));
+    for (tier, model) in [("workhorse", "grok-4.3"), ("flagship", "grok-4.7")] {
+        let mut file = TeamFile::load(&config).unwrap();
+        file.agents[3].model_tier = tier.into();
+        file.save(&config).unwrap();
+        assert_eq!(
+            routed(&home),
+            (config.clone(), model.to_string(), true),
+            "{tier}"
+        );
+        // The person's own chat keeps routing as usual.
+        assert!(!routed(&config).2, "{tier}");
+    }
+}
+
+#[test]
+fn the_persons_chat_words_dont_steer_an_agents_turn() {
+    use crate::route::live::{decide, RouteCall};
+    use crate::route::task_steer;
+    let config = scratch("steer");
+    household(&config);
+    two_models(&config);
+    let chat = (0..)
+        .map(|i| format!("agent-steer-{i}"))
+        .find(|c| {
+            !crate::route::guard::in_holdout(c)
+                && !crate::route::guard::in_holdout(&format!("{c}/s1"))
+        })
+        .unwrap();
+    assert_eq!(
+        task_steer::hear(&config, &chat, "from here on use grok-4.3 for debugging"),
+        Ok(true)
+    );
+    let session = format!("{chat}/s1");
+    let call = RouteCall {
+        provider: "xai",
+        class: "chat:default",
+        model: "grok-4.7",
+        session: &session,
+        text: "debug why the parser panics on Windows",
+        needs_tools: true,
+        ..RouteCall::default()
+    };
+    let routed = |pin: &Path| {
+        let _pin = ConfigGuard::set(pin);
+        let d = decide(&crate::perm::app_config_dir(), &call, 1_000_000);
+        let named = d
+            .route
+            .rule_ids
+            .iter()
+            .any(|id| id == task_steer::MODEL_RULE);
+        (d.route.model, named)
+    };
+    // The person's chat (and its helpers) follow the words.
+    assert_eq!(routed(&config), ("grok-4.3".to_string(), true));
+    // An agent sees only its message.
+    let (_, named) = routed(&home_of(&config, "researcher"));
+    assert!(!named);
+}
