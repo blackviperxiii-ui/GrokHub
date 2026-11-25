@@ -524,7 +524,7 @@ mod tests {
         turn("shell-web-2", "which locker is mine", "Locker 12.");
         crate::web_origin::note_chat(&dir, "shell-web-1").unwrap();
         crate::web_origin::note_chat(&dir, "shell-web-2").unwrap();
-        crate::web_origin::start_run("shell-auto-webjob-3-1", RunOrigin::Browser);
+        crate::web_origin::start_run(&dir, "shell-auto-webjob-3-1", RunOrigin::Browser).unwrap();
         let web_day = day(crate::session::load_session("shell-web-2").unwrap().created as i64);
         let web_hits = format!(
             "2 hits for \"locker\", page 1 of 1.\n\n\

@@ -135,7 +135,7 @@ pub fn prepare(
     }
     // A job a paired browser wrote resumes without the desktop, as it ran.
     let gate = match &automation {
-        Some(job) => crate::automations::gate_for(config_dir, &job.id, gate),
+        Some(job) => crate::automations::gate_for(config_dir, job, gate),
         None => gate,
     };
     let live = Live::claim(id, &card.title, others)?;
@@ -153,6 +153,9 @@ pub fn prepare(
         }
         // The block names the cut, so it is built before the resume clears it.
         let block = res::resume_block(c);
+        // A card whose words a paired browser wrote resumes as a browser's
+        // run, read with the words the block carries.
+        let gate = gate.with_origin(grokhub_agent::web_origin::card_origin(config_dir, id));
         let session = c
             .checkpoint
             .as_ref()

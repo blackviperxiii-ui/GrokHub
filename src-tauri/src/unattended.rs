@@ -127,8 +127,25 @@ pub fn run(job: Job) -> UnattendedDone {
     let config_dir = grokhub_agent::perm::config_dir();
     // The run starts here with its origin, which its helpers, its routine
     // steps and the jobs it writes take on. A session that started as a
-    // browser's (a browser's chat, or a resumed browser run) stays one.
-    grokhub_agent::web_origin::start_run(&job.session_id, job.gate.origin);
+    // browser's (a browser's chat, or a resumed browser run) stays one. A
+    // browser run that can't be kept on file as one doesn't start.
+    if let Err(error) =
+        grokhub_agent::web_origin::start_run(&config_dir, &job.session_id, job.gate.origin)
+    {
+        return UnattendedDone {
+            text: String::new(),
+            thought: String::new(),
+            stop_reason: "error".into(),
+            error,
+            usage: Default::default(),
+            meter: String::new(),
+            context_tokens_used: 0,
+            context_window_tokens: 0,
+            session_id: job.session_id,
+            permission_cards: 0,
+            elicit_cards: 0,
+        };
+    }
     let origin = grokhub_agent::web_origin::of_in(&config_dir, Some(&job.session_id));
     let gate = job.gate.with_origin(origin).gate();
     let desktop_ops = gate.desktop.then(|| {

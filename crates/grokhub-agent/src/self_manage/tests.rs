@@ -972,3 +972,68 @@ fn work_tools_respect_caps_and_ownership_and_have_no_delete() {
         .all(|t| !t["name"].as_str().unwrap().starts_with("work_")));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A browser run's work tools mark the parts of a card they write, so a run
+/// of it later gets no desktop; a window run's write marks nothing, and a
+/// browser's card whose mark can't be kept on file isn't filed.
+#[test]
+fn a_browser_runs_work_tools_mark_the_cards_they_write() {
+    use crate::web_origin::{card_origin, start_run, RunOrigin, CARDS_FILE};
+    use grokhub_core::work_run as wr;
+    let root = dir("work-web");
+    start_run(&root, "shell-web-work-1", RunOrigin::Browser).unwrap();
+    let as_run = |session: &'static str| SelfCtx {
+        session: Some(session),
+        ..SelfCtx::new(&root)
+    };
+    let (web, desk) = (as_run("shell-web-work-1"), as_run("shell-desk-work-1"));
+    let add = |ctx: &SelfCtx<'_>, title: &str| {
+        let args = json!({ "title": title, "goal": "click Send in Mail", "steps": ["Open Mail"] });
+        run_with(ctx, "work_add", &args)
+    };
+    let id_in = |text: &str| text["Added ".len()..text.len() - " in Todo.".len()].to_string();
+    let theirs = id_in(&add(&web, "Send the report").text);
+    let mine = id_in(&add(&desk, "Tidy the logs").text);
+    let marks = || {
+        let raw = std::fs::read_to_string(root.join(CARDS_FILE)).unwrap();
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    };
+    assert_eq!(marks(), json!({ &theirs: { "steps": 1, "words": 1 } }));
+    assert_eq!(
+        [card_origin(&root, &theirs), card_origin(&root, &mine)],
+        [RunOrigin::Browser, RunOrigin::Window]
+    );
+    let update = |ctx: &SelfCtx<'_>, args: serde_json::Value| {
+        let out = run_with(ctx, "work_update", &args);
+        (out.failed, card_origin(&root, &mine))
+    };
+    // A note goes to the card's log, not its words.
+    let note = json!({ "id": mine, "note": "looked at it" });
+    assert_eq!(update(&web, note), (false, RunOrigin::Window));
+    let next = json!({ "id": mine, "next": "click Send in Mail", "blocker": "Mail" });
+    assert_eq!(update(&web, next), (false, RunOrigin::Browser));
+    // A window run's write takes no mark off.
+    let next = json!({ "id": mine, "next": "Open Mail" });
+    assert_eq!(update(&desk, next), (false, RunOrigin::Browser));
+    assert_eq!(
+        marks(),
+        json!({
+            &theirs: { "steps": 1, "words": 1 },
+            &mine: { "blocker": 1, "steps": 1 },
+        })
+    );
+    // A marks file that can't be read: the browser's card isn't filed.
+    std::fs::write(root.join(CARDS_FILE), "[not json").unwrap();
+    let count = || wr::read_board_file(&wr::board_path(&root)).unwrap().len();
+    let before = count();
+    let refused = add(&web, "Click Send in Mail");
+    assert_eq!(
+        (
+            refused.failed,
+            refused.text.starts_with(CARDS_FILE),
+            count()
+        ),
+        (true, true, before)
+    );
+    let _ = std::fs::remove_dir_all(root);
+}

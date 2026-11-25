@@ -864,7 +864,7 @@ mod tests {
         let _config = crate::perm::ConfigGuard::set(&dir);
         // A chat a browser started, and a run of a job a browser wrote.
         note_chat(&dir, "shell-web-desk-1").unwrap();
-        start_run("shell-auto-webjob-5-1", RunOrigin::Browser);
+        start_run(&dir, "shell-auto-webjob-5-1", RunOrigin::Browser).unwrap();
         let desk = SpyDesk::default();
         let stop = || false;
         let steps = |session: Option<&str>| -> Vec<String> {
@@ -909,6 +909,74 @@ mod tests {
             *desk.0.lock().unwrap(),
             vec!["click", "screenshot", "click", "screenshot"]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A routine the person saved and allowed here, run from a browser's
+    /// run, clicks and types nothing: its desktop steps get no desktop
+    /// either. Run from a chat started here, the same steps reach it.
+    #[test]
+    fn a_browser_runs_routine_gets_no_desktop_it_was_handed() {
+        use crate::web_origin::{note_chat, RunOrigin, RunScope};
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-routine-desktop-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _config = crate::perm::ConfigGuard::set(&dir);
+        crate::harness::use_key_store_for(
+            &dir,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
+        let rdir = grokhub_core::routine::routines_dir(&dir).join("open-notes");
+        std::fs::create_dir_all(&rdir).unwrap();
+        let saved = serde_json::json!({
+            "version": 1, "name": "open-notes", "about": "Opens my notes", "triggers": ["chat"],
+            "steps": [{ "id": "open", "desktop": { "screen": null, "ops": [
+                { "Click": { "x": 10, "y": 20 } }, { "Type": { "text": "hello" } }
+            ] } }]
+        });
+        std::fs::write(rdir.join(grokhub_core::routine::FILE), saved.to_string()).unwrap();
+        let routine =
+            grokhub_core::routine::Routine::load(&rdir, &crate::routine_run::step_tool).unwrap();
+        crate::routine_consent::grant(&dir, &routine, 1).unwrap();
+        note_chat(&dir, "shell-web-rt-1").unwrap();
+        let desk = SpyDesk::default();
+        let stop = || false;
+        let ran = |session: Option<&str>| -> (bool, String) {
+            let ctx = ToolCtx {
+                workspace: &dir,
+                desktop: Some(&desk),
+                stop: &stop,
+                tasks: None,
+                owner: None,
+                session,
+            };
+            let out = dispatch(&ctx, run_routine::NAME, r#"{"name":"open-notes"}"#);
+            let said: Vec<&str> = out.text.lines().collect();
+            (out.failed, said[1..said.len() - 1].join("\n"))
+        };
+        let refused = (
+            true,
+            "Stopped at open: desktop steps need the app's desktop control".to_string(),
+        );
+        assert_eq!(ran(Some("shell-web-rt-1")), refused);
+        assert_eq!(ran(Some("shell-web-rt-1/helper-1")), refused);
+        {
+            let _run = RunScope::enter(Some("shell-web-rt-1"));
+            assert_eq!(ran(None), refused);
+        }
+        assert!(desk.0.lock().unwrap().is_empty());
+        assert_eq!(
+            crate::web_origin::of_in(&dir, Some("shell-web-rt-1")),
+            RunOrigin::Browser
+        );
+        assert_eq!(
+            ran(Some("shell-desk-rt-1")),
+            (false, "open: done\ndone\n\nFinished.".to_string())
+        );
+        assert_eq!(*desk.0.lock().unwrap(), vec!["click", "type"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

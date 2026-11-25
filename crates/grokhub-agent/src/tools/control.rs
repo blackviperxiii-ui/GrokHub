@@ -468,8 +468,9 @@ pub(crate) fn write_automation(
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
-    let mark =
-        |id: &str| crate::web_origin::note_job_write(&crate::perm::config_dir(), id, session);
+    let mark = |id: &str, before: Option<&str>| {
+        crate::web_origin::note_job_write(&crate::perm::config_dir(), id, session, before, prompt)
+    };
     let mut now = clock();
     now.now_ms = now_ms;
     let name = auto_name(prompt);
@@ -477,8 +478,8 @@ pub(crate) fn write_automation(
         let Some(row) = list.iter_mut().find(|row| row.id == id) else {
             return Err(format!("automation {id} not found"));
         };
+        let before = std::mem::replace(&mut row.instructions, prompt.to_string());
         row.name = name;
-        row.instructions = prompt.to_string();
         row.schedule = "heartbeat".into();
         row.heartbeat_every_min = mins;
         row.enabled = true;
@@ -495,7 +496,7 @@ pub(crate) fn write_automation(
         if let Some(slot) = list.iter_mut().find(|item| item.id == id) {
             *slot = row.clone();
         }
-        mark(&id)?;
+        mark(&id, Some(&before))?;
         ledgered(&path, &id, &format!("changed to every {mins} min"), || {
             save_list(&path, &list)
         })?;
@@ -533,7 +534,7 @@ pub(crate) fn write_automation(
     }
     let id = row.id.clone();
     list.push(row.clone());
-    mark(&id)?;
+    mark(&id, None)?;
     ledgered(&path, &id, &format!("scheduled every {mins} min"), || {
         save_list(&path, &list)
     })?;
@@ -783,7 +784,7 @@ mod tests {
     fn a_browsers_chat_marks_the_jobs_its_agent_writes() {
         let dir = scratch("web-jobs");
         let _guard = crate::perm::ConfigGuard::set(&dir);
-        crate::web_origin::start_run("shell-web-jobs-1", crate::web_origin::RunOrigin::Browser);
+        crate::web_origin::start_run(&dir, "shell-web-jobs-1", RunOrigin::Browser).unwrap();
         let call = |session: &str, name: &str, args: &str| {
             let ctx = ToolCtx {
                 workspace: &dir,
@@ -799,7 +800,12 @@ mod tests {
         };
         let id_in = |text: &str| text.lines().next().unwrap()["created ".len()..].to_string();
         let marks = || std::fs::read_to_string(dir.join(crate::web_origin::JOBS_FILE));
-        let web = |id: &str| crate::web_origin::job_origin(&dir, id) == RunOrigin::Browser;
+        let marked = || serde_json::from_str::<serde_json::Value>(&marks().unwrap()).unwrap();
+        let web = |id: &str| {
+            let jobs = load_list(&store_path()).unwrap();
+            let words = &jobs.iter().find(|job| job.id == id).unwrap().instructions;
+            crate::web_origin::job_origin(&dir, id, words) == RunOrigin::Browser
+        };
 
         let here = id_in(&call(
             "shell-desk-jobs-1",
@@ -828,7 +834,7 @@ mod tests {
             r#"{"instructions":"take a screenshot","every":"1d","reason":"asked"}"#,
         ));
         assert!(web(&made));
-        assert_eq!(marks().unwrap(), format!(r#"["{here}","{made}"]"#));
+        assert_eq!(marked(), serde_json::json!({ &here: null, &made: null }));
 
         // The window's chat writing again takes no mark away.
         call(
@@ -836,7 +842,8 @@ mod tests {
             "automation_modify",
             &format!(r#"{{"id":"{made}","instructions":"take two screenshots","reason":"asked"}}"#),
         );
-        assert_eq!(marks().unwrap(), format!(r#"["{here}","{made}"]"#));
+        assert_eq!(marked(), serde_json::json!({ &here: null, &made: null }));
+        assert!(web(&made));
         let _ = take_automation_changes();
         let _ = crate::harness::take_self_changes(&dir);
         let _ = std::fs::remove_dir_all(&dir);
@@ -856,7 +863,7 @@ mod tests {
         // A chat a browser started, on file only, as after a restart.
         crate::web_origin::note_chat(&dir, "shell-web-run-1").unwrap();
         // The run of a job a browser wrote.
-        crate::web_origin::start_run("shell-auto-webjob-7-1", RunOrigin::Browser);
+        crate::web_origin::start_run(&dir, "shell-auto-webjob-7-1", RunOrigin::Browser).unwrap();
         let call = |session: Option<&str>, name: &str, args: &str| {
             let ctx = ToolCtx {
                 workspace: &dir,
@@ -888,7 +895,7 @@ mod tests {
         };
         let jobs = load_list(&store_path()).unwrap();
         assert_eq!(jobs[0].instructions, "click Send in Mail", "{}", out.text);
-        let origin = crate::web_origin::job_origin(&dir, &here);
+        let origin = crate::web_origin::job_origin(&dir, &here, &jobs[0].instructions);
         let said = out.text.replace(&here, "<id>");
         let _ = take_automation_changes();
         let _ = crate::harness::take_self_changes(&dir);
