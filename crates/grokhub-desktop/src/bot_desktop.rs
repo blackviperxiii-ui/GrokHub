@@ -29,14 +29,16 @@ use x11rb::rust_connection::{DefaultStream, RustConnection};
 
 /// Where X servers put their sockets.
 pub const SOCKET_DIR: &str = "/tmp/.X11-unix";
+/// Where X servers put their lock files.
+const LOCK_DIR: &str = "/tmp";
 /// Display numbers tried, high enough to stay clear of real sessions.
 pub const DISPLAYS: std::ops::RangeInclusive<u32> = 90..=199;
+/// Display numbers one start tries when its server stops at start.
+const START_TRIES: u32 = 4;
 const COOKIE_NAME: &[u8] = b"MIT-MAGIC-COOKIE-1";
 /// Xauthority's wildcard family: the entry matches any host.
 const FAMILY_WILD: u16 = 0xffff;
 const READY_WITHIN: Duration = Duration::from_secs(10);
-/// Starts tried when another server takes the picked display first.
-const START_TRIES: usize = 4;
 /// The shared screen's size.
 pub const SHARED_SIZE: (u32, u32) = (1280, 800);
 
@@ -191,13 +193,21 @@ pub fn xauth_entry(display: u32, cookie: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The first display number in `range` that no server holds in `socket_dir`
-/// (its socket) or `/tmp` (its lock file).
-/// Another X server holds `display`: its socket or its lock is there.
-fn display_in_use(display: u32) -> bool {
-    free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), display..=display).is_none()
+/// Display `n`'s lock file, which holds its server's pid.
+fn lock_file(n: u32) -> PathBuf {
+    Path::new(LOCK_DIR).join(format!(".X{n}-lock"))
 }
 
+fn lock_pid(n: u32) -> Option<u32> {
+    std::fs::read_to_string(lock_file(n))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The first display number in `range` that no server holds in `socket_dir`
+/// (its socket) or `lock_dir` (its lock file).
 pub fn free_display(
     socket_dir: &Path,
     lock_dir: &Path,
@@ -231,46 +241,46 @@ impl BotDesktop {
 
     /// [`BotDesktop::start`] with a chosen server.
     pub fn start_with(server: Server, dir: &Path, size: (u32, u32)) -> Result<Self, String> {
-        Self::start_picking(server, dir, size, || {
-            free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), DISPLAYS)
-        })
-    }
-
-    /// Starts on the display `pick` names. Another server can take a free
-    /// number between the check and the start (two screens starting at
-    /// once): ours then stops at start with the number in use, so it picks
-    /// again, a few times at most.
-    fn start_picking(
-        server: Server,
-        dir: &Path,
-        size: (u32, u32),
-        mut pick: impl FnMut() -> Option<u32>,
-    ) -> Result<Self, String> {
-        let mut lost = None;
-        for _ in 0..START_TRIES {
-            let display = pick().ok_or("no free display number for Bot Desktop")?;
-            match Self::start_on(server, dir, size, display) {
-                Err(err) if display_in_use(display) => lost = Some(err),
-                started => return started,
+        std::fs::create_dir_all(dir).map_err(|e| format!("Bot Desktop folder: {e}"))?;
+        let program = crate::resolve_bin(server.program())
+            .ok_or_else(|| format!("{} isn't installed", server.program()))?;
+        let (sockets, locks) = (Path::new(SOCKET_DIR), Path::new(LOCK_DIR));
+        let mut tries = 1;
+        let mut from = *DISPLAYS.start();
+        loop {
+            let display = free_display(sockets, locks, from..=*DISPLAYS.end())
+                .or_else(|| free_display(sockets, locks, DISPLAYS))
+                .ok_or("no free display number for Bot Desktop")?;
+            let desk = Self::spawn(server, &program, dir, size, display)?;
+            match desk.wait_ready() {
+                Ok(()) => return Ok(desk),
+                // It stopped at start: most often another X server took the
+                // number between the check and the start (it can be gone
+                // again by now). Servers that start together all pick the
+                // lowest free number, so the next try looks from a random one.
+                Err(_) if tries < START_TRIES && !desk.running() => {
+                    tries += 1;
+                    let r = random_bytes(4)?;
+                    let span = DISPLAYS.end() - DISPLAYS.start() + 1;
+                    from = DISPLAYS.start() + u32::from_le_bytes([r[0], r[1], r[2], r[3]]) % span;
+                }
+                Err(e) => return Err(e),
             }
         }
-        Err(lost.unwrap_or_else(|| "no free display number for Bot Desktop".into()))
     }
 
-    fn start_on(
+    fn spawn(
         server: Server,
+        program: &Path,
         dir: &Path,
         size: (u32, u32),
         display: u32,
     ) -> Result<Self, String> {
-        std::fs::create_dir_all(dir).map_err(|e| format!("Bot Desktop folder: {e}"))?;
-        let cookie = random_cookie()?;
+        let cookie = random_bytes(16)?;
         let auth = dir.join(format!("bot-desktop-{display}.xauth"));
         let rfb = dir.join(format!("bot-desktop-{display}.rfb.sock"));
         write_private(&auth, &xauth_entry(display, &cookie))?;
         let _ = std::fs::remove_file(&rfb);
-        let program = crate::resolve_bin(server.program())
-            .ok_or_else(|| format!("{} isn't installed", server.program()))?;
         let child = Command::new(program)
             .args(server_args(server, display, &auth, size, &rfb))
             .stdin(Stdio::null())
@@ -278,7 +288,7 @@ impl BotDesktop {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("couldn't start {}: {e}", server.program()))?;
-        let desk = Self {
+        Ok(Self {
             child: Mutex::new(child),
             server,
             display,
@@ -286,9 +296,7 @@ impl BotDesktop {
             rfb,
             cookie,
             size,
-        };
-        desk.wait_ready()?;
-        Ok(desk)
+        })
     }
 
     fn wait_ready(&self) -> Result<(), String> {
@@ -330,13 +338,11 @@ impl BotDesktop {
         }
         let _ = child.wait();
         drop(child);
-        // Killed, the server can't remove its own lock and socket, and a
-        // stale pair holds the number until a reboot. The lock names the
-        // server that made it, so another server's pair stays.
-        let lock = Path::new("/tmp").join(format!(".X{}-lock", self.display));
-        if std::fs::read_to_string(&lock).is_ok_and(|held| held.trim() == pid.to_string()) {
-            let _ = std::fs::remove_file(&lock);
+        // A killed server can't remove its lock and socket, and left behind
+        // each one would use up a display number. Another server's stay.
+        if lock_pid(self.display) == Some(pid) {
             let _ = std::fs::remove_file(Path::new(SOCKET_DIR).join(format!("X{}", self.display)));
+            let _ = std::fs::remove_file(lock_file(self.display));
         }
         let _ = std::fs::remove_file(&self.auth);
         let _ = std::fs::remove_file(&self.rfb);
@@ -432,12 +438,12 @@ impl Drop for BotDesktop {
     }
 }
 
-fn random_cookie() -> Result<Vec<u8>, String> {
-    let mut cookie = vec![0u8; 16];
+fn random_bytes(n: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = vec![0u8; n];
     std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut cookie))
-        .map_err(|e| format!("Bot Desktop cookie: {e}"))?;
-    Ok(cookie)
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|e| format!("Bot Desktop random bytes: {e}"))?;
+    Ok(bytes)
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -610,55 +616,51 @@ mod tests {
         // No cookie, no connection.
         let sock = Path::new(SOCKET_DIR).join(format!("X{}", &desk.display_name()[1..]));
         let (stream, _) =
-            DefaultStream::from_unix_stream(UnixStream::connect(sock).unwrap()).unwrap();
+            DefaultStream::from_unix_stream(UnixStream::connect(&sock).unwrap()).unwrap();
         assert!(RustConnection::connect_to_stream(stream, 0).is_err());
 
         let auth = desk.xauthority().to_path_buf();
+        let lock = lock_file(desk.display);
+        assert!(lock.exists());
         drop(desk);
         assert!(!auth.exists());
+        // A killed server leaves its lock and socket; stop removes them, or
+        // every start would use up one more display number.
+        assert!(!lock.exists());
+        assert!(!sock.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Two screens starting at once can pick the same free number: the one
-    /// that loses it starts again on another, and the first keeps running.
+    /// Two screens started at the same moment (two processes, or two tests
+    /// side by side) both start, each on its own display number.
     #[test]
-    fn a_screen_that_loses_its_display_number_starts_on_another() {
+    fn two_screens_started_at_once_each_get_a_display() {
         if crate::resolve_bin("Xvfb").is_none() {
             eprintln!("skipped: no Xvfb");
             return;
         }
-        let dir = std::env::temp_dir().join(format!("grokhub-botdesk-race-{}", std::process::id()));
-        let first =
-            BotDesktop::start_with(Server::Xvfb, &dir.join("a"), (320, 240)).expect("starts");
-        let taken = first.display;
-        // The race: the first pick is the number the other screen just took.
-        let mut picks = vec![taken];
-        let second = BotDesktop::start_picking(Server::Xvfb, &dir.join("b"), (320, 240), || {
-            picks
-                .pop()
-                .or_else(|| free_display(Path::new(SOCKET_DIR), Path::new("/tmp"), DISPLAYS))
-        })
-        .expect("starts on another number");
-        assert_ne!(second.display, taken);
-        assert!(first.connect().is_ok(), "the first screen still runs");
-        assert!(second.connect().is_ok());
-        // A number that stays taken is tried a few times, then named.
-        let mut tries = 0;
-        let lost = BotDesktop::start_picking(Server::Xvfb, &dir.join("c"), (320, 240), || {
-            tries += 1;
-            Some(taken)
-        })
-        .err()
-        .expect("never starts on a taken number");
-        assert_eq!(
-            (tries, lost.as_str()),
-            (START_TRIES, "Xvfb stopped at start (exit status: 1)")
-        );
-        let numbers = (first.display, second.display);
-        drop((first, second));
-        // A stopped screen frees its number for the next one.
-        assert!(!display_in_use(numbers.0) && !display_in_use(numbers.1));
-        let _ = std::fs::remove_dir_all(&dir);
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let starts: Vec<_> = (0..2)
+            .map(|i| {
+                let gate = Arc::clone(&gate);
+                std::thread::spawn(move || {
+                    let dir = std::env::temp_dir()
+                        .join(format!("grokhub-botdesk-twin-{}-{i}", std::process::id()));
+                    gate.wait();
+                    BotDesktop::start_with(Server::Xvfb, &dir, (320, 240)).map(|d| (d, dir))
+                })
+            })
+            .collect();
+        let desks: Vec<_> = starts
+            .into_iter()
+            .map(|t| t.join().unwrap().expect("starts"))
+            .collect();
+        assert_ne!(desks[0].0.display_name(), desks[1].0.display_name());
+        assert!(desks.iter().all(|(d, _)| d.running()));
+        for (desk, dir) in desks {
+            drop(desk);
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     /// The native desktop tools, pointed at a real Xvfb Bot Desktop: a

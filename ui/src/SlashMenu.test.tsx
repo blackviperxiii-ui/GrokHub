@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   runSlash: vi.fn<(line: string) => Promise<SlashEffect>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
   addAutomation: vi.fn<(text: string) => Promise<unknown[]>>(),
+  downloadModels: vi.fn<(ids: string[]) => Promise<unknown>>(),
 }));
 
 vi.mock("./api", async () => {
@@ -24,6 +25,7 @@ vi.mock("./api", async () => {
   runSlash: api.runSlash,
   closeChat: api.closeChat,
   addAutomation: api.addAutomation,
+  downloadModels: api.downloadModels,
   answerElicit: vi.fn(),
   saveSettings: vi.fn(),
   answerPermission: vi.fn(),
@@ -411,6 +413,21 @@ describe("composer slash commands", () => {
     api.runSlash.mockResolvedValueOnce({ kind: "openSection", section: "labs" });
     await userEvent.type(screen.getByLabelText("Message"), "/plugins{Enter}");
     await waitFor(() => expect(onOpenSection).toHaveBeenCalledWith("labs"));
+  });
+
+  it("/download with a model starts its download, and alone opens Local AI", async () => {
+    const onOpenSection = vi.fn();
+    api.downloadModels.mockResolvedValueOnce({});
+    render(<Chat onOpenSettings={() => {}} onOpenSection={onOpenSection} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "downloadModel", id: "qwen3.6-35b-a3b-heretic-q4_k_m", name: "Qwen3.6 35B-A3B" });
+    await userEvent.type(screen.getByLabelText("Message"), "/download qwen3.6-35b-a3b-heretic-q4_k_m{Enter}");
+    await waitFor(() => expect(api.downloadModels).toHaveBeenCalledWith(["qwen3.6-35b-a3b-heretic-q4_k_m"]));
+    expect(await screen.findByRole("status", { name: "/download result" })).toHaveTextContent(
+      "Downloading Qwen3.6 35B-A3B. Settings → Local AI shows how it's going.",
+    );
+    api.runSlash.mockResolvedValueOnce({ kind: "openSection", section: "localAi" });
+    await userEvent.type(screen.getByLabelText("Message"), "/download{Enter}");
+    await waitFor(() => expect(onOpenSection).toHaveBeenCalledWith("localAi"));
   });
 
   it("/imagine-video opens Imagine and starts that prompt", async () => {
