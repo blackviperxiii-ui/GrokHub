@@ -38,9 +38,15 @@ pub fn run(workspace: &Path, session: Option<&str>, args: &Value) -> ToolOutput 
     if raw.is_empty() {
         return ToolOutput::err("target_file is required");
     }
-    let path = match confine(workspace, &raw) {
-        Ok(p) => p,
-        Err(e) => return ToolOutput::err(e),
+    // A long shell output this workspace's command saved, named in its
+    // answer's marker. Everything else stays inside the workspace.
+    let spooled = super::spool::find(workspace, &raw);
+    let path = match &spooled {
+        Some((path, _)) => path.clone(),
+        None => match confine(workspace, &raw) {
+            Ok(p) => p,
+            Err(e) => return ToolOutput::err(e),
+        },
     };
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
@@ -71,6 +77,14 @@ pub fn run(workspace: &Path, session: Option<&str>, args: &Value) -> ToolOutput 
     let end = (start + limit as usize).min(lines.len());
     let sparse = crate::diet::current().sparse_line_numbers;
     let out = numbered_lines(&lines, start, end, sparse);
+    // A saved output reads back as the command's answer did: plain, or
+    // fenced when the command fetched from outside.
+    if let Some((_, fetched)) = spooled {
+        if fetched {
+            return ToolOutput::ok(super::fence::fence("read_file:shell", &out));
+        }
+        return ToolOutput::ok(out);
+    }
     // Workspace reads stay plain for coding. Outside-workspace text (if a
     // future path allows it) is fenced as untrusted data, and so is a file
     // the agent wrote from outside text (a stored-injection mark).

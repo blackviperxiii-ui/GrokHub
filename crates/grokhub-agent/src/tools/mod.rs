@@ -28,6 +28,7 @@ mod session_search;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
+pub(crate) mod spool;
 pub(crate) mod taint;
 pub(crate) mod talk;
 mod web_fetch;
@@ -310,15 +311,15 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
         // Where background tasks are on, a command that outlives its timeout
         // keeps running as one instead of being killed.
         let Some(tasks) = ctx.tasks.as_ref() else {
-            return shell::run(ctx.workspace, args, ctx.stop);
+            return shell::run_adoptable(ctx.workspace, ctx.session, args, ctx.stop, None);
         };
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut adopt = |proc, guard| tasks.adopt(proc, &command, ctx.owner, guard);
-        return shell::run_adoptable(ctx.workspace, args, ctx.stop, Some(&mut adopt));
+        let mut adopt = |proc, guard| tasks.adopt(proc, ctx.workspace, &command, ctx.owner, guard);
+        return shell::run_adoptable(ctx.workspace, ctx.session, args, ctx.stop, Some(&mut adopt));
     }
     let Some(tasks) = ctx.tasks.as_ref() else {
         return ToolOutput::err("background tasks are not available on this run");
