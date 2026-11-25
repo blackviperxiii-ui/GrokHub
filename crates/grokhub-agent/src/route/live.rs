@@ -852,6 +852,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                     || stage.looped
                     || stage.check_failed
                     || stage.out_of_budget
+                    || stage.low_check
                     || (rejects.unwrap_or(0) > 0 && !verify_ok);
                 if trouble && !new_turn {
                     super::knn::note_trouble(key);
@@ -864,8 +865,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 verify_ok,
                 // "That's wrong" or "try again": the next answer starts one rung up.
                 correction: is_correction(call.text) || super::ask::asks_redo(call.text),
-                // No self-check score yet, so E4 stays quiet. App-side budget caps never throttle effort.
-                low_check: None,
+                // App-side budget caps never throttle effort.
                 budget_pct: None,
                 routine,
                 stage,

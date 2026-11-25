@@ -1359,6 +1359,7 @@ fn run_turn(
                     }
                     if let Some(note) = crate::post_check::note(&findings) {
                         post_notes += 1;
+                        crate::route::ladder::note_low_check();
                         history.push(cabin_note(&note));
                         continue;
                     }
@@ -1373,6 +1374,10 @@ fn run_turn(
                         crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
                     match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
+                            // A push that only lists open todos is the checklist, not a failed check.
+                            if !gaps.unchecked.is_empty() {
+                                crate::route::ladder::note_low_check();
+                            }
                             history.push(cabin_note(&note));
                             continue;
                         }
@@ -1450,6 +1455,7 @@ fn run_turn(
                         crate::close_check::CloseGate::Continue { note, steps } => {
                             close_continued = true;
                             close_steps = steps;
+                            crate::route::ladder::note_low_check();
                             history.push(cabin_note(&note));
                             continue;
                         }
@@ -3984,6 +3990,82 @@ mod tests {
         assert_eq!(
             efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
             vec![Some("medium"), Some("medium"), Some("high"), Some("xhigh")]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// E4 in the real loop: a reply the run's own check sends back (a sum
+    /// that doesn't add up) makes the next step think one rung harder.
+    #[test]
+    fn a_reply_a_check_sends_back_climbs_the_next_step_one_rung() {
+        let dir = workspace("stage-low-check");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let _ = crate::route::ladder::take_stage(true);
+        let _ = crate::route::ladder::take_tool_errors();
+        let conv = (0..)
+            .map(|i| format!("conv-low-check-{i}"))
+            .find(|s| !crate::route::guard::in_holdout(s))
+            .unwrap();
+        let client = EffortScript {
+            turns: Mutex::new(vec![
+                crate::TurnOutput {
+                    text: "Total: 2 + 2 = 5.".into(),
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    text: "Total: 2 + 2 = 4.".into(),
+                    ..Default::default()
+                },
+            ]),
+            efforts: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(
+            &input,
+            &mut history,
+            "explain what the note file says",
+            None,
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(
+            user_texts(&history)
+                .iter()
+                .any(|t| t.starts_with("Before this turn ends")),
+            "{:?}",
+            user_texts(&history)
+        );
+        let efforts = client.efforts.lock().unwrap().clone();
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("medium"), Some("high")],
+            "the step after the check's note climbs one rung (E4)"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,0 +1,1 @@
+- Router: when one of a turn's own checks sends the model back (a reply that doesn't match its results, a change it hasn't checked, or the finish check saying it isn't done), the next step now thinks one rung harder, up to the lane's ceiling, until the next message. Such a turn also counts as one that hit trouble, so similar turns later start a rung higher.
