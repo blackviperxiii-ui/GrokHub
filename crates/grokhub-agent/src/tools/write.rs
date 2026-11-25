@@ -22,7 +22,7 @@ pub fn schema() -> Value {
     })
 }
 
-pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
+pub fn run(workspace: &Path, session: Option<&str>, args: &Value) -> ToolOutput {
     let raw = path_arg(args);
     if raw.is_empty() {
         return ToolOutput::err("path is required");
@@ -48,7 +48,14 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         ""
     };
     crate::checkpoint::before_write(&path);
-    let written = with_file_lock(&path, || write_at(&path, &stored));
+    let written = with_file_lock(&path, || {
+        if super::seen::changed_on_disk(session, &path) {
+            return Err(super::seen::refusal(&raw));
+        }
+        let bytes = write_at(&path, &stored)?;
+        super::seen::note(session, &path, stored.as_bytes());
+        Ok(bytes)
+    });
     match written {
         Ok(bytes) => {
             crate::memory::after_model_write(workspace, &path);

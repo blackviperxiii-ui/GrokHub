@@ -33,7 +33,7 @@ pub fn schema() -> Value {
     })
 }
 
-pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
+pub fn run(workspace: &Path, session: Option<&str>, args: &Value) -> ToolOutput {
     let raw = str_field(args, "target_file");
     if raw.is_empty() {
         return ToolOutput::err("target_file is required");
@@ -46,6 +46,9 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         Ok(b) => b,
         Err(e) => return ToolOutput::err(format!("read {}: {e}", path.display())),
     };
+    // What the chat now knows of the file: an edit of it is refused once it
+    // changes on disk, until the chat reads it again.
+    super::seen::note(session, &path, &bytes);
     if let Some(mime) = image_mime(&bytes) {
         return encode_image(&bytes, mime);
     }
@@ -85,7 +88,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
 /// `n|line` rows from `start` to `end`, stopping early at [`READ_CHARS`] with a
 /// note naming the offset that continues. `sparse` numbers only the first row
 /// and every tenth line; the rest read `|line`.
-fn numbered_lines(lines: &[&str], start: usize, end: usize, sparse: bool) -> String {
+pub(super) fn numbered_lines(lines: &[&str], start: usize, end: usize, sparse: bool) -> String {
     let mut out = String::new();
     let mut used = 0usize;
     for (i, line) in lines[start..end].iter().enumerate() {
@@ -224,13 +227,13 @@ mod tests {
         std::fs::write(ws.join("a.txt"), "one\ntwo\nthree\n").expect("file");
         let _pin = crate::perm::ConfigGuard::set(&cfg);
         let args = serde_json::json!({"target_file": "a.txt"});
-        assert_eq!(run(&ws, &args).text, "1|one\n2|two\n3|three\n");
+        assert_eq!(run(&ws, None, &args).text, "1|one\n2|two\n3|three\n");
         std::fs::write(
             cfg.join(crate::diet::CONFIG_NAME),
             "sparse_line_numbers = true\n",
         )
         .expect("on");
-        assert_eq!(run(&ws, &args).text, "1|one\n|two\n|three\n");
+        assert_eq!(run(&ws, None, &args).text, "1|one\n|two\n|three\n");
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -246,7 +249,7 @@ mod tests {
             })
             .collect();
         fs::write(dir.join("big.log"), &body).unwrap();
-        let first = run(&dir, &json!({"target_file": "big.log"}));
+        let first = run(&dir, None, &json!({"target_file": "big.log"}));
         assert!(!first.failed);
         assert!(
             first.text.chars().count() <= READ_CHARS + 200,
@@ -267,7 +270,11 @@ mod tests {
         let mut offset = next;
         let mut last = String::new();
         for _ in 0..20 {
-            let page = run(&dir, &json!({"target_file": "big.log", "offset": offset}));
+            let page = run(
+                &dir,
+                None,
+                &json!({"target_file": "big.log", "offset": offset}),
+            );
             last = page.text.clone();
             match page
                 .text
@@ -286,7 +293,7 @@ mod tests {
     fn a_huge_single_line_is_cut_and_says_so() {
         let dir = crate::harness::test_dir("read-long-line");
         fs::write(dir.join("min.js"), format!("{}\nend\n", "é".repeat(10_000))).unwrap();
-        let out = run(&dir, &json!({"target_file": "min.js"}));
+        let out = run(&dir, None, &json!({"target_file": "min.js"}));
         assert!(
             out.text.contains("[line cut at 2000 of 10000 chars]"),
             "{}",
@@ -299,7 +306,7 @@ mod tests {
     fn a_small_file_reads_whole_with_no_note() {
         let dir = crate::harness::test_dir("read-small");
         fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
-        let out = run(&dir, &json!({"target_file": "a.txt"}));
+        let out = run(&dir, None, &json!({"target_file": "a.txt"}));
         assert_eq!(out.text, "1|one\n2|two\n");
     }
 
@@ -307,7 +314,7 @@ mod tests {
     fn workspace_read_is_not_fenced() {
         let dir = crate::harness::test_dir("read-no-fence");
         fs::write(dir.join("notes.txt"), "alpha\nbeta\n").unwrap();
-        let out = run(&dir, &json!({"target_file": "notes.txt"}));
+        let out = run(&dir, None, &json!({"target_file": "notes.txt"}));
         assert!(!out.failed, "{}", out.text);
         assert!(out.text.contains("1|alpha"), "{}", out.text);
         assert!(
