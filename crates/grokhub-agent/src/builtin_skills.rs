@@ -3,10 +3,10 @@
 //! `python3 .github/scripts/vstack_sync.py sync --tag vX.Y.Z`.
 
 /// Bundled upstream vstack tag.
-pub const BUILTIN_VSTACK_TAG: &str = "v1.6.0";
+pub const BUILTIN_VSTACK_TAG: &str = "v1.7.0";
 
 /// Bundled upstream vstack commit.
-pub const BUILTIN_VSTACK_COMMIT: &str = "3c6e08233dbfc96dc6a8d2b4b2152688c91c2bf8";
+pub const BUILTIN_VSTACK_COMMIT: &str = "499a3bcb2937990fc4524836c03d1c7ef9835746";
 
 /// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`): folder and
 /// `SKILL.md`.
@@ -78,6 +78,7 @@ pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
         include_str!("../assets/skills/ketchup-video/SKILL.md"),
     ),
     ("land-it", include_str!("../assets/skills/land-it/SKILL.md")),
+    ("lean-ci", include_str!("../assets/skills/lean-ci/SKILL.md")),
     (
         "maintain-formal-verification-skill",
         include_str!("../assets/skills/maintain-formal-verification-skill/SKILL.md"),
@@ -444,6 +445,11 @@ pub const BUILTIN_SKILL_FILES: &[(&str, &str, &str)] = &[
         "follow-through",
         "scripts/closeout.py",
         include_str!("../assets/skills/follow-through/scripts/closeout.py"),
+    ),
+    (
+        "lean-ci",
+        "references/affected-packages.md",
+        include_str!("../assets/skills/lean-ci/references/affected-packages.md"),
     ),
     (
         "modern-web-guidance",
