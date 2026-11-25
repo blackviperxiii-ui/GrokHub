@@ -289,6 +289,7 @@ fn an_alias_push_behind_any_wrapper_or_runner_is_refused_or_parked() {
     }
     for command in [
         "setsid -w git push --force origin main",
+        "chrt -o 0 git push --force origin main",
         "nohup git push origin main",
         "timeout 30 git push origin main",
         "bash -c 'git push --force origin main'",

@@ -126,6 +126,8 @@ fn wrappers_scripts_and_here_documents_are_read_through() {
         "nohup git status",
         "timeout 30 git status",
         "timeout -s KILL 30 git status",
+        "chrt -o 0 git status",
+        "chrt --rr 5 git status",
         "command git status",
         "if true; then git status; fi",
         "! git status",

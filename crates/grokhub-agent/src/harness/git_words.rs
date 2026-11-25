@@ -2867,6 +2867,34 @@ fn peel(prog: &str, args: &[Word], ps: bool) -> Peel {
         }
         "ionice" => options(&text, "t", "cn", &["--ignore"], &["--class", "--classdata"])
             .map_or(Peel::Unknown, runs),
+        // `chrt -o 0 cmd`: a policy flag, then the priority, then the command.
+        // `-p` (an existing process) and `-m` run nothing and stay unknown.
+        "chrt" => match options(
+            &text,
+            "abdfioRrv",
+            "DPT",
+            &[
+                "--all-tasks",
+                "--batch",
+                "--deadline",
+                "--fifo",
+                "--idle",
+                "--other",
+                "--reset-on-fork",
+                "--rr",
+                "--verbose",
+            ],
+            &["--sched-deadline", "--sched-period", "--sched-runtime"],
+        ) {
+            Some(at)
+                if text
+                    .get(at)
+                    .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit())) =>
+            {
+                runs(at + 1)
+            }
+            _ => Peel::Unknown,
+        },
         "stdbuf" => options(&text, "", "ioe", &[], &["--input", "--output", "--error"])
             .map_or(Peel::Unknown, runs),
         "chronic" => options(&text, "ev", "", &[], &[]).map_or(Peel::Unknown, runs),
