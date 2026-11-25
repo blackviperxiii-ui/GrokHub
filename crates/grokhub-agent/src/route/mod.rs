@@ -1996,9 +1996,9 @@ mod r2a_tests;
 mod r2b_tests;
 
 #[cfg(test)]
-mod r3b_tests;
-#[cfg(test)]
 mod matrix_tests;
+#[cfg(test)]
+mod r3b_tests;
 
 #[cfg(test)]
 mod sizing_tests;

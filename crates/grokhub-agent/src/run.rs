@@ -8069,6 +8069,7 @@ mod tests {
                 r#"{"query":"notes","path":"README.md"}"#,
                 ALL,
             ),
+            ("tool_search", r#"{"query":"cron","path":"README.md"}"#, ALL),
             (
                 "load_tool_schema",
                 r#"{"name":"work_add","path":"README.md"}"#,
@@ -8403,7 +8404,7 @@ mod tests {
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 80);
+        assert_eq!(native.len(), 81);
     }
 
     #[test]

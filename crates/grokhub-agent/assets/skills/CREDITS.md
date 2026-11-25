@@ -1,7 +1,7 @@
 # Built-in vstack skills: credit and license
 
 Bundled from [vstack](https://github.com/blackviperxiii-ui/vstack) release
-[`v1.5.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.5.0) (commit `ed794cc8272f5b59243db67ade79138c32acb33b`).
+[`v1.6.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.6.0) (commit `3c6e08233dbfc96dc6a8d2b4b2152688c91c2bf8`).
 `.github/scripts/vstack_sync.py` writes this file, the skill folders and
 `../../src/builtin_skills.rs` from `vstack.json`; edit that list, not these files.
 
@@ -15,10 +15,13 @@ License: MIT. The upstream copyright and permission notice ships unchanged in
 Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
 - architect
+- arena
+- automate-me
 - av-qa-walkthrough
 - bag-and-tag
 - benchmark-checklist
 - blast-radius
+- bro
 - chrome-extensions
 - correct
 - create-formal-verification-skill
@@ -35,16 +38,23 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - land-it
 - maintain-formal-verification-skill
 - maintain-verification-skill
+- make-bot-ui
 - modern-web-guidance
+- no-comments
 - optimize
 - principle-attack-the-premise
 - principle-boundary-discipline
 - principle-build-the-lever
+- principle-encode-lessons-in-structure
+- principle-exhaust-the-design-space
 - principle-experience-first
 - principle-explain-the-number
 - principle-fix-root-causes
 - principle-foundational-thinking
+- principle-guard-the-context-window
+- principle-laziness-protocol
 - principle-make-operations-idempotent
+- principle-migrate-callers-then-delete-legacy-apis
 - principle-minimize-reader-load
 - principle-model-the-domain
 - principle-never-block-on-the-human
@@ -59,6 +69,7 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - qa-walkthrough
 - recall
 - reflect
+- reframe
 - setup-vstack
 - sharpen
 - show-me-your-work
@@ -72,6 +83,7 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - unslop
 - updater
 - viper-mode
+- vstack-help
 - why
 
 Left out:
@@ -80,4 +92,4 @@ Left out:
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `ef655c0e974128a378c1af44cbe339a94952261bc15ba42ad12918579808ab8d`
+Bundle SHA-256: `f69270a9283d25d0cfef75ebfaeef77905d020761eee51122e128757f87e0d30`

@@ -1,9 +1,12 @@
 ---
 name: principle-separate-before-serializing-shared-state
-description: Concurrent writers to one target. Remove the sharing; lock only for a real invariant.
+description: "Apply when concurrent actors might write to the same file, branch, key, or state object. Eliminate the sharing first; serialize structurally only when one shared writer is a real invariant."
 ---
 
-1. Find shared mutable state.
-2. Default: each actor owns its file, key, branch, or dir; merge on read. Two workers' fields in one `state.json` still share.
-3. True single-target invariant only: serialize structurally (lockfile, phases, single writer, CAS). Conventions aren't concurrency control.
-4. CHANGELOG / VERSION / plugin manifests: don't launch a second worker that edits them while another open PR owns those files.
+# Separate Before Serializing Shared State
+
+Find the shared mutable state first. When concurrent actors might write the same file, branch, key, or object, first ask whether they need one shared object or are publishing independent facts. Default to giving each actor its own file, key, branch, or state directory, and merge only where the state is read. Two workers writing their own field into one `state.json` is still shared mutation.
+
+Only when one shared write target is a real invariant, serialize access structurally (a lockfile, a single writer, sequential phases, compare-and-swap). Instructions and conventions are not concurrency control, and "we need a lock" is a smell to check first.
+
+`CHANGELOG`, `VERSION`, and plugin manifests are shared write targets. Do not launch a second worker that edits them while another open PR owns those files.
