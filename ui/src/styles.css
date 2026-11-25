@@ -3141,6 +3141,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .pulse,
 .devices,
 .agents,
+.team,
 .skills,
 .imagine,
 .updates-page {
@@ -3160,6 +3161,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .history,
 .devices,
 .agents,
+.team,
 .skills,
 .imagine,
 .command-box,
@@ -3187,7 +3189,7 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 
 /* An empty or loading line sits under what it describes, not adrift
    mid-page, so what follows it (Hooks, Routines) stays in reach. */
-:is(.automations, .memory, .connectors, .journal, .meetings, .history, .devices, .agents, .skills,
+:is(.automations, .memory, .connectors, .journal, .meetings, .history, .devices, .agents, .team, .skills,
   .imagine, .command-box, .updates-page, .workboard, .mods) > .empty {
   margin: 0;
 }
@@ -6293,6 +6295,71 @@ button.primary:not(.quick-chip) {
   align-items: center;
   gap: 8px;
   margin: 8px 0;
+}
+
+/* Team: the person's agents, teams and task log. */
+
+.team h2 {
+  font-size: var(--font-prose);
+  margin: 0;
+}
+
+.team .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.team .card {
+  align-self: stretch;
+  max-width: none;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.team-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.team-about,
+.team-reply {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.team-reply {
+  white-space: pre-wrap;
+}
+
+.team-form {
+  gap: var(--space-8);
+}
+
+.team-form > label,
+.team-form fieldset {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.team-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.team-form .team-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-8);
 }
 
 /* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
