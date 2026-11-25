@@ -1211,6 +1211,20 @@ async function localAi(s, config) {
     throw new Error(`Reset Advanced left ${JSON.stringify(reset)}`);
   }
   console.log("Reset Advanced cleared the app list and kept the file");
+
+  // Remove the file again. On Windows the engine proof installed
+  // llama-server, and with an engine, a model file and no sign-in, Auto sends
+  // the next chats to this PC (local:no_keys) instead of the mock model.
+  await clickCentered(s, ".local-ai ul[aria-label='Added model files'] button.remove-file");
+  await clickCentered(s, ".local-ai button.save-local");
+  const removed = await waitFor("the file gone from local_ai.json", async () => {
+    const now = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
+    return now.ownFiles?.includes(modelFile) ? null : now;
+  });
+  if ((removed.ownFiles ?? []).length !== 0) {
+    throw new Error(`Remove left ${JSON.stringify(removed.ownFiles)}`);
+  }
+  console.log("model file removed and saved");
 }
 
 /** Opens Settings → Local AI's Advanced part, once. */
