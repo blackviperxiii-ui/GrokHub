@@ -296,6 +296,73 @@ impl TeamFile {
         self.teams.iter().find(|t| t.id == id)
     }
 
+    /// Adds `profile` (`add`) or replaces the agent with its id. Adding never
+    /// writes over an agent that has the id already.
+    pub fn put_agent(&mut self, profile: Profile, add: bool) -> Result<(), String> {
+        match self.agents.iter_mut().find(|a| a.id == profile.id) {
+            Some(_) if add => Err(format!("An agent already uses the id `{}`.", profile.id)),
+            Some(slot) => {
+                *slot = profile;
+                Ok(())
+            }
+            None if add => {
+                self.agents.push(profile);
+                Ok(())
+            }
+            None => Err(format!("`{}` isn't an agent.", profile.id)),
+        }
+    }
+
+    /// Removes an agent and every mention of it: no agent talks to it any
+    /// more, and a team it leads goes too. Its home folder stays on disk.
+    pub fn remove_agent(&mut self, id: &str) {
+        self.agents.retain(|a| a.id != id);
+        for agent in &mut self.agents {
+            agent.talks_to.retain(|to| to != id);
+        }
+        let led: Vec<String> = self
+            .teams
+            .iter()
+            .filter(|t| t.lead == id)
+            .map(|t| t.id.clone())
+            .collect();
+        for team in led {
+            self.remove_team(&team);
+        }
+    }
+
+    /// Adds `team` (`add`) or replaces the team with its id, and puts its
+    /// lead on it.
+    pub fn put_team(&mut self, team: Team, add: bool) -> Result<(), String> {
+        let at = self.teams.iter().position(|t| t.id == team.id);
+        match at {
+            Some(_) if add => return Err(format!("A team already uses the id `{}`.", team.id)),
+            None if !add => return Err(format!("`{}` isn't a team.", team.id)),
+            _ => {}
+        }
+        let lead = self
+            .agents
+            .iter_mut()
+            .find(|a| a.id == team.lead)
+            .ok_or_else(|| format!("Team `{}`'s lead `{}` isn't an agent.", team.id, team.lead))?;
+        lead.team = team.id.clone();
+        match at {
+            Some(i) => self.teams[i] = team,
+            None => self.teams.push(team),
+        }
+        Ok(())
+    }
+
+    /// Removes a team. Its members stay, on no team.
+    pub fn remove_team(&mut self, id: &str) {
+        self.teams.retain(|t| t.id != id);
+        for agent in &mut self.agents {
+            if agent.team == id {
+                agent.team.clear();
+            }
+        }
+    }
+
     /// Every rule a saved file keeps. The first broken one is the error.
     pub fn check(&self) -> Result<(), String> {
         if self.version != VERSION {
@@ -479,7 +546,7 @@ fn check_agent(
 }
 
 /// The tiers `model_profiles.toml` (and any override) uses.
-fn known_tiers() -> BTreeSet<String> {
+pub fn known_tiers() -> BTreeSet<String> {
     crate::model_registry::builtin::all()
         .into_iter()
         .filter_map(|p| p.tier)

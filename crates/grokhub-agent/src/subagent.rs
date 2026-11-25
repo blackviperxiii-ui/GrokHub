@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use grokhub_core::a2a::TaskState;
+use grokhub_core::agent_tasks::{self, Origin, TaskRecord};
 use grokhub_core::wire::{ElicitAsk, PermissionAsk};
 use serde_json::{json, Value};
 
@@ -173,6 +175,7 @@ pub fn try_run(call: SpawnCall<'_>) -> Option<(ToolOutput, Usage)> {
 /// its own home, with its own gate, rules and system text
 /// ([`crate::agent_message::brief`]). It sees only the message.
 fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
+    let started_ms = grokhub_core::now_ms();
     let refuse = |text: String| (ToolOutput::err(text), Usage::default());
     if call.depth >= DEPTH_LIMIT {
         return refuse("depth limit reached: a helper's helper can't message an agent".into());
@@ -183,6 +186,17 @@ fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let brief = match crate::agent_message::brief(call.arguments, call.gate, call.policy) {
         Ok(brief) => brief,
         Err(err) => return refuse(err),
+    };
+    let task = AgentTask {
+        root: brief.root.clone(),
+        from: brief.from.clone(),
+        to: brief.profile.id.clone(),
+        asked: brief.message.clone(),
+        started_ms,
+    };
+    let refuse = |text: String| {
+        task.log(TaskState::Rejected, &text);
+        refuse(text)
     };
     let ticket = match crate::subagent_policy::admit(&crate::subagent_policy::Ask {
         session: root_session(call.session),
@@ -254,7 +268,7 @@ fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_job(job, Some(tx)));
     let deadline = std::time::Instant::now() + crate::subagent_policy::wall(false);
-    let (done, _) = pump(
+    let (done, timed_out) = pump(
         &rx,
         call.on_event,
         call.cancel,
@@ -274,6 +288,7 @@ fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             findings: Vec::new(),
         }
     });
+    task.finish(&done, timed_out);
     (call.on_event)(LoopEvent::Task {
         id: id.clone(),
         title,
@@ -284,6 +299,46 @@ fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
     }
     let text = format_result(&done.text, &id, None, &done.stop);
     (ToolOutput::ok(text), done.usage)
+}
+
+/// One agent message, for the app's task log once its turn ends.
+struct AgentTask {
+    root: PathBuf,
+    from: Origin,
+    to: String,
+    asked: String,
+    started_ms: u64,
+}
+
+impl AgentTask {
+    fn log(&self, state: TaskState, reply: &str) {
+        let record = TaskRecord::new(
+            self.from.clone(),
+            &self.to,
+            state,
+            &self.asked,
+            reply,
+            self.started_ms,
+            grokhub_core::now_ms(),
+        );
+        // A full disk or a locked folder must not fail the message.
+        let _ = agent_tasks::append(&self.root, &record);
+    }
+
+    fn finish(&self, done: &ChildDone, timed_out: bool) {
+        let state = match &done.stop {
+            _ if timed_out => TaskState::Failed,
+            StopReason::EndTurn | StopReason::MaxTurns => TaskState::Completed,
+            StopReason::Cancelled | StopReason::Halted => TaskState::Canceled,
+            StopReason::Error(_) => TaskState::Failed,
+        };
+        let text = crate::tools::fence::display_text(&done.text);
+        match &done.stop {
+            StopReason::Error(err) if text.trim().is_empty() => self.log(state, err),
+            _ if timed_out => self.log(state, &format!("Timed out. {text}")),
+            _ => self.log(state, &text),
+        }
+    }
 }
 
 struct Spec {
@@ -5378,6 +5433,18 @@ mod tests {
         // The researcher may message nobody, so it isn't offered the tool.
         assert!(!child[0].3.iter().any(|t| t == "message_agent"));
         assert!(joined_outputs(&history).contains("The mesh one, by a wide margin."));
+        // The app's task log, not the agent's home, keeps the exchange.
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        let task = &log[0];
+        assert_eq!(task.from, grokhub_core::agent_tasks::Origin::Person);
+        assert_eq!(task.to, "researcher");
+        assert_eq!(task.state, grokhub_core::a2a::TaskState::Completed);
+        assert_eq!(task.asked, "Which router has the best range?");
+        assert_eq!(task.reply, "The mesh one, by a wide margin.");
+        assert!(task.started_ms > 0 && task.ended_ms >= task.started_ms);
+        let home = cfg.join("agents").join("researcher");
+        assert!(!home.join(grokhub_core::agent_tasks::TASK_LOG).exists());
         let _ = drain_side_events();
         let _ = std::fs::remove_dir_all(&dir);
     }

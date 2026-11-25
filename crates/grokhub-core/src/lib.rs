@@ -5,6 +5,7 @@
 pub mod a2a;
 pub mod action_mode;
 pub mod adult_guard;
+pub mod agent_tasks;
 pub mod agent_team;
 pub mod amr;
 pub mod app_json;

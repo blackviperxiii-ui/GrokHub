@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use grokhub_core::agent_tasks::Origin;
 use grokhub_core::agent_team::{self, Access, Profile, Sender, TeamFile};
 use serde_json::{json, Value};
 
@@ -99,6 +100,9 @@ pub(crate) struct Brief {
     pub policy: Policy,
     pub system: String,
     pub message: String,
+    /// The app's config folder, where the task log is.
+    pub root: PathBuf,
+    pub from: Origin,
 }
 
 /// Checks that the sender may message the agent and builds its turn.
@@ -165,6 +169,8 @@ pub(crate) fn brief(
         policy,
         system,
         message,
+        from: from.me.map_or(Origin::Person, Origin::Agent),
+        root: from.root,
     })
 }
 
