@@ -304,8 +304,8 @@ fn changed_lines(new_text: &str, sites: &[(usize, usize)], sparse: bool) -> Stri
 }
 
 /// On a miss: the lines that best match `needle` line by line, ignoring
-/// spacing at either end. The heading says whether every non-blank line
-/// matched; the rows are numbered. `None` when no start matches at least
+/// spacing at either end. The heading says whether every line, blank ones
+/// too, matched; the rows are numbered. `None` when no start matches at least
 /// half the needle's non-blank lines, so nothing is guessed.
 fn closest(lines: &[&str], needle: &str, sparse: bool) -> Option<(String, String)> {
     let wanted: Vec<&str> = needle.lines().map(str::trim).collect();
@@ -326,15 +326,21 @@ fn closest(lines: &[&str], needle: &str, sparse: bool) -> Option<(String, String
             best = Some((i, score));
         }
     }
-    let (i, score) = best?;
+    let (i, _) = best?;
     let end = (i + k).min(lines.len());
+    // Spacing is the only difference only when every needle line, blank
+    // ones too, matches a file line.
+    let matched = wanted
+        .iter()
+        .zip(&lines[i..])
+        .filter(|(want, have)| **want == have.trim())
+        .count();
+    let spacing_only = i + k <= lines.len() && matched == k;
     let (a, b) = (i + 1, end);
-    let head = match (score == nonblank, a == b) {
+    let head = match (spacing_only, a == b) {
         (true, true) => format!("\nLine {a} matches it except for spacing:\n"),
         (true, false) => format!("\nLines {a}-{b} match it except for spacing:\n"),
-        (false, _) => {
-            format!("\nThe closest lines, {a}-{b} ({score} of {nonblank} lines match):\n")
-        }
+        (false, _) => format!("\nThe closest lines, {a}-{b} ({matched} of {k} lines match):\n"),
     };
     Some((
         head,
@@ -574,6 +580,13 @@ mod tests {
         assert_eq!(
             near.text,
             "The string to replace was not found in the file, use the read_file tool to see the correct string.\nThe closest lines, 1-3 (2 of 3 lines match):\n1|fn main() {\n2|    let x = 1;\n3|}\n"
+        );
+        // A blank needle line facing a real line is more than spacing.
+        std::fs::write(ws.join("a.rs"), "fn a() {\n    // keep\n    body();\n}\n").unwrap();
+        let blank = replace(&ws, None, "a.rs", "fn a() {\n\n    body();\n}", "fn a() {}");
+        assert_eq!(
+            blank.text,
+            "The string to replace was not found in the file, use the read_file tool to see the correct string.\nThe closest lines, 1-4 (3 of 4 lines match):\n1|fn a() {\n2|    // keep\n3|    body();\n4|}\n"
         );
         let gone = replace(&ws, None, "main.rs", "let y = 2;", "let y = 3;");
         assert!(gone.failed);
