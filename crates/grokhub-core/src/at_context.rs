@@ -556,6 +556,8 @@ fn work_tree_diff(cwd: &Path) -> String {
     let mut cmd = git_cmd::git();
     cmd.current_dir(cwd)
         .env_remove("GIT_COMMON_DIR")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", own.dir.join(NO_GLOBAL_CONFIG))
         .env("GIT_DIR", &own.dir)
         .env("GIT_WORK_TREE", &own.top)
         .env("GIT_OBJECT_DIRECTORY", &own.objects)
@@ -565,6 +567,22 @@ fn work_tree_diff(cwd: &Path) -> String {
 
 /// Where [`OwnGitDir`]s go, under the app's config folder.
 const OWN_GIT_DIRS: &str = "at-diff";
+
+/// The empty file an [`OwnGitDir`]'s diff reads as its global config: its
+/// own config already holds the global settings, as the repository saw them.
+const NO_GLOBAL_CONFIG: &str = "no-global-config";
+
+/// Sections of the config a work tree diff never reads and that can hold a
+/// credential (a token in a URL or a header), left out of an
+/// [`OwnGitDir`]'s copy of it.
+const UNREAD_SECTIONS: [&[u8]; 6] = [
+    b"credential",
+    b"http",
+    b"url",
+    b"remote",
+    b"sendemail",
+    b"imap",
+];
 
 /// How long an [`OwnGitDir`] a crash left behind stays before the next
 /// `@diff` removes it. No diff takes so long.
@@ -584,15 +602,16 @@ const REPO_ATTRIBUTES_CAP: u64 = 1024 * 1024;
 
 /// A git dir of the app's own for one `@diff` of the repository at `cwd`,
 /// read with the repository's objects (and their alternates) and work tree.
-/// Its config holds the repository's format and includes the repository's
-/// config, so relative includes and `config.worktree` still apply. Its index
-/// is a copy of the repository's, with the shared index a split index names
-/// and the sparse-checkout patterns beside it. Its `info/attributes` is the
-/// repository's followed by [`NO_FILTERS`]. It has no `commondir`, since git
-/// reads `info/attributes` from the common dir. It sits in the app's config
-/// folder, which a sandboxed command can't write, and is removed when
-/// dropped. git writes a refreshed index to the copy, never to the
-/// repository.
+/// Its config holds the repository's format and the settings git reads in
+/// the repository ([`effective_config`]), and its diff reads no other config
+/// file, so an include that matches the repository's folder or branch still
+/// applies. Its index is a copy of the repository's, with the shared index a
+/// split index names and the sparse-checkout patterns beside it. Its
+/// `info/attributes` is the repository's followed by [`NO_FILTERS`]. It has
+/// no `commondir`, since git reads `info/attributes` from the common dir. It
+/// sits in the app's config folder, which a sandboxed command can't write,
+/// and is removed when dropped. git writes a refreshed index to the copy,
+/// never to the repository.
 struct OwnGitDir {
     dir: PathBuf,
     top: PathBuf,
@@ -606,15 +625,15 @@ impl OwnGitDir {
                 .current_dir(cwd)
                 .args(["rev-parse", "--show-toplevel"])
                 .args(["--git-path", "objects", "--git-path", "index"])
-                .args(["--git-path", "config", "--git-path", "config.worktree"])
-                .args(["--git-path", "info/attributes"])
+                .args(["--git-path", "config", "--git-path", "info/attributes"])
                 .args(["--git-path", "info/sparse-checkout"]),
             cwd,
         )?;
-        let [top, objects, index, config, worktree_config, attributes, sparse] = &paths[..] else {
+        let [top, objects, index, config, attributes, sparse] = &paths[..] else {
             return Err("git didn't say where the repository is".into());
         };
-        let format = repository_format(cwd, config)?;
+        let mut own_config = repository_format(cwd, config)?;
+        own_config.extend_from_slice(&effective_config(cwd)?);
         let attributes = own_attributes(attributes)?;
         let root = crate::paths::config_dir().join(OWN_GIT_DIRS);
         sweep_old(&root);
@@ -631,16 +650,8 @@ impl OwnGitDir {
         fs::create_dir(own.dir.join("info")).map_err(failed)?;
         fs::write(own.dir.join("HEAD"), "ref: refs/heads/main\n").map_err(failed)?;
         fs::write(own.dir.join("info").join("attributes"), attributes).map_err(failed)?;
-        let mut own_config = format;
-        own_config.extend_from_slice(&config_include(config));
         fs::write(own.dir.join("config"), own_config).map_err(failed)?;
-        if worktree_config.is_file() {
-            fs::write(
-                own.dir.join("config.worktree"),
-                config_include(worktree_config),
-            )
-            .map_err(failed)?;
-        }
+        fs::write(own.dir.join(NO_GLOBAL_CONFIG), "").map_err(failed)?;
         let uncopied =
             |from: &Path, err: io::Error| format!("can't copy {} for @diff: {err}", from.display());
         let own_index = own.dir.join("index");
@@ -760,12 +771,78 @@ fn repository_format(cwd: &Path, config: &Path) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// A config section that includes the config file at `path`.
-fn config_include(path: &Path) -> Vec<u8> {
-    let mut out = b"[include]\n\tpath = ".to_vec();
-    out.extend_from_slice(&config_quote(&path_bytes(path)));
-    out.push(b'\n');
-    out
+/// The settings git reads in the repository at `cwd`, as config lines in
+/// the order git reads them: system, global, the repository's own and its
+/// worktree's. git follows every include there, so a conditional one
+/// (`includeIf "gitdir:..."`, `"onbranch:..."`) matches the repository, not
+/// an [`OwnGitDir`]. Left out: the include lines (already followed), the
+/// repository format ([`repository_format`] has it), [`UNREAD_SECTIONS`],
+/// and the settings the app's environment adds, which still reach the diff
+/// through that environment.
+fn effective_config(cwd: &Path) -> Result<Vec<u8>, String> {
+    let out = git_cmd::git()
+        .current_dir(cwd)
+        .env_remove("GIT_CONFIG_PARAMETERS")
+        .env_remove("GIT_CONFIG_COUNT")
+        .args(["config", "--list", "--includes", "--null"])
+        .output()
+        .map_err(|err| format!("git failed: {err}"))?;
+    if !out.status.success() {
+        return Err(git_error(&out.stderr));
+    }
+    let mut lines = Vec::new();
+    let mut header: &[u8] = b"";
+    for entry in out.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let (key, value) = match entry.iter().position(|b| *b == b'\n') {
+            Some(at) => (&entry[..at], Some(&entry[at + 1..])),
+            None => (entry, None),
+        };
+        // `section[.subsection].name`: the subsection may hold dots.
+        let (Some(first), Some(last)) = (
+            key.iter().position(|b| *b == b'.'),
+            key.iter().rposition(|b| *b == b'.'),
+        ) else {
+            return Err("git named a setting it can't have".into());
+        };
+        let (section, name) = (&key[..first], &key[last + 1..]);
+        let plain = |part: &[u8]| {
+            !part.is_empty() && part.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+        };
+        if !plain(section) || !plain(name) {
+            return Err("git named a setting it can't have".into());
+        }
+        if matches!(section, b"include" | b"includeif" | b"extensions")
+            || key == b"core.repositoryformatversion"
+            || UNREAD_SECTIONS.contains(&section)
+        {
+            continue;
+        }
+        let at = &key[..last];
+        if at != header {
+            header = at;
+            lines.push(b'[');
+            lines.extend_from_slice(section);
+            if first < last {
+                lines.extend_from_slice(b" \"");
+                for &b in &key[first + 1..last] {
+                    if matches!(b, b'\\' | b'"') {
+                        lines.push(b'\\');
+                    }
+                    lines.push(b);
+                }
+                lines.push(b'"');
+            }
+            lines.extend_from_slice(b"]\n");
+        }
+        lines.push(b'\t');
+        lines.extend_from_slice(name);
+        if let Some(value) = value {
+            lines.extend_from_slice(b" = ");
+            lines.extend_from_slice(&config_quote(value));
+        }
+        lines.push(b'\n');
+    }
+    Ok(lines)
 }
 
 /// `value` as a quoted config value: git reads it back byte for byte.
@@ -783,17 +860,6 @@ fn config_quote(value: &[u8]) -> Vec<u8> {
     }
     out.push(b'"');
     out
-}
-
-#[cfg(unix)]
-fn path_bytes(path: &Path) -> Vec<u8> {
-    use std::os::unix::ffi::OsStrExt;
-    path.as_os_str().as_bytes().to_vec()
-}
-
-#[cfg(not(unix))]
-fn path_bytes(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().into_owned().into_bytes()
 }
 
 /// The repository's `info/attributes` (none when it has none), then
@@ -1331,6 +1397,116 @@ mod tests {
             )),
             "{sub_body}"
         );
+    }
+
+    /// Config scoped to a folder of repositories (`includeIf "gitdir:"` in
+    /// the global config) or to a branch (`includeIf "onbranch:"` in the
+    /// repository's) applies to `@diff` as it does to `git diff`: here the
+    /// folder's attributes file marks `*.env` `-diff`, and the branch turns
+    /// on mnemonic prefixes.
+    #[test]
+    fn at_diff_keeps_config_an_include_scopes_to_the_repository() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = temp_dir("include-if");
+        let slashed = |path: &Path| path.display().to_string().replace('\\', "/");
+        let repo = edited_repo(&dir, "repo", &["secret.env", "plain.txt"]);
+        plain_git(&repo, &["checkout", "-q", "-b", "topic"]);
+        let global = dir.join("global.gitconfig");
+        // The folder by its own name, which a short or resolved spelling of
+        // the temp folder above it keeps.
+        let folder = dir.file_name().unwrap().to_string_lossy().into_owned();
+        fs::write(
+            &global,
+            format!(
+                "[includeIf \"gitdir/i:**/{folder}/\"]\n\tpath = {}\n",
+                slashed(&dir.join("work.inc"))
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("work.inc"),
+            format!(
+                "[core]\n\tattributesFile = {}\n",
+                slashed(&dir.join("work.attributes"))
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("work.attributes"), "*.env -diff\n").unwrap();
+        let mut config = fs::read_to_string(repo.join(".git/config")).unwrap();
+        config.push_str("[includeIf \"onbranch:topic\"]\n\tpath = branch.inc\n");
+        fs::write(repo.join(".git/config"), config).unwrap();
+        fs::write(
+            repo.join(".git/branch.inc"),
+            "[diff]\n\tmnemonicPrefix = true\n",
+        )
+        .unwrap();
+        let before = std::env::var_os("GIT_CONFIG_GLOBAL");
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &global) };
+        let plain = git_in(&repo, &["--no-pager", "diff", "--no-color"]);
+        let body = body_of(&expand("@diff", &repo), "diff");
+        match before {
+            Some(value) => unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) },
+            None => unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") },
+        }
+        let _ = fs::remove_dir_all(&dir);
+        let plain = String::from_utf8_lossy(&plain.stdout);
+        for out in [plain.as_ref(), body.as_str()] {
+            assert!(
+                out.contains("Binary files i/secret.env and w/secret.env differ\n"),
+                "{out}"
+            );
+            assert!(
+                out.contains(
+                    "--- i/plain.txt\n+++ w/plain.txt\n@@ -1 +1 @@\n-plain.txt1\n+plain.txt2\n"
+                ),
+                "{out}"
+            );
+            assert!(!out.contains("+secret.env2"), "{out}");
+        }
+    }
+
+    /// The own dir's copy of the config keeps each setting under its
+    /// section and subsection (dots and quotes too) with its value byte for
+    /// byte, so git reads it back the same, and leaves out the sections that
+    /// can hold a credential.
+    #[test]
+    fn the_own_config_copies_settings_but_not_credentials() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = temp_dir("own-config");
+        let repo = edited_repo(&dir, "repo", &["a.txt"]);
+        let mut config = fs::read_to_string(repo.join(".git/config")).unwrap();
+        config.push_str(
+            "[diff \"my.\\\"Drv\"]\n\tbinary\n\txfuncname = \"^fn \\\\w\"\n\
+             [http]\n\textraHeader = Authorization: Bearer sk-abcdefghijklmnopqrstuv\n\
+             [remote \"origin\"]\n\turl = https://user:sk-abcdefghijklmnopqrstuv@example.com/x.git\n",
+        );
+        fs::write(repo.join(".git/config"), config).unwrap();
+        let own = effective_config(&repo).unwrap();
+        let copy = dir.join("copy.gitconfig");
+        fs::write(&copy, &own).unwrap();
+        let read_back = git_in(
+            &dir,
+            &[
+                "config",
+                "--file",
+                "copy.gitconfig",
+                "--get",
+                "diff.my.\"Drv.xfuncname",
+            ],
+        );
+        let _ = fs::remove_dir_all(&dir);
+        let own = String::from_utf8_lossy(&own);
+        assert!(
+            own.contains("[diff \"my.\\\"Drv\"]\n\tbinary\n\txfuncname = \"^fn \\\\w\"\n"),
+            "{own}"
+        );
+        assert_eq!(String::from_utf8_lossy(&read_back.stdout), "^fn \\w\n");
+        assert!(!own.contains("sk-abcdefghijklmnopqrstuv"), "{own}");
+        assert!(!own.contains("[include"), "{own}");
     }
 
     #[test]
