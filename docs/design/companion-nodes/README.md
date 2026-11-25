@@ -12,6 +12,7 @@ This page is the protocol. The code is in:
 | Paired list and consent rules | `crates/grokhub-core/src/companion_nodes.rs` |
 | Host: pairing, relay, MCP endpoint | `crates/grokhub-hub/src/node_host.rs` |
 | Companion program (`grokhub-hub node`) | `crates/grokhub-hub/src/node_client.rs` |
+| The app: Devices → Companions, connections, events | `src-tauri/src/companions.rs`, `ui/src/Devices.tsx` |
 
 ## How it fits together
 
@@ -189,6 +190,27 @@ carries HTML or script, so a panel can't run code on the companion.
 
 `skills_list` answers names and descriptions; `skill_read` takes
 `{"name": "…"}` and answers the skill's `SKILL.md`.
+
+## In the app
+
+Devices → Companions starts the host on the companion port and shows a
+pairing code with the command to type on the companion. The host is off
+until the user starts it, and it starts again at the next launch until they
+stop it (`companion-host.json`). The paired list stays while it is off.
+
+A companion that paired waits under Devices → Companions with a box for
+each thing it offers, none ticked. **Allow** saves the ticked ones. The app
+then adds one MCP connection, `companion-<id>`, pointing at
+`/node/v1/mcp/<id>`. Its key is sealed with the keyring like any connector's
+key (`tokenRef`), never written into `mcp.json`. All companions share one
+key, read back from a sealed connection when the host starts, so saved
+connections keep working across launches. **Save** changes what an
+approved companion may lend; **Remove** stops its token, ends its poll and
+deletes its connection and sealed key.
+
+When an approved companion comes online, the app opens its connection
+again so chats list what it lends now. A `wake` event brings the window to
+the front and opens a new chat; a `heard` line is sent in the open chat.
 
 ## Running a companion
 

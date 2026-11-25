@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Devices as Shape, HubJoin, Share } from "./api";
+import type { Companions, Devices as Shape, HubJoin, Share } from "./api";
 
 const api = vi.hoisted(() => ({
   getDevices: vi.fn<() => Promise<Shape>>(),
@@ -13,6 +13,13 @@ const api = vi.hoisted(() => ({
   getHubJoin: vi.fn<() => Promise<HubJoin>>(),
   joinHub: vi.fn<(address: string, code: string) => Promise<HubJoin>>(),
   leaveHub: vi.fn<() => Promise<HubJoin>>(),
+  getCompanions: vi.fn<() => Promise<Companions>>(),
+  startCompanions: vi.fn<() => Promise<Companions>>(),
+  stopCompanions: vi.fn<() => Promise<Companions>>(),
+  newCompanionCode: vi.fn<() => Promise<Companions>>(),
+  approveCompanion: vi.fn<(id: string, allowed: string[]) => Promise<Companions>>(),
+  setCompanionAllowed: vi.fn<(id: string, allowed: string[]) => Promise<Companions>>(),
+  removeCompanion: vi.fn<(id: string) => Promise<Companions>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -20,6 +27,10 @@ vi.mock("./api", () => api);
 import {
   ago,
   browserLine,
+  companionLine,
+  COMPANIONS_OFF,
+  NO_OFFERS,
+  pairCommand,
   Devices,
   JOIN_OFF,
   joinLine,
@@ -63,6 +74,34 @@ const JOINED: HubJoin = {
   lastError: null,
 };
 
+const COMPANIONS_OFF_VIEW: Companions = { on: false, port: 18767, code: "", address: "", companions: [] };
+const COMPANIONS_ON: Companions = { on: true, port: 18767, code: "ABC-123", address: "192.168.1.20", companions: [] };
+const PIXEL_PENDING: Companions["companions"][number] = {
+  id: "pixel",
+  name: "Pixel",
+  platform: "android",
+  approved: false,
+  offers: ["camera", "sms"],
+  allowed: [],
+  online: true,
+  pairedAt: NOW - 5 * MINUTE,
+};
+const PIXEL_YES = { ...PIXEL_PENDING, approved: true, allowed: ["camera"] };
+
+describe("companions", () => {
+  it("says the command to pair and each companion's state", () => {
+    expect(pairCommand(COMPANIONS_ON)).toBe("grokhub-hub node pair 192.168.1.20 ABC-123");
+    expect(pairCommand({ ...COMPANIONS_ON, address: "" })).toBe(
+      "grokhub-hub node pair <this computer's address> ABC-123",
+    );
+    expect(companionLine(PIXEL_PENDING, NOW)).toBe("Android · Waiting for your yes · Paired 5 min ago");
+    expect(companionLine(PIXEL_YES, NOW)).toBe("Android · Online · Paired 5 min ago");
+    expect(companionLine({ ...PIXEL_YES, online: false, platform: "plan9" }, NOW)).toBe(
+      "Other device · Offline · Paired 5 min ago",
+    );
+  });
+});
+
 describe("joinLine", () => {
   it("names the computer, its address and how the last send went", () => {
     expect(joinLine(NOT_JOINED, NOW)).toBe(JOIN_OFF);
@@ -103,6 +142,75 @@ describe("Devices", () => {
     api.joinHub.mockReset();
     api.leaveHub.mockReset();
     api.getHubJoin.mockResolvedValue(NOT_JOINED);
+    for (const fn of [
+      api.getCompanions,
+      api.startCompanions,
+      api.stopCompanions,
+      api.newCompanionCode,
+      api.approveCompanion,
+      api.setCompanionAllowed,
+      api.removeCompanion,
+    ])
+      fn.mockReset();
+    api.getCompanions.mockResolvedValue(COMPANIONS_OFF_VIEW);
+  });
+
+  it("starts companions and shows the code and the command to type on the companion", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    api.startCompanions.mockResolvedValue(COMPANIONS_ON);
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const card = await screen.findByRole("generic", { name: "Companions" });
+    expect(await within(card).findByText(COMPANIONS_OFF)).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Start companions" }));
+    expect(api.startCompanions).toHaveBeenCalledTimes(1);
+    expect(within(card).getByLabelText("Companion pairing code")).toHaveTextContent("ABC-123");
+    expect(within(card).getByText("grokhub-hub node pair 192.168.1.20 ABC-123")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Stop companions" })).toBeEnabled();
+  });
+
+  it("allows only what is ticked for a waiting companion, then removes it", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    api.getCompanions.mockResolvedValue({
+      ...COMPANIONS_ON,
+      code: "",
+      companions: [PIXEL_PENDING, { ...PIXEL_PENDING, id: "box", name: "Box", offers: [] }],
+    });
+    api.approveCompanion.mockResolvedValue({ ...COMPANIONS_ON, code: "", companions: [PIXEL_YES] });
+    api.removeCompanion.mockResolvedValue({ ...COMPANIONS_ON, code: "", companions: [] });
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const row = await screen.findByRole("listitem", { name: "Pixel" });
+    expect(within(row).getByText("Android · Waiting for your yes · Paired 5 min ago")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: "Box" })).getByText(NO_OFFERS)).toBeInTheDocument();
+    const camera = within(row).getByRole("checkbox", { name: "Camera" });
+    expect(camera).not.toBeChecked();
+    expect(within(row).getByRole("checkbox", { name: "Text messages" })).not.toBeChecked();
+    await userEvent.click(camera);
+    await userEvent.click(within(row).getByRole("button", { name: "Allow" }));
+    expect(api.approveCompanion).toHaveBeenCalledWith("pixel", ["camera"]);
+
+    const saved = await screen.findByRole("listitem", { name: "Pixel" });
+    expect(within(saved).getByText("Android · Online · Paired 5 min ago")).toBeInTheDocument();
+    expect(within(saved).getByRole("checkbox", { name: "Camera" })).toBeChecked();
+    expect(within(saved).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.click(within(saved).getByRole("button", { name: "Remove" }));
+    expect(api.removeCompanion).toHaveBeenCalledWith("pixel");
+    expect(screen.queryByRole("listitem", { name: "Pixel" })).not.toBeInTheDocument();
+  });
+
+  it("changing what an approved companion may lend saves the new set", async () => {
+    api.getDevices.mockResolvedValue(OFF);
+    api.getCompanions.mockResolvedValue({ ...COMPANIONS_ON, code: "", companions: [PIXEL_YES] });
+    api.setCompanionAllowed.mockResolvedValue({
+      ...COMPANIONS_ON,
+      code: "",
+      companions: [{ ...PIXEL_YES, allowed: ["camera", "sms"] }],
+    });
+    render(<Devices onOpenWebAccess={() => {}} />);
+    const row = await screen.findByRole("listitem", { name: "Pixel" });
+    await userEvent.click(within(row).getByRole("checkbox", { name: "Text messages" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(api.setCompanionAllowed).toHaveBeenCalledWith("pixel", ["camera", "sms"]);
+    expect(api.approveCompanion).not.toHaveBeenCalled();
   });
 
   it("joins another computer with its address and code, then leaves it", async () => {
