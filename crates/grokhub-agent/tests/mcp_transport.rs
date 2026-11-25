@@ -3,6 +3,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -109,11 +110,22 @@ impl ModelClient for Once {
 }
 
 fn run_call(dir: &Path, attended: bool, on_event: &mut dyn FnMut(LoopEvent)) -> String {
+    let cancel = CancelToken::new();
+    run_named(dir, attended, "s", &cancel, "box__echo", on_event)
+}
+
+fn run_named(
+    dir: &Path,
+    attended: bool,
+    session: &str,
+    cancel: &CancelToken,
+    tool: &str,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> String {
     let client = Once {
-        name: "box__echo".into(),
+        name: tool.into(),
         turn: AtomicUsize::new(0),
     };
-    let cancel = CancelToken::new();
     let steer = SteerQueue::new();
     let halt = NoHalt;
     let permits = ClosedPermits;
@@ -123,10 +135,10 @@ fn run_call(dir: &Path, attended: bool, on_event: &mut dyn FnMut(LoopEvent)) -> 
         model: "grok-4.7",
         effort: None,
         system: "",
-        conversation_id: "s",
+        conversation_id: session,
         max_turns: 3,
         usage_base: Usage::default(),
-        cancel: &cancel,
+        cancel,
         steer: &steer,
         halt: &halt,
         gate: Gate {
@@ -1084,4 +1096,470 @@ fn mcp_apps_host_loads_ui_resource_and_hides_app_only_tools() {
     assert!(restock.to_string().contains("MS-02"), "{restock}");
     let denied = mcp::app_call_tool("box", "echo", &json!({})).unwrap_err();
     assert!(denied.contains("not available to apps"), "{denied}");
+}
+
+struct TaskRun {
+    dir: PathBuf,
+    _clean: Clean,
+    _guard: ConfigGuard,
+    http: Option<Child>,
+}
+
+impl Drop for TaskRun {
+    fn drop(&mut self) {
+        if let Some(child) = self.http.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn task_log(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("rpc.log")).unwrap_or_default()
+}
+
+fn start_task(label: &str, mode: &str, id: &str, http: bool) -> TaskRun {
+    let (dir, clean, guard) = scratch(label);
+    let log = dir.join("rpc.log");
+    let log_s = log.display().to_string();
+    let child = if http {
+        let port_file = dir.join("port");
+        let bin = env!("CARGO_BIN_EXE_fake_mcp");
+        let child = Command::new(bin)
+            .arg("--http")
+            .env("FAKE_MCP_STATELESS", "1")
+            .env("FAKE_MCP_TASK", mode)
+            .env("FAKE_MCP_TASK_ID", id)
+            .env("FAKE_MCP_RPC_LOG", &log_s)
+            .env("FAKE_MCP_HTTP_PORT_FILE", &port_file)
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("fake_mcp --http");
+        let mut port = String::new();
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&port_file) {
+                if !text.trim().is_empty() {
+                    port = text.trim().to_string();
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!port.is_empty(), "fake_mcp --http did not write a port");
+        mcp::import_documents(&[json!({
+            "mcpServers": {
+                "box": {
+                    "url": format!("http://127.0.0.1:{port}/mcp"),
+                    "type": "http",
+                    "startup_timeout_sec": 8,
+                    "tool_timeout_sec": 8
+                }
+            }
+        })
+        .to_string()])
+        .unwrap();
+        Some(child)
+    } else {
+        let bin = env!("CARGO_BIN_EXE_fake_mcp");
+        import_bin(
+            bin,
+            &[
+                ("FAKE_MCP_STATELESS", "1"),
+                ("FAKE_MCP_TASK", mode),
+                ("FAKE_MCP_TASK_ID", id),
+                ("FAKE_MCP_RPC_LOG", &log_s),
+            ],
+        );
+        None
+    };
+    let rows = mcp::doctor();
+    assert_eq!(rows[0].status, "connected", "{rows:?}");
+    TaskRun {
+        dir,
+        _clean: clean,
+        _guard: guard,
+        http: child,
+    }
+}
+
+fn expect_get(log: &str, id: &str, http: bool) {
+    if http {
+        assert!(log.contains(&format!("tasks/get {id} name={id}")), "{log}");
+    } else {
+        assert!(log.contains(&format!("tasks/get {id}")), "{log}");
+    }
+}
+
+#[test]
+fn mcp_tasks_complete_on_stdio_and_http() {
+    for http in [false, true] {
+        let id = if http {
+            "task-done-http"
+        } else {
+            "task-done-stdio"
+        };
+        let run = start_task(&format!("task-done-{http}"), "complete", id, http);
+        let output = run_call(&run.dir, true, &mut |_| {});
+        assert!(output.contains("task-done"), "{output}");
+        assert!(!output.contains("MCP tool error"), "{output}");
+        expect_get(&task_log(&run.dir), id, http);
+    }
+}
+
+#[test]
+fn mcp_tasks_input_required_on_stdio_and_http() {
+    for http in [false, true] {
+        let id = if http {
+            "task-input-http"
+        } else {
+            "task-input-stdio"
+        };
+        let run = start_task(&format!("task-input-{http}"), "input", id, http);
+        let (tx, inbox) = mcp::ElicitInbox::pair();
+        mcp::attach_elicit("s", inbox);
+        let mut cards = 0;
+        let output = run_call(&run.dir, true, &mut |ev| {
+            if let LoopEvent::Elicit(view) = ev {
+                cards += 1;
+                assert_eq!(view.message, "Need a value");
+                assert_eq!(view.server_name, "box");
+                let _ = tx.send(ElicitNote {
+                    id: view.id.clone(),
+                    action: "accept".into(),
+                    content: Some(json!({"note": "hi"})),
+                });
+            }
+        });
+        assert_eq!(cards, 1, "{output}");
+        assert!(
+            output.contains("action=accept content={\"note\":\"hi\"}"),
+            "{output}"
+        );
+        assert!(
+            task_log(&run.dir).contains(&format!("tasks/update {id}")),
+            "{output}"
+        );
+        mcp::detach_elicit("s");
+    }
+}
+
+#[test]
+fn mcp_tasks_input_required_declines_when_unattended() {
+    for http in [false, true] {
+        let id = if http {
+            "task-away-http"
+        } else {
+            "task-away-stdio"
+        };
+        let run = start_task(&format!("task-away-{http}"), "input", id, http);
+        let mut cards = 0;
+        let output = run_call(&run.dir, false, &mut |ev| {
+            if matches!(ev, LoopEvent::Elicit(_)) {
+                cards += 1;
+            }
+        });
+        assert_eq!(cards, 0, "{output}");
+        assert!(output.contains("action=decline"), "{output}");
+    }
+}
+
+#[test]
+fn mcp_tasks_failed_maps_to_the_json_rpc_error() {
+    for http in [false, true] {
+        let id = if http {
+            "task-fail-http"
+        } else {
+            "task-fail-stdio"
+        };
+        let run = start_task(&format!("task-fail-{http}"), "fail", id, http);
+        let output = run_call(&run.dir, true, &mut |_| {});
+        assert!(output.contains("task failed (-32000)"), "{output}");
+    }
+}
+
+#[test]
+fn mcp_tasks_cancel_on_run_stop_covers_every_open_task() {
+    for http in [false, true] {
+        let id = if http {
+            "task-cancel-http"
+        } else {
+            "task-cancel-stdio"
+        };
+        let also = if http {
+            "task-also-http"
+        } else {
+            "task-also-stdio"
+        };
+        let run = start_task(&format!("task-cancel-{http}"), "cancel", id, http);
+        mcp::seed_open_task("s", "box", also);
+        let cancel = CancelToken::new();
+        let killer = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            killer.cancel();
+        });
+        let output = run_named(&run.dir, true, "s", &cancel, "box__echo", &mut |_| {});
+        assert!(
+            output.contains(&format!("mcp task `{id}` cancelled")),
+            "{output}"
+        );
+        let log = task_log(&run.dir);
+        assert!(log.contains(&format!("tasks/cancel {id}")), "{log}");
+        assert!(log.contains(&format!("tasks/cancel {also}")), "{log}");
+    }
+}
+
+#[test]
+fn mcp_tasks_ttl_expiry_stops_polling() {
+    for http in [false, true] {
+        let id = if http {
+            "task-ttl-http"
+        } else {
+            "task-ttl-stdio"
+        };
+        let run = start_task(&format!("task-ttl-{http}"), "ttl", id, http);
+        let output = run_call(&run.dir, true, &mut |_| {});
+        assert!(
+            output.contains(&format!("mcp task `{id}` expired after 1000ms")),
+            "{output}"
+        );
+        assert!(
+            !task_log(&run.dir).contains("tasks/get"),
+            "ttl expiry must stop before a poll: {}",
+            task_log(&run.dir)
+        );
+    }
+}
+
+#[test]
+fn mcp_tasks_cap_fails_clearly_on_stdio_and_http() {
+    for http in [false, true] {
+        let id = if http {
+            "task-cap-http"
+        } else {
+            "task-cap-stdio"
+        };
+        let run = start_task(&format!("task-cap-{http}"), "complete", id, http);
+        for n in 1..=4 {
+            mcp::seed_open_task("s", "box", &format!("task-cap-slot-{http}-{n}"));
+        }
+        let output = run_call(&run.dir, true, &mut |_| {});
+        assert!(
+            output.contains(&format!(
+                "mcp task cap reached: 4 in flight on server `box` (run cap 8); refused `{id}`"
+            )),
+            "{output}"
+        );
+        assert!(
+            task_log(&run.dir).contains(&format!("tasks/cancel {id}")),
+            "{}",
+            task_log(&run.dir)
+        );
+    }
+}
+
+#[test]
+fn mcp_tasks_cross_session_poll_and_cancel_are_refused() {
+    for http in [false, true] {
+        let id = if http {
+            "task-cross-http"
+        } else {
+            "task-cross-stdio"
+        };
+        let run = start_task(&format!("task-cross-{http}"), "complete", id, http);
+        let output = run_call(&run.dir, true, &mut |_| {});
+        assert!(output.contains("task-done"), "{output}");
+        let belongs = format!("refused mcp task `{id}`: it belongs to session `s` on server `box`");
+        assert_eq!(
+            mcp::binding_refusal("other", "box", id).as_deref(),
+            Some(belongs.as_str())
+        );
+        assert_eq!(
+            mcp::cancel_task("other", "box", id).unwrap_err(),
+            format!("refused mcp task `{id}`: it belongs to session `s` on server `box`")
+        );
+        assert_eq!(
+            mcp::cancel_task("s", "elsewhere", id).unwrap_err(),
+            format!("refused mcp task `{id}`: it belongs to session `s` on server `box`")
+        );
+        let before = task_log(&run.dir);
+        let again = run_named(
+            &run.dir,
+            true,
+            "other",
+            &CancelToken::new(),
+            "box__echo",
+            &mut |_| {},
+        );
+        assert!(
+            again.contains(&format!(
+                "refused mcp task `{id}`: it belongs to session `s` on server `box`"
+            )),
+            "{again}"
+        );
+        let after = task_log(&run.dir);
+        assert_eq!(
+            before.matches("tasks/get").count(),
+            after.matches("tasks/get").count(),
+            "a foreign session must not poll: {after}"
+        );
+        assert!(!after.contains("tasks/cancel"), "{after}");
+    }
+}
+
+#[test]
+fn a_finished_task_does_not_count_as_tool_approval() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("task-approval");
+    import_bin(
+        bin,
+        &[
+            ("FAKE_MCP_STATELESS", "1"),
+            ("FAKE_MCP_TASK", "complete"),
+            ("FAKE_MCP_TASK_ID", "task-approval-stdio"),
+        ],
+    );
+    let (permit_tx, permits) = grokhub_agent::PermitInbox::pair();
+    let client = ApprovalScript {
+        turn: AtomicUsize::new(0),
+    };
+    let cancel = CancelToken::new();
+    let steer = SteerQueue::new();
+    let halt = NoHalt;
+    let approvals = AtomicUsize::new(0);
+    let events = Mutex::new(Vec::new());
+    let events_cb = {
+        let events = &events;
+        let approvals = &approvals;
+        move |ev: LoopEvent| {
+            if let LoopEvent::Permission { id, name, hard, .. } = &ev {
+                let prior = events.lock().unwrap();
+                let started = prior.iter().any(|e| {
+                    matches!(
+                        e,
+                        LoopEvent::Tool { id: tid, status, .. }
+                            if tid == id && (*status == "in_progress" || *status == "completed")
+                    )
+                });
+                drop(prior);
+                assert!(
+                    !started,
+                    "gated tool must not run before the approval answer"
+                );
+                assert_eq!(name, "run_terminal_command");
+                assert!(*hard);
+                let n = approvals.fetch_add(1, Ordering::SeqCst) + 1;
+                assert_eq!(n, 1);
+                let _ = permit_tx.send(grokhub_agent::PermitNote {
+                    id: id.clone(),
+                    answer: grokhub_agent::PermAnswer::Deny,
+                });
+            }
+            events.lock().unwrap().push(ev);
+        }
+    };
+    let input = LoopIn {
+        client: &client,
+        workspace: &dir,
+        model: "grok-4.7",
+        effort: None,
+        system: "",
+        conversation_id: "s",
+        max_turns: 4,
+        usage_base: Usage::default(),
+        cancel: &cancel,
+        steer: &steer,
+        halt: &halt,
+        gate: Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        },
+        desktop: None,
+        permits: &permits,
+        perms: None,
+        context_length: 0,
+        tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
+    };
+    let mut history = Vec::new();
+    let mut on_event = events_cb;
+    let _ = run_loop(&input, &mut history, "go", None, &mut on_event);
+    assert_eq!(approvals.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        grokhub_agent::harness::ConsentLedger::load(&dir)
+            .active()
+            .count(),
+        0
+    );
+    let denied = history.iter().any(|item| {
+        matches!(
+            item,
+            InputItem::FunctionCallOutput { output, .. }
+                if output.contains("User rejected the execution for tool `run_terminal_command`")
+        )
+    });
+    assert!(denied, "{history:?}");
+    let task_ok = history.iter().any(|item| {
+        matches!(
+            item,
+            InputItem::FunctionCallOutput { output, .. } if output.contains("task-done")
+        )
+    });
+    assert!(task_ok, "{history:?}");
+}
+
+struct ApprovalScript {
+    turn: AtomicUsize,
+}
+
+impl ModelClient for ApprovalScript {
+    fn stream(
+        &self,
+        _req: &grokhub_agent::ResponsesRequest,
+        _cancel: &CancelToken,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        let n = self.turn.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            return Ok(TurnOutput {
+                text: String::new(),
+                reasoning: String::new(),
+                calls: vec![FunctionCall {
+                    call_id: "task-1".into(),
+                    name: "box__echo".into(),
+                    arguments: "{}".into(),
+                }],
+                usage: Usage::default(),
+                ..Default::default()
+            });
+        }
+        if n == 1 {
+            return Ok(TurnOutput {
+                text: String::new(),
+                reasoning: String::new(),
+                calls: vec![FunctionCall {
+                    call_id: "hard-1".into(),
+                    name: "run_terminal_command".into(),
+                    arguments: r#"{"command":"rm -rf old"}"#.into(),
+                }],
+                usage: Usage::default(),
+                ..Default::default()
+            });
+        }
+        sink(StreamEvent::TextDelta("done".into()));
+        Ok(TurnOutput {
+            text: "done".into(),
+            reasoning: String::new(),
+            calls: Vec::new(),
+            usage: Usage::default(),
+            ..Default::default()
+        })
+    }
 }
