@@ -3,10 +3,10 @@
 //! `python3 .github/scripts/vstack_sync.py sync --tag vX.Y.Z`.
 
 /// Bundled upstream vstack tag.
-pub const BUILTIN_VSTACK_TAG: &str = "v1.7.0";
+pub const BUILTIN_VSTACK_TAG: &str = "v1.8.0";
 
 /// Bundled upstream vstack commit.
-pub const BUILTIN_VSTACK_COMMIT: &str = "499a3bcb2937990fc4524836c03d1c7ef9835746";
+pub const BUILTIN_VSTACK_COMMIT: &str = "1f92bd32792f001a16191a6297056c350c5caff5";
 
 /// Bundled vstack skills (MIT; see `assets/skills/CREDITS.md`): folder and
 /// `SKILL.md`.
@@ -79,6 +79,10 @@ pub const BUILTIN_SKILL_BODIES: &[(&str, &str)] = &[
     ),
     ("land-it", include_str!("../assets/skills/land-it/SKILL.md")),
     ("lean-ci", include_str!("../assets/skills/lean-ci/SKILL.md")),
+    (
+        "lean-tests",
+        include_str!("../assets/skills/lean-tests/SKILL.md"),
+    ),
     (
         "maintain-formal-verification-skill",
         include_str!("../assets/skills/maintain-formal-verification-skill/SKILL.md"),
