@@ -1785,6 +1785,7 @@ mod tests {
         ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest, StreamEvent,
         TurnOutput,
     };
+    use std::path::Path;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -3572,7 +3573,13 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(workspace.join("mine.txt"), "MINE-4242\n").expect("mine");
         std::fs::write(root.join("private-notes.txt"), "PRIVATE-TOKEN-4242\n").expect("private");
-        let route = Route {
+        let route = answers_route(client, workspace, session);
+        (root, route)
+    }
+
+    /// A route to `client` in `workspace`, in `session` mode.
+    fn answers_route(client: &Arc<Answers>, workspace: PathBuf, session: SessionMode) -> Route {
+        Route {
             client: Arc::clone(client) as Arc<dyn ModelClient + Send + Sync>,
             auth_kind: AuthKind::ApiKey,
             workspace,
@@ -3583,8 +3590,7 @@ mod tests {
             voice_session: None,
             suggestions: false,
             lead: false,
-        };
-        (root, route)
+        }
     }
 
     /// `words` as the window sends them, the only way typed words arrive.
@@ -3594,9 +3600,14 @@ mod tests {
 
     /// The last user message of the model's first request, as text.
     fn first_user_text(client: &Answers) -> String {
+        user_text(client, 0)
+    }
+
+    /// The last user message of the model's request `n` (from 0), as text.
+    fn user_text(client: &Answers, n: usize) -> String {
         let requests = client.requests.lock().expect("requests");
         let user = requests
-            .first()
+            .get(n)
             .and_then(|r| {
                 r.input.iter().rev().find_map(|item| match item {
                     InputItem::Message { role, content } if role == "user" => Some(content.clone()),
@@ -3658,7 +3669,7 @@ mod tests {
             "what's in @file:mine.txt?",
             &answer,
         ));
-        let words = crate::turns::SendBack::default().typed("told-at", &sent);
+        let words = crate::turns::typed_in(&root, "told-at", &sent);
         let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
         let session = Session::spawn_with("told-at", temp_dir("told-at-config"), fake_desktop);
         let stop = session.prompt_typed(&text, words, Vec::new(), route, Box::new(|_| {}));
@@ -3688,7 +3699,7 @@ mod tests {
         let line = grokhub_core::focus_app::categorize("blender", &[])
             .expect("blender is a known app")
             .context_line();
-        let words = crate::turns::SendBack::default().typed("told-focus-at", &sent);
+        let words = crate::turns::typed_in(&root, "told-focus-at", &sent);
         let (text, words) = crate::turns::composed(&sent, words, None, |_| Some(line.clone()));
         let session = Session::spawn_with(
             "told-focus-at",
@@ -3723,7 +3734,7 @@ mod tests {
             outside.display()
         );
         let sent = typed("what does this mean for @file:mine.txt?");
-        let words = crate::turns::SendBack::default().typed("card-at", &sent);
+        let words = crate::turns::typed_in(&root, "card-at", &sent);
         let (text, words) = crate::turns::composed(&sent, words, Some(&report), |_| None);
         let session = Session::spawn_with("card-at", temp_dir("card-at-config"), fake_desktop);
         let stop = session.prompt_typed(&text, words, Vec::new(), route, Box::new(|_| {}));
@@ -3740,8 +3751,8 @@ mod tests {
 
     /// A Workboard card's message (its work prompt and notes, then what the
     /// person typed in Say) and an ask paused for a model come back from the
-    /// window as they were: only what the person typed in them expands, and
-    /// once used the note is gone.
+    /// window as they were: only what the person typed in them expands, each
+    /// time they are sent.
     #[test]
     fn a_message_the_app_wrote_for_the_window_expands_only_its_typed_words() {
         let client = Arc::new(Answers {
@@ -3755,19 +3766,20 @@ mod tests {
              Read @file:{} first\n\nWhen it is done, say so in one line.\n\n{said}",
             outside.display()
         );
-        let back = crate::turns::SendBack::default();
-        back.expect("board-at", &message, typed(said));
+        let config = temp_dir("board-at-marks");
+        crate::turns::note_sent(&config, "board-at", &message, &typed(said)).expect("noted");
         let sent = typed(&message);
-        let words = back.typed("board-at", &sent);
-        let again = back.typed("board-at", &sent);
+        let words = crate::turns::typed_in(&config, "board-at", &sent);
+        let again = crate::turns::typed_in(&config, "board-at", &sent);
         let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
         let session = Session::spawn_with("board-at", temp_dir("board-at-config"), fake_desktop);
         let stop = session.prompt_typed(&text, words.clone(), Vec::new(), route, Box::new(|_| {}));
         let user = first_user_text(&client);
         let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
         assert_eq!(stop, Ok("end_turn".to_string()));
         assert_eq!(words, typed(said));
-        assert_eq!(again, sent);
+        assert_eq!(again, typed(said));
         assert!(!user.contains("PRIVATE-TOKEN-4242"), "{user}");
         assert!(user.contains("### file:mine.txt\nMINE-4242"), "{user}");
     }
@@ -3825,10 +3837,9 @@ mod tests {
         .expect("write board");
         let always = grokhub_core::wire::PermissionMode::AlwaysApprove;
         let resumed = crate::workboard::resume(&config, "c1", "shell-new", always).expect("resume");
-        let back = crate::turns::SendBack::default();
-        let resumed = crate::noted_resume(&back, resumed);
+        let resumed = crate::noted_resume(&config, resumed).expect("noted");
         let sent = typed(&resumed.prompt);
-        let words = back.typed(&resumed.conversation_id, &sent);
+        let words = crate::turns::typed_in(&config, &resumed.conversation_id, &sent);
         let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
         let session = Session::spawn_with(
             "shell-resume-at",
@@ -3873,10 +3884,9 @@ mod tests {
         )
         .expect("plan");
         crate::code_keep::record(&config, chat, None);
-        let back = crate::turns::SendBack::default();
-        let prompt = crate::code_resume_noted(&back, &config, chat).expect("resume");
+        let prompt = crate::code_resume_noted(&config, chat).expect("resume");
         let sent = typed(&prompt);
-        let words = back.typed(chat, &sent);
+        let words = crate::turns::typed_in(&config, chat, &sent);
         let (text, words) = crate::turns::composed(&sent, words, None, |_| None);
         let session = Session::spawn_with(chat, temp_dir("code-resume-at-config"), fake_desktop);
         let stop = session.prompt_typed(&text, words.clone(), Vec::new(), route, Box::new(|_| {}));
@@ -3896,6 +3906,358 @@ mod tests {
         assert!(!user.contains("MINE-4242"), "{user}");
         assert_eq!(words, grokhub_core::Typed::nothing());
         assert!(user.contains(&prompt), "{user}");
+    }
+
+    /// The attached context `@file:mine.txt` adds to a message.
+    const MINE_ATTACHED: &str = "--- Attached context ---\n### file:mine.txt\nMINE-4242\n";
+
+    /// One chat as the window drives it: its turns run in `workspace`, and
+    /// its session and typed marks are kept in `config`, as the app keeps
+    /// them.
+    struct WindowChat<'a> {
+        session: Session,
+        client: &'a Arc<Answers>,
+        config: &'a Path,
+        chat: &'a str,
+        workspace: &'a Path,
+    }
+
+    impl<'a> WindowChat<'a> {
+        fn open(
+            client: &'a Arc<Answers>,
+            config: &'a Path,
+            chat: &'a str,
+            workspace: &'a Path,
+        ) -> Self {
+            Self {
+                session: Session::spawn_with(chat, config.to_path_buf(), fake_desktop),
+                client,
+                config,
+                chat,
+                workspace,
+            }
+        }
+
+        /// Sends `sent` the way the window does, through the steps
+        /// `send_chat` and `chat_turn` take before the turn runs: the typed
+        /// words looked up, a Focus help `line` put before it, and the
+        /// turn's message noted with the chat. Returns the user message the
+        /// model got, without the volatile notes put before it.
+        fn send(&self, sent: &str, line: Option<&str>) -> String {
+            self.send_with(sent, line, None, Vec::new())
+        }
+
+        /// [`Self::send`] for the first message of a chat opened from a
+        /// Pulse card (its report `carry`), with plus-button `files`.
+        fn send_with(
+            &self,
+            sent: &str,
+            line: Option<&str>,
+            carry: Option<&str>,
+            files: Vec<crate::attach::Staged>,
+        ) -> String {
+            let sent = typed(sent);
+            let words = crate::turns::typed_in(self.config, self.chat, &sent);
+            let (text, words) =
+                crate::turns::composed(&sent, words, carry, |_| line.map(str::to_string));
+            crate::turns::note_sent(self.config, self.chat, &text, &words).expect("noted");
+            let n = self.client.requests.lock().expect("requests").len();
+            let route = answers_route(self.client, self.workspace.to_path_buf(), SessionMode::Chat);
+            let stop = self
+                .session
+                .prompt_typed(&text, words, files, route, Box::new(|_| {}));
+            assert_eq!(stop, Ok("end_turn".to_string()));
+            let user = user_text(self.client, n);
+            match user.split_once("\n</cabin-volatile>\n\n") {
+                Some((_, said)) => said.to_string(),
+                None => user,
+            }
+        }
+
+        /// The chat's last message as it shows once reopened, which is what
+        /// `/retry` sends after a restart.
+        fn reopened(&self) -> String {
+            crate::history::load(self.config, self.chat, crate::history::LOAD_CAP)
+                .expect("saved chat")
+                .lines
+                .into_iter()
+                .rev()
+                .find(|line| line.role == crate::history::Role::User)
+                .expect("a message")
+                .text
+        }
+    }
+
+    /// A blocked agent card `c1` whose checkpoint's next step is `next`,
+    /// run in `chat`, on the board in `config`.
+    fn blocked_card(config: &Path, chat: &str, next: &str) {
+        use grokhub_core::{BoardCard, BoardStatus, Checkpoint, WorkOrigin};
+        let mut card = BoardCard::new("Tidy up", "", "");
+        card.id = "c1".into();
+        card.status = BoardStatus::Blocked;
+        card.run = true;
+        card.origin = Some(WorkOrigin::Agent);
+        card.thread_id = Some(chat.into());
+        card.checkpoint = Some(Checkpoint {
+            goal: "tidy the repo".into(),
+            next: next.into(),
+            ..Default::default()
+        });
+        std::fs::write(
+            crate::workboard::path(config),
+            serde_json::to_string(&[card]).expect("board"),
+        )
+        .expect("write board");
+    }
+
+    /// `/retry` after a Workboard Resume sends the resume block again, word
+    /// for word, and so does `/retry` once the app has restarted (the
+    /// reopened chat's line). The block stays the model's every time: its
+    /// `@` references stay text. What the person types next still reads.
+    #[test]
+    fn a_workboard_resume_block_sent_again_reads_no_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("resume-again", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("resume-again-config");
+        let chat = "shell-resume-again";
+        let next = format!("Read @file:{} and @file:mine.txt first", outside.display());
+        blocked_card(&config, chat, &next);
+        let always = grokhub_core::wire::PermissionMode::AlwaysApprove;
+        let resumed = crate::workboard::resume(&config, "c1", "shell-new", always).expect("resume");
+        let resumed = crate::noted_resume(&config, resumed).expect("noted");
+        let window = WindowChat::open(&client, &config, chat, &route.workspace);
+        let first = window.send(&resumed.prompt, None);
+        let retried = window.send(&resumed.prompt, None);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let typed_next = window.send("now read @file:mine.txt", None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert_eq!(resumed.conversation_id, chat);
+        assert!(resumed.prompt.contains(&next), "{}", resumed.prompt);
+        assert_eq!(first, resumed.prompt);
+        assert_eq!(retried, resumed.prompt);
+        assert_eq!(reopened, resumed.prompt);
+        assert_eq!(after_restart, resumed.prompt);
+        assert_eq!(
+            typed_next,
+            format!("now read @file:mine.txt\n\n{MINE_ATTACHED}")
+        );
+    }
+
+    /// The same for the Code tab's Resume, whose prompt the session's plan
+    /// gives.
+    #[test]
+    fn a_code_tab_resume_prompt_sent_again_reads_no_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("code-again", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("code-again-config");
+        let chat = "shell-code-again";
+        crate::lead::save_plan(
+            &config,
+            chat,
+            &format!(
+                "Tidy the repo\n- [ ] Read @file:{} and @file:mine.txt first",
+                outside.display()
+            ),
+        )
+        .expect("plan");
+        crate::code_keep::record(&config, chat, None);
+        let prompt = crate::code_resume_noted(&config, chat).expect("resume");
+        let window = WindowChat::open(&client, &config, chat, &route.workspace);
+        let first = window.send(&prompt, None);
+        let retried = window.send(&prompt, None);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let typed_next = window.send("now read @file:mine.txt", None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        assert_eq!(
+            prompt,
+            format!(
+                "Continue this Code tab session where it left off.\nGoal: Tidy the repo\n\
+                 Next: Read @file:{} and @file:mine.txt first",
+                outside.display()
+            )
+        );
+        assert_eq!(first, prompt);
+        assert_eq!(retried, prompt);
+        assert_eq!(reopened, prompt);
+        assert_eq!(after_restart, prompt);
+        assert_eq!(
+            typed_next,
+            format!("now read @file:mine.txt\n\n{MINE_ATTACHED}")
+        );
+    }
+
+    /// A card chat's Say sends the card's work prompt and notes with what
+    /// the person typed. Sent again (`/retry`, and after a restart from the
+    /// reopened chat, which shows the attached context too), only the
+    /// person's words read: the notes' `@file:` stays text each time.
+    #[test]
+    fn a_card_chat_message_sent_again_reads_only_what_the_person_typed() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("say-again", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("say-again-config");
+        let mut card = grokhub_core::BoardCard::new("Tidy up", "", "");
+        card.id = "c1".into();
+        card.notes = format!("Read @file:{} first", outside.display());
+        std::fs::write(
+            crate::workboard::path(&config),
+            serde_json::to_string(&[card]).expect("board"),
+        )
+        .expect("write board");
+        let said = typed("and @file:mine.txt");
+        let say =
+            crate::card_chat::say(&config, "c1", said.as_str(), "shell-say-again").expect("say");
+        let say = crate::noted_say(&config, say, &said).expect("noted");
+        let window = WindowChat::open(&client, &config, "shell-say-again", &route.workspace);
+        let first = window.send(&say.message, None);
+        let retried = window.send(&say.message, None);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let typed_next = window.send("now read @file:mine.txt", None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        let message = format!(
+            "Work on this workboard card: Tidy up\n\nMy notes for this card (follow them):\n\
+             Read @file:{} first\n\nWhen it is done, say so in one line.\n\nand @file:mine.txt",
+            outside.display()
+        );
+        assert_eq!(say.conversation_id, "shell-say-again");
+        assert_eq!(say.message, message);
+        assert_eq!(first, format!("{message}\n\n{MINE_ATTACHED}"));
+        assert_eq!(retried, first);
+        assert_eq!(reopened, first);
+        // The reopened line keeps its attached context, and the person's
+        // reference reads once more after it.
+        assert_eq!(
+            after_restart,
+            format!("{}\n\n{MINE_ATTACHED}", first.trim_end())
+        );
+        assert_eq!(
+            typed_next,
+            format!("now read @file:mine.txt\n\n{MINE_ATTACHED}")
+        );
+    }
+
+    /// With Focus help on, the resume block goes after the app's context
+    /// line. The chat's paused ask (sent again once a model is back) and
+    /// the reopened chat's line are that whole message, which the window
+    /// never sent itself: it stays the app's and the model's.
+    #[test]
+    fn a_resume_block_after_a_focus_line_sent_again_reads_no_reference() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("focus-again", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("focus-again-config");
+        let chat = "shell-focus-again";
+        blocked_card(
+            &config,
+            chat,
+            &format!("Read @file:{} first", outside.display()),
+        );
+        let always = grokhub_core::wire::PermissionMode::AlwaysApprove;
+        let resumed = crate::workboard::resume(&config, "c1", "shell-new", always).expect("resume");
+        let resumed = crate::noted_resume(&config, resumed).expect("noted");
+        let line = grokhub_core::focus_app::categorize("blender", &[])
+            .expect("blender is a known app")
+            .context_line();
+        let window = WindowChat::open(&client, &config, chat, &route.workspace);
+        let first = window.send(&resumed.prompt, Some(&line));
+        let resent = window.send(&first, None);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        let message = format!("{line}\n{}", resumed.prompt);
+        assert_eq!(first, message);
+        assert_eq!(resent, message);
+        assert_eq!(reopened, message);
+        assert_eq!(after_restart, message);
+    }
+
+    /// The first message of a chat opened from a Pulse card carries the
+    /// card's report, and a plus-button file adds its line after it. Once
+    /// the app restarts, `/retry` sends the reopened line, report and file
+    /// line included: the report's `@file:` stays text, and the person's
+    /// own reference reads.
+    #[test]
+    fn a_pulse_card_s_report_with_a_file_sent_again_after_a_restart_stays_text() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("pulse-again", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let config = temp_dir("pulse-again-config");
+        let chat = "shell-pulse-again";
+        let report = format!(
+            "Pulse card: Build is green\nReport: see @file:{} for the details",
+            outside.display()
+        );
+        let notes = crate::attach::Trays::default()
+            .stage(&config, chat, "notes.md", b"# plan", &["text", "image"])
+            .expect("staged");
+        let file_line = format!(
+            "File notes.md is on this computer at {}. Read it yourself. Do not ask for the contents to be pasted.",
+            notes.path
+        );
+        let window = WindowChat::open(&client, &config, chat, &route.workspace);
+        let sent = "what does this mean for @file:mine.txt?";
+        let first = window.send_with(sent, None, Some(&report), vec![notes]);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        let carried = grokhub_core::card_report::card_carry(&report);
+        assert_eq!(
+            first,
+            format!("{carried}{sent}\n{file_line}\n\n{MINE_ATTACHED}")
+        );
+        assert_eq!(reopened, first);
+        assert_eq!(
+            after_restart,
+            format!("{}\n\n{MINE_ATTACHED}", first.trim_end())
+        );
+    }
+
+    /// `/retry` of a message the person typed reads its reference again.
+    /// Reopened after a restart, the line holds the attached file too: an
+    /// `@` reference inside that file is the file's, not the person's, so
+    /// it stays text.
+    #[test]
+    fn a_typed_message_sent_again_still_reads_its_references() {
+        let client = Arc::new(Answers {
+            requests: Mutex::new(Vec::new()),
+        });
+        let (root, route) = at_fixture("typed-again", &client, SessionMode::Chat);
+        let outside = root.join("private-notes.txt");
+        let notes = format!("Also read @file:{}\n", outside.display());
+        std::fs::write(route.workspace.join("notes.txt"), &notes).expect("notes");
+        let config = temp_dir("typed-again-config");
+        let window = WindowChat::open(&client, &config, "shell-typed-again", &route.workspace);
+        let first = window.send("check @file:notes.txt", None);
+        let retried = window.send("check @file:notes.txt", None);
+        let reopened = window.reopened();
+        let after_restart = window.send(&reopened, None);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&config);
+        let attached = format!("--- Attached context ---\n### file:notes.txt\n{notes}");
+        assert_eq!(first, format!("check @file:notes.txt\n\n{attached}"));
+        assert_eq!(retried, first);
+        assert_eq!(reopened, first);
+        assert_eq!(after_restart, format!("{}\n\n{attached}", first.trim_end()));
     }
 }
 

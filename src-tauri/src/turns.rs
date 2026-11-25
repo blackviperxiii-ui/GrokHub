@@ -5,11 +5,12 @@
 //! stops it, and a new job waits its turn (the page does those last three).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use grokhub_agent::route::intent::{self, TurnCx, TurnRoute};
 use grokhub_core::Typed;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{agent, ShellState, CHAT_EVENT};
@@ -35,40 +36,140 @@ impl Reads {
     }
 }
 
-/// Messages the app hands the window to send back with `send_chat` (a
-/// Workboard card's message, an ask paused for a model), by chat, each with
-/// the words in it the person typed.
-#[derive(Default)]
-pub struct SendBack(Mutex<HashMap<String, (String, Typed)>>);
+/// Each chat's typed marks: `{config}/typed-marks/<hash of the chat id>.json`.
+const MARKS_DIR: &str = "typed-marks";
+/// A chat keeps the marks of its newest this many messages.
+const MARKS_KEPT: usize = 256;
+/// One writer at a time reads and rewrites a chat's marks.
+static MARKS_LOCK: Mutex<()> = Mutex::new(());
 
-impl SendBack {
-    /// `text` goes back to `chat` next, and of it the person typed `typed`.
-    pub(crate) fn expect(&self, chat: &str, text: &str, typed: Typed) {
-        let mut back = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        back.insert(chat.to_string(), (text.to_string(), typed));
-    }
+/// Which words of one message of a chat the person typed, for a message
+/// some of which they didn't type (a Workboard card's message, a Code tab
+/// Resume, a message after a Focus help line or a Pulse card's report). It
+/// holds no words: the message's hash and size ([`as_sent`]) and where the
+/// typed words sit in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Mark {
+    sha: String,
+    size: usize,
+    at: usize,
+    len: usize,
+}
 
-    /// The words the person typed in `sent`, a message the window sent in
-    /// `chat`: those noted when the app wrote it, else [`typed_words`].
-    pub(crate) fn typed(&self, chat: &str, sent: &Typed) -> Typed {
-        let mut back = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if back
-            .get(chat)
-            .is_some_and(|(text, _)| text == sent.as_str())
-        {
-            if let Some((_, typed)) = back.remove(chat) {
-                return typed;
+impl Mark {
+    /// `body` is this mark's message, or starts with it and goes on past a
+    /// line break: a reopened chat shows a message's plus-button file lines
+    /// after it.
+    fn fits(&self, body: &str) -> bool {
+        match (body.get(..self.size), body.get(self.size..)) {
+            (Some(head), Some(rest)) => {
+                (rest.is_empty() || rest.starts_with('\n'))
+                    && grokhub_core::model_download::sha256_hex(head.as_bytes()) == self.sha
             }
+            _ => false,
         }
-        typed_words(sent)
+    }
+}
+
+fn marks_path(config_dir: &Path, chat: &str) -> PathBuf {
+    let name = grokhub_core::model_download::sha256_hex(chat.as_bytes());
+    config_dir
+        .join(MARKS_DIR)
+        .join(format!("{}.json", &name[..32]))
+}
+
+fn read_marks(config_dir: &Path, chat: &str) -> Vec<Mark> {
+    std::fs::read_to_string(marks_path(config_dir, chat))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// A message as the window can send it again, for its mark: without the
+/// attached context the app put after its typed references (a reopened
+/// chat shows that), and trimmed.
+fn as_sent(text: &str) -> &str {
+    let attached = format!("\n\n{}\n", grokhub_core::ATTACHED_CONTEXT_HEADER);
+    text.split_once(attached.as_str())
+        .map_or(text, |(before, _)| before)
+        .trim()
+}
+
+/// `text`, a message a turn of `chat` runs or the window is about to send
+/// there, of which the person typed `typed`: when some of it isn't theirs,
+/// kept with the chat, so the same message sent there again (`/retry`,
+/// after a restart, once a model is back) reads only those words.
+pub(crate) fn note_sent(
+    config_dir: &Path,
+    chat: &str,
+    text: &str,
+    typed: &Typed,
+) -> Result<(), String> {
+    let body = as_sent(text);
+    let words = typed.as_str().trim();
+    if words == body {
+        return Ok(());
+    }
+    let (at, len) = match body.find(words) {
+        Some(at) if !words.is_empty() => (at, words.len()),
+        _ => (0, 0),
+    };
+    let mark = Mark {
+        sha: grokhub_core::model_download::sha256_hex(body.as_bytes()),
+        size: body.len(),
+        at,
+        len,
+    };
+    let _one = MARKS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut marks = read_marks(config_dir, chat);
+    marks.retain(|m| m.sha != mark.sha);
+    marks.push(mark);
+    let over = marks.len().saturating_sub(MARKS_KEPT);
+    marks.drain(..over);
+    let path = marks_path(config_dir, chat);
+    let saved = (|| {
+        std::fs::create_dir_all(config_dir.join(MARKS_DIR))?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec(&marks)?)?;
+        std::fs::rename(&tmp, &path)
+    })();
+    saved.map_err(|e| format!("Couldn't save which words of this message you typed: {e}"))
+}
+
+/// The words the person typed in `sent`, a message the window sent in
+/// `chat`: those [`note_sent`] kept for that message (the longest noted
+/// message it is, or starts with before a line break), else
+/// [`typed_words`]. A message that is none of the chat's noted ones, so one
+/// the person typed or changed, counts as typed in full.
+pub(crate) fn typed_in(config_dir: &Path, chat: &str, sent: &Typed) -> Typed {
+    let body = as_sent(sent.as_str());
+    match read_marks(config_dir, chat)
+        .into_iter()
+        .filter(|m| m.fits(body))
+        .max_by_key(|m| m.size)
+    {
+        Some(mark) => sent.keep(|s| {
+            as_sent(s)
+                .get(mark.at..mark.at.saturating_add(mark.len))
+                .unwrap_or_default()
+        }),
+        None => typed_words(sent),
+    }
+}
+
+/// Deleted chats take their marks with them.
+pub(crate) fn forget_marks(config_dir: &Path, chats: &[String]) {
+    for chat in chats {
+        let _ = std::fs::remove_file(marks_path(config_dir, chat));
     }
 }
 
 /// The words the person typed in `sent`, a message as the window sent it:
 /// all of it, less a told side answer's answer, which a model wrote
-/// ([`intent::person_words`]).
+/// ([`intent::person_words`]), and less the attached context a reopened
+/// chat shows after it, which the app read.
 pub(crate) fn typed_words(sent: &Typed) -> Typed {
-    sent.keep(intent::person_words)
+    sent.keep(|s| intent::person_words(as_sent(s)))
 }
 
 /// A message the window sent, as its turn runs it: after the report of the
@@ -305,6 +406,135 @@ pub fn tell_main(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `words` as the window sends them.
+    fn typed(words: &str) -> Typed {
+        serde_json::from_value(serde_json::json!(words)).expect("typed")
+    }
+
+    fn marks_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-shell-turns-{name}-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// A message the app wrote keeps its typed words however often it is
+    /// sent in its chat, also as a reopened chat shows it. It holds none of
+    /// the message's words on disk, and a deleted chat takes it along.
+    #[test]
+    fn a_noted_message_keeps_its_typed_words_each_time_it_is_sent_in_its_chat() {
+        let dir = marks_dir("noted");
+        let message = "Work on this workboard card: Tidy up\n\n\
+                       Read @file:/home/user/private-notes.txt first\n\nand @file:mine.txt";
+        note_sent(&dir, "shell-a", message, &typed("and @file:mine.txt")).expect("noted");
+        let sent = typed(message);
+        let reopened = typed(&format!(
+            "{message}\n\n{}\n### file:mine.txt\nMINE\n",
+            grokhub_core::ATTACHED_CONTEXT_HEADER
+        ));
+        let edited = message.replace("Tidy up", "Tidy it up");
+        let first = typed_in(&dir, "shell-a", &sent);
+        let again = typed_in(&dir, "shell-a", &sent);
+        let shown = typed_in(&dir, "shell-a", &reopened);
+        let elsewhere = typed_in(&dir, "shell-b", &sent);
+        let changed = typed_in(&dir, "shell-a", &typed(&edited));
+        let on_disk: String = std::fs::read_dir(dir.join(MARKS_DIR))
+            .expect("marks")
+            .map(|entry| std::fs::read_to_string(entry.expect("entry").path()).expect("read"))
+            .collect();
+        forget_marks(&dir, &["shell-a".to_string()]);
+        let forgotten = typed_in(&dir, "shell-a", &sent);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(first, typed("and @file:mine.txt"));
+        assert_eq!(again, typed("and @file:mine.txt"));
+        assert_eq!(shown, typed("and @file:mine.txt"));
+        assert_eq!(elsewhere, sent);
+        assert_eq!(changed, typed(&edited));
+        assert!(
+            !on_disk.contains("Tidy") && !on_disk.contains("@file"),
+            "{on_disk}"
+        );
+        assert_eq!(forgotten, sent);
+    }
+
+    /// A message all of which the person typed needs no mark, and a chat
+    /// keeps the marks of its newest [`MARKS_KEPT`] messages.
+    #[test]
+    fn a_chat_keeps_marks_only_for_its_newest_messages_with_words_not_typed() {
+        let dir = marks_dir("kept");
+        note_sent(
+            &dir,
+            "shell-a",
+            "fix @file:a.txt",
+            &typed("fix @file:a.txt"),
+        )
+        .expect("typed");
+        let wrote = dir.join(MARKS_DIR).exists();
+        for n in 0..=MARKS_KEPT {
+            note_sent(
+                &dir,
+                "shell-a",
+                &format!("app message {n}"),
+                &Typed::nothing(),
+            )
+            .expect("noted");
+        }
+        let oldest = typed_in(&dir, "shell-a", &typed("app message 0"));
+        let kept = typed_in(&dir, "shell-a", &typed("app message 1"));
+        let newest = typed_in(
+            &dir,
+            "shell-a",
+            &typed(&format!("app message {MARKS_KEPT}")),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!wrote);
+        assert_eq!(oldest, typed("app message 0"));
+        assert_eq!(kept, Typed::nothing());
+        assert_eq!(newest, Typed::nothing());
+    }
+
+    /// A reopened chat shows a message's plus-button file lines after it:
+    /// the message's mark still holds, and the lines aren't typed. Words
+    /// after it on its own last line make another message, and of two
+    /// noted messages the longer one that fits wins.
+    #[test]
+    fn a_noted_message_holds_with_file_lines_after_it_and_the_longest_wins() {
+        let dir = marks_dir("prefix");
+        let line = "[Context: the user was just in Blender (3D modelling).]";
+        let short = format!("{line}\nhi");
+        let long = format!("{line}\nhi\nread @file:notes.txt");
+        note_sent(&dir, "shell-a", &short, &typed("hi")).expect("noted");
+        note_sent(&dir, "shell-a", &long, &typed("hi\nread @file:notes.txt")).expect("noted");
+        let files =
+            format!("{short}\nFile a.md is on this computer at /home/user/a.md. Read it yourself.");
+        let same_line = format!("{short} and read @file:notes.txt");
+        let with_files = typed_in(&dir, "shell-a", &typed(&files));
+        let longer = typed_in(&dir, "shell-a", &typed(&long));
+        let other = typed_in(&dir, "shell-a", &typed(&same_line));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(with_files, typed("hi"));
+        assert_eq!(longer, typed("hi\nread @file:notes.txt"));
+        assert_eq!(other, typed(&same_line));
+    }
+
+    /// The attached context a reopened chat shows after a message holds a
+    /// file's words, not the person's: an `@` reference there isn't typed.
+    #[test]
+    fn the_attached_context_after_a_message_is_not_typed() {
+        let sent = typed(&format!(
+            "check @file:notes.txt\n\n{}\n### file:notes.txt\nAlso read @file:/home/user/private-notes.txt\n",
+            grokhub_core::ATTACHED_CONTEXT_HEADER
+        ));
+        assert_eq!(typed_words(&sent), typed("check @file:notes.txt"));
+        assert_eq!(
+            typed_words(&typed("  check @file:notes.txt\n")),
+            typed("check @file:notes.txt")
+        );
+    }
 
     #[test]
     fn a_side_id_belongs_to_its_own_chat_only() {
