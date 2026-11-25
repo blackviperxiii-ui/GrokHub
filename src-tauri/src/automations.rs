@@ -4,7 +4,9 @@
 //! shell's scheduler (`scheduler.rs`) does. Jobs gated by a check command run
 //! the check first, then fire only when it passes. "Run now" and scheduled
 //! runs go unattended in Ask mode, so a job can read but every tool that
-//! changes something is refused without a card.
+//! changes something is refused without a card. A job whose words a paired
+//! browser wrote runs as a browser's ([`RunOrigin::Browser`]): never with the
+//! desktop tools, however its run starts.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -13,6 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use grokhub_agent::{CancelToken, ModelClient};
 
 use crate::unattended::RunGate;
+pub use grokhub_agent::web_origin::RunOrigin;
 use grokhub_core::{Automation, LocalClock};
 use serde::{Deserialize, Serialize};
 
@@ -163,10 +166,49 @@ fn save(config_dir: &Path, list: &[Automation]) -> Result<(), String> {
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
+/// The gate a run of `job` goes behind: `gate`, as a browser's run when a
+/// browser run wrote the job (on a page, through a chat's agent, or in the
+/// run of another job a browser wrote) and a person hasn't saved the words
+/// it runs here since, so it gets no desktop. The words are the ones the run
+/// goes on, so a save that lands while it starts can't change whose they are
+/// ([`grokhub_agent::web_origin::job_origin`]).
+pub fn gate_for(config_dir: &Path, job: &Automation, gate: RunGate) -> RunGate {
+    gate.with_origin(grokhub_agent::web_origin::job_origin(
+        config_dir,
+        &job.id,
+        &job.instructions,
+    ))
+}
+
+/// Whose words the card of job `id` carries (its name and its runs'
+/// reports): the job's, as [`gate_for`] reads them. The list is read without
+/// the store lock, so a caller holding the board lock never waits on it; a
+/// save replaces the file whole. A job that can't be read is a browser's
+/// when a browser ever wrote it.
+pub fn card_job_origin(config_dir: &Path, id: &str) -> RunOrigin {
+    let words = std::fs::read_to_string(path(config_dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Vec<Automation>>(&raw).ok())
+        .and_then(|list| list.into_iter().find(|a| a.id == id))
+        .map(|a| a.instructions)
+        .unwrap_or_default();
+    grokhub_agent::web_origin::job_origin(config_dir, id, &words)
+}
+
 pub const ADD_HINT: &str =
     "Say when, like \"every weekday at 9am summarize my inbox\" or \"heartbeat every 30 min check the build\".";
 
 pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Automation>, String> {
+    add_by(config_dir, text, clock, RunOrigin::Window)
+}
+
+/// [`add`], with the words from `by`.
+pub fn add_by(
+    config_dir: &Path,
+    text: &str,
+    clock: LocalClock,
+    by: RunOrigin,
+) -> Result<Vec<Automation>, String> {
     let mut a = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if a.name.trim().is_empty() {
         return Err(ADD_HINT.into());
@@ -175,19 +217,24 @@ pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Autom
         a.check_command = words.command;
         a.gate = words.gate;
     }
-    add_parsed(config_dir, a, clock)
+    add_parsed(config_dir, a, clock, by)
 }
 
 /// Save an automation already parsed (a Suggested tile's seed), with a new
-/// id and its next run.
+/// id and its next run. A browser's job is marked before it is saved, so no
+/// tick ever finds it unmarked.
 pub fn add_parsed(
     config_dir: &Path,
     mut a: Automation,
     clock: LocalClock,
+    by: RunOrigin,
 ) -> Result<Vec<Automation>, String> {
     let _store = store();
     let mut list = load_unlocked(config_dir)?;
     a.id = grokhub_core::uid("auto");
+    if by == RunOrigin::Browser {
+        grokhub_agent::web_origin::mark_job(config_dir, &a.id)?;
+    }
     list.push(grokhub_core::ensure_automation_schedule(a, clock));
     save(config_dir, &list)?;
     Ok(list)
@@ -242,12 +289,30 @@ pub fn edit(
     text: &str,
     clock: LocalClock,
 ) -> Result<Vec<Automation>, String> {
+    edit_by(config_dir, id, text, clock, RunOrigin::Window)
+}
+
+/// [`edit`], with the words from `by`. A browser's words are marked before
+/// they are saved. This computer's make the job a person's for exactly the
+/// words saved, so a browser's save that lands after them, or one a run
+/// started on before them, still runs as a browser's.
+pub fn edit_by(
+    config_dir: &Path,
+    id: &str,
+    text: &str,
+    clock: LocalClock,
+    by: RunOrigin,
+) -> Result<Vec<Automation>, String> {
     let parsed = grokhub_core::parse_nl_automation(text).ok_or_else(|| ADD_HINT.to_string())?;
     if parsed.name.trim().is_empty() {
         return Err(ADD_HINT.into());
     }
     let words = grokhub_core::automation_check::script_words(text);
-    change(config_dir, id, |list, at| {
+    if by == RunOrigin::Browser {
+        grokhub_agent::web_origin::mark_job(config_dir, id)?;
+    }
+    let mut saved = String::new();
+    let list = change(config_dir, id, |list, at| {
         let old = &list[at];
         let (check_command, gate) = match words {
             // Same command: keep what it printed last, for the next diff.
@@ -276,7 +341,13 @@ pub fn edit(
             ..parsed
         };
         list[at] = grokhub_core::ensure_automation_schedule(next, clock);
-    })
+        saved.clone_from(&list[at].instructions);
+    })?;
+    if by == RunOrigin::Window {
+        // A failed save of the mark leaves the job without the desktop: the safe side.
+        let _ = grokhub_agent::web_origin::job_saved_here(config_dir, id, &saved);
+    }
+    Ok(list)
 }
 
 pub fn remove(config_dir: &Path, id: &str) -> Result<Vec<Automation>, String> {
@@ -361,6 +432,7 @@ fn run_on_board(
     why: &str,
 ) -> RunResult {
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
+    let gate = gate_for(config_dir, job, gate);
     let started = grokhub_core::now_ms();
     let session_id = format!("shell-auto-{}-{started}", job.id);
     let card = board_run_start(config_dir, job, &session_id, model, gate, started, why);
@@ -1229,5 +1301,200 @@ mod tests {
             Some(InterruptCause::Restart)
         );
         assert!(interrupt_board_orphans(&dir).is_empty());
+    }
+
+    /// Asks for one screenshot, then is done.
+    #[derive(Default)]
+    struct Screenshots {
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl ModelClient for Screenshots {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            let mut requests = self.requests.lock().expect("requests");
+            requests.push(req.clone());
+            if requests.len() == 1 {
+                return Ok(TurnOutput {
+                    calls: vec![FunctionCall {
+                        call_id: "shot".into(),
+                        name: "screenshot".into(),
+                        arguments: "{}".into(),
+                    }],
+                    ..TurnOutput::default()
+                });
+            }
+            Ok(TurnOutput {
+                text: "done".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    /// A job's words from a paired browser: added, or a job made here edited
+    /// there. Its runs get no desktop, however they start, until its words
+    /// are saved again here.
+    #[test]
+    fn a_job_a_browser_wrote_runs_without_the_desktop() {
+        let dir = temp_dir("web-job");
+        let on = RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        // A browser's run: no desktop, whatever the switch says.
+        let browser = RunGate {
+            origin: RunOrigin::Browser,
+            ..on
+        };
+        assert!(!browser.gate().desktop);
+        let web = add_by(
+            &dir,
+            "every day at 9am take a screenshot",
+            tuesday_8am(),
+            RunOrigin::Browser,
+        )
+        .expect("web job")[0]
+            .id
+            .clone();
+        let here = add(&dir, "every day at 10am take a screenshot", tuesday_8am()).expect("job")[1]
+            .id
+            .clone();
+        let job_of = |id: &str| {
+            load(&dir)
+                .expect("jobs")
+                .into_iter()
+                .find(|job| job.id == id)
+                .expect("job")
+        };
+        assert_eq!(gate_for(&dir, &job_of(&web), on), browser);
+        assert_eq!(gate_for(&dir, &job_of(&here), on), on);
+
+        // The scheduler's run of the browser's job, with desktop control on.
+        let job = load(&dir).expect("jobs")[0].clone();
+        let client = Arc::new(Screenshots::default());
+        let ws = temp_dir("web-job-ws");
+        execute(&dir, &job, client.clone(), "grok-4.7", ws, on);
+        let requests = client.requests.lock().expect("requests");
+        let shot = requests[1].input.iter().find_map(|item| match item {
+            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        });
+        assert_eq!(shot.as_deref(), Some(*grokhub_core::desktop_mcp::OFF_MSG));
+        drop(requests);
+
+        // A browser's edit of the job made here takes the desktop away, and
+        // saving its words here gives it back.
+        edit_by(
+            &dir,
+            &here,
+            "every day at 10am click Send",
+            tuesday_8am(),
+            RunOrigin::Browser,
+        )
+        .expect("web edit");
+        let web_words = job_of(&here);
+        assert_eq!(web_words.instructions, "every day at 10am click Send");
+        assert_eq!(gate_for(&dir, &web_words, on), browser);
+        edit(
+            &dir,
+            &here,
+            "every day at 10am take a screenshot",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        assert_eq!(gate_for(&dir, &job_of(&here), on), on);
+        // A run that read the browser's words before that save still runs
+        // them as the browser's.
+        assert_eq!(gate_for(&dir, &web_words, on), browser);
+        let marks: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(grokhub_agent::web_origin::JOBS_FILE))
+                .expect("web file"),
+        )
+        .expect("marks");
+        assert_eq!(
+            marks,
+            serde_json::json!({
+                &web: null,
+                // The words saved here: "every day at 10am take a screenshot".
+                &here: "fea130e2d1ccd61ccb0e72c6f12a2b33e66b396084b4df14bc0d8e093aa52558",
+            })
+        );
+        // A file that can't be read leaves every job without the desktop.
+        std::fs::write(dir.join(grokhub_agent::web_origin::JOBS_FILE), "[not json")
+            .expect("broken");
+        assert_eq!(gate_for(&dir, &job_of(&here), on), browser);
+    }
+
+    /// A person saves a job's words here while a browser edits the same job.
+    /// Whichever save lands last, a browser's words never run with the
+    /// desktop: the browser marks the job first, the person's save makes
+    /// only the words it saved theirs, and a run goes on the words it runs.
+    #[test]
+    fn a_save_here_racing_a_browsers_edit_never_gives_its_words_the_desktop() {
+        let dir = temp_dir("web-race");
+        let on = RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        let id = add(&dir, "every day at 9am summarize my inbox", tuesday_8am()).expect("job")[0]
+            .id
+            .clone();
+        let gate = || gate_for(&dir, &load(&dir).expect("jobs")[0], on);
+        // One at a time, in the order that lost the mark before: the
+        // browser's mark, the person's whole save, then the browser's save.
+        grokhub_agent::web_origin::mark_job(&dir, &id).expect("mark");
+        edit(
+            &dir,
+            &id,
+            "every day at 9am summarize my inbox",
+            tuesday_8am(),
+        )
+        .expect("edit");
+        change(&dir, &id, |list, at| {
+            list[at].instructions = "click Send in Mail".into();
+        })
+        .expect("browser's save");
+        assert_eq!(gate().origin, RunOrigin::Browser);
+        assert!(!gate().gate().desktop);
+        // Both at once, many times over.
+        for n in 0..200 {
+            edit(
+                &dir,
+                &id,
+                "every day at 9am summarize my inbox",
+                tuesday_8am(),
+            )
+            .expect("reset");
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let window = {
+                let (dir, id, barrier) = (dir.clone(), id.clone(), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let words = format!("every day at 9am summarize my inbox {n}");
+                    edit(&dir, &id, &words, tuesday_8am()).map(|_| ())
+                })
+            };
+            let browser = {
+                let (dir, id, barrier) = (dir.clone(), id.clone(), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let words = format!("every day at 9am click Send in Mail {n}");
+                    edit_by(&dir, &id, &words, tuesday_8am(), RunOrigin::Browser).map(|_| ())
+                })
+            };
+            assert_eq!(window.join().expect("window"), Ok(()));
+            assert_eq!(browser.join().expect("browser"), Ok(()));
+            // The words that landed last are the run's; the browser's run
+            // without the desktop, the person's with it.
+            let words = load(&dir).expect("jobs")[0].instructions.clone();
+            let want = match words {
+                w if w == format!("every day at 9am click Send in Mail {n}") => {
+                    (RunOrigin::Browser, false)
+                }
+                w if w == format!("every day at 9am summarize my inbox {n}") => {
+                    (RunOrigin::Window, true)
+                }
+                w => panic!("round {n}: neither save landed: {w}"),
+            };
+            assert_eq!((gate().origin, gate().gate().desktop), want, "round {n}");
+        }
     }
 }

@@ -9,6 +9,10 @@
 //! pasted into a chat is neither stored here nor found. Tool calls and their
 //! output are not indexed, only what was said. Scratch chats are never
 //! indexed, and a scratch chat can't search (see `crate::scratch`).
+//!
+//! A run that started from a paired browser's words finds and reads only the
+//! chats a browser started, never one this computer's window started, open
+//! or closed ([`crate::web_origin::Readable`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +21,7 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
 use super::ToolOutput;
+use crate::web_origin::Readable;
 
 pub const NAME: &str = "session_search";
 /// Hits on one page.
@@ -163,12 +168,35 @@ fn day(created_ms: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// One page of hits for `query`, newest chats first, leaving out `skip`.
-pub fn search(
+/// The chats a search may return, as SQL reads them: `NULL` is every chat,
+/// else a JSON array of ids.
+fn readable_param(readable: &Readable) -> Option<String> {
+    match readable {
+        Readable::Every => None,
+        Readable::Only(chats) => Some(serde_json::to_string(chats).unwrap_or_else(|_| "[]".into())),
+    }
+}
+
+/// One page of hits for `query`, newest chats first, leaving out `skip`, as a
+/// window run searches.
+#[cfg(test)]
+fn search(
     config_dir: &Path,
     query: &str,
     page: usize,
     skip: Option<&str>,
+) -> Result<String, String> {
+    search_in(config_dir, query, page, skip, &Readable::Every)
+}
+
+/// One page of hits for `query`, newest chats first, leaving out `skip`,
+/// among only the chats `readable` lets the run read.
+pub fn search_in(
+    config_dir: &Path,
+    query: &str,
+    page: usize,
+    skip: Option<&str>,
+    readable: &Readable,
 ) -> Result<String, String> {
     let query = query.trim();
     if query.chars().count() < QUERY_MIN {
@@ -178,10 +206,12 @@ pub fn search(
     refresh(&mut db).map_err(|e| e.to_string())?;
     let phrase = format!("\"{}\"", query.replace('"', "\"\""));
     let skip = skip.unwrap_or_default();
+    let only = readable_param(readable);
     let total: i64 = db
         .query_row(
-            "SELECT count(*) FROM said WHERE said MATCH ?1 AND chat != ?2",
-            params![phrase, skip],
+            "SELECT count(*) FROM said WHERE said MATCH ?1 AND chat != ?2
+             AND (?3 IS NULL OR chat IN (SELECT value FROM json_each(?3)))",
+            params![phrase, skip, only],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -193,7 +223,8 @@ pub fn search(
     let mut stmt = db
         .prepare(
             "SELECT s.chat, s.line, s.role, s.text, c.title, c.created FROM said s JOIN chats c ON c.id = s.chat
-             WHERE said MATCH ?1 AND s.chat != ?2 ORDER BY c.created DESC, s.chat, s.line LIMIT ?3 OFFSET ?4",
+             WHERE said MATCH ?1 AND s.chat != ?2 AND (?5 IS NULL OR s.chat IN (SELECT value FROM json_each(?5)))
+             ORDER BY c.created DESC, s.chat, s.line LIMIT ?3 OFFSET ?4",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -202,7 +233,8 @@ pub fn search(
                 phrase,
                 skip,
                 PAGE_HITS as i64,
-                ((page - 1) * PAGE_HITS) as i64
+                ((page - 1) * PAGE_HITS) as i64,
+                only
             ],
             |r| {
                 Ok((
@@ -231,8 +263,24 @@ pub fn search(
     Ok(out)
 }
 
-/// The messages around `line` in one chat.
-pub fn around(config_dir: &Path, chat: &str, line: usize) -> Result<String, String> {
+/// The messages around `line` in one chat, as a window run reads them.
+#[cfg(test)]
+fn around(config_dir: &Path, chat: &str, line: usize) -> Result<String, String> {
+    around_in(config_dir, chat, line, &Readable::Every)
+}
+
+/// The messages around `line` in one chat, for a run that reads only what
+/// `readable` lets it. A chat it may not read is one with no such id, so a
+/// refusal tells nothing of it.
+pub fn around_in(
+    config_dir: &Path,
+    chat: &str,
+    line: usize,
+    readable: &Readable,
+) -> Result<String, String> {
+    if !readable.sees(chat) {
+        return Err(format!("No earlier chat has the id {chat}."));
+    }
     let mut db = open(config_dir).map_err(|e| e.to_string())?;
     refresh(&mut db).map_err(|e| e.to_string())?;
     let title: String = db
@@ -284,15 +332,19 @@ pub fn run(session: Option<&str>, args: &Value) -> ToolOutput {
             .unwrap_or_default()
     };
     let number = |k: &str| args.get(k).and_then(Value::as_u64);
+    // What the run that searches may read: a browser run, only the chats a
+    // browser started.
+    let readable = Readable::for_session(&dir, session);
     let result = match (text("chat"), number("line")) {
         (chat, Some(line)) if !chat.is_empty() && text("query").is_empty() => {
-            around(&dir, chat, line as usize)
+            around_in(&dir, chat, line as usize, &readable)
         }
-        _ => search(
+        _ => search_in(
             &dir,
             text("query"),
             number("page").unwrap_or(1) as usize,
             session,
+            &readable,
         ),
     };
     match result {
@@ -440,6 +492,104 @@ mod tests {
             "{second}"
         );
         assert_eq!(second.matches("\n- chat ").count(), 2);
+    }
+
+    /// What the run `session` gets back from a tool call, as its agent makes it.
+    fn call(session: Option<&str>, name: &str, args: Value) -> (bool, String) {
+        let dir = crate::perm::config_dir();
+        let stop = || false;
+        let ctx = crate::tools::ToolCtx {
+            workspace: &dir,
+            desktop: None,
+            stop: &stop,
+            tasks: None,
+            owner: None,
+            session,
+        };
+        let out = crate::tools::dispatch(&ctx, name, &args.to_string());
+        (out.failed, out.text)
+    }
+
+    /// A run that started from a paired browser's words finds and reads only
+    /// the chats a browser started: the browser's chat, its helper, the run
+    /// of a job a browser wrote, and a routine's step run inside one of them.
+    /// A window chat, saved and closed, is as if it weren't there. A window
+    /// run finds every chat.
+    #[test]
+    fn a_browser_run_finds_and_reads_only_the_chats_a_browser_started() {
+        use crate::web_origin::RunOrigin;
+        let dir = crate::harness::test_dir("session-search-web");
+        let _config = crate::perm::ConfigGuard::set(&dir);
+        turn("shell-desk-1", "my locker code is 4321", "Noted.");
+        turn("shell-web-2", "which locker is mine", "Locker 12.");
+        crate::web_origin::note_chat(&dir, "shell-web-1").unwrap();
+        crate::web_origin::note_chat(&dir, "shell-web-2").unwrap();
+        crate::web_origin::start_run(&dir, "shell-auto-webjob-3-1", RunOrigin::Browser).unwrap();
+        let web_day = day(crate::session::load_session("shell-web-2").unwrap().created as i64);
+        let web_hits = format!(
+            "2 hits for \"locker\", page 1 of 1.\n\n\
+             - chat shell-web-2 \"which locker is mine\" ({web_day}), line 0, user: which locker is mine\n\
+             - chat shell-web-2 \"which locker is mine\" ({web_day}), line 1, assistant: Locker 12."
+        );
+        let gone = (true, "No earlier chat has the id shell-desk-1.".to_string());
+        let find = json!({ "query": "locker" });
+        let read = json!({ "chat": "shell-desk-1", "line": 0 });
+        for run in [
+            "shell-web-1",
+            "shell-web-1/helper-2",
+            "shell-auto-webjob-3-1",
+        ] {
+            assert_eq!(
+                call(Some(run), NAME, find.clone()),
+                (false, web_hits.clone()),
+                "{run}"
+            );
+            assert_eq!(call(Some(run), NAME, read.clone()), gone, "{run}");
+        }
+
+        // A window run finds the window's chat and reads around its line.
+        let (failed, found) = call(Some("shell-desk-9"), NAME, find.clone());
+        assert!(!failed);
+        assert!(
+            found.starts_with("3 hits for \"locker\", page 1 of 1.\n"),
+            "{found}"
+        );
+        assert!(
+            found.contains("line 0, user: my locker code is 4321"),
+            "{found}"
+        );
+        let (failed, shown) = call(Some("shell-desk-9"), NAME, read.clone());
+        assert!(!failed);
+        assert!(
+            shown.contains("[0] user: my locker code is 4321"),
+            "{shown}"
+        );
+
+        // A routine's step has no session of its own: it searches as the run
+        // whose agent ran the routine.
+        let routine = grokhub_core::routine::routines_dir(&dir).join("find-locker");
+        std::fs::create_dir_all(&routine).unwrap();
+        std::fs::write(
+            routine.join(grokhub_core::routine::FILE),
+            json!({
+                "version": 1, "name": "find-locker", "triggers": ["chat"],
+                "steps": [{ "id": "find", "tool": NAME, "args": { "query": "locker" } }],
+                "result": "{{find.stdout}}"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let by_routine = |run: &str| {
+            let (failed, text) = call(Some(run), "run_routine", json!({ "name": "find-locker" }));
+            assert!(!failed, "{text}");
+            text
+        };
+        let web = by_routine("shell-web-1");
+        assert!(web.contains("2 hits for \"locker\""), "{web}");
+        assert!(!web.contains("4321"), "{web}");
+        let desk = by_routine("shell-desk-9");
+        assert!(desk.contains("3 hits for \"locker\""), "{desk}");
+        assert!(desk.contains("my locker code is 4321"), "{desk}");
     }
 
     #[test]
