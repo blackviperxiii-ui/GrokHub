@@ -383,8 +383,9 @@ pub struct WipeReport {
 
 /// Delete every learned line about the user for good: facts, likes,
 /// routines, needs and how they like things done, forgotten ones too. Other
-/// memory (projects, game scans, lessons) stays. Only the user's confirmed
-/// click or typing can wipe.
+/// memory (projects, game scans, lessons) stays, and `index.sqlite` starts
+/// over from it, so no wiped line's text is left in the index's file. Only
+/// the user's confirmed click or typing can wipe.
 pub fn wipe_user_model(store: &AmrStore, _ask: UserForget) -> Result<WipeReport, AmrError> {
     if store.is_scratch() {
         return Err(AmrError::Scratch);
@@ -393,6 +394,7 @@ pub fn wipe_user_model(store: &AmrStore, _ask: UserForget) -> Result<WipeReport,
     for id in &ids {
         store.purge(id)?;
     }
+    store.start_index_over()?;
     Ok(WipeReport {
         removed: ids.len(),
         locked,

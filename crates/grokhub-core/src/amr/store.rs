@@ -508,19 +508,27 @@ impl AmrStore {
         }
     }
 
-    /// The nodes [`Self::recallable`] returns whose `source` starts with
-    /// `prefix` (Spike-8a: the `scope:` nodes the local indexers write),
-    /// sorted by file name, plus how many sealed nodes stayed shut. A
-    /// forgotten, paused, proposed or superseded node is left out, so a line
-    /// the user paused on Personal never reaches the model this way either.
+    /// Every live node whose `source` starts with `prefix` (Spike-8a: the
+    /// `scope:` nodes the local indexers write), sorted by file name, plus how
+    /// many sealed nodes stayed shut. A paused or superseded node is still
+    /// one: it is what the scope taught, and "Forget these" tombstones it.
     /// Opens sealed nodes in memory only.
-    pub fn recallable_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
-        let (nodes, locked) = self.recallable();
-        let nodes = nodes
+    pub fn live_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
+        let loaded = self.load_live();
+        let nodes = loaded
+            .nodes
             .into_iter()
             .filter(|n| n.source.starts_with(prefix))
             .collect();
-        (nodes, locked)
+        (nodes, loaded.locked)
+    }
+
+    /// The nodes of [`Self::live_from_source`] that recall can return: a
+    /// paused, proposed or superseded node is left out, so a line the user
+    /// paused on Personal never reaches the model this way either.
+    pub fn recallable_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
+        let (nodes, locked) = self.live_from_source(prefix);
+        (self.visible(nodes), locked)
     }
 
     /// Node files on disk (`.md` and `.sealed`), tombstoned ones included.
@@ -698,6 +706,28 @@ impl AmrStore {
         let index = AmrIndex::open(&self.index_path())?;
         index.replace_all(&plain)?;
         Ok(index)
+    }
+
+    /// Replace `index.sqlite`, when there is one, with a new file built from
+    /// the nodes left. A deleted row's text stays in the old file's free
+    /// pages and FTS segments, so Wipe, which deletes lines for good, starts
+    /// the file over rather than trusting the row deletes. No index is a
+    /// no-op: the store never starts one on its own.
+    pub(super) fn start_index_over(&self) -> Result<(), AmrError> {
+        let path = self.index_path();
+        if !path.is_file() {
+            return Ok(());
+        }
+        for side in ["", "-journal", "-wal", "-shm"] {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(side);
+            match fs::remove_file(PathBuf::from(name)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(io_err(err)),
+            }
+        }
+        self.rebuild_index().map(|_| ())
     }
 
     /// An in-memory index of the sealed nodes that open right now (unlock).

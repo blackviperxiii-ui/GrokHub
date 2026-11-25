@@ -1711,6 +1711,73 @@ mod tests {
         assert!(dir.join("index.sqlite").is_file());
     }
 
+    /// Wipe deletes a learned line "for good": no byte of it is left anywhere
+    /// in the config folder, the learned notes' own index included. Deleting
+    /// an index row leaves its text in the file's free pages.
+    #[test]
+    fn wipe_leaves_no_byte_of_a_learned_line_anywhere_in_the_config_folder() {
+        let d = dirs("wipe-amr-index");
+        add_fact(
+            &d.workspace,
+            "My sister lives on Quillfeather Lane",
+            "about",
+        )
+        .unwrap();
+        let id = load(&d.workspace).unwrap().rows[0].id.clone();
+        // An index an earlier version built; the store keeps it up to date.
+        let store = grokhub_agent::amr_store();
+        store.rebuild_index().unwrap();
+        save(&d.workspace, true, "My niece is called Brambleton\n", "").unwrap();
+        assert_eq!(
+            grokhub_agent::search_memory(&d.workspace, "Brambleton")
+                .unwrap()
+                .len(),
+            1
+        );
+        let config = grokhub_agent::perm::config_dir();
+        let holding = |needle: &str| -> Vec<String> {
+            let needle = needle.to_ascii_lowercase().into_bytes();
+            let mut found = Vec::new();
+            let mut todo = vec![config.clone()];
+            while let Some(dir) = todo.pop() {
+                for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        todo.push(path);
+                        continue;
+                    }
+                    let bytes = std::fs::read(&path).unwrap().to_ascii_lowercase();
+                    if bytes.windows(needle.len()).any(|w| w == needle.as_slice()) {
+                        let rel = path.strip_prefix(&config).unwrap();
+                        let parts: Vec<String> = rel
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                            .collect();
+                        found.push(parts.join("/"));
+                    }
+                }
+            }
+            found.sort();
+            found
+        };
+        assert_eq!(
+            holding("quillfeather"),
+            ["amr/index.sqlite".to_string(), format!("amr/nodes/{id}.md")]
+        );
+        assert_eq!(
+            holding("brambleton"),
+            ["memory/MEMORY.md", "memory/index.sqlite"]
+        );
+        let wiped = wipe(&d.workspace).unwrap();
+        assert_eq!(wiped.removed, 1);
+        assert_eq!(
+            (holding("quillfeather"), holding("brambleton")),
+            (Vec::<String>::new(), Vec::<String>::new())
+        );
+        // The learned notes' index is still there, rebuilt from what is left.
+        assert!(store.index_path().is_file());
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_linked_memory_file_is_not_shown_or_replaced() {

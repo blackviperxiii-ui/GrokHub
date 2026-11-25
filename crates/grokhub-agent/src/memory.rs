@@ -230,14 +230,25 @@ pub fn flush_pending(workspace: &Path, history: &[InputItem]) -> Result<bool, St
     if body.trim().is_empty() || !grokhub_core::is_plain_text(&body) {
         return Ok(false);
     }
+    // The marker names the chat text as it stands, so the same text is still
+    // a no-op once a forgotten line is left out of what is saved.
     let marker = format!("<!-- flush:{:016x} -->", fnv(body.as_bytes()));
+    let forgotten = forgotten_session_keys()?;
+    let kept: String = body
+        .split_inclusive('\n')
+        .filter(|line| !forgotten.contains(&session_line_key(line)))
+        .collect();
+    let kept = kept.trim_end_matches(['\n', '\r']);
+    if kept.trim().is_empty() {
+        return Ok(false);
+    }
     let path = flush_memory_path(workspace);
     ensure_allowed(&path, workspace)?;
     let existing = read_capped(&path);
     if existing.contains(&marker) {
         return Ok(false);
     }
-    let block = format!("## Session\n\n{marker}\n{body}\n");
+    let block = format!("## Session\n\n{marker}\n{kept}\n");
     append_block(&path, &block)?;
     reindex_file(&path, "session")?;
     Ok(true)
@@ -677,7 +688,7 @@ fn named_sealed_app_ask(q: &str) -> bool {
     if !framed {
         return false;
     }
-    let index = crate::indexers::ScopeIndex::load(&crate::perm::config_dir());
+    let index = crate::indexers::ScopeIndex::recallable(&crate::perm::config_dir());
     for fact in index.for_scope("apps") {
         let line = fact.line.trim().to_ascii_lowercase();
         let name = line
@@ -727,7 +738,7 @@ fn scope_library_lines(user_text: &str) -> Vec<String> {
     if !library_intent(user_text) {
         return Vec::new();
     }
-    let index = crate::indexers::ScopeIndex::load(&crate::perm::config_dir());
+    let index = crate::indexers::ScopeIndex::recallable(&crate::perm::config_dir());
     let apps = index.for_scope("apps");
     if apps.is_empty() {
         return Vec::new();
@@ -1438,11 +1449,50 @@ pub fn session_lines_about(topic: &str) -> Vec<String> {
         .collect()
 }
 
+/// Session memory's tombstones: one hash per chat line `/forget <topic>`
+/// took out of a flush file. [`flush_pending`] leaves those lines out, so the
+/// same chat's next `/flush` or compaction, which still holds the line, does
+/// not save it again. Only the hash is kept, never the words. It is not a
+/// `.md` file, so it is not session memory itself.
+fn forgotten_session_path() -> PathBuf {
+    crate::perm::config_dir()
+        .join("memory")
+        .join("flush")
+        .join("forgotten.txt")
+}
+
+/// The key a forgotten session line is kept under: its SHA-256, trimmed.
+fn session_line_key(line: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(line.trim().as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The keys in [`forgotten_session_path`]. No file is none. One that can't
+/// be read is an error, so a flush can't save a line it should leave out.
+fn forgotten_session_keys() -> Result<std::collections::BTreeSet<String>, String> {
+    let path = forgotten_session_path();
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(text
+            .lines()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+            .collect()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(err) => Err(format!("{}: {err}", path.display())),
+    }
+}
+
 /// `/forget <topic>` over session memory: drop every line that mentions
 /// `topic` from every workspace's flush file and reindex each file it
-/// changed, so recall stops finding them. Every file is read before any is
-/// written: one that can't be read stops it with nothing changed. Returns
-/// the lines it dropped.
+/// changed, so recall stops finding them, and keep each line's key in
+/// [`forgotten_session_path`] so no later flush saves it again. Every file is
+/// read before any is written: one that can't be read stops it with nothing
+/// changed. The keys are written before the lines leave. Returns the lines
+/// it dropped.
 pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
     let mut rewrites = Vec::new();
     for path in flush_files() {
@@ -1450,6 +1500,14 @@ pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
         if !gone.is_empty() {
             rewrites.push((path, kept, gone));
         }
+    }
+    if !rewrites.is_empty() {
+        let mut keys = forgotten_session_keys()?;
+        for (_, _, gone) in &rewrites {
+            keys.extend(gone.iter().map(|line| session_line_key(line)));
+        }
+        let body: String = keys.iter().map(|key| format!("{key}\n")).collect();
+        write_capped(&forgotten_session_path(), &body)?;
     }
     let mut dropped = Vec::new();
     for (path, kept, gone) in rewrites {
@@ -2475,6 +2533,67 @@ mod tests {
         assert_eq!(
             hits,
             vec!["<!-- flush:ffcde0c31e741ee9 -->\nUser: I am quietly leaving Contoso for Fabrikam in March"]
+        );
+    }
+
+    /// `/forget <topic>` is sticky in session memory, as a tombstone is for a
+    /// learned line: the same chat's next flush (`/flush`, or a compaction
+    /// that keeps the line in its tail) doesn't save the line again.
+    #[test]
+    fn a_line_forget_took_out_of_session_memory_is_not_flushed_again() {
+        let (cfg, ws, _guard) = temp_pair("forget-reflush");
+        let say = |role: &str, text: &str| InputItem::Message {
+            role: role.into(),
+            content: vec![ContentPart::InputText(text.into())],
+        };
+        let bodies = |q: &str| -> Vec<String> {
+            search(&ws, q)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.body)
+                .collect()
+        };
+        let flush_dir_holds = |needle: &str| -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(cfg.join("memory").join("flush"))
+                .unwrap()
+                .flatten()
+                .filter(|e| fs::read_to_string(e.path()).is_ok_and(|t| t.contains(needle)))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let mut history = vec![say(
+            "user",
+            "I am quietly leaving Contoso for Fabrikam in March",
+        )];
+        assert!(flush_pending(&ws, &history).unwrap());
+        assert_eq!(
+            forget_session_topic("Fabrikam").unwrap(),
+            ["User: I am quietly leaving Contoso for Fabrikam in March"]
+        );
+        assert_eq!(bodies("Fabrikam"), Vec::<String>::new());
+        // The chat goes on, and /flush saves it again.
+        history.push(say("assistant", "Noted."));
+        history.push(say("user", "Thanks, what is on my calendar today?"));
+        assert!(flush_pending(&ws, &history).unwrap());
+        assert_eq!(bodies("Fabrikam"), Vec::<String>::new());
+        assert_eq!(flush_dir_holds("Fabrikam"), Vec::<String>::new());
+        assert_eq!(
+            bodies("calendar"),
+            ["<!-- flush:cd1a76034eee766a -->\nAssistant: Noted.\nUser: Thanks, what is on my calendar today?"]
+        );
+        // The same chat text again is still a no-op.
+        assert!(!flush_pending(&ws, &history).unwrap());
+        // Something new said about the topic after the forget is saved.
+        history.push(say("user", "Fabrikam moved my start to April"));
+        assert!(flush_pending(&ws, &history).unwrap());
+        assert_eq!(
+            bodies("Fabrikam")
+                .iter()
+                .flat_map(|b| b.lines().filter(|l| l.contains("Fabrikam")))
+                .collect::<Vec<_>>(),
+            ["User: Fabrikam moved my start to April"]
         );
     }
 

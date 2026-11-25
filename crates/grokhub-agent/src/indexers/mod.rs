@@ -37,7 +37,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use grokhub_core::amr::{
-    AmrError, AmrStore, NodeDraft, NodeType, Sensitivity, SCOPE_SOURCE_PREFIX,
+    AmrError, AmrStore, Node, NodeDraft, NodeType, Sensitivity, SCOPE_SOURCE_PREFIX,
 };
 use sha2::{Digest, Sha256};
 
@@ -458,8 +458,20 @@ pub struct ScopeIndex {
 }
 
 impl ScopeIndex {
+    /// Every fact a scope taught that isn't forgotten, a paused one too: what
+    /// a Scopes row lists and what its "Forget these" tombstones.
     pub fn load(config_dir: &Path) -> Self {
-        let (nodes, locked) = scope_store(config_dir).recallable_from_source(SCOPE_SOURCE_PREFIX);
+        Self::of(scope_store(config_dir).live_from_source(SCOPE_SOURCE_PREFIX))
+    }
+
+    /// The facts recall may hand the model: [`Self::load`] without a paused,
+    /// proposed or superseded one. The library pack and the named-app ask
+    /// read this.
+    pub fn recallable(config_dir: &Path) -> Self {
+        Self::of(scope_store(config_dir).recallable_from_source(SCOPE_SOURCE_PREFIX))
+    }
+
+    fn of((nodes, locked): (Vec<Node>, usize)) -> Self {
         let mut facts: BTreeMap<String, Vec<IndexedFact>> = BTreeMap::new();
         for n in nodes {
             let key = n.source[SCOPE_SOURCE_PREFIX.len()..].to_string();
