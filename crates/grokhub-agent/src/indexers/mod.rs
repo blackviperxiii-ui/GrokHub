@@ -459,7 +459,7 @@ pub struct ScopeIndex {
 
 impl ScopeIndex {
     pub fn load(config_dir: &Path) -> Self {
-        let (nodes, locked) = scope_store(config_dir).live_from_source(SCOPE_SOURCE_PREFIX);
+        let (nodes, locked) = scope_store(config_dir).recallable_from_source(SCOPE_SOURCE_PREFIX);
         let mut facts: BTreeMap<String, Vec<IndexedFact>> = BTreeMap::new();
         for n in nodes {
             let key = n.source[SCOPE_SOURCE_PREFIX.len()..].to_string();

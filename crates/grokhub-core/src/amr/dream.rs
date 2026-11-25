@@ -877,8 +877,11 @@ mod tests {
         ] {
             assert!(!store.is_forgotten(id), "{id}");
         }
-        assert_eq!(store.live_from_source("scope:").0.len(), 3);
-        assert_eq!(store.live_from_source("scope:system_state").0.len(), 1);
+        assert_eq!(store.recallable_from_source("scope:").0.len(), 3);
+        assert_eq!(
+            store.recallable_from_source("scope:system_state").0.len(),
+            1
+        );
     }
 
     /// A trail that mentions a note (and a fact learned from that turn) does

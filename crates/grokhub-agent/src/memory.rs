@@ -218,7 +218,13 @@ pub(crate) fn after_model_write(workspace: &Path, path: &Path) {
 /// Write pending user and assistant text into this workspace's flush file in
 /// the config dir before compaction. The repo `MEMORY.md` is not touched.
 /// A second flush of the same text is a no-op. This does not call the model.
+/// With Learn from chats off (`memory_writes` false) nothing is written: the
+/// switch promises nothing new is saved from a chat, and this is the chat's
+/// own words.
 pub fn flush_pending(workspace: &Path, history: &[InputItem]) -> Result<bool, String> {
+    if !memory_writes_enabled() {
+        return Ok(false);
+    }
     let body = extract_pending(history);
     let body = grokhub_core::redact_secrets(&body);
     if body.trim().is_empty() || !grokhub_core::is_plain_text(&body) {
@@ -1386,6 +1392,98 @@ fn scope_paths(workspace: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Every workspace's flush file (session memory), sorted. A link or a
+/// folder in the flush folder is not one.
+fn flush_files() -> Vec<PathBuf> {
+    let dir = crate::perm::config_dir().join("memory").join("flush");
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = read
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("md")
+                && path.symlink_metadata().is_ok_and(|meta| meta.is_file())
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// `body` without the chat lines a forget on `topic` drops, and those lines.
+/// The `## Session` heading and the flush marker stay, so the same chat text
+/// is not flushed again. Every other byte stays as it was.
+fn without_session_topic(body: &str, topic: &str) -> (String, Vec<String>) {
+    let mut kept = String::new();
+    let mut gone = Vec::new();
+    for line in body.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        let frame = bare == "## Session" || bare.starts_with("<!-- flush:");
+        if !frame && !bare.trim().is_empty() && grokhub_core::forget_topic(bare, topic).is_empty() {
+            gone.push(bare.to_string());
+        } else {
+            kept.push_str(line);
+        }
+    }
+    (kept, gone)
+}
+
+/// The session-memory lines (every workspace's flush file) that `/forget
+/// <topic>` would drop, in file order.
+pub fn session_lines_about(topic: &str) -> Vec<String> {
+    flush_files()
+        .iter()
+        .flat_map(|path| without_session_topic(&read_capped(path), topic).1)
+        .collect()
+}
+
+/// `/forget <topic>` over session memory: drop every line that mentions
+/// `topic` from every workspace's flush file and reindex each file it
+/// changed, so recall stops finding them. Every file is read before any is
+/// written: one that can't be read stops it with nothing changed. Returns
+/// the lines it dropped.
+pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
+    let mut rewrites = Vec::new();
+    for path in flush_files() {
+        let (kept, gone) = without_session_topic(&read_for_rewrite(&path)?, topic);
+        if !gone.is_empty() {
+            rewrites.push((path, kept, gone));
+        }
+    }
+    let mut dropped = Vec::new();
+    for (path, kept, gone) in rewrites {
+        write_capped(&path, &kept)?;
+        reindex_file(&path, "session")?;
+        dropped.extend(gone);
+    }
+    Ok(dropped)
+}
+
+/// For Personal's Wipe, once the global notes are emptied: delete the copies
+/// of them this module keeps. That is dream's `MEMORY.md.dream.bak` beside
+/// the global file and `index.sqlite` with its journal, which hold every
+/// indexed paragraph. Recall rebuilds the index from the files that are left,
+/// as it does whenever it is missing. A file already gone is fine, so a
+/// second Wipe after a failed one finishes the job.
+pub fn drop_global_copies() -> Result<(), String> {
+    let index = index_path();
+    let mut doomed = vec![dream_backup_path(&global_memory_path()), index.clone()];
+    for side in ["-journal", "-wal", "-shm"] {
+        let mut name = index.as_os_str().to_os_string();
+        name.push(side);
+        doomed.push(PathBuf::from(name));
+    }
+    for path in doomed {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("{}: {err}", path.display())),
+        }
+    }
+    Ok(())
+}
+
 pub fn dream_backup_path(memory_file: &Path) -> PathBuf {
     let name = memory_file.file_name().unwrap_or_default();
     let mut bak = name.to_os_string();
@@ -2346,6 +2444,41 @@ mod tests {
     }
 
     #[test]
+    fn learn_from_chats_off_keeps_the_flush_from_saving_chat_words() {
+        let (cfg, ws, _guard) = temp_pair("writes-off-flush");
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        // Personal -> "Learn from chats" off: "Not learning from chats. Nothing new is saved."
+        set_memory_writes(false).unwrap();
+        assert!(!memory_writes_enabled());
+        let history = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(
+                "I am quietly leaving Contoso for Fabrikam in March".into(),
+            )],
+        }];
+        let saved = flush_pending(&ws, &history).unwrap();
+        let hits: Vec<String> = search(&ws, "Fabrikam")
+            .unwrap()
+            .into_iter()
+            .map(|h| h.body)
+            .collect();
+        assert_eq!((saved, hits), (false, Vec::<String>::new()));
+        assert!(!flush_memory_path(&ws).exists());
+        // Learning again: the next flush saves the chat's words.
+        set_memory_writes(true).unwrap();
+        assert!(flush_pending(&ws, &history).unwrap());
+        let hits: Vec<String> = search(&ws, "Fabrikam")
+            .unwrap()
+            .into_iter()
+            .map(|h| h.body)
+            .collect();
+        assert_eq!(
+            hits,
+            vec!["<!-- flush:ffcde0c31e741ee9 -->\nUser: I am quietly leaving Contoso for Fabrikam in March"]
+        );
+    }
+
+    #[test]
     fn the_recall_pack_masks_pii_but_keeps_code() {
         let (_cfg, ws, _guard) = temp_pair("pii");
         fs::write(
@@ -2431,6 +2564,73 @@ mod tests {
             .expect("follow-up library ask injects");
         assert!(follow.contains("Installed app: ARC Raiders"), "{follow}");
         assert!(followup_injection(&ws, "what is 2+2", &[]).is_none());
+    }
+
+    #[test]
+    fn a_paused_or_forgotten_installed_app_stays_out_of_the_library_pack() {
+        use grokhub_core::amr::{NodeDraft, NodeType, Sensitivity};
+        use std::sync::Arc;
+
+        let (cfg, ws, _guard) = temp_pair("apps-paused");
+        let keys = Arc::new(crate::harness::MemoryKeyStore::new());
+        crate::harness::use_key_store_for(&cfg, keys);
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        let store = amr_store();
+        store.init().unwrap();
+        for (item, name) in [
+            ("aion", "Installed app: AION 2"),
+            ("arc", "Installed app: ARC Raiders"),
+            ("dave", "Installed app: Dave the Diver"),
+        ] {
+            store
+                .remember(&NodeDraft {
+                    id: format!("scope-apps-{item}"),
+                    node_type: NodeType::Fact,
+                    created: "2026-10-12T12:00:00Z".into(),
+                    updated: "2026-10-12T12:00:00Z".into(),
+                    source: "scope:apps".into(),
+                    confidence: 0.7,
+                    tags: vec!["scope:apps".into()],
+                    body: format!("{name}\n"),
+                    sensitivity: Sensitivity::Personal,
+                    consent_ref: "grant-test".into(),
+                })
+                .unwrap();
+        }
+        // Personal shows the line; the user taps Pause ("Keep a line but stop using it").
+        let (rows, _) = grokhub_core::amr::memory_rows(&store);
+        assert!(
+            rows.iter().any(|r| r.id == "scope-apps-arc"),
+            "row on Personal"
+        );
+        grokhub_core::amr::pause_node(&store, "scope-apps-arc", true).unwrap();
+        store.forget("scope-apps-dave").unwrap();
+        assert!(
+            store.recall("arc raiders").is_empty(),
+            "store recall skips paused"
+        );
+        let block =
+            first_turn_injection(&ws, "could you use what you knew about my gaming library?")
+                .unwrap_or_default();
+        let lines: Vec<&str> = block
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().contains("installed"))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "Sealed on this computer: 1 installed-app learning(s). Prefer these over claiming no library info or scanning ~/.steam.",
+                "Installed app: AION 2",
+            ]
+        );
+        assert!(
+            !block.contains("ARC Raiders"),
+            "paused app reached the model: {block}"
+        );
+        assert!(
+            !block.contains("Dave the Diver"),
+            "forgotten app reached the model: {block}"
+        );
     }
 
     #[test]

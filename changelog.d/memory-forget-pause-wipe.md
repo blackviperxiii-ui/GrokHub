@@ -1,0 +1,4 @@
+- Memory: a line you forgot or paused on Personal no longer reaches an IDE through the `--mcp-bridge` memory search, and a paused or forgotten installed app stays out of what the model is told about your library.
+- Memory: with Learn from chats off, a chat no longer saves its own words to session memory before it compacts, and `/forget <topic>` now takes the topic's lines out of session memory too, listing them before you confirm.
+- Personal's Wipe now also deletes dream's backup of your global notes and the recall index, so no copy of them is left; recall builds a new index from the notes that stay.
+- Know me's Wipe all now removes every "From your PC" topic it added to Pulse, including ones whose tag a signal switch or a later scan had already taken off the list. Topics you added yourself stay.

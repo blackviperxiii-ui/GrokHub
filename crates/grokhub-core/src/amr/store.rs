@@ -203,13 +203,8 @@ impl AmrStore {
         let loaded = self.load_live();
         report.locked = loaded.locked;
         report.why = loaded.why;
-        let superseded = self.superseded_ids();
         let mut hits = Vec::new();
-        for node in loaded
-            .nodes
-            .iter()
-            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-        {
+        for node in &self.visible(loaded.nodes) {
             hits.extend(match_lines(node, &query));
         }
         hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -241,13 +236,7 @@ impl AmrStore {
         if opts.cap == 0 || (words.is_empty() && opts.meaning.is_none()) {
             return Vec::new();
         }
-        let loaded = self.load_live();
-        let superseded = self.superseded_ids();
-        let nodes: Vec<Node> = loaded
-            .nodes
-            .into_iter()
-            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-            .collect();
+        let nodes = self.visible(self.load_live().nodes);
         let decay = |node: &Node| {
             let updated = crate::pulse_sources::parse_date_ms(&node.updated).unwrap_or(0);
             let age = opts.now_ms.saturating_sub(updated) as f64 / 1000.0;
@@ -519,17 +508,19 @@ impl AmrStore {
         }
     }
 
-    /// Every live node whose `source` starts with `prefix` (Spike-8a: the
-    /// `scope:` nodes the local indexers write), sorted by file name, plus how
-    /// many sealed nodes stayed shut. Opens sealed nodes in memory only.
-    pub fn live_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
-        let loaded = self.load_live();
-        let nodes = loaded
-            .nodes
+    /// The nodes [`Self::recallable`] returns whose `source` starts with
+    /// `prefix` (Spike-8a: the `scope:` nodes the local indexers write),
+    /// sorted by file name, plus how many sealed nodes stayed shut. A
+    /// forgotten, paused, proposed or superseded node is left out, so a line
+    /// the user paused on Personal never reaches the model this way either.
+    /// Opens sealed nodes in memory only.
+    pub fn recallable_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
+        let (nodes, locked) = self.recallable();
+        let nodes = nodes
             .into_iter()
             .filter(|n| n.source.starts_with(prefix))
             .collect();
-        (nodes, loaded.locked)
+        (nodes, locked)
     }
 
     /// Node files on disk (`.md` and `.sealed`), tombstoned ones included.
@@ -641,17 +632,50 @@ impl AmrStore {
             .collect()
     }
 
-    /// Live nodes that recall can return: not tombstoned, not superseded.
-    /// Sealed nodes appear only when they opened.
+    /// Live nodes that recall can return: not tombstoned, superseded, paused
+    /// or proposed. Sealed nodes appear only when they opened.
     pub fn recallable(&self) -> (Vec<Node>, usize) {
         let loaded = self.load_live();
+        (self.visible(loaded.nodes), loaded.locked)
+    }
+
+    /// The plain nodes [`Self::recallable`] returns, read without opening or
+    /// even reading a `.sealed` file: what a reader that holds no key (the
+    /// hub's MCP bridge) may show. An id with a `.sealed` file beside its
+    /// `.md`, and a `.md` whose frontmatter says sealed, are left out. A file
+    /// that won't parse is skipped and left where it is. Sorted by file name.
+    pub fn plain_recallable(&self) -> Vec<Node> {
+        let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = read
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().and_then(|ext| ext.to_str()) == Some("md")
+                    && !path.with_extension(TOMBSTONE_EXT).is_file()
+                    && !path.with_extension(SEALED_EXT).is_file()
+            })
+            .collect();
+        files.sort();
+        let nodes = files
+            .iter()
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .filter_map(|text| Node::from_markdown(&text).ok())
+            .filter(|node| !node.sensitivity.sealed())
+            .collect();
+        self.visible(nodes)
+    }
+
+    /// `nodes` without the ones recall leaves out though they are live:
+    /// superseded, proposed or paused. Every reader that hands lines to the
+    /// model or to another app goes through this one filter.
+    fn visible(&self, nodes: Vec<Node>) -> Vec<Node> {
         let superseded = self.superseded_ids();
-        let nodes = loaded
-            .nodes
+        nodes
             .into_iter()
             .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-            .collect();
-        (nodes, loaded.locked)
+            .collect()
     }
 
     /// `amr/index.sqlite`.

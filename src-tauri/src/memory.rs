@@ -245,8 +245,10 @@ pub struct Wiped {
 const WIPED_NOTES: [&str; 2] = ["USER.md", "MEMORY.md"];
 
 /// Delete every learned line about the user for good, and empty the global
-/// USER.md and MEMORY.md (and the `.prev` copy a save keeps). Project notes
-/// in the work folder are the project's, so they stay.
+/// USER.md and MEMORY.md, leaving no copy of them: not the `.prev` copy a
+/// save keeps, dream's backup or the recall index. Project notes in the work
+/// folder are the project's, so they stay, and so does session memory, the
+/// chats' own words; `/forget <topic>` takes lines out of both.
 pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
     let store = open_store()?;
     let report =
@@ -263,6 +265,7 @@ pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
             std::fs::write(&path, format!("# {name}\n")).map_err(|e| e.to_string())?;
         }
     }
+    grokhub_agent::drop_global_copies()?;
     Ok(Wiped {
         removed: report.removed,
         locked: report.locked,
@@ -550,6 +553,8 @@ struct ForgetHits {
     global: Vec<String>,
     /// Lines it would drop from the project's MEMORY.md.
     project: Vec<String>,
+    /// Chat lines it would drop from session memory (the pre-compaction flush).
+    session: Vec<String>,
 }
 
 /// Reads what `/forget <topic>` would remove without changing anything: the
@@ -577,10 +582,15 @@ fn forget_hits(workspace: &Path, topic: &str) -> Result<ForgetHits, String> {
         .map(clip)
         .collect();
     let (_, project) = without_topic(&project_notes(workspace)?, topic);
+    let session = grokhub_agent::session_lines_about(topic)
+        .iter()
+        .map(|line| clip(line))
+        .collect();
     Ok(ForgetHits {
         learned,
         global,
         project,
+        session,
     })
 }
 
@@ -612,7 +622,11 @@ pub fn forget_plan(workspace: &Path, topic: Option<&str>) -> Result<Plan, String
         return Ok(Plan::Ask(ask));
     };
     let hits = forget_hits(workspace, topic)?;
-    if hits.learned.is_empty() && hits.global.is_empty() && hits.project.is_empty() {
+    if hits.learned.is_empty()
+        && hits.global.is_empty()
+        && hits.project.is_empty()
+        && hits.session.is_empty()
+    {
         return Ok(Plan::Nothing(format!(
             "Nothing in memory mentions {topic}."
         )));
@@ -628,6 +642,7 @@ pub fn forget_plan(workspace: &Path, topic: Option<&str>) -> Result<Plan, String
             .iter()
             .map(|l| format!("project MEMORY.md: {l}")),
     );
+    all.extend(hits.session.iter().map(|l| format!("session memory: {l}")));
     Ok(Plan::Ask(format!(
         "Forget {topic}? These go:\n{}",
         listed(&all)
@@ -636,8 +651,9 @@ pub fn forget_plan(workspace: &Path, topic: Option<&str>) -> Result<Plan, String
 
 /// `/forget [topic] --yes`. Learned lines get a tombstone and the topic's
 /// lines leave the global MEMORY.md, the cabin's own pair of steps, and they
-/// leave the project's MEMORY.md too, where `/remember` files a line. With
-/// no topic the global file is emptied.
+/// leave the project's MEMORY.md too, where `/remember` files a line, and
+/// session memory, where a chat's own words go before it compacts. With no
+/// topic the global file is emptied.
 pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     let path = grokhub_agent::global_memory_path();
     let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
@@ -653,6 +669,9 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     let before = read(&path)?;
     let local = grokhub_agent::workspace_memory_path(workspace);
     let (local_after, local_gone) = without_topic(&read(&local)?, topic);
+    // Session memory reads all its files before it writes any, so one it
+    // can't read also stops the command here with nothing changed.
+    let session_gone = grokhub_agent::forget_session_topic(topic)?;
     let mut parts = Vec::new();
     if grokhub_agent::amr_enabled() {
         let store = open_store()?;
@@ -676,6 +695,13 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
             "{} {} in the project MEMORY.md",
             local_gone.len(),
             lines_word(local_gone.len())
+        ));
+    }
+    if !session_gone.is_empty() {
+        parts.push(format!(
+            "{} {} in session memory",
+            session_gone.len(),
+            lines_word(session_gone.len())
         ));
     }
     Ok(if parts.is_empty() {
@@ -1557,6 +1583,132 @@ mod tests {
         assert!(wiped.notes.rows.is_empty());
         assert_eq!(wiped.notes.global, "# MEMORY.md\n");
         assert_eq!(wiped.notes.workspace, "the build needs node 22\n");
+    }
+
+    #[test]
+    fn forget_topic_takes_the_line_out_of_session_memory() {
+        let d = dirs("forget-flush");
+        let history = vec![
+            grokhub_agent::InputItem::Message {
+                role: "user".into(),
+                content: vec![grokhub_agent::ContentPart::InputText(
+                    "I am quietly leaving Contoso for Fabrikam in March".into(),
+                )],
+            },
+            grokhub_agent::InputItem::Message {
+                role: "assistant".into(),
+                content: vec![grokhub_agent::ContentPart::InputText(
+                    "Noted. The harbor build still needs node 22".into(),
+                )],
+            },
+        ];
+        // The pre-compaction flush saves the chat's own words to session memory.
+        assert!(grokhub_agent::flush_pending(&d.workspace, &history).unwrap());
+        let bodies = |q: &str| {
+            grokhub_agent::search_memory(&d.workspace, q)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.body)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bodies("Fabrikam Contoso").len(), 1);
+        assert_eq!(
+            forget_plan(&d.workspace, Some("Fabrikam")).unwrap(),
+            Plan::Ask(
+                "Forget Fabrikam? These go:\n- session memory: User: I am quietly leaving Contoso for Fabrikam in March"
+                    .into()
+            )
+        );
+        assert_eq!(
+            forget(&d.workspace, Some("Fabrikam")).unwrap(),
+            "Forgot Fabrikam: 0 notes in the memory repo, 1 line in session memory"
+        );
+        assert_eq!(bodies("Fabrikam Contoso"), Vec::<String>::new());
+        assert_eq!(
+            grokhub_agent::first_turn_injection(&d.workspace, "when do I start at Fabrikam"),
+            None
+        );
+        // The rest of that chat stays in session memory.
+        let kept = bodies("harbor");
+        assert_eq!(kept.len(), 1);
+        assert!(
+            kept[0].ends_with("Assistant: Noted. The harbor build still needs node 22"),
+            "{kept:?}"
+        );
+        assert_eq!(
+            forget_plan(&d.workspace, Some("Fabrikam")).unwrap(),
+            Plan::Nothing("Nothing in memory mentions Fabrikam.".into())
+        );
+    }
+
+    struct RewriteGlobal;
+    impl grokhub_agent::ModelClient for RewriteGlobal {
+        fn stream(
+            &self,
+            _req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            _sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            Ok(grokhub_agent::TurnOutput {
+                text: "<<<GH_WORKSPACE>>>\n<<<GH_GLOBAL>>>\nI like short answers\nMy daughter is called Ada\n<<<GH_END>>>\n".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn wipe_leaves_no_copy_of_the_global_notes() {
+        let d = dirs("wipe-bak");
+        save(
+            &d.workspace,
+            true,
+            "I like short answers\nI like short answers\nMy daughter is called Ada\n",
+            "",
+        )
+        .unwrap();
+        // The user runs /dream in a chat: it consolidates the global MEMORY.md.
+        let mut spent = grokhub_agent::Usage::default();
+        let status = grokhub_agent::dream(
+            &RewriteGlobal,
+            &grokhub_agent::CancelToken::new(),
+            "grok-4.7",
+            &d.workspace,
+            "conv",
+            &mut spent,
+        )
+        .unwrap();
+        assert!(status.contains("Consolidated"), "{status}");
+        let dir = grokhub_agent::global_memory_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let holding = |needle: &[u8]| {
+            let mut names = Vec::new();
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if bytes.windows(needle.len()).any(|w| w == needle) {
+                        names.push(path.file_name().unwrap().to_string_lossy().to_string());
+                    }
+                }
+            }
+            names.sort();
+            names
+        };
+        assert_eq!(
+            holding(b"called Ada"),
+            ["MEMORY.md", "MEMORY.md.dream.bak", "index.sqlite"]
+        );
+        // Then Wipe: "Delete every learned line about the user for good".
+        let wiped = wipe(&d.workspace).unwrap();
+        assert_eq!(wiped.notes.global, "# MEMORY.md\n");
+        assert_eq!(holding(b"called Ada"), Vec::<String>::new());
+        // Recall builds a new index from what is left.
+        assert_eq!(
+            grokhub_agent::search_memory(&d.workspace, "Ada").unwrap(),
+            Vec::new()
+        );
+        assert!(dir.join("index.sqlite").is_file());
     }
 
     #[cfg(unix)]

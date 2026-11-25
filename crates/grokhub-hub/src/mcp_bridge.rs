@@ -3,11 +3,13 @@
 //! no network listen, no copied code.
 //!
 //! Tools are read-only:
-//! - `memory_search`: unsealed AMR nodes (`nodes/<id>.md`) only
+//! - `memory_search`: unsealed AMR nodes (`nodes/<id>.md`) only, and only the
+//!   ones in-app recall would use: a forgotten, paused, proposed or
+//!   superseded node stays out ([`AmrStore::plain_recallable`])
 //! - `automation_status`: `automations.json` status
 //!
 //! `.sealed` nodes are never opened or returned ([`at_rest`] denial). The
-//! store is opened without a sealer, and this module only reads `.md` files.
+//! store is opened without a sealer, and only `.md` node files are read.
 
 use std::fs;
 use std::io::Write;
@@ -148,8 +150,8 @@ fn bridge_tools() -> Vec<Value> {
     ]
 }
 
-/// Search plain `nodes/<id>.md` only. Never opens `.sealed` files, even when a
-/// sealer could decrypt them.
+/// Search the plain `nodes/<id>.md` nodes in-app recall would use. Never
+/// opens `.sealed` files, even when a sealer could decrypt them.
 pub fn search_unsealed(config_dir: &Path, query: &str) -> Result<String, String> {
     let raw = query.trim();
     let query = raw.to_ascii_lowercase();
@@ -164,7 +166,7 @@ pub fn search_unsealed(config_dir: &Path, query: &str) -> Result<String, String>
     if sealed_path(&nodes_dir, raw).is_file() && !plain_path(&nodes_dir, raw).is_file() {
         return Err(SEALED_DENIED.into());
     }
-    let hits = collect_plain_hits(&nodes_dir, &query)?;
+    let hits = collect_plain_hits(&AmrStore::at(config_dir.join("amr")), &query);
     if hits.is_empty() {
         return Ok("no matches".into());
     }
@@ -183,48 +185,19 @@ fn sealed_path(nodes_dir: &Path, id: &str) -> PathBuf {
     nodes_dir.join(format!("{id}.sealed"))
 }
 
-fn collect_plain_hits(nodes_dir: &Path, query: &str) -> Result<Vec<(String, String)>, String> {
-    let Ok(read) = fs::read_dir(nodes_dir) else {
-        return Ok(Vec::new());
-    };
-    let mut files: Vec<PathBuf> = read
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
-        .collect();
-    files.sort();
+/// The store's own visibility filter, so a line the user forgot or paused
+/// in the app never leaves it over the bridge either.
+fn collect_plain_hits(store: &AmrStore, query: &str) -> Vec<(String, String)> {
     let mut hits = Vec::new();
-    for path in files {
-        // Never follow a sibling .sealed; only the .md path is opened.
-        let id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        if sealed_path(nodes_dir, &id).is_file() {
-            // A node must not be both plain and sealed; if a .sealed sibling
-            // exists, refuse that id entirely.
-            continue;
-        }
-        let text = match fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        let Ok(node) = Node::from_markdown(&text) else {
-            continue;
-        };
-        if node.sensitivity.sealed() {
-            // Frontmatter claims sealed but the file is .md — still withhold.
-            continue;
-        }
+    for node in store.plain_recallable() {
         for line in match_plain(&node, query) {
             hits.push((node.id.clone(), line));
             if hits.len() >= SEARCH_CAP {
-                return Ok(hits);
+                return hits;
             }
         }
     }
-    Ok(hits)
+    hits
 }
 
 fn match_plain(node: &Node, query: &str) -> Vec<String> {
@@ -413,6 +386,50 @@ mod tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn memory_search_leaves_out_a_forgotten_node() {
+        let dir = temp("forget");
+        let store = AmrStore::at(dir.join("amr"));
+        store.init().unwrap();
+        store
+            .remember(&plain_draft(
+                "fact-gone",
+                "My old address is 12 Elm Street.\n",
+            ))
+            .unwrap();
+        assert_eq!(
+            search_unsealed(&dir, "elm").as_deref(),
+            Ok("fact-gone\tMy old address is 12 Elm Street.")
+        );
+        store.forget("fact-gone").unwrap();
+        // In-app recall skips it now, and so does the bridge.
+        assert_eq!(store.recall("elm").len(), 0);
+        assert_eq!(search_unsealed(&dir, "elm").as_deref(), Ok("no matches"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_search_leaves_out_a_paused_node_until_it_is_used_again() {
+        let dir = temp("pause");
+        let store = AmrStore::at(dir.join("amr"));
+        store.init().unwrap();
+        store
+            .remember(&plain_draft(
+                "fact-paused",
+                "I work at the harbor office.\n",
+            ))
+            .unwrap();
+        store.set_paused("fact-paused", true).unwrap();
+        assert_eq!(store.recall("harbor").len(), 0);
+        assert_eq!(search_unsealed(&dir, "harbor").as_deref(), Ok("no matches"));
+        store.set_paused("fact-paused", false).unwrap();
+        assert_eq!(
+            search_unsealed(&dir, "harbor").as_deref(),
+            Ok("fact-paused\tI work at the harbor office.")
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
