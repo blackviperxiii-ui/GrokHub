@@ -15,7 +15,9 @@
 //!   hard tasks step up to when the computer is free.
 
 use crate::local_picker::{Memory, Profile};
-use crate::local_setup::{self as ls, LocalModel, ModelKind, DISK_HEADROOM_MB, STANDARD_MODEL_CAP};
+use crate::local_setup::{
+    self as ls, LocalModel, ModelKind, UseCase, DISK_HEADROOM_MB, STANDARD_MODEL_CAP,
+};
 use crate::model_library::{Fit, Row};
 
 /// Hot-swap only steps up to a model this fast (mirrors
@@ -151,11 +153,24 @@ pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup
             .max_by_key(|r| r.model.run_mb)
     });
     // Image: the biggest picture model memory holds, with the picture guard.
+    // A video row shares the image kind so it downloads in that folder.
+    let picture = |r: &&Row| ls::use_case(r.model.id) != UseCase::VideoGen;
     let image = rows
         .iter()
         .filter(|r| pickable(r, ModelKind::Image) && r.fit != Fit::No)
+        .filter(picture)
         .filter(|r| r.model.run_mb <= p.capacity())
         .max_by_key(|r| r.model.run_mb);
+    let (mem, vram) = p.budget();
+    let video = (matches!(mem, Memory::Gpu | Memory::Unified) && vram >= 8_192)
+        .then(|| {
+            rows.iter()
+                .filter(|r| pickable(r, ModelKind::Image) && r.fit != Fit::No)
+                .filter(|r| ls::use_case(r.model.id) == UseCase::VideoGen)
+                .filter(|r| r.model.run_mb <= p.capacity())
+                .max_by_key(|r| r.model.run_mb)
+        })
+        .flatten();
     let guard = rows
         .iter()
         .find(|r| pickable(r, ModelKind::ImageGuard) && r.fit != Fit::No);
@@ -213,13 +228,12 @@ pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup
             guard.map(|g| vec![g.model]).unwrap_or_default(),
             "No picture model fits this PC.".into(),
         ),
-        Slot {
-            goal: Goal::Video,
-            pick: None,
-            extras: Vec::new(),
-            on_disk: false,
-            note: "No on-device video models yet.".into(),
-        },
+        slot(
+            Goal::Video,
+            video,
+            Vec::new(),
+            "No video model fits this PC.".into(),
+        ),
     ];
 
     // The queue: most needed first. Each pick with its extras, or none of them.
@@ -230,7 +244,13 @@ pub fn recommend(rows: &[Row], p: &Profile, free_disk_mb: Option<u64>) -> Lineup
         .count();
     let on_disk = |m: &LocalModel| row_of(rows, m.id).is_some_and(|r| r.on_disk);
     let mut queue: Vec<&'static LocalModel> = Vec::new();
-    for goal in [Goal::Everyday, Goal::Speed, Goal::Image, Goal::Performance] {
+    for goal in [
+        Goal::Everyday,
+        Goal::Speed,
+        Goal::Image,
+        Goal::Video,
+        Goal::Performance,
+    ] {
         let Some(s) = slots.iter_mut().find(|s| s.goal == goal) else {
             continue;
         };

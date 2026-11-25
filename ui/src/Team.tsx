@@ -383,7 +383,12 @@ export function Team({ shown = true }: { shown?: boolean }) {
           )}
           <ul className="rows" aria-label="Task log">
             {tasks.map((t) => {
-              const who = t.from === "person" ? "You" : name(t.from.agent);
+              const who =
+                t.from === "person"
+                  ? "You"
+                  : "agent" in t.from
+                    ? name(t.from.agent)
+                    : "A paired computer";
               return (
                 <li key={t.id} className="card team-task" aria-label={`${who} asked ${name(t.to)}`}>
                   <div className="card-status">

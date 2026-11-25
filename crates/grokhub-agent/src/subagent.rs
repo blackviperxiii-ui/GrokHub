@@ -279,6 +279,7 @@ fn message(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         child_cancel.cancel();
         let _ = tasks.kill(&id);
         ChildDone {
+            said: String::new(),
             stop: StopReason::Cancelled,
             usage: Usage::default(),
             text: "the agent ended without an answer".into(),
@@ -334,6 +335,208 @@ impl AgentTask {
             _ if timed_out => self.log(state, &format!("Timed out. {text}")),
             _ => self.log(state, &text),
         }
+    }
+}
+
+/// The only tools a paired computer's message may use: reads inside the
+/// agent's workspace. Read-only alone would still offer tool scripts,
+/// explore helpers and chat search.
+const PEER_TOOLS: [&str; 4] = ["read_file", "list_dir", "grep", "glob"];
+/// Longest answer that goes back to a paired computer, in characters.
+const PEER_REPLY_CHARS: usize = crate::agent_message::MAX_MESSAGE;
+/// What a paired computer hears when its message is turned down for any
+/// reason but a missing agent.
+const PEER_REFUSED: &str = "the agent couldn't take this message";
+/// What a paired computer hears when the model call fails.
+const PEER_FAILED: &str = "the agent couldn't answer";
+/// What a paired computer hears when the agent ends without words.
+const PEER_NO_ANSWER: &str = "the agent ended without an answer";
+
+/// One message from a paired computer to an agent shared with it.
+pub struct PeerTurn {
+    /// The app's config folder, where the team file and the task log are.
+    pub config: PathBuf,
+    /// The paired computer's device id.
+    pub peer: String,
+    pub agent: String,
+    pub text: String,
+    pub client: Arc<dyn ModelClient + Send + Sync>,
+    pub model: String,
+    pub cancel: CancelToken,
+}
+
+/// Answers a paired computer: the agent runs read only and unattended in its
+/// own home, with [`PEER_TOOLS`] at most, no desktop and nobody to approve
+/// anything. The message is fenced as outside text, the run counts as
+/// automation, and the answer is redacted and clipped. Logged like any agent
+/// message, from `{"peer": …}`.
+pub fn answer_peer(turn: PeerTurn) -> grokhub_core::a2a::Outcome {
+    use grokhub_core::a2a::Outcome;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let _config = crate::perm::ConfigGuard::set(&turn.config);
+    let started_ms = grokhub_core::now_ms();
+    let task = AgentTask {
+        asked: crate::agent_message::peer_asked(&turn.config, &turn.peer, &turn.agent, &turn.text),
+        started_ms,
+    };
+    // Only "no such agent" goes back as it is; other reasons can name the
+    // person's folders, so the peer gets a fixed line and the log the reason.
+    let unknown = grokhub_core::agent_team::Refusal::UnknownAgent(turn.agent.clone()).to_string();
+    let refuse = |text: String| {
+        task.log(TaskState::Rejected, &text);
+        Outcome::Rejected(if text == unknown {
+            text
+        } else {
+            PEER_REFUSED.into()
+        })
+    };
+    let caller = Gate {
+        mode: crate::gate::PermMode::Ask,
+        readonly_session: true,
+        attended: false,
+        desktop: false,
+    };
+    let brief = match crate::agent_message::brief(&task.asked, &caller, None) {
+        Ok(brief) => brief,
+        Err(err) => return refuse(err),
+    };
+    // A number, not the peer's ids, so nothing it sends shapes a session path.
+    // A scratch id: the turn never reads the person's memory into the model,
+    // and nothing the peer says is written to memory.
+    let session = crate::scratch::shell_id(
+        true,
+        &format!(
+            "a2a-{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ),
+    );
+    let ticket = match crate::subagent_policy::admit(&crate::subagent_policy::Ask {
+        session: &session,
+        explore: false,
+        background: false,
+        worktree: false,
+        lead_model: &turn.model,
+        objective: &task.asked.message,
+        agent: true,
+    }) {
+        Ok(ticket) => ticket,
+        Err(text) => return refuse(text),
+    };
+    let tasks = crate::tasks::hub_for(&session);
+    let child_cancel = CancelToken::child_of(&turn.cancel);
+    let kill_cancel = child_cancel.clone();
+    let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || kill_cancel.cancel());
+    let title = format!("Agent: {}", brief.profile.name.trim());
+    let id = match tasks.register_agent(None, &title, kill, &turn.model) {
+        Ok(id) => id,
+        Err(err) => {
+            crate::tasks::forget_session(&session);
+            return refuse(err);
+        }
+    };
+    let conversation_id = format!("{session}/{id}");
+    let _ =
+        crate::run::bind_job_tool_set(session.as_str(), crate::tools::ToolSet::only(PEER_TOOLS));
+    if !brief.profile.tools.is_empty() {
+        crate::run::bind_narrower_tool_set(&conversation_id, &brief.profile.tools);
+    }
+    // Fenced on this thread, so the run's nonce and its "read outside text"
+    // mark go with it.
+    let prompt = crate::tools::fence::fence(&format!("peer:{}", turn.peer), &task.asked.message);
+    let job = ChildJob {
+        client: Arc::clone(&turn.client),
+        permits: Arc::new(crate::gate::ClosedPermits),
+        desktop: None,
+        workspace: brief.workspace.clone(),
+        model: turn.model.clone(),
+        effort: None,
+        system: brief.system,
+        conversation_id: conversation_id.clone(),
+        parent_session: session.clone(),
+        parent_workspace: brief.workspace,
+        fence: crate::tools::fence::capture(),
+        max_turns: crate::subagent_policy::child_turns(0, false),
+        context_length: 0,
+        cancel: child_cancel.clone(),
+        steer: SteerQueue::new(),
+        gate: brief.gate,
+        policy: Some(brief.policy),
+        depth: 1,
+        tasks: Arc::clone(&tasks),
+        prompt,
+        agent_id: id.clone(),
+        kind_name: "agent".to_string(),
+        title,
+        background: false,
+        shared_client: turn.client,
+        ports: crate::tools::ports::current(),
+        origin: crate::harness::Origin::Automation,
+        fork: None,
+        config: Some(brief.home),
+        class: None,
+        ticket,
+        work: None,
+        review: None,
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || run_job(job, Some(tx)));
+    let halt = HubHalt {
+        hub: Arc::clone(&tasks),
+    };
+    let deadline = std::time::Instant::now() + crate::subagent_policy::wall(false);
+    let (done, timed_out) = pump(
+        &rx,
+        &mut |_| {},
+        &turn.cancel,
+        &halt,
+        &child_cancel,
+        deadline,
+    );
+    let done = done.unwrap_or_else(|| {
+        child_cancel.cancel();
+        let _ = tasks.kill(&id);
+        ChildDone {
+            said: String::new(),
+            stop: StopReason::Cancelled,
+            usage: Usage::default(),
+            text: String::new(),
+            looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
+        }
+    });
+    let answer = peer_answer(&done);
+    let ended = matches!(done.stop, StopReason::EndTurn | StopReason::MaxTurns);
+    // The log says what the peer is told: no words is a failed task.
+    if ended && !timed_out && answer.is_empty() {
+        task.log(TaskState::Failed, PEER_NO_ANSWER);
+    } else {
+        task.finish(&done, timed_out);
+    }
+    crate::run::clear_job_tool_set(&conversation_id);
+    crate::run::clear_job_tool_set(&session);
+    crate::tasks::forget_session(&session);
+    match &done.stop {
+        _ if timed_out => Outcome::Failed("the agent ran out of time".into()),
+        StopReason::EndTurn | StopReason::MaxTurns if answer.is_empty() => {
+            Outcome::Failed(PEER_NO_ANSWER.into())
+        }
+        StopReason::EndTurn | StopReason::MaxTurns => Outcome::Completed(answer),
+        StopReason::Cancelled | StopReason::Halted => {
+            Outcome::Failed("the task was canceled".into())
+        }
+        // The error can hold a key or a path; the task log keeps it.
+        StopReason::Error(_) => Outcome::Failed(PEER_FAILED.into()),
+    }
+}
+
+/// What goes back to a paired computer: the agent's own words, without the
+/// files it looked at or the calls it was refused, secrets redacted, clipped.
+fn peer_answer(done: &ChildDone) -> String {
+    let words = grokhub_core::redact_secrets(done.said.trim());
+    match words.char_indices().nth(PEER_REPLY_CHARS) {
+        Some((at, _)) => format!("{}…", words[..at].trim_end()),
+        None => words,
     }
 }
 
@@ -621,6 +824,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         child_cancel.cancel();
         let _ = tasks.kill(&id);
         ChildDone {
+            said: String::new(),
             stop: StopReason::Cancelled,
             usage: Usage::default(),
             text: "subagent ended without a result".into(),
@@ -731,6 +935,9 @@ struct ChildDone {
     stop: StopReason,
     usage: Usage,
     text: String,
+    /// The helper's last words alone, without the notes `text` adds about
+    /// refused calls.
+    said: String,
     /// Files and pages the helper read, for the parent to check its claims.
     looked_at: Vec<String>,
     /// A worktree helper's record once its work is sealed.
@@ -857,6 +1064,7 @@ fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDo
     match attempt() {
         Ok(done) => done,
         Err(_) if job.cancel.is_cancelled() => ChildDone {
+            said: String::new(),
             stop: StopReason::Cancelled,
             usage: Usage::default(),
             text: String::new(),
@@ -865,6 +1073,7 @@ fn run_child_retrying(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDo
             findings: Vec::new(),
         },
         Err(_) => attempt().unwrap_or_else(|_| ChildDone {
+            said: String::new(),
             looked_at: Vec::new(),
             work: None,
             findings: Vec::new(),
@@ -982,6 +1191,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         stop: out.stop,
         usage: out.usage,
         text: child_text(&history[own..]),
+        said: last_said(&history[own..]),
         looked_at: looked_at(&history[own..]),
         work: None,
         findings: findings.into_inner(),
@@ -1238,17 +1448,22 @@ fn child_system(parent: &str, persona: &str, explore: bool) -> String {
     text
 }
 
+/// The helper's last non-empty message.
+fn last_said(history: &[InputItem]) -> String {
+    history
+        .iter()
+        .rev()
+        .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "assistant"))
+        .map(|item| crate::compact::message_text(item).trim().to_string())
+        .find(|text| !text.is_empty())
+        .unwrap_or_default()
+}
+
 fn child_text(history: &[InputItem]) -> String {
-    let mut last = String::new();
+    let mut last = last_said(history);
     let mut notes = Vec::new();
     for item in history {
         match item {
-            InputItem::Message { role, .. } if role == "assistant" => {
-                let text = crate::compact::message_text(item).trim().to_string();
-                if !text.is_empty() {
-                    last = text;
-                }
-            }
             InputItem::FunctionCallOutput { output, .. }
                 if output.contains("read-only in this phase")
                     || output.contains("Denied by permission policy")
@@ -4150,6 +4365,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(5));
             }
             let _ = tx.send(ChildNote::Finished(ChildDone {
+                said: String::new(),
                 stop: StopReason::Cancelled,
                 usage: Usage::default(),
                 text: "found two of three".into(),
@@ -5503,6 +5719,342 @@ mod tests {
         assert_eq!(task.asked, "Which router has the best range?");
         assert_eq!(task.reply, "There's no agent `ghost`.");
         let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn shared_desk(cfg: &Path, with: &str) {
+        use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+        let mut desk = Profile::new(Kind::Customer, "front-desk", "Front desk");
+        desk.about = "Answers opening hours.".into();
+        desk.share = true;
+        desk.share_with = vec![with.into()];
+        TeamFile {
+            version: VERSION,
+            agents: vec![desk],
+            teams: Vec::new(),
+        }
+        .save(cfg)
+        .unwrap();
+    }
+
+    fn peer_turn(cfg: &Path, client: Arc<Fake>) -> PeerTurn {
+        PeerTurn {
+            config: cfg.to_path_buf(),
+            peer: "laptop".into(),
+            agent: "front-desk".into(),
+            text: "When are you open?".into(),
+            client,
+            model: "grok-4".into(),
+            cancel: CancelToken::new(),
+        }
+    }
+
+    #[test]
+    fn a_paired_computer_gets_a_read_only_answer_from_four_read_tools() {
+        use grokhub_core::a2a::Outcome;
+        let dir = scratch("peer");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let work = cfg.join("agents").join("front-desk").join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("hours.md"), "9 to 5").unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        type Seen = (String, PathBuf, String, Vec<String>, Vec<(String, String)>);
+        let seen = Arc::new(Mutex::new(Vec::<Seen>::new()));
+        let seen_step = Arc::clone(&seen);
+        let wanted = [
+            "message_agent",
+            "run_tool_script",
+            "session_search",
+            "spawn_subagent",
+            "todo_write",
+            "web_fetch",
+            "write",
+        ];
+        let client = fake("no-parent", move |req, _cancel, n| {
+            let mut tools: Vec<String> = req
+                .tools
+                .iter()
+                .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()))
+                .map(str::to_string)
+                .collect();
+            tools.sort();
+            let outputs = req
+                .input
+                .iter()
+                .filter_map(|item| match item {
+                    InputItem::FunctionCallOutput { call_id, output } => {
+                        Some((call_id.clone(), output.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            seen_step.lock().unwrap().push((
+                req.conversation_id.clone(),
+                crate::perm::config_dir(),
+                format!("{:?}", req.input),
+                tools,
+                outputs,
+            ));
+            if n == 0 {
+                let mut calls: Vec<FunctionCall> = wanted
+                    .iter()
+                    .map(|name| call(name, name, r#"{"path":"x","prompt":"x","type":"explore","url":"https://example.com","code":"1","query":"x","content":"x"}"#))
+                    .collect();
+                calls.push(call("read", "read_file", r#"{"target_file":"hours.md"}"#));
+                return Ok(calls_turn(calls, Usage::default()));
+            }
+            Ok(text_turn("open 9 to 5", Usage::default()))
+        });
+        let outcome = answer_peer(peer_turn(&cfg, client));
+        assert_eq!(outcome, Outcome::Completed("open 9 to 5".into()));
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        let (conversation, config, first, tools, _) = &seen[0];
+        assert_eq!(config, &cfg.join("agents").join("front-desk"));
+        // The deferred-tool loader rides along; whatever it loads is still
+        // refused when called, since the set is checked when a tool runs.
+        assert_eq!(
+            tools,
+            &["glob", "grep", "list_dir", "load_tool_schema", "read_file"]
+        );
+        assert!(first.contains("<<<UNTRUSTED source=peer:laptop"), "{first}");
+        assert!(first.contains("When are you open?"), "{first}");
+        assert!(
+            first.contains("A message from a paired computer follows"),
+            "{first}"
+        );
+        let outputs: HashMap<String, String> = seen[1].4.iter().cloned().collect();
+        assert_eq!(outputs.len(), 8, "{outputs:?}");
+        assert!(outputs["read"].contains("9 to 5"), "{outputs:?}");
+        for name in wanted {
+            assert!(!outputs[name].contains("9 to 5"), "{name}: {outputs:?}");
+        }
+        // A read-only run turns down an agent message and a write.
+        for name in ["message_agent", "write"] {
+            assert!(
+                outputs[name].starts_with(&format!(
+                    "read-only in this phase: `{name}` is not available"
+                )),
+                "{name}: {outputs:?}"
+            );
+        }
+        // A script passes the read-only gate only where the OS sandbox holds
+        // it; then the set stops it. Either way it never runs.
+        let script = &outputs["run_tool_script"];
+        let read_only = "read-only in this phase: `run_tool_script` is not available. \
+                         Use read_file, list_dir, grep, or glob.";
+        assert!(
+            script.contains(read_only)
+                || script.contains(&crate::tools::tool_set_refusal("run_tool_script")),
+            "{script}"
+        );
+        // A helper and the todo list run inside the loop; the set stops them
+        // too (an explore helper skips the read-only refusal).
+        for name in ["session_search", "spawn_subagent", "todo_write"] {
+            assert!(
+                outputs[name].contains(&crate::tools::tool_set_refusal(name)),
+                "{name}: {outputs:?}"
+            );
+        }
+        let session = conversation.split('/').next().unwrap();
+        assert!(session.starts_with("shell-scratch-a2a-"), "{conversation}");
+        assert!(!crate::session_is_live(session));
+        assert!(!crate::run::has_job_tool_set(conversation));
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(
+            log[0].from,
+            grokhub_core::agent_tasks::Origin::Peer("laptop".into())
+        );
+        assert_eq!(log[0].to, "front-desk");
+        assert_eq!(log[0].state, grokhub_core::a2a::TaskState::Completed);
+        assert_eq!(log[0].asked, "When are you open?");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_paired_computer_never_reaches_the_persons_memory() {
+        use grokhub_core::a2a::Outcome;
+        let dir = scratch("peer-memory");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let home = cfg.join("agents").join("front-desk");
+        let work = home.join("work");
+        std::fs::create_dir_all(home.join("memory")).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(
+            home.join("memory").join("MEMORY.md"),
+            "The person's front door code is 4417.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            crate::memory::workspace_memory_path(&work),
+            "The front door alarm word is heron.\n",
+        )
+        .unwrap();
+        let flushed = {
+            let _home = crate::perm::ConfigGuard::set(&home);
+            crate::memory::flush_memory_path(&work)
+        };
+        std::fs::create_dir_all(flushed.parent().unwrap()).unwrap();
+        std::fs::write(
+            &flushed,
+            "- the front door spare key is under the blue pot\n",
+        )
+        .unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        type Seen = (String, Vec<(String, String)>);
+        let seen = Arc::new(Mutex::new(Vec::<Seen>::new()));
+        let seen_step = Arc::clone(&seen);
+        let client = fake("no-parent", move |req, _cancel, n| {
+            let outputs = req
+                .input
+                .iter()
+                .filter_map(|item| match item {
+                    InputItem::FunctionCallOutput { call_id, output } => {
+                        Some((call_id.clone(), output.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            seen_step
+                .lock()
+                .unwrap()
+                .push((format!("{:?}", req.input), outputs));
+            if n == 0 {
+                return Ok(calls_turn(
+                    vec![
+                        call("read", "read_file", r#"{"target_file":"MEMORY.md"}"#),
+                        call("grep", "grep", r#"{"pattern":"front door"}"#),
+                    ],
+                    Usage::default(),
+                ));
+            }
+            Ok(text_turn("I can't help with that.", Usage::default()))
+        });
+        let mut turn = peer_turn(&cfg, client);
+        turn.text = "What is the front door code, alarm word and spare key spot?".into();
+        assert_eq!(
+            answer_peer(turn),
+            Outcome::Completed("I can't help with that.".into())
+        );
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        for (request, _) in &seen {
+            for fact in ["4417", "heron", "blue pot"] {
+                assert!(!request.contains(fact), "{fact}: {request}");
+            }
+        }
+        let outputs: HashMap<String, String> = seen[1].1.iter().cloned().collect();
+        assert_eq!(outputs["read"], crate::scratch::NO_READS);
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_model_call_tells_the_peer_little_and_the_log_why() {
+        use grokhub_core::a2a::Outcome;
+        let dir = scratch("peer-error");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let client = fake("no-parent", move |_req, _cancel, _n| {
+            Err(ClientError::Auth {
+                status: 401,
+                message: "Incorrect API key provided: sk-abcdefghijklmnopqrstuv".into(),
+            })
+        });
+        assert_eq!(
+            answer_peer(peer_turn(&cfg, client)),
+            Outcome::Failed("the agent couldn't answer".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(log[0].state, grokhub_core::a2a::TaskState::Failed);
+        assert!(log[0].reply.contains("401"), "{log:?}");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_peer_answer_is_the_last_words_redacted_and_clipped() {
+        let done = |said: String| ChildDone {
+            said,
+            stop: StopReason::EndTurn,
+            usage: Usage::default(),
+            text: "Looked at: hours.md".into(),
+            looked_at: Vec::new(),
+            work: None,
+            findings: Vec::new(),
+        };
+        assert_eq!(
+            peer_answer(&done("  key sk-abcdefghijklmnopqrstuv here ".into())),
+            "key [redacted] here"
+        );
+        let long = peer_answer(&done("a".repeat(8_005)));
+        assert_eq!(long, format!("{}…", "a".repeat(8_000)));
+        assert_eq!(peer_answer(&done(" \n ".into())), "");
+    }
+
+    #[test]
+    fn a_turn_without_words_or_one_canceled_fails_for_the_peer_and_the_log() {
+        use grokhub_core::a2a::{Outcome, TaskState as State};
+        let dir = scratch("peer-silent");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let client = fake("no-parent", |_req, _cancel, _n| {
+            Ok(text_turn("", Usage::default()))
+        });
+        assert_eq!(
+            answer_peer(peer_turn(&cfg, client)),
+            Outcome::Failed("the agent ended without an answer".into())
+        );
+        let client = fake("no-parent", |_req, _cancel, _n| {
+            Ok(text_turn("never", Usage::default()))
+        });
+        let turn = peer_turn(&cfg, client);
+        turn.cancel.cancel();
+        assert_eq!(
+            answer_peer(turn),
+            Outcome::Failed("the task was canceled".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        let states: Vec<State> = log.iter().map(|row| row.state).collect();
+        assert_eq!(states, [State::Canceled, State::Failed], "{log:?}");
+        assert_eq!(log[1].reply, "the agent ended without an answer");
+        let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_computer_the_agent_isnt_shared_with_is_turned_down_and_logged() {
+        use grokhub_core::a2a::Outcome;
+        let dir = scratch("peer-refused");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "desk-pc");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&asked);
+        let client = fake("no-parent", move |_req, _cancel, _n| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(text_turn("never", Usage::default()))
+        });
+        assert_eq!(
+            answer_peer(peer_turn(&cfg, client)),
+            Outcome::Rejected("There's no agent `front-desk`.".into())
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 0);
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(
+            log[0].from,
+            grokhub_core::agent_tasks::Origin::Peer("laptop".into())
+        );
+        assert_eq!(log[0].state, grokhub_core::a2a::TaskState::Rejected);
+        assert_eq!(log[0].reply, "There's no agent `front-desk`.");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

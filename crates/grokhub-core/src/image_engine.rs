@@ -75,9 +75,11 @@ pub fn download(
 /// image folder.
 pub fn image_model(models_dir: &Path) -> Option<&'static LocalModel> {
     let dir = md::kind_dir(models_dir, ModelKind::Image);
-    crate::local_setup::local_models()
-        .iter()
-        .find(|m| m.kind == ModelKind::Image && md::complete(&dir, m))
+    crate::local_setup::local_models().iter().find(|m| {
+        m.kind == ModelKind::Image
+            && crate::local_setup::use_case(m.id) != crate::local_setup::UseCase::VideoGen
+            && md::complete(&dir, m)
+    })
 }
 
 /// The first catalog picture guard whose files are all on disk.
@@ -247,6 +249,30 @@ mod tests {
         assert!(m.parts.iter().any(|p| p.file.ends_with("ae.safetensors")));
         assert!(m.parts.iter().any(|p| p.file.contains("Qwen3-4B")));
         assert_eq!(image_model(Path::new("/nowhere")), None);
+        let wan = crate::local_setup::model_by_id("wan2.2-ti2v-5b-q4_k_m").unwrap();
+        assert_eq!(
+            crate::local_setup::use_case(wan.id),
+            crate::local_setup::UseCase::VideoGen
+        );
+        let root = std::env::temp_dir().join(format!("grokhub-video-row-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = md::kind_dir(&root, ModelKind::Image);
+        std::fs::create_dir_all(dir.join("wan2.2-ti2v-5b")).unwrap();
+        std::fs::write(md::final_path(&dir, wan), b"w").unwrap();
+        for part in wan.parts {
+            let path = dir.join(part.file);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, b"p").unwrap();
+        }
+        assert!(md::complete(&dir, wan));
+        assert_eq!(
+            image_model(&root),
+            None,
+            "video files are not a picture model"
+        );
+        let _ = std::fs::remove_dir_all(&root);
         let guard = crate::local_setup::local_models()
             .iter()
             .find(|m| m.kind == ModelKind::ImageGuard)
