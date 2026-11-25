@@ -320,7 +320,7 @@ class EndToEnd(unittest.TestCase):
             vs.sync("v2.0.0", self.src, None)
         self.assertEqual(self.snapshot(), before)
 
-    def test_check_upstream_passes_when_in_sync_and_fails_on_drift(self):
+    def test_check_upstream_follows_the_newest_tag_not_main(self):
         vs.sync("v2.0.0", self.src, None)
         # Align manifest with fake upstream (setup included without exclude)
         doc = vs.load()
@@ -329,7 +329,7 @@ class EndToEnd(unittest.TestCase):
         vs.write(vs.MANIFEST, vs.emit_manifest(doc))
         vs.check_upstream(self.src)
 
-        # Add an upstream skill on main not yet bundled -> must fail
+        # A skill only on main, not yet in a tag, waits for the next tag.
         new_skill = os.path.join(self.src, "skills", "brand-new", "SKILL.md")
         os.makedirs(os.path.dirname(new_skill), exist_ok=True)
         with open(new_skill, "w", encoding="utf-8") as fh:
@@ -337,9 +337,16 @@ class EndToEnd(unittest.TestCase):
         run("git", "add", "-A", cwd=self.src)
         run("git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
             "commit", "-q", "-m", "add brand-new", cwd=self.src)
+        vs.check_upstream(self.src)
+
+        # Once a tag carries it and the bundle is still on the old one -> must fail.
+        run("git", "tag", "v2.1.0", cwd=self.src)
         with self.assertRaises(vs.SyncError) as err:
             vs.check_upstream(self.src)
-        self.assertIn("brand-new", str(err.exception))
+        self.assertEqual(
+            str(err.exception),
+            "bundled skill list drifted from upstream v2.1.0 (missing=['brand-new'], extra=[])",
+        )
 
 
 if __name__ == "__main__":

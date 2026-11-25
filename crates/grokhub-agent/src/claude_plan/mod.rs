@@ -68,7 +68,10 @@ fn usual_dirs(home: &Path) -> Vec<PathBuf> {
 /// checked too so a test home with `.config/Claude` works on every CI OS.
 fn desktop_claude_roots(home: &Path) -> Vec<PathBuf> {
     let linux = home.join(".config").join("Claude");
-    let macos = home.join("Library").join("Application Support").join("Claude");
+    let macos = home
+        .join("Library")
+        .join("Application Support")
+        .join("Claude");
     let windows = home.join("AppData").join("Roaming").join("Claude");
     if cfg!(windows) {
         vec![windows, linux, macos]
@@ -411,10 +414,7 @@ mod tests {
             .join("2.1.330");
         let path_cli = touch_cli(&on_path);
         let _desktop_cli = touch_cli(&desktop);
-        assert_eq!(
-            find_in([on_path.clone()], Some(&home)),
-            Some(path_cli)
-        );
+        assert_eq!(find_in([on_path.clone()], Some(&home)), Some(path_cli));
     }
 
     #[cfg(unix)]

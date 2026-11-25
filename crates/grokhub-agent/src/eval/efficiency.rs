@@ -133,10 +133,10 @@ impl ModelClient for Recorder {
     }
 }
 
-/// `name` is not in `tools` but the `load_tool_schema` index lists it.
+/// `name` is not in `tools` but the `tool_search` index lists it.
 fn indexed_only(tools: &[Value], name: &str) -> bool {
     let indexed = tools.iter().any(|t| {
-        t["name"] == crate::tools::registry::LOAD_TOOL_SCHEMA
+        t["name"] == crate::tools::registry::TOOL_SEARCH
             && t["description"]
                 .as_str()
                 .is_some_and(|d| d.lines().any(|l| l.starts_with(&format!("{name} — "))))

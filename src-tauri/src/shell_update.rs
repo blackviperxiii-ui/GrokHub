@@ -100,7 +100,13 @@ pub fn set_channel(config_dir: &Path, channel: Channel) -> Result<(), String> {
 ///
 /// A copy built from a clone (`source` receipt) or the AUR under `/usr`, and
 /// phones, can't.
-pub fn updatable(os: &str, appimage: Option<&str>, deb: bool, exe: &Path, config_dir: &Path) -> bool {
+pub fn updatable(
+    os: &str,
+    appimage: Option<&str>,
+    deb: bool,
+    exe: &Path,
+    config_dir: &Path,
+) -> bool {
     match os {
         "linux" => {
             appimage.is_some_and(|p| !p.trim().is_empty())

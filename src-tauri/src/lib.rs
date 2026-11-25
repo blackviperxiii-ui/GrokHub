@@ -8976,6 +8976,7 @@ pub fn run() {
             home_assistant::register(app.state::<ShellState>().config_dir.clone());
             #[cfg(desktop)]
             start_scheduler(app);
+            #[cfg(desktop)]
             start_channel_inbox(app.handle().clone());
             // Questions from helpers that outlive their chat's reply.
             // Only this shell watches task changes; the cabin leaves it off.
