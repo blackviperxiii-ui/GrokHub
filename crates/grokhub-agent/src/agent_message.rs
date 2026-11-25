@@ -16,7 +16,7 @@ use crate::perm::{Action, ConfigGuard, Policy};
 pub const TOOL: &str = "message_agent";
 
 /// Longest message one agent hands another, in characters.
-pub(crate) const MAX_MESSAGE: usize = 8_000;
+pub const MAX_MESSAGE: usize = 8_000;
 
 /// Who is sending: the app's config folder (where the team file is) and,
 /// inside an agent's turn, that agent's id, or the paired computer that asked.

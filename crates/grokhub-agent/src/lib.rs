@@ -97,6 +97,7 @@ mod work;
 mod ws_mode;
 pub mod xai_keychain;
 
+pub use agent_message::MAX_MESSAGE as AGENT_MESSAGE_CHARS;
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
     ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
