@@ -101,7 +101,33 @@ the hard floor and the sandbox). A customer profile can't be saved with
 
 `TaskBook` keeps tasks in memory and enforces the lifecycle: a terminal task
 (completed, failed, canceled, rejected) takes no more messages, and only a
-task that hasn't ended can be canceled.
+task that hasn't ended can be canceled. `ListTasks` pages newest first by
+`pageToken` (the last task id of the page before), filters by `contextId`
+and `status`, gives `pageSize` and `totalSize`, and leaves out artifacts
+unless `includeArtifacts` is set.
+
+## The hub's agent door
+
+`grokhub_hub::A2aDoor` serves `/a2a/v1` on the app's hub, behind the hub's
+pairing token, while sharing is on, never to a web page (`Origin` header).
+`GET /a2a/v1` lists the agents shared with the calling computer, `GET
+/a2a/v1/<id>` gives one's card, and `POST /a2a/v1/<id>` takes JSON-RPC. An
+agent not shared with that computer gets the hub's plain 404. Card URLs use
+the address the computer called (`Host`), else the LAN address.
+
+- Each computer, by device id and token, has its own task book per agent,
+  so it sees only its own tasks, and pairing again starts fresh.
+- 2 turns at once per computer and 4 in all, 20 messages an hour per
+  computer, a request body of at most 96 KiB.
+- Who may reach the agent is checked again after the body is read, just
+  before the turn starts, and before the answer goes out.
+  `A2aDoor::recheck` cancels the turns of computers that may no longer
+  reach the agent; the hub runs it after a pairing and on every `/a2a`
+  request, and the app after it stops sharing, unpairs a computer or saves
+  the team.
+- A blocking `SendMessage` waits for the turn to end, up to the turn's time
+  limit, and then answers with an error, never a task still working.
+- A turn that panics still ends its task, as failed, and frees its place.
 
 ## What it builds on
 
