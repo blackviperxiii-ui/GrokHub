@@ -1171,7 +1171,10 @@ fn try_git_stash_snapshot(
     let ref_name = format!("refs/loadout-backups/{id}");
     let _ = run_git(workspace, &["update-ref", &ref_name, &sha]);
     // Immediately re-apply so the working tree is unchanged before the tool runs.
-    let _ = run_git(workspace, &["-c", STASH_RAW_BYTES, "stash", "apply", "--quiet", &sha]);
+    let _ = run_git(
+        workspace,
+        &["-c", STASH_RAW_BYTES, "stash", "apply", "--quiet", &sha],
+    );
     Some(BackupEntry {
         id: id.to_string(),
         created_at_ms: now_ms,
@@ -1325,8 +1328,10 @@ pub fn restore_backup(
             // Restore tracked files from the stash tree first, then apply the
             // stash (including untracked files via `^3` if present) without
             // dropping the stash.
-            let (code, out) =
-                run_git(workspace, &["-c", STASH_RAW_BYTES, "checkout", &sha, "--", "."])?;
+            let (code, out) = run_git(
+                workspace,
+                &["-c", STASH_RAW_BYTES, "checkout", &sha, "--", "."],
+            )?;
             if code != 0 {
                 let (apply_code, apply_out) =
                     run_git(workspace, &["-c", STASH_RAW_BYTES, "stash", "apply", &sha])?;
@@ -1341,7 +1346,14 @@ pub fn restore_backup(
                 if git_ok(workspace, &["rev-parse", "--verify", &untracked_parent]).is_some() {
                     let _ = run_git(
                         workspace,
-                        &["-c", STASH_RAW_BYTES, "checkout", &untracked_parent, "--", "."],
+                        &[
+                            "-c",
+                            STASH_RAW_BYTES,
+                            "checkout",
+                            &untracked_parent,
+                            "--",
+                            ".",
+                        ],
                     );
                 }
             }
