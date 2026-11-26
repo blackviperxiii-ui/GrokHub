@@ -226,6 +226,12 @@ pub fn maybe_compact_tool_output(
         Err(_) => (extractive_tool_output_summary(output), Usage::default()),
     };
     let summary = keep_fenced(output, tool_name, summary);
+    // How a command ended stays on the line after the header, in the tool's
+    // own words, for the ledger and the end-of-turn checks.
+    let summary = match ended_line(output).filter(|_| tool_name == "run_terminal_command") {
+        Some(ended) => format!("{ended}\n{summary}"),
+        None => summary,
+    };
     let body =
         format_tool_output_compact_message(tool_name, &handle, &rel_path, &summary, output.len());
     Ok(ToolOutputCompactOutcome::Replaced { text: body, usage })
@@ -2242,6 +2248,7 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
 
 #[path = "compact_ledger.rs"]
 mod ledger;
+use ledger::ended_line;
 pub(crate) use ledger::{shell_status, NOT_KEPT};
 
 #[path = "compact_bg.rs"]
@@ -3491,6 +3498,59 @@ mod tests {
                 bytes = fenced.len(),
             )
         );
+        set_tool_output_compact_for_tests(None);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compacted_command_keeps_how_it_ended_after_the_header() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+            enabled: true,
+            min_bytes: 50,
+        }));
+        let output = format!("exit 0\n{}", "test a ... ok\n".repeat(20));
+        let script = Script {
+            turns: Mutex::new(vec![Ok(TurnOutput {
+                text: "All 20 tests passed.".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: usage(2, 1, 1),
+                ..Default::default()
+            })]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let replaced = maybe_compact_tool_output(
+            &dir,
+            &dir,
+            "sess",
+            &script,
+            &CancelToken::new(),
+            "grok-4.7",
+            None,
+            "call-9",
+            "run_terminal_command",
+            &output,
+        )
+        .expect("replaced");
+        let ToolOutputCompactOutcome::Replaced { text, .. } = replaced else {
+            panic!("expected replacement");
+        };
+        assert_eq!(
+            text,
+            format!(
+                "<tool_output_compact tool=\"run_terminal_command\" handle=\"to-call-9\" bytes=\"{bytes}\">\n\
+                 exit 0\n\
+                 All 20 tests passed.\n\
+                 </tool_output_compact>\n\
+                 Full output ({bytes} bytes) is spooled at `.grokhub/tool-output-compact/sess/to-call-9.txt`. \
+                 Re-read it with read_file (or grep that path) when you need exact text.",
+                bytes = output.len(),
+            )
+        );
+        assert_eq!(shell_status(Some(&text), false), "exit 0");
         set_tool_output_compact_for_tests(None);
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);

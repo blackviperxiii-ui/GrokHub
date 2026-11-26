@@ -7353,7 +7353,9 @@ mod tests {
             },
         )
         .unwrap();
-        let red = "echo 'test result: FAILED. 0 passed; 1 failed'; exit 1 # cargo test";
+        // A real test run that fails: there is no project here, and `exit 1`
+        // fixes the code in every shell.
+        let red = "cargo test --manifest-path missing/Cargo.toml; exit 1";
         let script = scripted(vec![
             turn(
                 "",
@@ -7402,7 +7404,7 @@ mod tests {
             .collect();
         assert_eq!(judge.len(), 1, "{seen:?}");
         let work = format!(
-            "Files written: src/handler.rs\nCommands, newest last:\n- `{red}` → exit 1\nLast test run: `{red}` → exit 1\nLast assistant reply:\nUpdated the handler."
+            "Files written: src/handler.rs\nCommands, newest last:\n- `{red}` → exit 1\nLast test run: `{red}` → exit 1\nOther calls: (none)\nLast assistant reply:\nUpdated the handler."
         );
         assert!(judge[0].contains(&work), "{}", judge[0]);
         // The judge said not done: the model got its next step and answered again.

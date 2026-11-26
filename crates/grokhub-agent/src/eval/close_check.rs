@@ -321,7 +321,7 @@ fn open_intention_continues_once() -> Result<u32, &'static str> {
     assert_low_check(&passed.checks)?;
     // The judge reads the run's work, here none, beside the reply.
     if !request_text(&passed.checks[0])
-        .contains("Files written: (none)\nCommands, newest last:\n(none)\nLast test run: (none)")
+        .contains("Files written: (none)\nCommands, newest last:\n(none)\nLast test run: (none)\nOther calls: (none)")
     {
         return Err("failed: open intention judge saw no work list");
     }

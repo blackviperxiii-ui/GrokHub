@@ -93,8 +93,9 @@ impl Ran {
         } else {
             Vec::new()
         };
-        // Only a command's output is read (test summaries, git's lines).
-        let output = if command.is_empty() {
+        // Only a command's output is read (test summaries, git's lines), and
+        // a background read's, for how its task ended.
+        let output = if command.is_empty() && name != BACKGROUND_READ {
             String::new()
         } else {
             head_and_tail(output)
@@ -112,9 +113,7 @@ impl Ran {
     /// Work the checks can't see into: a subagent, or a command left running
     /// in the background.
     fn opaque(&self) -> bool {
-        self.name == "spawn_subagent"
-            || self.name == "get_command_or_subagent_output"
-            || self.background()
+        self.name == "spawn_subagent" || self.name == BACKGROUND_READ || self.background()
     }
 
     /// A command left running in the background.
@@ -128,9 +127,9 @@ impl Ran {
     }
 
     /// How this command ended, in the compaction ledger's words (`exit 0`,
-    /// `timed out after …`, `started in the background`). A failed call whose
-    /// result says no such thing never ran (a refusal, a denial, bad
-    /// arguments): `not run`.
+    /// `timed out after 120000ms`, `killed`, `started in the background`). A
+    /// failed call whose result says no such thing never ran (a refusal, a
+    /// denial, bad arguments): `not run`.
     pub fn ended(&self) -> String {
         let status = crate::compact::shell_status(Some(&self.output), self.background());
         if !self.ok && status == crate::compact::NOT_KEPT {
@@ -139,6 +138,82 @@ impl Ran {
             status
         }
     }
+
+    /// The background task this command went on as: started with
+    /// `is_background` (`task id: t1`), or handed over at its timeout
+    /// (`… moved to the background as task t1`). Read only from the result's
+    /// first lines, which are the tool's own.
+    fn task(&self) -> Option<&str> {
+        if self.name != "run_terminal_command" {
+            return None;
+        }
+        self.output
+            .lines()
+            .take(2)
+            .find_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("task id: ").or_else(|| {
+                    line.strip_prefix("still running after ")
+                        .and_then(|rest| rest.split_once(": moved to the background as task "))
+                        .map(|(_, id)| id)
+                })
+            })
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && !id.contains(char::is_whitespace))
+    }
+
+    /// How background task `id` ended, by this read of it: `exit N` or
+    /// `killed`; `None` while it runs, or when this read is not of it.
+    fn task_ended(&self, id: &str) -> Option<String> {
+        if self.name != BACKGROUND_READ || !self.ok {
+            return None;
+        }
+        let args: serde_json::Value = serde_json::from_str(&self.args).unwrap_or_default();
+        let ids: Vec<&str> = match args.get("task_id").and_then(serde_json::Value::as_str) {
+            Some(list) => list.split(',').map(str::trim).collect(),
+            None => args
+                .get("task_ids")
+                .and_then(serde_json::Value::as_array)
+                .map(|ids| ids.iter().filter_map(serde_json::Value::as_str).collect())
+                .unwrap_or_default(),
+        };
+        if !ids.contains(&id) {
+            return None;
+        }
+        // One task's read starts with its status; several are each under `id:`.
+        let mut lines = self.output.lines().map(str::trim);
+        if ids.len() > 1 {
+            lines.find(|line| line.strip_suffix(':') == Some(id))?;
+        }
+        match lines.next()? {
+            "status: killed" => Some("killed".into()),
+            "status: exited" => lines
+                .next()?
+                .strip_prefix("exit_code: ")?
+                .parse::<i64>()
+                .ok()
+                .map(|code| format!("exit {code}")),
+            _ => None,
+        }
+    }
+}
+
+/// The tool that reads a background task's output and how it ended.
+const BACKGROUND_READ: &str = "get_command_or_subagent_output";
+
+/// How the command at `ran[at]` ended. One that went on in the background
+/// ends where a later read of its task says it did (`exit 0`), and until one
+/// does it is `still running (task t1)`.
+pub(crate) fn outcome(ran: &[Ran], at: usize) -> String {
+    let r = &ran[at];
+    let Some(id) = r.task() else {
+        return r.ended();
+    };
+    ran[at + 1..]
+        .iter()
+        .rev()
+        .find_map(|later| later.task_ended(id))
+        .unwrap_or_else(|| format!("still running (task {id})"))
 }
 
 fn head_and_tail(text: &str) -> String {

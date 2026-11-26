@@ -81,27 +81,45 @@ fn prior_ledger(items: &[InputItem]) -> Ledger {
 /// What [`shell_status`] says when a result holds no line saying how it ended.
 pub(crate) const NOT_KEPT: &str = "result not kept";
 
-/// How a shell call ended, read from the first lines of its result (a
-/// fenced result's `exit N` is on its second line).
+/// How a shell call ended, read from its result by [`ended_line`].
 pub(crate) fn shell_status(output: Option<&str>, background: bool) -> String {
     if background {
         return "started in the background".into();
     }
-    let Some(output) = output else {
-        return "no result".into();
-    };
-    for line in output.lines().take(3) {
-        let line = line.trim();
-        if let Some(code) = line.strip_prefix("exit ") {
-            if code.parse::<i64>().is_ok() {
-                return format!("exit {code}");
-            }
-        }
-        if line.starts_with("timed out after") || line == "killed" {
-            return line.to_string();
-        }
+    match output {
+        None => "no result".into(),
+        Some(output) => ended_line(output).unwrap_or_else(|| NOT_KEPT.into()),
     }
-    NOT_KEPT.into()
+}
+
+/// The shell tool's own line saying how a command ended, in its own shapes
+/// only (`exit 0`, `timed out after 120000ms`, `killed`): the result's first
+/// line, or the one right after the fence or the compaction header that
+/// opens it. A line further on is the command's own output, so it is never
+/// taken for one.
+pub(crate) fn ended_line(output: &str) -> Option<String> {
+    let mut lines = output.lines().map(str::trim);
+    let first = lines.next()?;
+    let line = if first.starts_with("<<<UNTRUSTED source=")
+        || first.starts_with("<tool_output_compact ")
+    {
+        lines.next()?
+    } else {
+        first
+    };
+    if let Some(code) = line.strip_prefix("exit ") {
+        return code.parse::<i64>().ok().map(|code| format!("exit {code}"));
+    }
+    if let Some(ms) = line
+        .strip_prefix("timed out after ")
+        .and_then(|rest| rest.strip_suffix("ms"))
+    {
+        return ms
+            .parse::<u64>()
+            .ok()
+            .map(|ms| format!("timed out after {ms}ms"));
+    }
+    (line == "killed").then(|| line.to_string())
 }
 
 fn is_background(arguments: &serde_json::Value) -> bool {

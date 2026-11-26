@@ -520,11 +520,11 @@ fn shell_steps(cmd: &str) -> Vec<Step> {
     let mut kinds: Vec<(usize, Kind, String)> = commands(&code)
         .into_iter()
         .map(|at| {
-            let (kind, program) = command_kind(&cmd[at.clone()], &code[at.clone()]);
+            let read = command_kind(&cmd[at.clone()], &code[at.clone()]);
             // `echo hi > out.txt` writes its output, so nobody sees it.
-            let unseen = kind == Kind::Look && writes.iter().any(|(w, _)| at.contains(w));
-            let kind = if unseen { Kind::Setup } else { kind };
-            (at.start, kind, program)
+            let unseen = read.kind == Kind::Look && writes.iter().any(|(w, _)| at.contains(w));
+            let kind = if unseen { Kind::Setup } else { read.kind };
+            (at.start, kind, read.program)
         })
         .collect();
     // `sudo cp /etc/fstab /etc/fstab.bak` is the backup, not a change to check.
@@ -577,15 +577,32 @@ fn commands(code: &str) -> Vec<std::ops::Range<usize>> {
     out
 }
 
+/// One command of a shell line, as [`command_kind`] read it.
+struct Command {
+    kind: Kind,
+    /// Its program, lowercased (`cargo`, `pytest`, `get-content`).
+    program: String,
+    /// Its first two plain words after the program, lowercased: the
+    /// subcommand and the one after it (`test` in `cargo test`, `run test`
+    /// in `npm run test`).
+    sub: Option<String>,
+    next: Option<String>,
+}
+
 /// What one command does, read by its program (after `sudo`, `env`, `npx`,
 /// `uv run`, `python -m` and the like) and its subcommand, never by a word
-/// further on; and its program. `text` is the command as written, `code` the
-/// same bytes with its data blanked.
-fn command_kind(text: &str, code: &str) -> (Kind, String) {
+/// further on. `text` is the command as written, `code` the same bytes with
+/// its data blanked.
+fn command_kind(text: &str, code: &str) -> Command {
     let all: Vec<&str> = code.split_whitespace().collect();
     let w = peel(&all);
     let Some(first) = w.first() else {
-        return (Kind::Setup, String::new());
+        return Command {
+            kind: Kind::Setup,
+            program: String::new(),
+            sub: None,
+            next: None,
+        };
     };
     let name = program(first);
     let lower: Vec<String> = w.iter().map(|x| x.to_ascii_lowercase()).collect();
@@ -633,7 +650,35 @@ fn command_kind(text: &str, code: &str) -> (Kind, String) {
     } else {
         Kind::Exec
     };
-    (kind, name)
+    Command {
+        kind,
+        program: name,
+        sub: sub.map(str::to_string),
+        next: next.map(str::to_string),
+    }
+}
+
+/// Programs that run tests. Any program whose subcommand is a test word
+/// runs them too (`cargo test`, `go test`, `npm run test`, `cargo nextest`).
+const TEST_PROGRAMS: &[&str] = &[
+    "pytest", "jest", "vitest", "ctest", "phpunit", "rspec", "unittest",
+];
+const TEST_SUBS: &[&str] = &["test", "tests", "nextest"];
+
+/// `cmd` runs tests: one of its commands runs a test runner, by its program
+/// or its subcommand (`cargo test 2>&1 | tail`, `python -m pytest`, `npm run
+/// test`). A test word anywhere else runs none: `pip install pytest-mock`,
+/// `cat jest.config.js`, `grep test x`, a commit message.
+pub(crate) fn runs_tests(cmd: &str) -> bool {
+    let code = crate::shell_redirect::code(cmd);
+    commands(&code).into_iter().any(|at| {
+        let c = command_kind(&cmd[at.clone()], &code[at]);
+        let test = |w: &Option<String>| w.as_deref().is_some_and(|w| TEST_SUBS.contains(&w));
+        matches!(c.kind, Kind::Run | Kind::Exec)
+            && (TEST_PROGRAMS.contains(&c.program.as_str())
+                || test(&c.sub)
+                || (c.sub.as_deref() == Some("run") && test(&c.next)))
+    })
 }
 
 /// `words` past the assignments, wrappers and runners that only start the
