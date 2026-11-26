@@ -54,6 +54,8 @@ const api = vi.hoisted(() => ({
     companionHandlers.push(handler);
     return Promise.resolve(() => {});
   }),
+  takeSkillInstallOffer: vi.fn(() => Promise.resolve(null)),
+  onSkillInstallOffer: vi.fn(() => Promise.resolve(() => {})),
   workboardSweepUndo: vi.fn(() => Promise.resolve({})),
   listChats: vi.fn((): Promise<ChatRow[]> => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),

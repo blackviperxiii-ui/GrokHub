@@ -111,6 +111,11 @@ impl EditVerifyState {
         self.edit_gen > self.verified_gen && self.attempts >= MAX_ATTEMPTS
     }
 
+    /// Resets the retry counter when escalating a failed turn to a frontier model.
+    pub fn reset_attempts_for_escalation(&mut self) {
+        self.attempts = 0;
+    }
+
     /// Most recent verification outcome recorded in this turn.
     pub fn last_outcome(&self) -> Option<&VerifyOutcome> {
         self.last_outcome.as_ref()
@@ -169,9 +174,25 @@ pub fn sync_local_verify_flag(outcome: &VerifyOutcome, on_local: bool) {
     }
     match outcome {
         VerifyOutcome::Passed { .. } => crate::route::local::note_local_verify_failed(false),
-        VerifyOutcome::Exhausted { .. } => crate::route::local::note_local_verify_failed(true),
+        VerifyOutcome::Exhausted {
+            command, attempts, ..
+        } => crate::route::local::note_local_verify_failed_with_reason(format!(
+            "verification failed after {attempts} attempts ({command})"
+        )),
         VerifyOutcome::Failed { .. } => {}
     }
+}
+
+/// Cabin instruction injected when local verification exhausts retries and
+/// execution escalates mid-turn to a frontier model (Claude or Grok).
+pub fn escalation_note(command: &str, output: &str, attempts: u8) -> String {
+    let clipped = clip_output(output, NOTE_OUTPUT_MAX);
+    format!(
+        "Local model verification failed after {attempts} attempts; escalating to frontier model.\n\
+         Command: `{command}`\n\
+         Last failure output:\n```\n{clipped}\n```\n\
+         Fix the failing issue cleanly and verify the fix passes."
+    )
 }
 
 /// Returns `true` when `path` is a source code file or build/test manifest.
@@ -627,14 +648,26 @@ mod tests {
         };
         sync_local_verify_flag(&exhausted, false);
         assert!(!crate::route::local::local_verify_failed());
+        assert!(crate::route::local::local_verify_reason().is_none());
 
         sync_local_verify_flag(&exhausted, true);
         assert!(crate::route::local::local_verify_failed());
+        assert!(crate::route::local::local_verify_reason()
+            .is_some_and(|r| r.contains("3 attempts") && r.contains("cargo test")));
 
         let passed = VerifyOutcome::Passed {
             command: "cargo test".into(),
         };
         sync_local_verify_flag(&passed, true);
         assert!(!crate::route::local::local_verify_failed());
+        assert!(crate::route::local::local_verify_reason().is_none());
+
+        let mut st = EditVerifyState::default();
+        st.note_edit("src/lib.rs");
+        let _ = st.record_result("cargo test", false, "err");
+        assert_eq!(st.attempts(), 1);
+        st.reset_attempts_for_escalation();
+        assert_eq!(st.attempts(), 0);
+        assert!(st.needs_verify());
     }
 }

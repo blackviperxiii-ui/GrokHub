@@ -548,9 +548,33 @@ pub fn caps() -> TierCaps {
 /// Remember that the last on-device answer failed VerifyGate (escalate next online turn).
 static LOCAL_VERIFY_FAILED: AtomicBool = AtomicBool::new(false);
 
+fn verify_reason_slot() -> &'static Mutex<Option<String>> {
+    static S: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
 /// Cabin / live path: set after a local turn's verify outcome.
 pub fn note_local_verify_failed(failed: bool) {
     LOCAL_VERIFY_FAILED.store(failed, Ordering::SeqCst);
+    if !failed {
+        if let Ok(mut slot) = verify_reason_slot().lock() {
+            *slot = None;
+        }
+    }
+}
+
+/// Record a failed local verification together with the reason shown on escalation.
+pub fn note_local_verify_failed_with_reason(reason: impl Into<String>) {
+    let trimmed = reason.into().trim().to_string();
+    if let Ok(mut slot) = verify_reason_slot().lock() {
+        *slot = (!trimmed.is_empty()).then_some(trimmed);
+    }
+    LOCAL_VERIFY_FAILED.store(true, Ordering::SeqCst);
+}
+
+/// Stored verification failure reason, if any.
+pub fn local_verify_reason() -> Option<String> {
+    verify_reason_slot().lock().ok()?.clone()
 }
 
 pub fn local_verify_failed() -> bool {
@@ -706,9 +730,30 @@ pub fn too_hard_for_local(class: &str, ctx_tokens: u64, d: f64) -> bool {
         || (!fits_by_trimming(class) && ctx_tokens > ctx_cap().saturating_mul(3) / 4)
 }
 
+/// `id` may serve a local-first coding turn within the live tier's context cap.
+pub fn admits_coding(gate: &LocalGate, id: &str, ctx_tokens: u64) -> bool {
+    is_local(id)
+        && id.trim() == gate.tier
+        && gate.enabled
+        && !gate.hard_tool
+        && ctx_tokens <= ctx_cap()
+}
+
 /// Quiet note when escalating from local to cloud (names both models).
 pub fn escalate_note(local_model: &str, cloud_model: &str) -> String {
     format!("Switched from {local_model} (local) to {cloud_model}: the on-device answer failed a check.")
+}
+
+/// Escalation note including the specific check or test failure reason when available.
+pub fn escalate_note_with_reason(
+    local_model: &str,
+    cloud_model: &str,
+    reason: Option<&str>,
+) -> String {
+    match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("Switched from {local_model} (local) to {cloud_model}: {r}."),
+        None => escalate_note(local_model, cloud_model),
+    }
 }
 
 /// The registry source for local tiers. Lists nothing (a no-op) while the flag is off.

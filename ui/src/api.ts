@@ -4283,6 +4283,47 @@ export function installLibraryPack(
   return invoke<SkillLibraryInstall>("install_library_pack", { packId });
 }
 
+/** Confirm dialog for `loadout://skill/install?identifier=`. */
+export interface SkillInstallPreview {
+  identifier: string;
+  source: string;
+  name: string;
+  description: string;
+  destination: string;
+  kind: string;
+  skills?: string[];
+}
+
+export interface SkillLinkInstall {
+  page: SkillPage;
+  note: string;
+  preview: SkillInstallPreview;
+}
+
+export const SKILL_INSTALL_OFFER_EVENT = "skill-install://offer";
+
+export function previewSkillInstall(
+  identifier: string,
+): Promise<SkillInstallPreview> {
+  return invoke<SkillInstallPreview>("preview_skill_install", { identifier });
+}
+
+export function confirmSkillInstall(
+  identifier: string,
+): Promise<SkillLinkInstall> {
+  return invoke<SkillLinkInstall>("confirm_skill_install", { identifier });
+}
+
+export function takeSkillInstallOffer(): Promise<SkillInstallPreview | null> {
+  return invoke<SkillInstallPreview | null>("take_skill_install_offer");
+}
+
+export function onSkillInstallOffer(
+  handler: (preview: SkillInstallPreview) => void,
+): Promise<UnlistenFn> {
+  return subscribe<SkillInstallPreview>(SKILL_INSTALL_OFFER_EVENT, handler);
+}
+
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
 export type TaskStatus = "running" | "failed" | "done" | "stopped";
 

@@ -211,6 +211,10 @@ fn restored_state() -> StateFlags {
 pub fn plugins(builder: tauri::Builder<Wry>) -> tauri::Builder<Wry> {
     builder
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // loadout://skill/install deep links from a second launch.
+            if crate::skill_install::handle_args(app, &args) {
+                return;
+            }
             // A login start while the app already runs changes nothing.
             if !at_login(&args) {
                 crate::show_main(app);

@@ -1192,7 +1192,10 @@ mod tests {
         let text = include_str!("../../../packaging/grokhub-shell.desktop");
         assert!(text.lines().any(|line| line == "Version=1.5"));
         assert!(text.lines().any(|line| line == "Name=Loadout"));
-        assert!(text.lines().any(|line| line == "Exec=grokhub-shell"));
+        assert!(text.lines().any(|line| line == "Exec=grokhub-shell %u"));
+        assert!(text
+            .lines()
+            .any(|line| line == "MimeType=x-scheme-handler/loadout;"));
         assert!(text
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
