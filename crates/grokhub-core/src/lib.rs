@@ -240,6 +240,7 @@ pub mod stt_stream;
 pub mod systems_brief;
 pub mod talk;
 pub mod task;
+pub mod telephony;
 pub mod thread_tab;
 pub mod tool_engine;
 pub mod tool_tags;

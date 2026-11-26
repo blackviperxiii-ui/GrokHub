@@ -87,6 +87,7 @@ mod subagent;
 mod subagent_policy;
 pub mod sudo_pass;
 pub mod tasks;
+pub mod telephony_net;
 pub mod timing;
 pub mod tokens;
 mod tools;
