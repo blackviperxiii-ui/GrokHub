@@ -154,10 +154,12 @@ pub fn self_class(name: &str, args: &Value) -> Option<SelfClass> {
     Some(base)
 }
 
-/// `needs_token: true`: the user types a token on a masked card. The value
-/// never travels in args (Spike-5b `connection_add` refuses one).
+/// `needs_token: true`, or a catalog key connector: the user types a token on
+/// a masked card. The value never travels in args (Spike-5b `connection_add`
+/// refuses one).
 pub fn needs_token(args: &Value) -> bool {
     args.get("needs_token").and_then(|v| v.as_bool()) == Some(true)
+        || crate::tools::connections::catalog_needs_key(args)
 }
 
 /// What a scope-guard refusal names. The words are matched on any string in
@@ -263,6 +265,7 @@ pub fn mcp_tools() -> Vec<Value> {
         "instructions": { "type": "string", "description": "The steps. Never a secret." },
     });
     let conn_body = json!({
+        "catalog_id": { "type": "string", "description": "Bundled catalog id (for example notion or linear). Prefer this when the user asks to connect a known app. Leave url and command out." },
         "url": { "type": "string", "description": "http(s) server URL" },
         "command": { "type": "string", "description": "local stdio server command (instead of url)" },
         "args": { "type": "array", "items": { "type": "string" } },
@@ -288,7 +291,7 @@ pub fn mcp_tools() -> Vec<Value> {
         tool("skill_enable", grokhub_core::brand::filled("Turn a disabled {product} skill back on. Logged with Undo."), obj(named(json!({})), &["name", "reason"])),
         tool("skill_delete", grokhub_core::brand::filled("Delete a {product} skill. Needs the user's click."), obj(named(json!({})), &["name", "reason"])),
         tool("connection_list", "List connections (MCP servers) in the app's own MCP config.", obj(json!({}), &[])),
-        tool("connection_add", "Add a connection (MCP server) to the app's own MCP config. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body.clone()), &["name", "reason"])),
+        tool("connection_add", "Add a connection (MCP server) to the app's own MCP config. Use catalog_id (e.g. notion) to open the same setup card in chat. Logged with Undo. OAuth shows a link the user opens; the app never opens the browser. needs_token / catalog keys take the user's typed secret.", obj(named(conn_body.clone()), &["name", "reason"])),
         tool("connection_modify", "Change a connection; fields left out stay. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body), &["name", "reason"])),
         tool("connection_disable", "Turn a connection off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
         tool("connection_remove", "Remove a connection. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),

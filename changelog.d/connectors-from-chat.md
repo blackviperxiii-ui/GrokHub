@@ -1,0 +1,1 @@
+- Chat can connect a catalog MCP (for example Notion) with the same setup card: secrets stay masked, OAuth shows a link the app never opens by itself, and cancel leaves no config.

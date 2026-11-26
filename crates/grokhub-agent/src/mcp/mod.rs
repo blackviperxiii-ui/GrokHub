@@ -23,7 +23,12 @@ pub use config::{
 pub use elicit::{
     alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
 };
-pub(crate) use elicit::{ask_secret, wait_elicit, ElicitAnswer};
+pub(crate) use elicit::{
+    ask_secret, hook_session, offer_url, try_take_elicit, wait_elicit, ElicitAnswer,
+};
+
+#[cfg(test)]
+pub(crate) use oauth::tests::{approving_browser, AuthMcp};
 
 pub(crate) use elicit::with_elicit;
 
@@ -680,6 +685,15 @@ pub fn browser_attach_changed() -> Vec<String> {
 /// Sign in to an HTTP server in the browser `open` launches, then reconnect
 /// it with the new token. Returns the line naming the account.
 pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<String, String> {
+    sign_in_until(name, open, &|| false)
+}
+
+/// [`sign_in`] that stops when `stop` says so (chat Decline on the URL card).
+pub fn sign_in_until(
+    name: &str,
+    open: &dyn Fn(&str) -> Result<(), String>,
+    stop: &dyn Fn() -> bool,
+) -> Result<String, String> {
     let (slots, _) = load_slots();
     let slot = slots
         .get(name)
@@ -693,11 +707,12 @@ pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<
             ))
         }
     };
-    let line = oauth::sign_in(
+    let line = oauth::sign_in_until(
         name,
         &url,
         open,
         std::time::Duration::from_secs(oauth::LOOPBACK_SECS),
+        stop,
     )?;
     match restart(name) {
         Ok(()) => Ok(line),

@@ -25,5 +25,6 @@
 - The stdio server runs soft calls and only parks hard class; soft calls rely on the caller's own gate. Under Always, delete and credentials still park, Enter never approves, and TTL, Halt, or a closed cabin is Deny.
 - Connections land in the cabin's native `mcp.json`, never the Grok Build CLI's config, so Undo rows stay one file.
 - A token-needing `connection_add` is hard class credentials by its args (`needs_token`), not its name; the server's own park is what holds it.
+- `catalog_id` (or a name that matches the bundled catalog) reuses the Connectors install recipe. OAuth shows a URL elicit card and never opens the browser; Decline or a failed sign-in removes the staged entry. Catalog key connectors are credentials like `needs_token`. Tools join on the next turn (`begin_turn` refreshes frozen MCP schemas).
 ## See also
 - [harness](harness.md), [desktop-mcp](desktop-mcp.md), [grokhub-agent](grokhub-agent.md)
