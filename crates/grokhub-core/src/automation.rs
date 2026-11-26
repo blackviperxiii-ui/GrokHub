@@ -348,6 +348,46 @@ pub fn due_automations(list: &[Automation], now_ms: u64) -> Vec<Automation> {
         .collect()
 }
 
+/// Most a UTC offset moves at once (daylight saving, a trip): how far ahead
+/// a slot may be for [`due_before_its_slot`] to hold a due job back.
+const OFFSET_SHIFT_MAX_MS: u64 = 2 * 3_600_000;
+
+/// A clock job is due, but no slot of it has come since its next run, and
+/// one is just ahead on `clock`. Its next run was worked out before the UTC
+/// offset changed (daylight saving ended overnight): it waits for the slot
+/// instead of firing an hour early. A late or missed slot still fires.
+pub fn due_before_its_slot(a: &Automation, clock: LocalClock) -> bool {
+    if matches!(a.schedule.as_str(), "heartbeat" | "once" | "monthly") || a.wait.active() {
+        return false;
+    }
+    let Some(next) = a.next_run else {
+        return false;
+    };
+    let now = clock.now_ms;
+    if now < next {
+        return false;
+    }
+    const DAY_MS: u64 = 24 * 3_600_000;
+    let into_day = u64::from(clock.hour * 60 + clock.minute) * 60_000 + now % 60_000;
+    let Some(today) = now.checked_sub(into_day) else {
+        return false;
+    };
+    let slots: Vec<u64> = normalize_times(&a.time, &a.times)
+        .iter()
+        .filter_map(|t| hm_min(t))
+        .flat_map(|min| {
+            let at = today + u64::from(min) * 60_000;
+            [at.checked_sub(DAY_MS), Some(at), Some(at + DAY_MS)]
+        })
+        .flatten()
+        .collect();
+    let came = slots.iter().any(|&at| at + 60_000 >= next && at <= now);
+    let ahead = slots
+        .iter()
+        .any(|&at| at > now && at - now <= OFFSET_SHIFT_MAX_MS);
+    !came && ahead
+}
+
 pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8) -> bool {
     destructive && (quiet || autonomy == 0)
 }
@@ -1484,6 +1524,47 @@ mod tests {
             health: AutoHealth::default(),
             lifecycle: Default::default(),
         }
+    }
+
+    /// Only a job whose slot is still ahead since its next run waits: an
+    /// on-time, late or missed slot fires, as do jobs not tied to a slot.
+    #[test]
+    fn a_job_due_before_its_slot_is_held_only_after_the_clock_moves() {
+        const MIN: u64 = 60_000;
+        const HOUR: u64 = 60 * MIN;
+        // Sunday 14:00:30 UTC.
+        let utc_14 = 1_825_596_030_000;
+        let mut daily = job("a");
+        daily.next_run = Some(utc_14 - 30_000);
+        // Set as 09:00 at UTC-5; the clock now reads 08:00 at UTC-6.
+        let at = |ms: u64, offset: i32| LocalClock::at_offset(ms, offset);
+        assert!(due_before_its_slot(&daily, at(utc_14, -360)));
+        assert!(due_before_its_slot(&daily, at(utc_14 + 59 * MIN, -360)));
+        assert!(!due_before_its_slot(&daily, at(utc_14 + HOUR, -360)));
+        // On time, and an hour late, it fires.
+        assert!(!due_before_its_slot(&daily, at(utc_14, -300)));
+        assert!(!due_before_its_slot(&daily, at(utc_14 + HOUR, -300)));
+        // Missed for a day while the app was closed: it fires.
+        let mut missed = daily.clone();
+        missed.next_run = Some(utc_14 - 24 * HOUR);
+        assert!(!due_before_its_slot(&missed, at(utc_14, -360)));
+        // 08:00 is a slot of its own.
+        let mut twice = daily.clone();
+        twice.times = vec!["08:00".into(), "09:00".into()];
+        assert!(!due_before_its_slot(&twice, at(utc_14, -360)));
+        // Not due yet, a heartbeat, a once job and a waiting job never wait here.
+        assert!(!due_before_its_slot(&daily, at(utc_14 - 31_000, -360)));
+        for schedule in ["heartbeat", "once", "monthly"] {
+            let other = Automation {
+                schedule: schedule.into(),
+                ..daily.clone()
+            };
+            assert!(!due_before_its_slot(&other, at(utc_14, -360)), "{schedule}");
+        }
+        let mut waits = daily.clone();
+        waits.wait.kind = "event_stream".into();
+        waits.wait.source = "disk".into();
+        assert!(!due_before_its_slot(&waits, at(utc_14, -360)));
     }
 
     #[test]

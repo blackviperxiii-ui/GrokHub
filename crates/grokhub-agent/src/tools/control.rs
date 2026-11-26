@@ -282,7 +282,14 @@ pub fn scheduler_create(args: &Value, session: Option<&str>) -> ToolOutput {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let task_id = text_field(args, "task_id");
-    match write_automation(&prompt, mins, fire, task_id.as_deref(), now_ms(), session) {
+    match write_automation(
+        &prompt,
+        Some(mins),
+        fire,
+        task_id.as_deref(),
+        now_ms(),
+        session,
+    ) {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(err),
     }
@@ -457,10 +464,12 @@ fn ledgered(
 /// Creates a job, or with `task_id` rewrites one, for the run `session`
 /// (`None` is the run whose tool runs on this thread). A browser run's job is
 /// marked as a browser's before its words are saved, so no run ever finds
-/// them unmarked ([`crate::web_origin::note_job_write`]).
+/// them unmarked ([`crate::web_origin::note_job_write`]). `every` is the new
+/// heartbeat gap in minutes; a rewrite without one keeps the job's schedule,
+/// and a rewrite never turns a paused job back on.
 pub(crate) fn write_automation(
     prompt: &str,
-    mins: u32,
+    every: Option<u32>,
     fire: bool,
     task_id: Option<&str>,
     now_ms: u64,
@@ -483,29 +492,39 @@ pub(crate) fn write_automation(
         let before = JobWords::of(row);
         row.instructions = prompt.to_string();
         row.name = name;
-        row.schedule = "heartbeat".into();
-        row.heartbeat_every_min = mins;
-        row.enabled = true;
+        if let Some(mins) = every {
+            row.schedule = "heartbeat".into();
+            row.heartbeat_every_min = mins;
+        }
         if fire {
             row.last_run = None;
         }
         let id = row.id.clone();
         let mut row = list.iter().find(|row| row.id == id).cloned().expect("row");
         row = ensure_automation_schedule(row, now);
-        if fire {
+        if fire && row.enabled {
             row.next_run = Some(now.now_ms);
             row.last_run = None;
         }
         if let Some(slot) = list.iter_mut().find(|item| item.id == id) {
             *slot = row.clone();
         }
+        let cadence = match every {
+            Some(mins) => format!("every {mins} min"),
+            None => grokhub_core::automation_schedule_label(&row),
+        };
         mark(&id, Some(&before), &row)?;
-        ledgered(&path, &id, &format!("changed to every {mins} min"), || {
-            save_list(&path, &list)
-        })?;
+        let reason = match every {
+            Some(_) => format!("changed to {cadence}"),
+            None => "reworded".to_string(),
+        };
+        ledgered(&path, &id, &reason, || save_list(&path, &list))?;
         note_change(AutomationChange::Upsert(Box::new(row)));
-        return Ok(format!("updated {id}\nevery {mins} min"));
+        return Ok(format!("updated {id}\n{cadence}"));
     }
+    let Some(mins) = every else {
+        return Err("an automation needs `every` (10m, 1h, 1d)".into());
+    };
     if list.len() >= LOOP_MAX {
         return Err(format!("at most {LOOP_MAX} automations"));
     }
@@ -732,10 +751,10 @@ mod tests {
         let dir = crate::harness::test_dir("auto-cap");
         let _guard = crate::perm::ConfigGuard::set(&dir);
         let now = now_ms();
-        write_automation("check the build", 10, false, None, now, None).unwrap();
-        write_automation("sweep the inbox", 30, false, None, now, None).unwrap();
+        write_automation("check the build", Some(10), false, None, now, None).unwrap();
+        write_automation("sweep the inbox", Some(30), false, None, now, None).unwrap();
         assert_eq!(
-            write_automation("water the plants", 60, false, None, now + 1, None).unwrap_err(),
+            write_automation("water the plants", Some(60), false, None, now + 1, None).unwrap_err(),
             "Not added: Loadout already made 2 automations on its own this week. \
              Keep one from its Work-tree row, or add this one yourself on the Automations page."
         );
@@ -748,7 +767,7 @@ mod tests {
         // counted from after the writes, not from `now`.
         let week_on = now_ms() + crate::harness::WEEK_MS;
         assert!(
-            write_automation("water the plants", 60, false, None, week_on, None).is_ok(),
+            write_automation("water the plants", Some(60), false, None, week_on, None).is_ok(),
             "a week on, room again"
         );
         let ledger =
@@ -767,7 +786,15 @@ mod tests {
             ]
         );
         let id = ledger.all()[0].id.clone();
-        write_automation("check the build twice", 5, false, Some(&id), now, None).unwrap();
+        write_automation(
+            "check the build twice",
+            Some(5),
+            false,
+            Some(&id),
+            now,
+            None,
+        )
+        .unwrap();
         delete_automation(&id).unwrap();
         let ops: Vec<&str> =
             crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation)
@@ -776,6 +803,74 @@ mod tests {
                 .map(|c| c.op.as_str())
                 .collect();
         assert_eq!(ops, ["create", "create", "create", "modify", "delete"]);
+        let _ = take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
+    }
+
+    /// A modify that only rewords a paused daily job keeps it daily and
+    /// paused: it does not turn it back on as an every-minute heartbeat.
+    #[test]
+    fn a_reword_keeps_a_paused_daily_jobs_schedule() {
+        let dir = crate::harness::test_dir("auto-reword");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let daily = Automation {
+            id: "auto-daily".into(),
+            name: "summarize my inbox".into(),
+            schedule: "daily".into(),
+            time: "09:00".into(),
+            times: vec!["09:00".into()],
+            instructions: "summarize my inbox".into(),
+            heartbeat_every_min: 0,
+            check_command: String::new(),
+            gate: Default::default(),
+            wait: Default::default(),
+            enabled: false,
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+            health: Default::default(),
+            lifecycle: Default::default(),
+        };
+        save_list(&store_path(), &[daily]).unwrap();
+        let ctx = crate::self_manage::SelfCtx::new(&dir);
+        let out = crate::self_manage::run(
+            &ctx,
+            "automation_modify",
+            &serde_json::json!({
+                "id": "auto-daily",
+                "instructions": "summarize my inbox and calendar",
+                "reason": "clearer words",
+            }),
+            &mut |_| None,
+        );
+        assert_eq!(
+            (out.failed, out.text.as_str()),
+            (false, "updated auto-daily\ndaily at 09:00")
+        );
+        let row = find_automation("auto-daily").unwrap().unwrap();
+        assert_eq!(
+            (
+                row.schedule.as_str(),
+                row.heartbeat_every_min,
+                row.enabled,
+                row.next_run,
+                row.instructions.as_str(),
+            ),
+            ("daily", 0, false, None, "summarize my inbox and calendar")
+        );
+        // A new cadence still turns it into a heartbeat, and it stays paused.
+        let out = crate::self_manage::run(
+            &ctx,
+            "automation_modify",
+            &serde_json::json!({ "id": "auto-daily", "every": "30m", "reason": "more often" }),
+            &mut |_| None,
+        );
+        assert_eq!(out.text, "updated auto-daily\nevery 30 min");
+        let row = find_automation("auto-daily").unwrap().unwrap();
+        assert_eq!(
+            (row.schedule.as_str(), row.heartbeat_every_min, row.enabled),
+            ("heartbeat", 30, false)
+        );
         let _ = take_automation_changes();
         let _ = crate::harness::take_self_changes(&dir);
     }
