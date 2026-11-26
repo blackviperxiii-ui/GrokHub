@@ -162,6 +162,18 @@ impl EditVerifyState {
     }
 }
 
+/// Updates the router's local verify failure flag for on-device coding turns.
+pub fn sync_local_verify_flag(outcome: &VerifyOutcome, on_local: bool) {
+    if !on_local {
+        return;
+    }
+    match outcome {
+        VerifyOutcome::Passed { .. } => crate::route::local::note_local_verify_failed(false),
+        VerifyOutcome::Exhausted { .. } => crate::route::local::note_local_verify_failed(true),
+        VerifyOutcome::Failed { .. } => {}
+    }
+}
+
 /// Returns `true` when `path` is a source code file or build/test manifest.
 pub fn is_code_path(path: &str) -> bool {
     let norm = path.trim().replace('\\', "/").to_ascii_lowercase();
@@ -602,5 +614,27 @@ mod tests {
         assert!(!out.failed, "{}", out.text);
         assert!(out.text.contains("sandbox-verify-ok"), "{}", out.text);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_local_verify_flag_sets_on_exhausted_and_clears_on_pass() {
+        crate::route::local::note_local_verify_failed(false);
+
+        let exhausted = VerifyOutcome::Exhausted {
+            command: "cargo test".into(),
+            output: "failed".into(),
+            attempts: MAX_ATTEMPTS,
+        };
+        sync_local_verify_flag(&exhausted, false);
+        assert!(!crate::route::local::local_verify_failed());
+
+        sync_local_verify_flag(&exhausted, true);
+        assert!(crate::route::local::local_verify_failed());
+
+        let passed = VerifyOutcome::Passed {
+            command: "cargo test".into(),
+        };
+        sync_local_verify_flag(&passed, true);
+        assert!(!crate::route::local::local_verify_failed());
     }
 }

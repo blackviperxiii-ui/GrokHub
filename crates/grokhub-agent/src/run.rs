@@ -1595,12 +1595,9 @@ fn run_turn(
                         );
                         let on_local = crate::route::live::step_on_device()
                             || crate::route::local::is_local(input.model);
+                        crate::edit_verify::sync_local_verify_flag(&outcome, on_local);
                         match outcome {
-                            crate::edit_verify::VerifyOutcome::Passed { .. } => {
-                                if on_local {
-                                    crate::route::local::note_local_verify_failed(false);
-                                }
-                            }
+                            crate::edit_verify::VerifyOutcome::Passed { .. } => {}
                             crate::edit_verify::VerifyOutcome::Failed { .. } => {
                                 if let Some(note) =
                                     crate::edit_verify::EditVerifyState::failure_note(&outcome)
@@ -1611,9 +1608,6 @@ fn run_turn(
                                 }
                             }
                             crate::edit_verify::VerifyOutcome::Exhausted { attempts, .. } => {
-                                if on_local {
-                                    crate::route::local::note_local_verify_failed(true);
-                                }
                                 on_event(LoopEvent::Thought(format!(
                                     "Verification (`{}`) still failing after {attempts} attempts.",
                                     cmd.label
@@ -13176,7 +13170,6 @@ linter (or run the changed file) before you finish: a re-read or git status does
         std::fs::write(dir.join("src/bug.rs"), "pub fn answer() -> i32 { 0 }\n").unwrap();
         std::fs::write(dir.join("tests/check.rs"), "#[test] fn t() {}\n").unwrap();
 
-        crate::route::local::note_local_verify_failed(false);
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_ref = calls.clone();
         let _runner = crate::edit_verify::TestRunnerGuard::set(move |_ws, _cmd| {
@@ -13222,47 +13215,34 @@ linter (or run the changed file) before you finish: a re-read or git status does
             answer: PermAnswer::Allow,
             asks: AtomicUsize::new(0),
         };
-        let input = LoopIn {
-            client: &script,
-            workspace: &dir,
-            model: "grok-4.7",
-            effort: None,
-            system: "",
-            conversation_id: "conv-edit-verify-exhaust",
-            max_turns: 10,
-            usage_base: Usage::default(),
-            cancel: &CancelToken::new(),
-            steer: &SteerQueue::new(),
-            halt: &NeverHalt,
-            gate: chat(gate::PermMode::Always, true, false),
-            desktop: None,
-            permits: &permits,
-            perms: None,
-            context_length: 0,
-            tasks: None,
-            depth: 0,
-            agent_id: None,
-            shared_client: None,
-            shared_permits: None,
-            shared_desktop: None,
-        };
-        let mut history = Vec::new();
-        let mut events = Vec::new();
-        let _on_device = crate::route::live::StepOnDeviceForTests::set(true);
-        let out = run_loop(&input, &mut history, "fix bug", None, &mut |ev| {
-            events.push(ev)
-        });
+        let (out, _history, events) = once_for(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+            10,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             usize::from(crate::edit_verify::MAX_ATTEMPTS)
         );
-        assert!(crate::route::local::local_verify_failed());
+        let failed_runs = events
+            .iter()
+            .filter(|ev| {
+                matches!(
+                    ev,
+                    LoopEvent::Tool { name, status, .. }
+                        if name == "edit_verify" && status == "failed"
+                )
+            })
+            .count();
+        assert_eq!(failed_runs, usize::from(crate::edit_verify::MAX_ATTEMPTS));
         assert!(events.iter().any(|ev| matches!(
             ev,
             LoopEvent::Thought(t) if t.contains("still failing after 3 attempts")
         )));
-        crate::route::local::note_local_verify_failed(false);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
