@@ -27,7 +27,7 @@
 - The `--dry-run` line (`channel=… branch=… switch=… prefix=… receipt=…`) is asserted literally by `install_sh_parses_channel_flags_and_follows_the_receipt`, which runs the real script on unix.
 - No `--channel`: the receipt wins, missing means stable (`main`). `--channel` refuses a dirty tree (except a lone Cargo.lock), fetches `origin/$BRANCH` by refspec, `checkout -B --track` when the local branch is missing, and otherwise fast-forwards only (refuses when local is ahead).
 - `GROKHUB_CHANNEL` is exported into `cargo build` and `tauri build` so the shell's build.rs labels the binary for the saved channel.
-- The desktop entry's `Exec=grokhub-shell` is rewritten to the absolute prefix path, so launch works without `~/.local/bin` on PATH.
+- The desktop entry's `Exec=grokhub-shell %u` is rewritten to the absolute prefix path (keeps `%u` for `loadout://` links), so launch works without `~/.local/bin` on PATH.
 - `.cursor/install.sh` is the Cloud Agent bootstrap, not an installer: apt build deps plus `cargo build --workspace --locked`.
 ## See also
 - [versions-and-channels](versions-and-channels.md), [grokhub-hub](grokhub-hub.md), grokhub-shell

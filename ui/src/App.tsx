@@ -12,16 +12,20 @@ import {
   onCompanionEvent,
   onHalt,
   onLocalEngineEvent,
+  onSkillInstallOffer,
   onUpdateAvailable,
   saveDockLayout,
   shareSchedulerClock,
+  takeSkillInstallOffer,
   WEB,
   workboardSweepUndo,
   type BoardSwept,
   type Capabilities,
   type DockLayout,
   type Profile,
+  type SkillInstallPreview,
 } from "./api";
+import { SkillInstallConfirm } from "./SkillInstallConfirm";
 import { onGameCompanionNotice } from "./gameSession";
 import {
   cardsByChat,
@@ -277,6 +281,7 @@ export function App() {
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number } | null>(null);
   const [askClear, setAskClear] = useState(false);
   const [clear, setClear] = useState<{ n: number }>();
+  const [skillInstall, setSkillInstall] = useState<SkillInstallPreview | null>(null);
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   // Messages lined up behind the open chat's reply, as the chat reports them.
   const [queued, setQueued] = useState<{ conversationId: string; texts: string[] }>();
@@ -440,6 +445,26 @@ export function App() {
       stop?.();
     };
   }, [canHalt]);
+  // loadout://skill/install deep links: pending offer + live event.
+  useEffect(() => {
+    if (!inShell()) return;
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void takeSkillInstallOffer().then(
+      (preview) => {
+        if (!dropped && preview) setSkillInstall(preview);
+      },
+      () => {},
+    );
+    void onSkillInstallOffer((preview) => setSkillInstall(preview)).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, []);
   // The palette's Sign in row follows the key and the Grok sign-in, which
   // Settings may have added.
   useEffect(() => {
@@ -1185,6 +1210,17 @@ export function App() {
           )}
           {/* Chat and Automations stay mounted so a reply or a Run now in flight
               is not lost when another tab opens. */}
+          {skillInstall && (
+            <SkillInstallConfirm
+              preview={skillInstall}
+              onDone={(note) => {
+                setSkillInstall(null);
+                setView("skills");
+                setNotices((now) => pushNotice(now, "success", note, Date.now()));
+              }}
+              onCancel={() => setSkillInstall(null)}
+            />
+          )}
           {askClear && (
             <ClearChatDialog
               onConfirm={() => {

@@ -72,6 +72,8 @@ vi.mock("./api", async () => {
   onUpdateAvailable: () => Promise.resolve(() => {}),
   onLocalEngineEvent: () => Promise.resolve(() => {}),
   onCompanionEvent: () => Promise.resolve(() => {}),
+  takeSkillInstallOffer: () => Promise.resolve(null),
+  onSkillInstallOffer: () => Promise.resolve(() => {}),
   workboardSweepUndo: () => Promise.resolve({}),
   shareSchedulerClock: () => Promise.resolve(),
   onFileDrop: () => Promise.resolve(() => {}),
