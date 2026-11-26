@@ -1,0 +1,6 @@
+- Offline only: a URL that one program reads as this computer and another reads as the internet (a `\` before an `@`, or `https:host` with no slashes) is now refused, so a plugin git install can't reach the internet while it's on.
+- Mods: Update keeps a backup of a mod file you changed, so uninstalling later puts your version back instead of deleting it.
+- Install script: on a Mac without minisign it now says to run `brew install minisign`, and it accepts any openssl that can really check the signature instead of going by its version.
+- Skills Hub: a pasted GitHub folder or file link (`…/tree/<branch>/…` or `…/blob/<branch>/…/SKILL.md`) installs from that branch and folder.
+- Skills: Edit on a skill whose folder name doesn't match its name edits that skill instead of writing a second copy.
+- CI: the anti-cheat API guard scans src-tauri and every line; the Cargo.lock label rule covers src-tauri/Cargo.lock and ignores comment-only Cargo.toml edits; `cargo xtask bump --check` matches whole version values; pii-guard checks words inside email addresses, Windows home paths, file names, and the pushed commits on a push.

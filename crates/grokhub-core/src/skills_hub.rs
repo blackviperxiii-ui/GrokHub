@@ -373,11 +373,16 @@ fn looks_like_github_ref(q: &str) -> Option<(String, String, Option<String>)> {
     {
         return None;
     }
-    let skill = if parts.len() >= 3 {
-        Some(parts[2..].join("/"))
-    } else {
-        None
-    };
+    let mut path = parts[2..].to_vec();
+    // A pasted folder or file link (`tree/<branch>/…`, `blob/<branch>/…/SKILL.md`)
+    // keeps its branch as `tree/<branch>/…`, the folder that holds SKILL.md.
+    if path.len() >= 2 && matches!(path[0], "tree" | "blob") {
+        path[0] = "tree";
+        if path.len() > 2 && path.last() == Some(&"SKILL.md") {
+            path.pop();
+        }
+    }
+    let skill = (!path.is_empty()).then(|| path.join("/"));
     Some((owner.to_string(), repo.to_string(), skill))
 }
 
@@ -420,7 +425,11 @@ fn search_github(query: &str) -> Result<Vec<HubHit>, String> {
         return Ok(Vec::new());
     };
     if let Some(path) = skill {
-        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        // `tree/<branch>` alone is the repo's own SKILL.md on that branch.
+        let name = match path.strip_prefix("tree/") {
+            Some(at) if !at.contains('/') => repo.clone(),
+            _ => path.rsplit('/').next().unwrap_or(&path).to_string(),
+        };
         return Ok(vec![HubHit {
             source: HubSource::GitHub,
             id: format!("{owner}/{repo}/{path}"),
@@ -543,6 +552,12 @@ fn github_candidate_urls(id: &str) -> Vec<String> {
     }
     let owner = parts[0];
     let repo = parts[1];
+    // `tree/<ref and path>`: raw.githubusercontent.com reads the ref and the
+    // path as one, so a branch with a slash in it needs no splitting.
+    if parts.len() >= 4 && parts[2] == "tree" {
+        let at = parts[3..].join("/");
+        return vec![format!("{RAW_GITHUB}/{owner}/{repo}/{at}/SKILL.md")];
+    }
     let rest = if parts.len() > 2 {
         parts[2..].join("/")
     } else {
@@ -741,6 +756,41 @@ mod tests {
             Some("docs.example.com".into())
         );
         assert_eq!(looks_like_host("not a host"), None);
+    }
+
+    #[test]
+    fn a_pasted_github_folder_url_reads_from_that_branch_and_folder() {
+        let want = Some((
+            "user".to_string(),
+            "my-skills".to_string(),
+            Some("tree/dev/skills/notes".to_string()),
+        ));
+        for pasted in [
+            "https://github.com/user/my-skills/tree/dev/skills/notes",
+            "https://github.com/user/my-skills/tree/dev/skills/notes/",
+            "https://github.com/user/my-skills/blob/dev/skills/notes/SKILL.md",
+        ] {
+            assert_eq!(looks_like_github_ref(pasted), want, "{pasted}");
+        }
+        // raw.githubusercontent.com takes the ref and the path as one, so a
+        // branch with a slash in it needs no guessing.
+        assert_eq!(
+            github_candidate_urls("user/my-skills/tree/dev/skills/notes"),
+            ["https://raw.githubusercontent.com/user/my-skills/dev/skills/notes/SKILL.md"]
+        );
+        assert_eq!(
+            github_candidate_urls("user/my-skills/tree/feature/x/notes"),
+            ["https://raw.githubusercontent.com/user/my-skills/feature/x/notes/SKILL.md"]
+        );
+        assert_eq!(
+            github_candidate_urls("user/my-skills/tree/main"),
+            ["https://raw.githubusercontent.com/user/my-skills/main/SKILL.md"]
+        );
+        // A plain path still tries main and master.
+        assert_eq!(
+            github_candidate_urls("user/my-skills/notes")[0],
+            "https://raw.githubusercontent.com/user/my-skills/main/notes/SKILL.md"
+        );
     }
 
     #[test]

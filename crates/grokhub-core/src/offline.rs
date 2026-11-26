@@ -197,31 +197,66 @@ pub fn ip_is_local(ip: IpAddr) -> bool {
     }
 }
 
-/// The host part of a URL (`scheme://user@host:port/path`), or the input
-/// itself when it has no scheme. `None` for a URL that names no host
-/// (`file:///…`, `data:`).
+/// The host part of a URL (`scheme://user@host:port/path`) as a browser
+/// reads it, or the input itself when it has no scheme. `None` for a URL that
+/// names no host (`file:///…`, `data:`).
 pub fn url_host(url: &str) -> Option<String> {
-    let url = url.trim();
-    let Some((scheme, rest)) = url.split_once("://") else {
-        let lower = url.to_ascii_lowercase();
-        if ["data:", "mailto:", "about:", "blob:", "file:"]
-            .iter()
-            .any(|p| lower.starts_with(p))
-        {
-            return None;
-        }
-        return Some(authority_host(
-            url.split(['/', '?', '#']).next().unwrap_or(""),
-        ));
+    dial_hosts(url).map(|hosts| hosts.into_iter().next().unwrap_or_default())
+}
+
+/// Schemes a WHATWG parser reads with or without `//`, and with `\` as `/`.
+const SPECIAL_SCHEMES: [&str; 5] = ["http", "https", "ws", "wss", "ftp"];
+
+/// Every host some dialer could read from `url`: the WHATWG reading first,
+/// then the RFC 3986 one that git, curl and ssh use (the authority runs to the
+/// first `/`, so a `\` before an `@` is userinfo). `None` when there is no
+/// host to dial.
+fn dial_hosts(url: &str) -> Option<Vec<String>> {
+    // WHATWG drops tabs and newlines anywhere in the input.
+    let url: String = url
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let scheme_end = url.find(':').filter(|&i| {
+        let scheme = &url[..i];
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    let (scheme, rest) = match scheme_end {
+        Some(i) => (url[..i].to_ascii_lowercase(), &url[i + 1..]),
+        None => (String::new(), url.as_str()),
     };
-    if scheme.eq_ignore_ascii_case("file") {
+    if ["data", "mailto", "about", "blob", "file"].contains(&scheme.as_str()) {
         return None;
     }
-    // WHATWG URLs end the authority at `\` too.
-    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or("");
-    Some(authority_host(
-        authority.rsplit('@').next().unwrap_or(authority),
-    ))
+    let special = SPECIAL_SCHEMES.contains(&scheme.as_str());
+    if !special && !rest.starts_with("//") {
+        // No scheme (`host:port`, `::1`, `host/path`): the input is the host.
+        return Some(vec![authority_host(
+            url.split(['/', '?', '#']).next().unwrap_or(""),
+        )]);
+    }
+    let whatwg = if special {
+        rest.trim_start_matches(['/', '\\'])
+    } else {
+        &rest[2..]
+    };
+    let whatwg = whatwg.split(['/', '\\', '?', '#']).next().unwrap_or("");
+    let mut hosts = vec![userinfo_stripped(whatwg)];
+    if let Some(after) = rest.strip_prefix("//") {
+        let rfc = userinfo_stripped(after.split(['/', '?', '#']).next().unwrap_or(""));
+        if rfc != hosts[0] {
+            hosts.push(rfc);
+        }
+    }
+    Some(hosts)
+}
+
+fn userinfo_stripped(authority: &str) -> String {
+    authority_host(authority.rsplit('@').next().unwrap_or(authority))
 }
 
 fn authority_host(authority: &str) -> String {
@@ -254,9 +289,21 @@ pub fn check_url(url: &str) -> Result<(), OfflineError> {
     if !enabled() {
         return Ok(());
     }
-    match url_host(url) {
+    // Parsers disagree on some URLs; every host one of them could dial must
+    // be local, and a space or control character is never read the same way.
+    match dial_hosts(url) {
         None => Ok(()),
-        Some(host) => check_host(&host),
+        Some(hosts) => {
+            for host in &hosts {
+                check_host(host)?;
+                if host.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                    return Err(OfflineError {
+                        host: host.trim().to_ascii_lowercase(),
+                    });
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -372,6 +419,49 @@ mod tests {
             Some("evil.example")
         );
         assert_eq!(url_host("::1").as_deref(), Some("::1"));
+        assert_eq!(
+            url_host("https:evil.example/?next=http://127.0.0.1/").as_deref(),
+            Some("evil.example")
+        );
+        assert_eq!(
+            url_host("HTTPS:\\\\evil.example\\x").as_deref(),
+            Some("evil.example")
+        );
+        assert_eq!(url_host("localhost:8080").as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn a_url_that_parsers_read_two_ways_is_refused() {
+        let _on = force_for_thread(true);
+        // git and curl end the authority at `/` only, so they dial the host
+        // after the last `@`; a WHATWG parser stops at the `\`.
+        assert_eq!(
+            check_url("ssh://127.0.0.1\\@evil.example/plugin.git").map_err(|e| e.host),
+            Err("evil.example".to_string())
+        );
+        // A special scheme needs no `//`: this dials evil.example.
+        assert_eq!(
+            check_url("https:evil.example/?next=http://127.0.0.1/").map_err(|e| e.host),
+            Err("evil.example".to_string())
+        );
+        assert_eq!(
+            check_url("https:/evil.example/").map_err(|e| e.host),
+            Err("evil.example".to_string())
+        );
+        // WHATWG drops tabs and newlines anywhere in the input.
+        assert_eq!(
+            check_url("http://127.0.0.1\n.evil.example/").map_err(|e| e.host),
+            Err("127.0.0.1.evil.example".to_string())
+        );
+        assert_eq!(
+            check_url("http://127.0.0.1 @evil.example/").map_err(|e| e.host),
+            Err("evil.example".to_string())
+        );
+        assert_eq!(check_url("ssh://git@127.0.0.1/plugin.git"), Ok(()));
+        assert_eq!(check_url("http://user:pw@[::1]:9/x"), Ok(()));
+        assert_eq!(check_url("https:127.0.0.1/x"), Ok(()));
+        assert_eq!(check_url("localhost:8080"), Ok(()));
+        assert_eq!(check_url("mailto:user@evil.example"), Ok(()));
     }
 
     #[test]

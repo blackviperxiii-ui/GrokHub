@@ -519,8 +519,10 @@ pub fn plan(
         files.push(Planned {
             sha256: sha_of(&src).ok_or_else(|| format!("Couldn't read {}.", src.display()))?,
             from: src,
+            // An update keeps a file the user changed since the last install,
+            // so the new version replaces it like any other file.
             replaces: match was_ours(&to_str) {
-                Some(w) => w.backup.is_some(),
+                Some(w) => w.backup.is_some() || sha_of(&dest).is_some_and(|now| now != w.sha256),
                 None => dest.exists(),
             },
             to: to_str,
@@ -586,7 +588,9 @@ impl<'a> Installer<'a> {
                 .map(|(i, f)| Written {
                     to: f.to.clone(),
                     sha256: f.sha256.clone(),
-                    backup: f.replaces.then(|| format!("{i}.bak")),
+                    // Whatever is there at write time is backed up, even if
+                    // the plan didn't expect it (`write_all` drops the rest).
+                    backup: Some(format!("{i}.bak")),
                     was: None,
                 })
                 .collect(),
@@ -1063,6 +1067,32 @@ mod tests {
         assert_eq!(
             std::fs::read(r.game.join("Data/textures/sky.dds")).unwrap(),
             b"vanilla sky"
+        );
+    }
+
+    #[test]
+    fn update_keeps_a_backup_of_a_file_the_user_changed() {
+        let r = rig("mods-update-changed");
+        let inst = Installer::new(&r.config, &idle);
+        inst.apply(&sky_plan(&r, "nexus:1"), 1).unwrap();
+        std::fs::write(r.game.join("Data/BetterSky.esp"), b"my edits").unwrap();
+        std::fs::write(r.staged.join("Better Sky/BetterSky.esp"), b"plugin v2").unwrap();
+        let p2 = sky_plan(&r, "nexus:1");
+        let replaces: Vec<&str> = p2.replaces().map(|f| f.to.as_str()).collect();
+        assert_eq!(replaces, ["BetterSky.esp", "textures/sky.dds"]);
+        let (removed, m) = inst.update(&p2, 2).unwrap();
+        assert_eq!(removed.kept, ["BetterSky.esp"]);
+        let esp = m.files.iter().find(|w| w.to == "BetterSky.esp").unwrap();
+        assert_eq!(esp.backup.as_deref(), Some("0.bak"));
+        assert_eq!(
+            std::fs::read(r.game.join("Data/BetterSky.esp")).unwrap(),
+            b"plugin v2"
+        );
+        let gone = inst.uninstall("skyrimse", "nexus:1").unwrap();
+        assert_eq!(gone.restores, ["BetterSky.esp", "textures/sky.dds"]);
+        assert_eq!(
+            std::fs::read(r.game.join("Data/BetterSky.esp")).unwrap(),
+            b"my edits"
         );
     }
 
