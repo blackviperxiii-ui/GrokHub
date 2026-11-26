@@ -688,7 +688,10 @@ fn snapshot_root_ok(key: &str, home: &str) -> bool {
         .strip_prefix("//?/")
         .unwrap_or(key)
         .trim_end_matches('/');
-    let home = home.strip_prefix("//?/").unwrap_or(home).trim_end_matches('/');
+    let home = home
+        .strip_prefix("//?/")
+        .unwrap_or(home)
+        .trim_end_matches('/');
     let drive_root = plain.len() <= 2 && plain.ends_with(':');
     !(plain.is_empty()
         || drive_root
@@ -751,9 +754,7 @@ fn take_snapshot(conv: &str, root: &Path, command: &str) -> Option<Snapshot> {
         let key = path_key(&path);
         let meta = fs::metadata(&path).ok();
         let len = meta.as_ref().map(|m| m.len());
-        if sensitive(&key, &homes)
-            || len.is_none_or(|n| n > SNAPSHOT_MAX_FILE_BYTES)
-        {
+        if sensitive(&key, &homes) || len.is_none_or(|n| n > SNAPSHOT_MAX_FILE_BYTES) {
             left_out.push(rel);
             continue;
         }

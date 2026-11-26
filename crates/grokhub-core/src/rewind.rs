@@ -176,12 +176,21 @@ mod tests {
 
     #[test]
     fn a_windows_spelling_of_a_sensitive_leaf_is_still_sensitive() {
-        let home = "C:\\Users\\Viper";
-        assert!(rewind_sensitive("//?/C:/Users/Viper/.ssh/id_ed25519", home));
-        assert!(rewind_sensitive("c:/users/viper/.SSH/id_ed25519", home));
-        assert!(rewind_sensitive("\\\\?\\C:\\Users\\Viper\\.config\\grokhub", home));
-        assert!(rewind_sensitive("//?/UNC/srv/share/v/.aws", "//srv/share/V"));
-        assert!(!rewind_sensitive("//?/C:/Users/Viper/code/.ssh-notes", home));
+        let home = "C:\\Users\\Owner";
+        assert!(rewind_sensitive("//?/C:/Users/Owner/.ssh/id_ed25519", home));
+        assert!(rewind_sensitive("c:/users/owner/.SSH/id_ed25519", home));
+        assert!(rewind_sensitive(
+            "\\\\?\\C:\\Users\\Owner\\.config\\grokhub",
+            home
+        ));
+        assert!(rewind_sensitive(
+            "//?/UNC/srv/share/v/.aws",
+            "//srv/share/V"
+        ));
+        assert!(!rewind_sensitive(
+            "//?/C:/Users/Owner/code/.ssh-notes",
+            home
+        ));
         assert!(rewind_sensitive("/Users/v/.SSH", "/Users/v"));
         assert!(rewind_sensitive("/home/v/.ssh/id", "/home/v"));
     }
