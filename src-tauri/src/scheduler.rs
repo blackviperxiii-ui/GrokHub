@@ -224,6 +224,7 @@ pub fn tick_as(
                     text: String::new(),
                     error: why,
                     stop: PREFLIGHT.into(),
+                    delivered: false,
                 },
             });
             continue;
@@ -253,6 +254,7 @@ pub fn tick_as(
                     text: output.clone(),
                     error: String::new(),
                     stop: SCRIPT_ONLY.into(),
+                    delivered: false,
                 },
                 Some(CheckStep::Ask { shown, .. }) => {
                     let decision = if job.gate.on_change {
@@ -265,6 +267,7 @@ pub fn tick_as(
                             text: format!("Checked, nothing to do: {}", d.why),
                             error: String::new(),
                             stop: DECIDED_NO.into(),
+                            delivered: true,
                         },
                         d => {
                             let picked = d.map(|d| d.items.join("\n")).unwrap_or_default();
@@ -386,6 +389,7 @@ fn tick_live(
             text: String::new(),
             error,
             stop: "error".into(),
+            delivered: false,
         },
     };
     // The decision step uses the same route as the run, with no tools.
@@ -501,6 +505,7 @@ mod tests {
             text: text.into(),
             error: String::new(),
             stop: "end_turn".into(),
+            delivered: true,
         }
     }
 
@@ -843,6 +848,7 @@ mod tests {
             text: String::new(),
             error: "Add an xAI API key in Settings first.".into(),
             stop: "error".into(),
+            delivered: false,
         })
         .expect("tick");
         assert_eq!(fired.len(), 1);
@@ -993,6 +999,7 @@ mod tests {
             text: String::new(),
             error: "busy".into(),
             stop: "error".into(),
+            delivered: false,
         };
         tick_with_check(&dir, &at(nine), PID, &mut run, &mut |_| {
             receipt("/dev/sda1 91%")
@@ -1028,6 +1035,7 @@ mod tests {
                     text: "backed up 3 files".into(),
                     error: String::new(),
                     stop: SCRIPT_ONLY.into(),
+                    delivered: false,
                 },
             }]
         );
@@ -1088,6 +1096,7 @@ mod tests {
                 text: "Checked, nothing to do: Every disk has room.".into(),
                 error: String::new(),
                 stop: DECIDED_NO.into(),
+                delivered: true,
             }
         );
         assert_eq!(

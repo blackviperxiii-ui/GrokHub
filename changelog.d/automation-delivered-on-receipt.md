@@ -1,0 +1,1 @@
+- Automations: a run counts as delivered only when its board card took the result. A good run whose card was moved away or whose board couldn't be written now shows delivery failed on its row instead of ok.

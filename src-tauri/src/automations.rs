@@ -376,6 +376,10 @@ pub struct RunResult {
     pub text: String,
     pub error: String,
     pub stop: String,
+    /// The place the result goes took it: the job's board card was written.
+    /// A run that had nothing to hand on counts as delivered.
+    #[serde(skip)]
+    pub delivered: bool,
 }
 
 /// Jobs a Run now or a scheduled run is working on. A second run of the same
@@ -495,17 +499,18 @@ fn run_on_board(
         cancel: CancelToken::new(),
         resume: false,
     });
-    let result = RunResult {
+    let mut result = RunResult {
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
+        delivered: false,
     };
     let ran = BoardRun {
         job,
         asked: prompt,
         origin: gate.origin,
     };
-    board_run_end(config_dir, ran, card.as_deref(), &result);
+    result.delivered = board_run_end(config_dir, ran, card.as_deref(), &result);
     result
 }
 
@@ -519,7 +524,7 @@ fn settle(a: Automation, result: &RunResult) -> Automation {
     if result.failed() {
         grokhub_core::mark_automation_failed(a, &result.error)
     } else {
-        grokhub_core::mark_automation_ok(a)
+        grokhub_core::mark_automation_ok(a, result.delivered)
     }
 }
 
@@ -559,6 +564,7 @@ pub fn run_now_preflight(
             text: String::new(),
             error: why,
             stop: grokhub_core::PREFLIGHT_STOP.into(),
+            delivered: false,
         });
     }
     let _running = Running::claim(id)?;
@@ -815,12 +821,12 @@ pub(crate) fn board_run_end(
     ran: BoardRun<'_>,
     card: Option<&str>,
     done: &RunResult,
-) {
+) -> bool {
     use grokhub_agent::web_origin::{card_saved_here, card_seen, mark_card};
     use grokhub_core::work_resume as res;
     use grokhub_core::work_run::{self as wr, RunEnd};
     let Some(card) = card else {
-        return;
+        return false;
     };
     let job = ran.job;
     let now = grokhub_core::now_ms();
@@ -838,7 +844,7 @@ pub(crate) fn board_run_end(
     };
     // KB-03: a failed run is Interrupted (Blocked with its checkpoint), so it
     // resumes from there.
-    let (cut, replaced) = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
+    let landed = wr::edit_board_file(&wr::board_path(config_dir), now, |cards| {
         let cut = cards
             .iter_mut()
             .rev()
@@ -848,8 +854,10 @@ pub(crate) fn board_run_end(
             })
             .is_some_and(|c| res::interrupt_failed(c, &end, now));
         let mut replaced = None;
+        let mut filed = true;
         if !cut {
-            wr::finish_automation_card(cards, &job.id, &end, report, now);
+            // The job's card moved out of Doing meanwhile: the result has no home.
+            filed = wr::finish_automation_card(cards, &job.id, &end, report, now).is_some();
             if report {
                 let before = cards.clone();
                 let (id, _) = grokhub_core::file_follow_up(cards, &job.id, title, &done.text, now);
@@ -858,6 +866,7 @@ pub(crate) fn board_run_end(
                         let parts = [CardPart::Words, CardPart::Report];
                         if mark_card(config_dir, &id, &parts).is_err() {
                             *cards = before;
+                            filed = false;
                         }
                     }
                     RunOrigin::Window => {
@@ -866,9 +875,10 @@ pub(crate) fn board_run_end(
                 }
             }
         }
-        (cut, replaced)
-    })
-    .unwrap_or((false, None));
+        (cut, replaced, filed)
+    });
+    let delivered = matches!(landed, Ok((_, _, true)));
+    let (cut, replaced, _) = landed.unwrap_or((false, None, false));
     if let Some((id, seen)) = replaced {
         // A mark that can't be taken off leaves the report a browser's: the safe side.
         let _ = card_saved_here(config_dir, &id, CardPart::Report, seen);
@@ -885,6 +895,7 @@ pub(crate) fn board_run_end(
         wr::LOG_END,
         &line,
     );
+    delivered
 }
 
 /// KB-03: at shell startup no shell run is live, so every Doing card a shell
@@ -1687,6 +1698,38 @@ mod tests {
                 ..TurnOutput::default()
             })
         }
+    }
+
+    /// L3: a run's result is delivered when its board card took it. When the
+    /// board can't be written the run is still healthy, but its row says the
+    /// result went nowhere.
+    #[test]
+    fn a_run_is_delivered_only_when_its_card_takes_the_result() {
+        use grokhub_core::{work_run as wr, AutoOutcome, LifePhase};
+        let run = |dir: &Path| {
+            let id = add(dir, "every day at 7am summarize the board", tuesday_8am()).expect("job")
+                [0]
+            .id
+            .clone();
+            let ws = temp_dir("deliver-ws");
+            let says = Arc::new(Says("All quiet."));
+            run_now(dir, &id, says, "m", ws, RunGate::BACKGROUND).expect("ran");
+            load(dir).expect("jobs")[0].clone()
+        };
+        let landed = run(&temp_dir("deliver-ok"));
+        assert_eq!(
+            (landed.lifecycle.delivery, landed.lifecycle.completion),
+            (LifePhase::Ok, LifePhase::Ok)
+        );
+
+        let dir = temp_dir("deliver-lost");
+        std::fs::create_dir_all(wr::board_path(&dir)).expect("a folder where the board goes");
+        let lost = run(&dir);
+        assert_eq!(lost.health.outcome, AutoOutcome::Ok);
+        assert_eq!(
+            (lost.lifecycle.delivery, lost.lifecycle.completion),
+            (LifePhase::Failed, LifePhase::Failed)
+        );
     }
 
     /// The Follow up card a browser job's run files holds the browser's
