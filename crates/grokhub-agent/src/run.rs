@@ -6089,11 +6089,13 @@ linter (or run the changed file) before you finish: a re-read or git status does
             .filter(|r| r.name == "run_terminal_command")
             .map(|r| (r.command.as_str(), r.ended()))
             .collect();
+        // Windows PowerShell 5.1 ends with exit 1 when a native command fails.
+        let exit = if cfg!(windows) { "exit 1" } else { "exit 101" };
         assert_eq!(
             ended,
             [(
                 "cargo check --offline --color never --target-dir target",
-                "exit 101".to_string()
+                exit.to_string()
             )]
         );
         assert!(
