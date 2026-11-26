@@ -3169,7 +3169,7 @@ pub mod fake_server {
 
     /// Read one HTTP/1.1 request (headers + Content-Length body). Windows often
     /// delivers headers and body in separate TCP packets; a single `read` is not enough.
-    fn read_http_request(stream: &mut TcpStream) -> Result<String, ()> {
+    pub(crate) fn read_http_request(stream: &mut TcpStream) -> Result<String, ()> {
         stream
             .set_read_timeout(Some(Duration::from_millis(2_000)))
             .ok();
