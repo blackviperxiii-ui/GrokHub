@@ -28,8 +28,7 @@
 ## What depends on it
 - R3a fills DE2 and joins route records with `outcomes.jsonl` by episode. R3b's `new_provider` routes ride the same `Spend` and `harness::decide`.
 ## Non-obvious
-- The on-device loading note (`LOCAL_LOADING_NOTE` in `local.rs`, sent from `stream_routed`) is one line, and only when this turn will cold-start llama-server or switch the model file it is serving. A server already serving that file stays up between turns and says nothing. It unloads after the idle timeout from Settings → Local AI (default 10 minutes, `local_perf::IDLE_UNLOAD_SECS`); a cleared `0` waits that default rather than unloading at once.
-- `harness::decide` stays the only approval gate: the router picks how to think, never whether to act. A GB-only model gets a metadata-only profile (`not_run: gb_only`); a queued probe is not usable yet.
+- The on-device loading note (`LOCAL_LOADING_NOTE` in `local.rs`, sent from `stream_routed`) is one line, and only when this turn will cold-start llama-server or switch the model file it is serving. A server already serving that file stays up between turns and says nothing. It unloads after the idle timeout from Settings → Local AI (default 10 minutes, `local_perf::IDLE_UNLOAD_SECS`); a cleared `0` waits that default rather than unloading at once. `harness::decide` stays the only approval gate: the router picks how to think, never whether to act. A GB-only model gets a metadata-only profile (`not_run: gb_only`); a queued probe is not usable yet.
 - `PROVIDER_GROK_BUILD` (`grok_build`) is left from the CLI path: a call logged under it gets no outcome and no health (`crates/grokhub-agent/src/route/live.rs`). No CLI turn runs now; chat, background, and scheduled turns are native.
 - The ladder's state is in memory per episode and class; tool errors and the A4/E14 stage signals reach it through thread-locals (`note_tool_error`, `take_stage`), so the next routed call on the same thread reads them.
 ## See also
