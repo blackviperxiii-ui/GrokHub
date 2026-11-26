@@ -521,8 +521,9 @@ fn clean_reason(raw: &str) -> String {
 }
 
 /// The head and tail of a long text, with a marker where the middle was left
-/// out, so a payload at the end of a long call still reaches the judge.
-fn clip_middle(text: &str, max: usize) -> String {
+/// out, so a payload at the end of a long call still reaches the judge (and a
+/// command's exit line still reaches the episode worker).
+pub(crate) fn clip_middle(text: &str, max: usize) -> String {
     let total = text.chars().count();
     if total <= max {
         return text.to_string();

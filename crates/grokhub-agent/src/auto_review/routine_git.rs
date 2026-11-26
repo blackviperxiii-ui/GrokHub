@@ -117,7 +117,9 @@ fn is_routine_fetch(args: &[String]) -> bool {
 /// it), an `https://` or `ssh://` URL, or an scp-style `user@host:path`.
 /// Every part starts with a letter, a digit or `_` where ssh would read a
 /// leading `-` as an option, and no word holds a character the shell
-/// expands (`*`, `?`, `[`, `{`, `~`, `$`) or quotes.
+/// expands (`*`, `?`, `[`, `{`, `~`, `$`) or quotes. A local path never
+/// starts with `//`: on Windows that is a network share (`//server/share`),
+/// which git reaches over SMB on another machine.
 fn is_plain_repository(word: &str) -> bool {
     if let Some(rest) = word
         .strip_prefix("https://")
@@ -148,6 +150,7 @@ fn is_plain_repository(word: &str) -> bool {
     word.bytes()
         .next()
         .is_some_and(|b| b == b'.' || b == b'/' || name_start(b))
+        && !word.starts_with("//")
         && word.bytes().all(path_byte)
 }
 

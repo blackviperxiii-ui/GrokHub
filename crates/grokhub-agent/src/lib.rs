@@ -55,7 +55,6 @@ mod post_check;
 mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;
-mod recovery;
 pub mod repair;
 mod repo_rules;
 pub mod research;
@@ -167,10 +166,6 @@ pub use prompt::{
     chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
     system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
 };
-pub use recovery::{
-    project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
-    RecoveryState,
-};
 pub use repo_rules::{
     discover as discover_repo_rules, resolve_preferred_branch,
     task_prefix as repo_rules_task_prefix, RepoRulesBundle, RepoRulesInput, RepoSync, RuleFile,
@@ -201,7 +196,9 @@ pub use skills::{
     SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
 pub use sse::SseParser;
-pub use subagent::{answer_peer, drain_side_events, requeue_side_events, PeerTurn, SideEvent};
+pub use subagent::{
+    answer_peer, drain_side_events, peer_unanswered, requeue_side_events, PeerTurn, SideEvent,
+};
 pub use tasks::{
     drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,
     link_child, session_is_live, set_task_watch, watch_cancel, TaskPeek, TaskProgress, TaskRow,

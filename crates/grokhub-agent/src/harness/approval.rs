@@ -9,7 +9,7 @@ use crate::gate::{Decision, DeskFlags, Gate, PermMode};
 use crate::harness::access::AccessMode;
 use crate::harness::consent::{ConsentLedger, Scope};
 use crate::harness::egress::DataClass;
-use crate::harness::hard::{classify, classify_ask, desk_classify, HardClass, HardFloor, HardHit};
+use crate::harness::hard::{classify, desk_classify, HardClass, HardFloor, HardHit};
 use crate::harness::mindcheck::{proactive_outcome, MindCheck};
 
 /// How long a parked hard-class card may wait before fail-closed Deny.
@@ -116,15 +116,13 @@ pub fn apply_access(mut gate: Gate, access: AccessMode) -> Gate {
 /// One step a caller wants to run, in the shape that caller has.
 #[derive(Debug, Clone, Copy)]
 pub enum Step<'a> {
-    /// A tool call: name plus JSON arguments (native gate, headless `grok -p` cards).
+    /// A tool call: name plus JSON arguments (native gate).
     Tool { name: &'a str, arguments: &'a str },
     /// A `grokhub-desktop` `tools/call` (path A).
     Desk {
         tool: &'a str,
         args: &'a serde_json::Value,
     },
-    /// A Grok Build permission ask: card title plus action text (paths B / E).
-    Ask { title: &'a str, action: &'a str },
     /// A cabin-owned outbound call (EgressGuard, Spike-4a): destination key
     /// from `egress_dest`, the user data it carries, and the consent ledger.
     Egress {
@@ -169,9 +167,9 @@ pub enum Step<'a> {
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
-/// here: native gate, desktop MCP, ACP asks, headless cards, and later ones.
+/// here: native gate, desktop MCP, the Cua proxy, egress, and later ones.
 /// Refuse = floor, Park = hard class (Always cannot skip), Allow = soft, left
-/// to Grok Build's own Ask / Auto / Always.
+/// to the permission pill (`decide_harness`).
 pub fn decide(step: Step<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:decide");
     let hit = match step {
@@ -218,7 +216,6 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
         }
         Step::Tool { name, arguments } => classify(name, arguments),
         Step::Desk { tool, args } => desk_classify(tool, args),
-        Step::Ask { title, action } => classify_ask(title, action),
         Step::Repair { command } => crate::repair::repair_hit(command),
         Step::Proactive {
             name,
@@ -300,10 +297,6 @@ mod tests {
                 tool: "type",
                 args: &rm,
             }),
-            decide(Step::Ask {
-                title: "bash",
-                action: "rm -rf ~/old",
-            }),
         ];
         for got in shapes {
             assert_eq!(
@@ -316,18 +309,18 @@ mod tests {
             );
         }
         assert_eq!(
-            decide(Step::Ask {
-                title: "bash",
-                action: "rm -rf /"
+            decide(Step::Tool {
+                name: "run_terminal_command",
+                arguments: r#"{"command":"rm -rf /"}"#,
             }),
             GateOutcome::Refuse {
                 reason: "hard floor: rm -rf /".into()
             }
         );
         assert_eq!(
-            decide(Step::Ask {
-                title: "bash",
-                action: "ls"
+            decide(Step::Tool {
+                name: "run_terminal_command",
+                arguments: r#"{"command":"ls"}"#,
             }),
             GateOutcome::Allow
         );
