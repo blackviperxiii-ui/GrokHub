@@ -917,6 +917,8 @@ fn run_turn(
     let mut close_surfaced = false;
     // LO-51: tool calls the model wrote into its reply as text were handled.
     let mut written_handled = false;
+    // Order 24: automatic sandboxed test/build verification before a coding turn ends.
+    let mut edit_verify = crate::edit_verify::EditVerifyState::default();
     // Brain 2: the turn's Brief and the changes still waiting on a check.
     let brief = drive
         .as_ref()
@@ -1533,6 +1535,93 @@ fn run_turn(
                 }
             }
             if notes.is_empty() {
+                if input.depth == 0
+                    && !gate.readonly_session
+                    && !crate::session_tools::plan_on(input.conversation_id)
+                    && edit_verify.needs_verify()
+                {
+                    if let Some(cmd) =
+                        crate::edit_verify::detect_command(input.workspace, modified_paths)
+                    {
+                        let verify_id = format!("edit-verify-{}", edit_verify.attempts() + 1);
+                        on_event(LoopEvent::Tool {
+                            id: verify_id.clone(),
+                            name: "edit_verify".into(),
+                            status: "in_progress".into(),
+                            detail: cmd.command.clone(),
+                            image: None,
+                        });
+                        let stop = || input.cancel.is_cancelled() || stop_for_halt(input);
+                        let verify_out = crate::edit_verify::run_sandboxed(
+                            input.workspace,
+                            Some(input.conversation_id),
+                            &cmd,
+                            &stop,
+                        );
+                        on_event(LoopEvent::Tool {
+                            id: verify_id,
+                            name: "edit_verify".into(),
+                            status: if verify_out.failed {
+                                "failed".into()
+                            } else {
+                                "completed".into()
+                            },
+                            detail: verify_out.text.clone(),
+                            image: None,
+                        });
+                        if input.cancel.is_cancelled() {
+                            return finish(
+                                input,
+                                StopReason::Cancelled,
+                                usage,
+                                compacted_once,
+                                true,
+                            );
+                        }
+                        if stop_for_halt(input) {
+                            return finish(input, StopReason::Halted, usage, compacted_once, true);
+                        }
+                        let ran_args = serde_json::json!({ "command": cmd.command }).to_string();
+                        ran.push(crate::post_check::Ran::new(
+                            "run_terminal_command",
+                            &ran_args,
+                            !verify_out.failed,
+                            &verify_out.text,
+                        ));
+                        let outcome = edit_verify.record_result(
+                            &cmd.command,
+                            !verify_out.failed,
+                            &verify_out.text,
+                        );
+                        let on_local = crate::route::live::step_on_device()
+                            || crate::route::local::is_local(input.model);
+                        match outcome {
+                            crate::edit_verify::VerifyOutcome::Passed { .. } => {
+                                if on_local {
+                                    crate::route::local::note_local_verify_failed(false);
+                                }
+                            }
+                            crate::edit_verify::VerifyOutcome::Failed { .. } => {
+                                if let Some(note) =
+                                    crate::edit_verify::EditVerifyState::failure_note(&outcome)
+                                {
+                                    crate::route::ladder::note_low_check();
+                                    history.push(cabin_note(&note));
+                                    continue;
+                                }
+                            }
+                            crate::edit_verify::VerifyOutcome::Exhausted { attempts, .. } => {
+                                if on_local {
+                                    crate::route::local::note_local_verify_failed(true);
+                                }
+                                on_event(LoopEvent::Thought(format!(
+                                    "Verification (`{}`) still failing after {attempts} attempts.",
+                                    cmd.label
+                                )));
+                            }
+                        }
+                    }
+                }
                 // Item 24: the reply's totals, test counts, claimed commits,
                 // pushes and edits, and what it says the checks found meet
                 // this run's results. Again after more calls ran, so a reply
@@ -2266,6 +2355,14 @@ fn run_turn(
                 stall.note(did, &output);
             }
             crate::post_check::note_ran(ran, call, &output);
+            if !refused && call.name == "run_terminal_command" {
+                if let Some(cmd) = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                    .ok()
+                    .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
+                {
+                    edit_verify.note_manual_command(&cmd, !output.failed);
+                }
+            }
             if output.failed
                 && ran
                     .last()
@@ -2282,6 +2379,7 @@ fn run_turn(
                 if let Some(path) =
                     crate::compact::path_from_write_call(&call.name, &call.arguments)
                 {
+                    edit_verify.note_edit(&path);
                     if !modified_paths.iter().any(|p| p == &path) {
                         modified_paths.push(path);
                     }
@@ -12971,6 +13069,195 @@ linter (or run the changed file) before you finish: a re-read or git status does
         assert_eq!(row.output_tokens, 200);
         assert_eq!(row.cost_in_usd_ticks, 3_000_000);
         assert_eq!(row.stop_reasons.get("end_turn").copied(), Some(1));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_verify_retries_failing_check_then_finishes_when_fixed() {
+        let dir = workspace("edit-verify-fix");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("src/bug.rs"), "pub fn answer() -> i32 { 0 }\n").unwrap();
+        std::fs::write(
+            dir.join("tests/check.rs"),
+            "#[test] fn t() { assert_eq!(42, 42); }\n",
+        )
+        .unwrap();
+
+        let _runner = crate::edit_verify::TestRunnerGuard::set(|ws, cmd| {
+            assert_eq!(cmd.kind, "rustc-test");
+            let src = std::fs::read_to_string(ws.join("src/bug.rs")).unwrap_or_default();
+            if src.contains("42") {
+                ToolOutput::ok("test result: ok. 1 passed; 0 failed")
+            } else {
+                ToolOutput::err("assertion failed: expected 42, got 0")
+            }
+        });
+
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call(
+                        "w1",
+                        "write",
+                        r#"{"path":"src/bug.rs","content":"pub fn answer() -> i32 { 1 }\n"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+                ScriptTurn::calls(
+                    vec![call(
+                        "w2",
+                        "write",
+                        r#"{"path":"src/bug.rs","content":"pub fn answer() -> i32 { 42 }\n"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("all fixed"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _history, events) = once_for(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+            10,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+
+        let verify_statuses: Vec<&str> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Tool { name, status, .. } if name == "edit_verify" => {
+                    Some(status.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            verify_statuses,
+            vec!["in_progress", "failed", "in_progress", "completed"]
+        );
+
+        let seen = script.seen.lock().unwrap();
+        assert_eq!(seen.len(), 4);
+        let retry_prompt = format!("{:?}", seen[2]);
+        assert!(
+            retry_prompt.contains("Verification failed before completing your coding turn"),
+            "{retry_prompt}"
+        );
+        assert!(
+            retry_prompt.contains("assertion failed: expected 42, got 0"),
+            "{retry_prompt}"
+        );
+        drop(seen);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_verify_bounds_retries_and_flags_local_verify_failure() {
+        let dir = workspace("edit-verify-exhaust");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("src/bug.rs"), "pub fn answer() -> i32 { 0 }\n").unwrap();
+        std::fs::write(dir.join("tests/check.rs"), "#[test] fn t() {}\n").unwrap();
+
+        crate::route::local::note_local_verify_failed(false);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_ref = calls.clone();
+        let _runner = crate::edit_verify::TestRunnerGuard::set(move |_ws, _cmd| {
+            calls_ref.fetch_add(1, Ordering::SeqCst);
+            ToolOutput::err("error[E0425]: still broken")
+        });
+
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call(
+                        "w1",
+                        "write",
+                        r#"{"path":"src/bug.rs","content":"pub fn answer() -> i32 { 1 }\n"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("try 1"),
+                ScriptTurn::calls(
+                    vec![call(
+                        "w2",
+                        "write",
+                        r#"{"path":"src/bug.rs","content":"pub fn answer() -> i32 { 2 }\n"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("try 2"),
+                ScriptTurn::calls(
+                    vec![call(
+                        "w3",
+                        "write",
+                        r#"{"path":"src/bug.rs","content":"pub fn answer() -> i32 { 3 }\n"}"#,
+                    )],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("giving up"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "local:small",
+            effort: None,
+            system: "",
+            conversation_id: "conv-edit-verify-exhaust",
+            max_turns: 10,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &permits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "fix bug", None, &mut |ev| {
+            events.push(ev)
+        });
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            usize::from(crate::edit_verify::MAX_ATTEMPTS)
+        );
+        assert!(crate::route::local::local_verify_failed());
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Thought(t) if t.contains("still failing after 3 attempts")
+        )));
+        crate::route::local::note_local_verify_failed(false);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
