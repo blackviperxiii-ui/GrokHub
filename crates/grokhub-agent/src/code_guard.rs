@@ -63,13 +63,15 @@ pub fn apply(
     policy: Option<&crate::perm::Policy>,
     base: Decision,
 ) -> Decision {
+    let base =
+        crate::code_panel::enforce_hard_and_dangerous(session, name, arguments, workspace, base);
     let Some(guard) = find(session) else {
         return base;
     };
     let Some(said) = guard(name, arguments, workspace) else {
         return base;
     };
-    match (said, base) {
+    let next = match (said, base) {
         (Decision::Refuse(why), _) | (_, Decision::Refuse(why)) => Decision::Refuse(why),
         (Decision::Ask, _) => Decision::Ask,
         (Decision::Run, Decision::Run) => Decision::Run,
@@ -84,7 +86,8 @@ pub fn apply(
                 Decision::Run
             }
         }
-    }
+    };
+    crate::code_panel::enforce_hard_and_dangerous(session, name, arguments, workspace, next)
 }
 
 #[cfg(test)]

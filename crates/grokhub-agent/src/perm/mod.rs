@@ -30,8 +30,9 @@ pub(crate) use risk::{
     program_name, trusted_head,
 };
 pub use session::{
-    clear_conversation, earlier_failure, earlier_image, note_failure, note_store_error,
-    remember_image, remember_session, session_covers, HeldImage, GRANT_NOT_SAVED,
+    clear_conversation, earlier_failure, earlier_image, earlier_result, note_failure,
+    note_store_error, remember_image, remember_result, remember_session, session_covers, HeldImage,
+    HeldResult, GRANT_NOT_SAVED,
 };
 pub use store::{
     add_grant_at, app_config_dir, config_dir, config_pinned, load_all_grants, load_grants,
