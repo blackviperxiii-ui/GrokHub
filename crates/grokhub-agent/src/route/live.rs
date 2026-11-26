@@ -97,6 +97,8 @@ pub struct RouteCall<'a> {
     pub providers: bool,
     /// The episode just re-planned: one model and one rung up for this call only.
     pub step_up: bool,
+    /// Code tab "Local models only and nonstop coding" is enabled for this project.
+    pub code_local_only: bool,
 }
 
 /// How the call went. Counts and ids only.
@@ -641,6 +643,9 @@ impl Decision {
         if self.budget_pause.is_none() && rule("voice:no_local") {
             return "Voice routing is set to Local only, and no on-device model is ready. Download one in Settings → Local AI or switch Voice routing to Auto.".to_string();
         }
+        if self.budget_pause.is_none() && rule("code:no_local") {
+            return "Local models only is on for this project, and no on-device model is ready. Enable Local AI in Settings → Local AI or turn off Local models only in Code → Settings.".to_string();
+        }
         self.pause_msg().to_string()
     }
 
@@ -930,9 +935,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         })
     };
     let voice_reply = super::voice_route::active_reply_pref(config_dir);
+    let code_local_only = call.code_local_only
+        || crate::code_panel::session_local_only(call.session)
+        || crate::code_panel::session_local_only(call.episode);
     let sticky = sticky
         .filter(|m| !user_bench.matches_model(m))
         .filter(|m| !cooling(config_dir, m, now_ms))
+        .filter(|m| !code_local_only || super::local::is_local(m))
         .filter(|m| match &voice_reply {
             None => true,
             Some(super::voice_route::ReplyPref::LocalOnly) => super::local::is_local(m),
@@ -1065,6 +1074,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             && tune::in_canary(key, super::trial::CANARY))
         .then_some(key),
         voice_reply,
+        code_local_only,
         user_bench,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
@@ -1191,10 +1201,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // switch: neither is a model to wait for.
     if live
         && route.no_route
-        && !route
-            .rule_ids
-            .iter()
-            .any(|r| r == "local:paused" || r == "offline:switch" || r == "voice:no_local")
+        && !route.rule_ids.iter().any(|r| {
+            r == "local:paused"
+                || r == "offline:switch"
+                || r == "voice:no_local"
+                || r == "code:no_local"
+        })
     {
         let failed = reg
             .get(call.model)
@@ -1647,6 +1659,17 @@ pub fn route_log(
                 now,
             )
         });
+        // Frontier usage meter: local vs frontier turns for Home and training.
+        let project = super::frontier_usage::project_for_session(call.session, call.episode);
+        let cost_usd = if done.usage.cost_in_usd_ticks > 0 {
+            done.usage.cost_in_usd_ticks as f64 / TICKS_PER_USD
+        } else {
+            rec.outcome.as_ref().map(|o| o.cost_usd).unwrap_or(0.0)
+        };
+        let event = super::frontier_usage::event_from(&rec, &project, now, cost_usd);
+        timing::time("route:log_frontier", || {
+            super::frontier_usage::note(config_dir, &event)
+        });
         // Failover PR 5: what the call wrote and whether a free or on-device
         // model carried it, for the turn's mid-flight size upgrade.
         if done.ok {
@@ -1956,6 +1979,7 @@ pub fn stream_routed(
     } else {
         ask_adult || must_stay
     };
+    let code_local_only = crate::code_panel::session_local_only(&req.conversation_id);
     let mut call = RouteCall {
         provider: super::PROVIDER_XAI,
         class,
@@ -1968,6 +1992,7 @@ pub fn stream_routed(
         needs_tools: !req.tools.is_empty() || req.hosted_search,
         providers: true,
         adult: turn_adult,
+        code_local_only,
         ..RouteCall::default()
     };
     let now = grokhub_core::now_ms();
@@ -2119,7 +2144,8 @@ pub fn stream_routed(
     };
     // Reply text passes the hard-limit check before the chat shows it.
     let mut reply = grokhub_core::adult_guard::ReplyGuard::default();
-    let allow_cross_provider_failover = super::voice_route::active_reply_pref(&dir).is_none();
+    let allow_cross_provider_failover =
+        super::voice_route::active_reply_pref(&dir).is_none() && !code_local_only;
     let mut failed_hops: Vec<(String, ClientError, Duration)> = Vec::new();
     let mut tried: Vec<String> = Vec::new();
     let mut last_fail_rule: Option<&'static str> = None;

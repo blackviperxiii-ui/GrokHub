@@ -1,6 +1,7 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
 pub(crate) mod batch;
+pub(crate) mod coding;
 pub(crate) mod connections;
 pub(crate) mod control;
 mod defs;
@@ -8,6 +9,7 @@ mod desktop;
 pub(crate) mod fence;
 mod glob;
 mod grep;
+pub(crate) mod hangout;
 pub(crate) mod home_assistant;
 mod html_md;
 mod list_dir;
@@ -37,6 +39,7 @@ pub(crate) mod web_search;
 pub(crate) mod workspace_tools;
 mod write;
 
+pub use hangout::CANT_DO_HERE;
 pub use registry::Settings as DeferredToolsSettings;
 #[cfg(test)]
 pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
@@ -452,11 +455,48 @@ pub fn workspace_missing(path: &Path) -> bool {
     path.as_os_str().is_empty() || !path.is_dir()
 }
 
+/// Clear, actionable error when the workspace folder is missing or unreadable.
+pub(crate) fn workspace_unavailable_error(workspace: &Path, err: &std::io::Error) -> String {
+    let raw = workspace.to_string_lossy();
+    let windows =
+        cfg!(windows) || raw.starts_with(r"\\?\") || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    let shown = grokhub_core::canonical_session_cwd(&raw, windows);
+    if shown.is_empty() {
+        format!(
+            "workspace is not available ({err}): no workspace folder is set. Pick a folder in Chat or Settings → Workspace, then try again."
+        )
+    } else {
+        format!(
+            "workspace is not available at `{shown}` ({err}). Create that folder or pick an existing folder in Chat or Settings → Workspace, then try again."
+        )
+    }
+}
+
+/// Clear, actionable message when a top-level chat tool call tries to reach
+/// outside the active workspace. Preserves the `"path escapes the workspace"`
+/// prefix while telling the user and model what to do.
+pub fn path_escape_guidance(workspace: &Path, requested: &str) -> String {
+    let raw = workspace.to_string_lossy();
+    let windows =
+        cfg!(windows) || raw.starts_with(r"\\?\") || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    let ws = grokhub_core::canonical_session_cwd(&raw, windows);
+    let target = requested.trim();
+    if target.is_empty() {
+        format!(
+            "path escapes the workspace (`{ws}`). File tools can only access paths inside this workspace; use a relative path inside `{ws}`, or pick a different folder in Chat or Settings → Workspace."
+        )
+    } else {
+        format!(
+            "path escapes the workspace: `{target}` is outside `{ws}`. Use a path inside `{ws}`, or pick the folder containing `{target}` in Chat or Settings → Workspace."
+        )
+    }
+}
+
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.
 pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let root_c = root
         .canonicalize()
-        .map_err(|e| format!("workspace is not available: {e}"))?;
+        .map_err(|e| workspace_unavailable_error(root, &e))?;
     let raw = raw.trim();
     if raw.is_empty() || raw == "." {
         return Ok(root_c);
@@ -1146,5 +1186,63 @@ mod tests {
         );
         assert_eq!(*desk.0.lock().unwrap(), vec!["click", "type"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_errors_and_default_workspace_read_write_are_clear() {
+        let root = std::env::temp_dir().join(format!("gh-ws-clear-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let home_str = root.to_string_lossy().into_owned();
+
+        // Missing workspace produces a clear actionable message naming the folder.
+        let missing = root.join("does-not-exist");
+        let err = confine(&missing, "a.txt").unwrap_err();
+        assert!(err.contains("workspace is not available"), "{err}");
+        assert!(err.contains("does-not-exist"), "{err}");
+        assert!(err.contains("Settings → Workspace"), "{err}");
+
+        // Path escape guidance preserves the prefix and names both target and workspace.
+        let guidance = path_escape_guidance(
+            Path::new(r"C:\Users\alice\GrokHub-Work"),
+            r"C:\Users\alice\Desktop\todo.txt",
+        );
+        assert!(
+            guidance.contains("path escapes the workspace"),
+            "{guidance}"
+        );
+        assert!(
+            guidance.contains(r"C:\Users\alice\Desktop\todo.txt"),
+            "{guidance}"
+        );
+        assert!(
+            guidance.contains(r"C:\Users\alice\GrokHub-Work"),
+            "{guidance}"
+        );
+        assert!(guidance.contains("Settings → Workspace"), "{guidance}");
+
+        // Default Chat/Hangout workspace is created on disk and supports write + read_file.
+        let ws = grokhub_core::paths::ensure_chat_workspace("", false, Some(&home_str), None);
+        assert!(ws.is_dir());
+        let stop = || false;
+        let ctx = ToolCtx {
+            workspace: &ws,
+            desktop: None,
+            stop: &stop,
+            tasks: None,
+            owner: None,
+            session: Some("chat-ws-test"),
+        };
+        let wrote = dispatch(
+            &ctx,
+            "write",
+            r#"{"path":"hello.txt","content":"hello from chat\n"}"#,
+        );
+        assert!(!wrote.failed, "{}", wrote.text);
+        let read = dispatch(&ctx, "read_file", r#"{"target_file":"hello.txt"}"#);
+        assert!(!read.failed, "{}", read.text);
+        assert!(read.text.contains("hello from chat"), "{}", read.text);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

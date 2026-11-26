@@ -1,7 +1,8 @@
-//! Grants, failures, and pictures kept for one conversation.
+//! Grants, failures, and successful tool results kept for one conversation.
 //! Project files still hold only safe shell grants. This map is the rest:
 //! the same tool and arguments, for the rest of that chat, including the
-//! next user turn. It never allows a call the gate refused.
+//! next user turn. It never allows a call the gate refused. An identical
+//! successful call (same tool, same arguments) reuses the earlier result.
 
 use std::sync::Mutex;
 
@@ -22,7 +23,8 @@ struct Fail {
     text: String,
 }
 
-struct Picture {
+struct Cached {
+    tool: String,
     args: String,
     text: String,
     image: Option<String>,
@@ -32,15 +34,18 @@ struct Picture {
 struct Chat {
     grants: Vec<Grant>,
     failures: Vec<Fail>,
-    images: Vec<Picture>,
+    results: Vec<Cached>,
     store_error_shown: bool,
 }
 
-/// An earlier `image_generate` result for these arguments.
-pub struct HeldImage {
+/// An earlier successful tool result for these arguments.
+pub struct HeldResult {
     pub text: String,
     pub image: Option<String>,
 }
+
+/// An earlier `image_generate` result for these arguments.
+pub type HeldImage = HeldResult;
 
 fn book() -> std::sync::MutexGuard<'static, Vec<(String, Chat)>> {
     static BOOK: Mutex<Vec<(String, Chat)>> = Mutex::new(Vec::new());
@@ -147,37 +152,52 @@ pub fn earlier_failure(id: &str, tool: &str, args: &str) -> Option<String> {
         })
 }
 
-pub fn remember_image(id: &str, args: &str, text: &str, image: Option<&str>) {
-    if id.is_empty() {
+/// Remember a successful tool result for this conversation. The next identical
+/// call (same tool, same arguments) returns it without running again.
+pub fn remember_result(id: &str, tool: &str, args: &str, text: &str, image: Option<&str>) {
+    if id.is_empty() || tool.is_empty() {
         return;
     }
     let mut book = book();
     let chat = chat(&mut book, id);
-    if let Some(picture) = chat.images.iter_mut().find(|picture| picture.args == args) {
-        picture.text = text.to_string();
-        picture.image = image.map(str::to_string);
+    if let Some(held) = chat
+        .results
+        .iter_mut()
+        .find(|held| held.tool == tool && held.args == args)
+    {
+        held.text = text.to_string();
+        held.image = image.map(str::to_string);
         return;
     }
-    chat.images.push(Picture {
+    chat.results.push(Cached {
+        tool: tool.to_string(),
         args: args.to_string(),
         text: text.to_string(),
         image: image.map(str::to_string),
     });
 }
 
-pub fn earlier_image(id: &str, args: &str) -> Option<HeldImage> {
+pub fn earlier_result(id: &str, tool: &str, args: &str) -> Option<HeldResult> {
     book()
         .iter()
         .find(|(key, _)| key == id)
         .and_then(|(_, chat)| {
-            chat.images
+            chat.results
                 .iter()
-                .find(|picture| picture.args == args)
-                .map(|picture| HeldImage {
-                    text: picture.text.clone(),
-                    image: picture.image.clone(),
+                .find(|held| held.tool == tool && held.args == args)
+                .map(|held| HeldResult {
+                    text: held.text.clone(),
+                    image: held.image.clone(),
                 })
         })
+}
+
+pub fn remember_image(id: &str, args: &str, text: &str, image: Option<&str>) {
+    remember_result(id, "image_generate", args, text, image);
+}
+
+pub fn earlier_image(id: &str, args: &str) -> Option<HeldImage> {
+    earlier_result(id, "image_generate", args)
 }
 
 /// Log a project-grant write failure and return the line to show once.
@@ -222,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn an_earlier_failure_and_image_come_back_for_the_same_arguments() {
+    fn an_earlier_failure_and_result_come_back_for_the_same_arguments() {
         let id = "sess-ac4-img-9";
         clear_conversation(id);
         let args = r#"{"prompt":"a red fox in snow"}"#;
@@ -247,6 +267,20 @@ mod tests {
         assert_eq!(again.text, "IMAGINE: https://cdn.example/fox.png");
         assert_eq!(again.image.as_deref(), Some("file:///earlier/fox.png"));
         assert!(earlier_image(id, r#"{"prompt":"a blue whale"}"#).is_none());
+        remember_result(
+            id,
+            "web_search",
+            r#"{"query":"rust"}"#,
+            "<<<UNTRUSTED source=web_search>>>\nrust hits",
+            None,
+        );
+        assert_eq!(
+            earlier_result(id, "web_search", r#"{"query":"rust"}"#)
+                .unwrap()
+                .text,
+            "<<<UNTRUSTED source=web_search>>>\nrust hits"
+        );
+        assert!(earlier_result(id, "web_search", r#"{"query":"go"}"#).is_none());
         clear_conversation(id);
     }
 

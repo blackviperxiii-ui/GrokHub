@@ -1010,6 +1010,8 @@ export function Chat({
   const busyHere = busy && runIn === conversationId;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  /** Counts chat picks, so only the newest pick's load is shown. */
+  const opening = useRef(0);
   /** The running reply already sent its last event (`done`): only the app's
    * own wrap-up after it is left. */
   const replyDone = useRef(false);
@@ -1249,6 +1251,7 @@ export function Chat({
   function startFresh(scratch = false) {
     const nextId = newConversationId(scratch);
     openAfter.current = null;
+    opening.current += 1;
     openNow.current = nextId;
     queueBackToBox();
     leaveSides();
@@ -1314,6 +1317,7 @@ export function Chat({
     // Picking the chat on screen keeps it, and drops a pick still waiting.
     if (id === conversationId) {
       openAfter.current = null;
+      opening.current += 1;
       return;
     }
     if (busyRef.current) {
@@ -1332,7 +1336,16 @@ export function Chat({
     openAfter.current = null;
     touched.current = true;
     closeChat(conversationId).catch(() => {});
-    loadChat(id).then(show, (err) => setError(String(err)));
+    // Only the latest pick lands: a slower load picked earlier is dropped.
+    const pick = ++opening.current;
+    loadChat(id).then(
+      (transcript) => {
+        if (opening.current === pick) show(transcript);
+      },
+      (err) => {
+        if (opening.current === pick) setError(String(err));
+      },
+    );
   }
   const openPicked = useEffectEvent((id: string) => openChat(id));
 

@@ -400,7 +400,7 @@ impl TaskHub {
         }
         let cwd = cwd
             .canonicalize()
-            .map_err(|err| format!("workspace is not available: {err}"))?;
+            .map_err(|err| crate::tools::workspace_unavailable_error(cwd, &err))?;
         let id = {
             let mut hub = self.lock();
             if hub.halted {

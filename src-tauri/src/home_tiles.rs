@@ -713,10 +713,21 @@ fn usage_view(config_dir: &Path, now: u64) -> TileView {
         now.saturating_sub(grokhub_agent::cache_watch::WINDOW_MS),
     )
     .map(|s| s.pct);
-    usage_from(week.spent_usd, cache, grokhub_agent::cache_watch::FLOOR_PCT)
+    let share = grokhub_agent::route::frontier_usage::week_from_disk(config_dir, now).detail();
+    usage_from(
+        week.spent_usd,
+        cache,
+        grokhub_agent::cache_watch::FLOOR_PCT,
+        share,
+    )
 }
 
-pub fn usage_from(week_usd: f64, cache_pct: Option<u8>, floor: u8) -> TileView {
+pub fn usage_from(
+    week_usd: f64,
+    cache_pct: Option<u8>,
+    floor: u8,
+    local_share: Option<String>,
+) -> TileView {
     let cache = cache_pct.map(|pct| {
         if pct < floor {
             format!("Prompt cache {pct}% (low)")
@@ -724,10 +735,14 @@ pub fn usage_from(week_usd: f64, cache_pct: Option<u8>, floor: u8) -> TileView {
             format!("Prompt cache {pct}%")
         }
     });
+    let detail = match (local_share, cache) {
+        (Some(share), Some(c)) => Some(format!("{share} · {c}")),
+        (share, c) => share.or(c),
+    };
     let text = TileText {
         big: format!("${week_usd:.2}"),
         caption: "AI spend this week".into(),
-        detail: cache,
+        detail,
         tone: if week_usd > 0.0 {
             Tone::Normal
         } else {

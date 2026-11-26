@@ -90,6 +90,18 @@ pub(crate) fn has_job_tool_set(session: &str) -> bool {
     }
 }
 
+/// Job allowlist, or the lean coding set for a local coding turn.
+fn turn_tool_set(session: &str, model: &str) -> Option<ToolSet> {
+    if let Some(set) = bound_job_tool_set(session) {
+        return Some(set);
+    }
+    let brief = crate::checkpoint::turn_brief(session);
+    if tools::coding::wants(session, model, brief.as_ref()) {
+        return Some(ToolSet::coding());
+    }
+    None
+}
+
 fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
     let Ok(mut map) = job_tool_sets().lock() else {
         return None;
@@ -781,12 +793,23 @@ fn run_turn(
     // No token cap: a run goes on until the task is done. A run that stops
     // getting anywhere is caught by the stall check instead.
     let mut stall = crate::stall::Stall::default();
+    let code_panel_cfg = crate::code_panel::session_settings(input.conversation_id);
+    let code_panel_nonstop = code_panel_cfg
+        .as_ref()
+        .is_some_and(|(_, _, s)| s.local_only_nonstop);
+    let mut nonstop_guard = code_panel_cfg
+        .as_ref()
+        .filter(|(_, _, s)| s.local_only_nonstop)
+        .map(|(_, _, s)| crate::code_panel::NonstopGuard::new(s, grokhub_core::now_ms()));
+    let mut edited_files_in_turn: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
-    // "continue" (not a bare "ok") carries on the checklist an earlier run left open.
+    // "continue" (not a bare "ok") — or Code tab nonstop mode — carries on the
+    // checklist an earlier run left open without pausing between steps.
     let mut drive =
         (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty()).then(|| {
             let todos = crate::session_tools::todos_for(input.conversation_id);
-            if crate::brain::is_go_on(user_text) {
+            if code_panel_nonstop || crate::brain::is_go_on(user_text) {
                 crate::drive::Drive::resumed(&todos)
             } else {
                 crate::drive::Drive::new(&todos)
@@ -1021,13 +1044,29 @@ fn run_turn(
         let sent_len = history.len();
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
-        let tools = match (
-            crate::subagent::fork_tools(input.conversation_id),
-            bound_job_tool_set(input.conversation_id),
-        ) {
-            (Some(parents), _) => parents,
-            (None, Some(set)) => tools::schemas_for_job(&gate, &set),
-            (None, None) => tools::schemas_for(&gate),
+        // Order 0.5: casual Hangout sends no tools unless this ask is an
+        // action or the Brief is a task. A missing Brief keeps today's list.
+        let chat_only = turn_is_chat_only(input.conversation_id, user_text);
+        let turn_brief = crate::checkpoint::turn_brief(input.conversation_id);
+        // Order 27: local coding turns get the lean code-tool set (and lean
+        // prompt). Hangout chat-only still wins with an empty list.
+        let lean_coding = !chat_only
+            && tools::coding::wants(input.conversation_id, input.model, turn_brief.as_ref());
+        if lean_coding {
+            tools::coding::apply_lean_prompt(&mut wire);
+        }
+        let tools = if chat_only {
+            Vec::new()
+        } else {
+            match (
+                crate::subagent::fork_tools(input.conversation_id),
+                bound_job_tool_set(input.conversation_id),
+            ) {
+                (Some(parents), _) => parents,
+                (None, Some(set)) => tools::schemas_for_job(&gate, &set),
+                (None, None) if lean_coding => tools::schemas_for_job(&gate, &ToolSet::coding()),
+                (None, None) => tools::schemas_for(&gate),
+            }
         };
         let mut req = ResponsesRequest {
             text_format: None,
@@ -1036,14 +1075,16 @@ fn run_turn(
             input: wire,
             conversation_id: input.conversation_id.to_string(),
             tools,
-            hosted_search: hosted_for_step(
-                &gate,
-                input.perms,
-                input.workspace,
-                history,
-                input.conversation_id,
-                &mut recalled,
-            ),
+            hosted_search: !chat_only
+                && !lean_coding
+                && hosted_for_step(
+                    &gate,
+                    input.perms,
+                    input.workspace,
+                    history,
+                    input.conversation_id,
+                    &mut recalled,
+                ),
             call_timeout: None,
         };
         // Each request should extend the last one; a rewrite logs its first changed segment.
@@ -1287,6 +1328,13 @@ fn run_turn(
                     content: vec![ContentPart::InputText(text)],
                 });
             }
+        }
+        if let Some(reason) = nonstop_guard.as_ref().and_then(|g| {
+            g.check_repetition_cut(&turn.text, &current_nonstop_where(input.conversation_id))
+        }) {
+            on_event(LoopEvent::Findings(reason.status_card_body()));
+            stop_with_note(history, on_event, reason.summary_line());
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         if turn.truncated {
             if turn.out_of_budget() {
@@ -1706,7 +1754,7 @@ fn run_turn(
                     }
                 }
             }
-            if let Some(output) = replay_image(input.conversation_id, call) {
+            if let Some(output) = replay_result(input.conversation_id, call) {
                 let id = tool_id(call);
                 let refused = output.failed;
                 emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
@@ -1738,6 +1786,26 @@ fn run_turn(
                 }
                 call_i += 1;
                 continue;
+            }
+            // Order 0.5: a casual Hangout turn never runs tools. One plain
+            // refusal, then the rest of the batch is abandoned (no retry).
+            if input.depth == 0 && turn_is_chat_only(input.conversation_id, user_text) {
+                let output = ToolOutput::err(tools::CANT_DO_HERE);
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_refusal(history, input.conversation_id, call, output);
+                on_event(LoopEvent::Text(tools::CANT_DO_HERE.to_string()));
+                call_i += 1;
+                abandon_calls(
+                    &calls,
+                    call_i,
+                    tools::CANT_DO_HERE,
+                    history,
+                    input.conversation_id,
+                    on_event,
+                );
+                return finish(input, StopReason::EndTurn, usage, compacted_once, true);
             }
             if input.depth == 0
                 && grokhub_core::small_talk::is_greeting(user_text)
@@ -1870,6 +1938,15 @@ fn run_turn(
             let mut permitted = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
+                    let text = if input.depth == 0 && text == "path escapes the workspace" {
+                        let req_path = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                            .ok()
+                            .and_then(|v| tools::tool_path_arg(&call.name, &v))
+                            .unwrap_or_default();
+                        tools::path_escape_guidance(input.workspace, &req_path)
+                    } else {
+                        text
+                    };
                     refused = true;
                     if crate::denials::is_denial(&text) {
                         note_safety(
@@ -1928,6 +2005,13 @@ fn run_turn(
                     match waited {
                         Waited::Answer(PermAnswer::Allow) => {
                             permitted = true;
+                            prepare_code_panel_backup(
+                                input,
+                                call,
+                                always || gate.mode == gate::PermMode::Always,
+                                &mut edited_files_in_turn,
+                                on_event,
+                            );
                             note_tool(
                                 input,
                                 &mut gate,
@@ -1971,6 +2055,13 @@ fn run_turn(
                             // never stops the asking for what comes after.
                             always |= call.name != tools::control::MERGE_WORK;
                             permitted = true;
+                            prepare_code_panel_backup(
+                                input,
+                                call,
+                                always || gate.mode == gate::PermMode::Always,
+                                &mut edited_files_in_turn,
+                                on_event,
+                            );
                             note_tool(
                                 input,
                                 &mut gate,
@@ -2015,17 +2106,26 @@ fn run_turn(
                         }
                     }
                 }
-                Decision::Run => note_tool(
-                    input,
-                    &mut gate,
-                    base_readonly,
-                    plan_at_start,
-                    call,
-                    &id,
-                    on_event,
-                    &pre_context,
-                    &mut nested_agents,
-                ),
+                Decision::Run => {
+                    prepare_code_panel_backup(
+                        input,
+                        call,
+                        always || gate.mode == gate::PermMode::Always,
+                        &mut edited_files_in_turn,
+                        on_event,
+                    );
+                    note_tool(
+                        input,
+                        &mut gate,
+                        base_readonly,
+                        plan_at_start,
+                        call,
+                        &id,
+                        on_event,
+                        &pre_context,
+                        &mut nested_agents,
+                    )
+                }
             };
             if usage_pending(&extra_usage) {
                 usage.add(&extra_usage);
@@ -2033,8 +2133,10 @@ fn run_turn(
             }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
+            let mut did_for_nonstop = crate::stall::Did::Nothing;
             if !refused {
                 let did = crate::stall::Did::of(&call.name, &call.arguments, &output);
+                did_for_nonstop = did;
                 note_repeat(&mut repeats, input.workspace, call, &output, did);
                 stall.note(did, &output);
             }
@@ -2081,19 +2183,49 @@ fn run_turn(
                     &call.arguments,
                     &output.text,
                 );
-            } else if !output.failed && call.name == "image_generate" {
-                crate::perm::remember_image(
+            } else if !output.failed && session_replay_tool(&call.name) {
+                // Order 0.5: an identical later lookup reuses this result.
+                crate::perm::remember_result(
                     input.conversation_id,
+                    &call.name,
                     &call.arguments,
                     &output.text,
                     output.image_data_url.as_deref(),
                 );
             }
+            let nonstop_stop = nonstop_guard.as_mut().and_then(|g| {
+                let step_label =
+                    format!("{} {}", call.name, card_action(input.conversation_id, call));
+                g.note_call(
+                    &key,
+                    &step_label,
+                    did_for_nonstop,
+                    output.failed,
+                    &output.text,
+                    grokhub_core::now_ms(),
+                )
+            });
             let stop = turn_should_stop(user_text, call, &output, &mut empty_searches);
             if refused {
                 push_refusal(history, input.conversation_id, call, output);
             } else {
                 push_output(history, input.conversation_id, call, output);
+            }
+            if let Some(ns_reason) = nonstop_stop {
+                if !cancelled && !halted {
+                    call_i += 1;
+                    abandon_calls(
+                        &calls,
+                        call_i,
+                        &ns_reason.summary_line(),
+                        history,
+                        input.conversation_id,
+                        on_event,
+                    );
+                    on_event(LoopEvent::Findings(ns_reason.status_card_body()));
+                    stop_with_note(history, on_event, ns_reason.summary_line());
+                    return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
+                }
             }
             if let Some(reason) = stop {
                 if !cancelled && !halted {
@@ -2480,7 +2612,18 @@ fn repeat_key(call: &FunctionCall) -> String {
 /// A folder tool with no folder fails closed. The card is not shown.
 fn refuse_without_workspace(name: &str, workspace: &Path, decision: Decision) -> Decision {
     if tools::needs_workspace(name) && tools::workspace_missing(workspace) {
-        Decision::Refuse(gate::NO_WORKSPACE.to_string())
+        if workspace.as_os_str().is_empty() {
+            Decision::Refuse(gate::NO_WORKSPACE.to_string())
+        } else {
+            let raw = workspace.to_string_lossy();
+            let windows = cfg!(windows)
+                || raw.starts_with(r"\\?\")
+                || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+            let shown = grokhub_core::canonical_session_cwd(&raw, windows);
+            Decision::Refuse(format!(
+                "No workspace in this chat: folder `{shown}` does not exist on disk. Pick a folder in Chat or Settings → Workspace (or create it), then try again."
+            ))
+        }
     } else {
         decision
     }
@@ -2501,17 +2644,31 @@ fn session_allows(conversation: &str, name: &str, arguments: &str) -> bool {
     crate::perm::session_covers(conversation, name, arguments)
 }
 
-fn replay_image(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> {
-    if call.name != "image_generate" {
+/// Tools whose successful results may stand in for an identical later call in
+/// the same session. Writes, shell, and reads stay out: the repeat and stall
+/// guards need those to run again.
+fn session_replay_tool(name: &str) -> bool {
+    matches!(name, "web_search" | "web_fetch" | "image_generate")
+}
+
+/// An identical successful lookup call in this session returns its earlier result.
+fn replay_result(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> {
+    if !session_replay_tool(&call.name) {
         return None;
     }
-    let held = crate::perm::earlier_image(conversation, &call.arguments)?;
+    let held = crate::perm::earlier_result(conversation, &call.name, &call.arguments)?;
     Some(ToolOutput {
         text: held.text,
         image_data_url: held.image,
         failed: false,
         mcp_app: None,
     })
+}
+
+/// Order 0.5: this Hangout turn is chat-only (no tools offered).
+fn turn_is_chat_only(conversation_id: &str, user_text: &str) -> bool {
+    crate::checkpoint::turn_brief(conversation_id)
+        .is_some_and(|brief| tools::hangout::chat_only(&brief, user_text))
 }
 
 /// A failure from a call the person already allowed. Hard classes and merges
@@ -2884,6 +3041,86 @@ fn usage_pending(usage: &Usage) -> bool {
         || usage.cost_in_usd_ticks != 0
 }
 
+/// Human-readable location for nonstop stop status cards (AC-4).
+fn current_nonstop_where(conversation_id: &str) -> String {
+    let todos = crate::session_tools::todos_for(conversation_id);
+    if let Some(active) = todos
+        .iter()
+        .find(|t| t.status == "in_progress")
+        .or_else(|| todos.iter().find(|t| t.status == "pending"))
+    {
+        return format!("task `{}` ({})", active.id, active.content);
+    }
+    "active coding step".to_string()
+}
+
+/// Before a tool call executes in a Code tab session, take a backup (AC-5) or
+/// pre-step work-branch checkpoint (AC-3) when the project's Code Settings
+/// toggles call for one.
+fn prepare_code_panel_backup(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    allow_always: bool,
+    edited_files: &mut std::collections::HashSet<String>,
+    on_event: &mut dyn FnMut(LoopEvent),
+) {
+    let Some((cfg_dir, workspace, settings)) =
+        crate::code_panel::session_settings(input.conversation_id)
+    else {
+        return;
+    };
+    let effective_ws = if input.workspace.as_os_str().is_empty() {
+        workspace.as_path()
+    } else {
+        input.workspace
+    };
+    if let Some(kind) = crate::code_panel::classify_risky_action(
+        &call.name,
+        &call.arguments,
+        effective_ws,
+        edited_files,
+    ) {
+        let label = crate::code_panel::action_label(kind, &call.name, &call.arguments);
+        if settings.backup_before_risky && allow_always {
+            if let Ok(entry) =
+                crate::code_panel::create_backup(&cfg_dir, effective_ws, kind, &label)
+            {
+                on_event(LoopEvent::Thought(format!(
+                    "Saved backup {} before {} ({}).",
+                    entry.id,
+                    kind.label(),
+                    entry.ref_value
+                )));
+            }
+        } else if settings.local_only_nonstop {
+            if let Ok(entry) = crate::code_panel::checkpoint_before_risky_step(
+                &cfg_dir,
+                effective_ws,
+                kind,
+                &label,
+            ) {
+                on_event(LoopEvent::Thought(format!(
+                    "Checkpointed {} before {} ({}).",
+                    entry.id,
+                    kind.label(),
+                    entry.ref_value
+                )));
+            }
+        }
+    }
+    if matches!(call.name.as_str(), "write" | "search_replace") {
+        if let Some(raw) = crate::compact::path_from_write_call(&call.name, &call.arguments) {
+            let p = std::path::PathBuf::from(&raw);
+            let full = if p.is_absolute() {
+                p
+            } else {
+                effective_ws.join(p)
+            };
+            edited_files.insert(full.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
 fn note_tool(
     input: &LoopIn<'_>,
     gate: &mut Gate,
@@ -2932,6 +3169,13 @@ fn finish_tool_output(
     mut output: ToolOutput,
     mut usage: Usage,
 ) -> (ToolOutput, Usage) {
+    if input.depth == 0 && output.failed && output.text == "path escapes the workspace" {
+        let req_path = serde_json::from_str::<serde_json::Value>(&call.arguments)
+            .ok()
+            .and_then(|v| tools::tool_path_arg(&call.name, &v))
+            .unwrap_or_default();
+        output.text = tools::path_escape_guidance(input.workspace, &req_path);
+    }
     if !pre_context.is_empty() {
         if !output.text.is_empty() && !output.text.ends_with('\n') {
             output.text.push('\n');
@@ -3140,7 +3384,7 @@ fn run_readonly_tool_batch(
             owner,
             session: Some(session),
         };
-        let set = bound_job_tool_set(session);
+        let set = turn_tool_set(session, input.model);
         tools::dispatch_for_job(&ctx, &call.name, &call.arguments, set.as_ref())
     });
 
@@ -3216,9 +3460,10 @@ fn dispatch_tool_call(
         session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
-    // A job's tool set holds for the tools the loop runs itself too: a
-    // helper, a message to an agent, plan mode and the todo list.
-    let job_set = bound_job_tool_set(input.conversation_id);
+    // A job's tool set (or the lean coding set on a local coding turn) holds
+    // for the tools the loop runs itself too: a helper, a message to an
+    // agent, plan mode and the todo list.
+    let job_set = turn_tool_set(input.conversation_id, input.model);
     if job_set.as_ref().is_some_and(|set| !set.allows(&call.name)) {
         return (
             ToolOutput::err(tools::tool_set_refusal(&call.name)),
@@ -8433,6 +8678,320 @@ linter (or run the changed file) before you finish: a re-read or git status does
         assert_eq!(outputs[0].1, outputs[1].1);
         assert!(
             outputs[1].1.contains("https://cdn.example/fox.png"),
+            "{}",
+            outputs[1].1
+        );
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Order 0.5: a casual Hangout turn offers no tools and never runs one.
+    #[test]
+    fn a_casual_hangout_turn_offers_no_tools_and_refuses_a_sneaky_search() {
+        let dir = workspace("hangout-chat-only");
+        let conv = "hangout-chat-only-05";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Chat, crate::brain::Care::Casual, &[]),
+        );
+        let fetch_calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fetch = std::sync::Arc::new(HitFetch {
+            body: r#"<a class="result-link" href="https://example.org/flirt">Flirt</a>"#.into(),
+            calls: fetch_calls.clone(),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            fetch: Some(fetch as std::sync::Arc<dyn crate::tools::PageFetch>),
+            ..Default::default()
+        });
+        // First turn: plain chat, no tool calls. Tools list must be empty.
+        struct RecordsTools {
+            tools: Mutex<Vec<usize>>,
+            inner: Script,
+        }
+        impl ModelClient for RecordsTools {
+            fn stream(
+                &self,
+                req: &ResponsesRequest,
+                cancel: &CancelToken,
+                sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<crate::TurnOutput, ClientError> {
+                self.tools.lock().unwrap().push(req.tools.len());
+                self.inner.stream(req, cancel, sink)
+            }
+        }
+        let plain = RecordsTools {
+            tools: Mutex::new(Vec::new()),
+            inner: said(&["hey, same — what's good?"]),
+        };
+        let (history, events) = {
+            let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+            let input = LoopIn {
+                client: &plain,
+                workspace: &dir,
+                model: "grok-4.7",
+                effort: None,
+                system: "",
+                conversation_id: conv,
+                max_turns: 2,
+                usage_base: Usage::default(),
+                cancel: &cancel,
+                steer: &steer,
+                halt: &NeverHalt,
+                gate: chat(gate::PermMode::Always, true, false),
+                desktop: None,
+                permits: &gate::ClosedPermits,
+                perms: None,
+                context_length: 0,
+                tasks: None,
+                depth: 0,
+                agent_id: None,
+                shared_client: None,
+                shared_permits: None,
+                shared_desktop: None,
+            };
+            let mut history = Vec::new();
+            let mut events = Vec::new();
+            run_loop(&input, &mut history, "hey how are you", None, &mut |ev| {
+                events.push(ev)
+            });
+            (history, events)
+        };
+        assert_eq!(plain.tools.lock().unwrap().as_slice(), &[0]);
+        assert!(
+            !history
+                .iter()
+                .any(|item| matches!(item, InputItem::FunctionCall { .. })),
+            "casual turn transcript must have zero tool calls: {history:?}"
+        );
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Text(t) if t.contains("hey, same")
+        )));
+
+        // A misbehaving model still cannot run web_search on a chat-only turn.
+        let sneaky = script_calls(vec![vec![
+            call(
+                "flirt-search",
+                "web_search",
+                r#"{"query":"how to flirt with a guy"}"#,
+            ),
+            call(
+                "flirt-again",
+                "web_search",
+                r#"{"query":"how to flirt with a guy"}"#,
+            ),
+        ]]);
+        let (out, history, events) = drive(
+            &sneaky,
+            &dir,
+            conv,
+            "lol same",
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &Answer {
+                answer: PermAnswer::Allow,
+                asks: AtomicUsize::new(0),
+            },
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(fetch_calls.load(Ordering::SeqCst), 0);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].1, tools::CANT_DO_HERE);
+        assert_eq!(outputs[1].1, tools::CANT_DO_HERE);
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Text(t) if t == tools::CANT_DO_HERE
+        )));
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Order 27: a local coding turn offers only the lean code tools.
+    #[test]
+    fn a_local_coding_turn_offers_only_code_tools() {
+        let dir = workspace("lean-coding-tools");
+        let conv = "lean-coding-27";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let _legacy = tools::registry::LegacyPromptGuard::set();
+        // Scripted client stays on grok; force the lean coding profile on.
+        let _lean = tools::coding::ForceGuard::set(Some(true));
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        struct RecordsTools {
+            names: Mutex<Vec<Vec<String>>>,
+            inner: Script,
+        }
+        impl ModelClient for RecordsTools {
+            fn stream(
+                &self,
+                req: &ResponsesRequest,
+                cancel: &CancelToken,
+                sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<crate::TurnOutput, ClientError> {
+                let names = req
+                    .tools
+                    .iter()
+                    .filter_map(|t| t["name"].as_str().map(str::to_string))
+                    .collect();
+                self.names.lock().unwrap().push(names);
+                self.inner.stream(req, cancel, sink)
+            }
+        }
+        let coding = RecordsTools {
+            names: Mutex::new(Vec::new()),
+            inner: said(&["patched"]),
+        };
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &coding,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 2,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        run_loop(
+            &input,
+            &mut history,
+            "fix the average helper",
+            None,
+            &mut |_| {},
+        );
+        let offered = coding.names.lock().unwrap();
+        assert_eq!(offered.len(), 1, "{offered:?}");
+        assert_eq!(
+            offered[0],
+            vec![
+                "read_file".to_string(),
+                "list_dir".to_string(),
+                "grep".to_string(),
+                "glob".to_string(),
+                "get_command_or_subagent_output".to_string(),
+                "write".to_string(),
+                "search_replace".to_string(),
+                "run_terminal_command".to_string(),
+            ]
+        );
+        assert_eq!(offered[0].len(), tools::coding::CODING_TOOLS_LIVE);
+        drop(_lean);
+        // A casual Hangout turn still offers zero tools (Order 0.5).
+        let _off = tools::coding::ForceGuard::set(Some(false));
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Chat, crate::brain::Care::Casual, &[]),
+        );
+        let casual = RecordsTools {
+            names: Mutex::new(Vec::new()),
+            inner: said(&["hey"]),
+        };
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &casual,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 2,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        run_loop(&input, &mut history, "hey how are you", None, &mut |_| {});
+        let empty: Vec<Vec<String>> = vec![vec![]];
+        assert_eq!(casual.names.lock().unwrap().as_slice(), empty.as_slice());
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Order 0.5: an identical web_search in the same session reuses the earlier result.
+    #[test]
+    fn an_identical_web_search_returns_the_earlier_result() {
+        let dir = workspace("search-again");
+        let conv = "search-again-05";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fetch = std::sync::Arc::new(HitFetch {
+            body: r#"<a class="result-link" href="https://example.org/rust">Rust</a>
+                <td class="result-snippet">A systems language.</td>"#
+                .into(),
+            calls: calls.clone(),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            fetch: Some(fetch as std::sync::Arc<dyn crate::tools::PageFetch>),
+            ..Default::default()
+        });
+        let args = r#"{"query":"rust release notes hangout-05"}"#;
+        let script = script_calls(vec![vec![
+            call("search-1", "web_search", args),
+            call("search-2", "web_search", args),
+        ]]);
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "search for rust release notes",
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &Answer {
+                answer: PermAnswer::Allow,
+                asks: AtomicUsize::new(0),
+            },
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "identical web_search must run once"
+        );
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "search-1");
+        assert_eq!(outputs[1].0, "search-2");
+        assert_eq!(outputs[0].1, outputs[1].1);
+        assert!(
+            outputs[1].1.contains("web_search") || outputs[1].1.contains("Rust"),
             "{}",
             outputs[1].1
         );

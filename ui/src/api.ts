@@ -5718,6 +5718,74 @@ export function codeDeployRun(
   return invoke<CodeTestResult>("code_deploy_run", { command, confirmed });
 }
 
+/** Code tab Settings panel (src-tauri/src/code_panel_cmd.rs). */
+export type CodeRiskyActionKind =
+  | "delete"
+  | "overwrite"
+  | "massEdit"
+  | "gitDiscard"
+  | "packageInstall";
+
+export type CodeBackupStrategy =
+  | "git_commit"
+  | "git_stash"
+  | "git_head_ref"
+  | "folder_copy";
+
+export interface CodePanelSettings {
+  localOnlyNonstop: boolean;
+  backupBeforeRisky: boolean;
+  maxRepeatedFailures: number;
+  stallTimeoutMins: number;
+  backupRetentionWarn: number;
+}
+
+export interface CodeBackupEntry {
+  id: string;
+  createdAtMs: number;
+  label: string;
+  actionKind: CodeRiskyActionKind;
+  strategy: CodeBackupStrategy;
+  refValue: string;
+  branch?: string | null;
+  filesCount: number;
+  restoredAtMs?: number | null;
+}
+
+export interface CodePanelState {
+  workspace: string;
+  isRepo: boolean;
+  branch: string | null;
+  settings: CodePanelSettings;
+  backups: CodeBackupEntry[];
+  retentionWarnLimit: number;
+  retentionWarning: string | null;
+}
+
+export interface CodeBackupRestoreResult {
+  id: string;
+  summary: string;
+  restoredFiles: number;
+}
+
+export function codePanelState(): Promise<CodePanelState> {
+  return invoke<CodePanelState>("code_panel_state");
+}
+
+export function codePanelSettingsSave(
+  settings: CodePanelSettings,
+): Promise<CodePanelState> {
+  return invoke<CodePanelState>("code_panel_settings_save", { settings });
+}
+
+export function codePanelBackupRestore(
+  backupId: string,
+): Promise<CodeBackupRestoreResult> {
+  return invoke<CodeBackupRestoreResult>("code_panel_backup_restore", {
+    backupId,
+  });
+}
+
 /** Settings → Code → Coding skills (vstack): active version/commit and sync state. */
 export interface VstackStatus {
   repo: string;
