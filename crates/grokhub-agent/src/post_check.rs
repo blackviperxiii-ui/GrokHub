@@ -94,16 +94,21 @@ impl Ran {
             Vec::new()
         };
         // Only a command's output is read (test summaries, git's lines), and
-        // a background read's, for how its task ended.
-        let output = if command.is_empty() && name != BACKGROUND_READ {
+        // a background read's or a subagent's, for how its task ended.
+        let output = if command.is_empty() && name != BACKGROUND_READ && name != "spawn_subagent" {
             String::new()
         } else {
             head_and_tail(output)
         };
+        let mut args: String = arguments.chars().take(HEAD_KEEP).collect();
+        if name == "use_tool" && args.len() < arguments.len() {
+            // Clipped arguments are no JSON: the connector tool's name is kept whole.
+            args = serde_json::json!({ "name": value.get("name"), "clipped": args }).to_string();
+        }
         Self {
             name: name.to_string(),
             command,
-            args: arguments.chars().take(HEAD_KEEP).collect(),
+            args,
             ok,
             output,
             urls,
@@ -132,7 +137,8 @@ impl Ran {
     /// denial, bad arguments): `not run`.
     pub fn ended(&self) -> String {
         let status = crate::compact::shell_status(Some(&self.output), self.background());
-        if !self.ok && status == crate::compact::NOT_KEPT {
+        // A refused or failed background start never ran either.
+        if !self.ok && (self.background() || status == crate::compact::NOT_KEPT) {
             "not run".into()
         } else {
             status
@@ -142,23 +148,20 @@ impl Ran {
     /// The background task this command went on as: started with
     /// `is_background` (`task id: t1`), or handed over at its timeout
     /// (`… moved to the background as task t1`). Read only from the result's
-    /// first lines, which are the tool's own.
+    /// first line that the tool wrote; a line after it is the command's own.
     fn task(&self) -> Option<&str> {
         if self.name != "run_terminal_command" {
             return None;
         }
-        self.output
-            .lines()
-            .take(2)
-            .find_map(|line| {
-                let line = line.trim();
-                line.strip_prefix("task id: ").or_else(|| {
-                    line.strip_prefix("still running after ")
-                        .and_then(|rest| rest.split_once(": moved to the background as task "))
-                        .map(|(_, id)| id)
-                })
-            })
-            .map(str::trim)
+        let line = crate::compact::head_line(&self.output)?;
+        let id = if self.background() {
+            line.strip_prefix("task id: ")
+        } else {
+            line.strip_prefix("still running after ")
+                .and_then(|rest| rest.split_once(": moved to the background as task "))
+                .map(|(_, id)| id)
+        };
+        id.map(str::trim)
             .filter(|id| !id.is_empty() && !id.contains(char::is_whitespace))
     }
 
@@ -169,19 +172,26 @@ impl Ran {
             return None;
         }
         let args: serde_json::Value = serde_json::from_str(&self.args).unwrap_or_default();
+        // The ids as the read tool takes them: an empty one names no task.
         let ids: Vec<&str> = match args.get("task_id").and_then(serde_json::Value::as_str) {
-            Some(list) => list.split(',').map(str::trim).collect(),
+            Some(list) => list.split(',').collect(),
             None => args
                 .get("task_ids")
                 .and_then(serde_json::Value::as_array)
                 .map(|ids| ids.iter().filter_map(serde_json::Value::as_str).collect())
                 .unwrap_or_default(),
         };
+        let ids: Vec<&str> = ids
+            .into_iter()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
         if !ids.contains(&id) {
             return None;
         }
-        // One task's read starts with its status; several are each under `id:`.
-        let mut lines = self.output.lines().map(str::trim);
+        // One task's read starts with its status; several are each under
+        // `id:`. Only the read's own lines count, never a task's output.
+        let mut lines = crate::compact::read_head(&self.output).into_iter();
         if ids.len() > 1 {
             lines.find(|line| line.strip_suffix(':') == Some(id))?;
         }
@@ -214,6 +224,41 @@ pub(crate) fn outcome(ran: &[Ran], at: usize) -> String {
         .rev()
         .find_map(|later| later.task_ended(id))
         .unwrap_or_else(|| format!("still running (task {id})"))
+}
+
+/// How the subagent call at `ran[at]` ended: the `status:` its result
+/// closes with (`done`, `partial`, `stopped`, `failed`). One started in the
+/// background ends where a later read of its task says it did (`finished`,
+/// `stopped`), and until one does it is `still running, task s1`.
+pub(crate) fn helper_outcome(ran: &[Ran], at: usize) -> String {
+    let r = &ran[at];
+    if !r.ok {
+        return "failed".into();
+    }
+    let own: Vec<&str> = crate::compact::outside_fences(&r.output).collect();
+    let status = own
+        .iter()
+        .rev()
+        .find_map(|line| line.strip_prefix("status: "));
+    match status.and_then(|s| s.split_whitespace().next()) {
+        Some("running") => {
+            let Some(id) = own.iter().find_map(|line| line.strip_prefix("task id: ")) else {
+                return "still running".into();
+            };
+            let id = id.trim();
+            match ran[at + 1..]
+                .iter()
+                .rev()
+                .find_map(|later| later.task_ended(id))
+            {
+                Some(ended) if ended == "killed" => "stopped".into(),
+                Some(_) => "finished".into(),
+                None => format!("still running, task {id}"),
+            }
+        }
+        Some(word @ ("done" | "partial" | "stopped" | "failed")) => word.into(),
+        _ => "ok".into(),
+    }
 }
 
 fn head_and_tail(text: &str) -> String {

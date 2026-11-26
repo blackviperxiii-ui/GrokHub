@@ -101,6 +101,11 @@ fn scan(cmd: &str) -> (Vec<Redirect>, String) {
                         i += 1;
                     }
                     let (delim, end) = word(&chars, skip_blanks(&chars, i));
+                    // `<<\EOF` quotes its word as `<<'EOF'` does.
+                    let delim = match delim.strip_prefix('\\') {
+                        Some(word) => word.to_string(),
+                        None => delim,
+                    };
                     // `$((1<<2))` shifts; a here-document names a word.
                     if !delim.is_empty() && !delim.bytes().all(|b| b.is_ascii_digit()) {
                         heredocs.push((delim, tabs));
@@ -194,21 +199,26 @@ fn skip_blanks(chars: &[(usize, char)], mut i: usize) -> usize {
 }
 
 /// Past the quoted text that opens at `i` (a backslash or, in PowerShell,
-/// a backtick escapes a double quote).
+/// a backtick escapes a double quote). A quote no escaped reading closes
+/// ends at its next quote mark: PowerShell's `"C:\app\"` escapes nothing,
+/// and a backtick in bash's `"use `x`"` runs a command.
 fn past_quote(chars: &[(usize, char)], i: usize) -> usize {
     let quote = chars[i].1;
-    let mut k = i + 1;
-    while let Some(&(_, c)) = chars.get(k) {
-        if c == quote {
-            return k + 1;
+    let close = |escapes: bool| {
+        let mut k = i + 1;
+        while let Some(&(_, c)) = chars.get(k) {
+            if c == quote {
+                return Some(k + 1);
+            }
+            k += if escapes && quote == '"' && matches!(c, '\\' | '`') {
+                2
+            } else {
+                1
+            };
         }
-        k += if quote == '"' && matches!(c, '\\' | '`') {
-            2
-        } else {
-            1
-        };
-    }
-    k
+        None
+    };
+    close(true).or_else(|| close(false)).unwrap_or(chars.len())
 }
 
 /// The word at `i`, quotes removed, and where it ends. A backslash stays
@@ -371,5 +381,16 @@ mod tests {
         assert_eq!(files(tabs), [file("a.txt"), file("b.txt")]);
         assert_eq!(files(r#"cat <<< "x > y""#), []);
         assert_eq!(files("echo $((1<<2)) > n.txt"), [file("n.txt")]);
+    }
+
+    #[test]
+    fn an_escape_no_quote_closes_and_a_quoted_here_document_word_hide_no_command() {
+        assert_eq!(code(r#"cd "C:\x\"; ls"#), "cd _______; ls");
+        assert_eq!(
+            code("git commit -m \"a `b`\" && ls"),
+            "git commit -m _______ && ls"
+        );
+        assert_eq!(code("cat <<\\EOF\nx\nEOF\nls"), "cat       \n \n   \nls");
+        assert_eq!(code(r#"echo "a \" b" && ls"#), "echo ________ && ls");
     }
 }

@@ -78,6 +78,10 @@ const LOOK_WORDS: &[&str] = &[
     "diff",
     "test-path",
     "get-service",
+    "show",
+    "view",
+    "list",
+    "info",
 ];
 /// Programs that only show something (a file, a search, a listing, a
 /// value): a look, never a run, so they never check code. `sed`, `perl` and
@@ -243,6 +247,9 @@ const WRAPPERS: &[(&str, &[&str])] = &[
     ("do", &[]),
     ("while", &[]),
     ("until", &[]),
+    ("foreach", &[]),
+    ("foreach-object", &[]),
+    ("%", &[]),
 ];
 /// Two words that run the command after them: `uv run pytest`,
 /// `python -m pytest`.
@@ -338,6 +345,13 @@ const MUTATING_HEADS: &[&str] = &[
     "set-content",
     "new-item",
     "move-item",
+    "copy-item",
+    "rename-item",
+    "add-content",
+    "clear-content",
+    "out-file",
+    "set-itemproperty",
+    "new-itemproperty",
     "restart",
     "start",
     "stop",
@@ -517,16 +531,24 @@ fn shell_steps(cmd: &str) -> Vec<Step> {
         .iter()
         .any(|w| SYSTEM_WORDS.contains(w) || system_path(w))
         || writes.iter().any(|(_, file)| system_path(file));
-    let mut kinds: Vec<(usize, Kind, String)> = commands(&code)
-        .into_iter()
-        .map(|at| {
-            let read = command_kind(&cmd[at.clone()], &code[at.clone()]);
-            // `echo hi > out.txt` writes its output, so nobody sees it.
-            let unseen = read.kind == Kind::Look && writes.iter().any(|(w, _)| at.contains(w));
-            let kind = if unseen { Kind::Setup } else { read.kind };
-            (at.start, kind, read.program)
-        })
-        .collect();
+    let mut kinds: Vec<(usize, Kind, String)> = Vec::new();
+    let mut before = Kind::Setup;
+    for (at, piped) in commands(&code) {
+        let read = command_kind(&cmd[at.clone()], &code[at.clone()]);
+        // `echo hi > out.txt` writes its output, so nobody sees it, and
+        // `npm install | tail` shows the install's own lines, not its result.
+        let unseen = read.kind == Kind::Look
+            && (writes.iter().any(|(w, _)| at.contains(w)) || (piped && before == Kind::Change));
+        if read.builds {
+            kinds.push((at.start, Kind::Exec, String::new()));
+        }
+        before = read.kind;
+        kinds.push((
+            at.start,
+            if unseen { Kind::Setup } else { read.kind },
+            read.program,
+        ));
+    }
     // `sudo cp /etc/fstab /etc/fstab.bak` is the backup, not a change to check.
     let backup_only = !steps.is_empty()
         && writes.is_empty()
@@ -557,22 +579,42 @@ fn shell_steps(cmd: &str) -> Vec<Step> {
     steps
 }
 
-/// The byte range of each command in a shell line's [`crate::shell_redirect::code`]:
-/// split at `&&`, `||`, `;`, `|`, `&`, a line end and a parenthesis (a
-/// subshell or `$(…)` runs its own commands).
-fn commands(code: &str) -> Vec<std::ops::Range<usize>> {
+/// Each command of a shell line's [`crate::shell_redirect::code`]: its byte
+/// range, and whether a lone `|` feeds it the output of the command before.
+/// A command ends at `&&`, `||`, `;`, `|`, `&`, a line end and a parenthesis
+/// (a subshell or `$(…)` runs its own commands). The rest of the word after
+/// a closing parenthesis (`$(pwd)/src`, `(Get-Content f)[0..9]`) is the outer
+/// command's data, not a new command.
+fn commands(code: &str) -> Vec<(std::ops::Range<usize>, bool)> {
+    let bytes = code.as_bytes();
+    let ends = |b: u8| matches!(b, b';' | b'|' | b'&' | b'\n' | b'(' | b')');
     let mut out = Vec::new();
-    let mut start = 0;
-    for (i, c) in code.char_indices() {
-        if matches!(c, ';' | '|' | '&' | '\n' | '(' | ')') {
-            if !code[start..i].trim().is_empty() {
-                out.push(start..i);
-            }
-            start = i + 1;
+    let (mut start, mut piped, mut open) = (0, false, 0usize);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !ends(b) {
+            i += 1;
+            continue;
         }
+        if !code[start..i].trim().is_empty() {
+            out.push((start..i, piped));
+        }
+        piped = b == b'|' && bytes.get(i + 1) != Some(&b'|') && (i == 0 || bytes[i - 1] != b'|');
+        start = i + 1;
+        if b == b'(' {
+            open += 1;
+        } else if b == b')' && open > 0 {
+            open -= 1;
+            while start < bytes.len() && !ends(bytes[start]) && !bytes[start].is_ascii_whitespace()
+            {
+                start += 1;
+            }
+        }
+        i = start;
     }
     if !code[start..].trim().is_empty() {
-        out.push(start..code.len());
+        out.push((start..code.len(), piped));
     }
     out
 }
@@ -587,21 +629,46 @@ struct Command {
     /// in `npm run test`).
     sub: Option<String>,
     next: Option<String>,
+    /// A change that builds first: `mvn install` compiles and tests the
+    /// code before it installs it.
+    builds: bool,
 }
+
+/// Verbs whose next word names what runs: `npm run test`, `deno task check`.
+const RUNNER_VERBS: &[&str] = &["run", "exec", "task", "run-script"];
+/// Build tools whose `install` goal builds the code before it installs it.
+const BUILD_TOOLS: &[&str] = &["mvn", "mvnw", "gradle", "gradlew", "make"];
 
 /// What one command does, read by its program (after `sudo`, `env`, `npx`,
 /// `uv run`, `python -m` and the like) and its subcommand, never by a word
 /// further on. `text` is the command as written, `code` the same bytes with
 /// its data blanked.
 fn command_kind(text: &str, code: &str) -> Command {
-    let all: Vec<&str> = code.split_whitespace().collect();
-    let w = peel(&all);
+    let mut all: Vec<&str> = code.split_whitespace().collect();
+    // PowerShell's `$out=cargo test` is `$out = cargo test`.
+    if let Some((name, value)) = all.first().and_then(|w| w.split_once('=')) {
+        if name.starts_with('$') && !value.is_empty() {
+            all.splice(0..1, [name, "=", value]);
+        }
+    }
+    let mut w = peel(&all);
+    // `$out = cargo test` runs the command it keeps; `$n = 3` runs none.
+    if w.get(1) == Some(&"=") {
+        w = peel(&w[2..]);
+        let runs = w.first().is_some_and(|v| {
+            v.starts_with(|c: char| c.is_ascii_alphabetic() || matches!(c, '.' | '/' | '\\' | '~'))
+        });
+        if !runs {
+            w = &[];
+        }
+    }
     let Some(first) = w.first() else {
         return Command {
             kind: Kind::Setup,
             program: String::new(),
             sub: None,
             next: None,
+            builds: false,
         };
     };
     let name = program(first);
@@ -609,42 +676,59 @@ fn command_kind(text: &str, code: &str) -> Command {
     let mut plain = lower[1..]
         .iter()
         .map(String::as_str)
-        .filter(|x| !x.starts_with('-'));
+        .filter(|x| !x.starts_with(['-', '+']));
     let sub = plain.next();
     let next = plain.next();
-    let kind = if SETUP.contains(&name.as_str()) || first.starts_with('-') || w.get(1) == Some(&"=")
-    {
-        // `-arg` alone is a continued line; `$x = 1` sets a variable.
+    let builtin = !first.contains(['/', '\\']);
+    let exec_at = (name == "find")
+        .then(|| {
+            lower
+                .iter()
+                .position(|x| matches!(x.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+        })
+        .flatten();
+    let mut builds = false;
+    let kind = if SETUP.contains(&name.as_str()) || first.starts_with('-') || ps_expression(w) {
+        // `-arg` alone is a continued line.
         Kind::Setup
     } else if (matches!(name.as_str(), "sed" | "perl" | "ruby")
         && w[1..].iter().any(|f| in_place(&name, f)))
         || (name == "find" && lower.iter().any(|x| x == "-delete"))
     {
         Kind::Change
-    } else if name == "find"
-        && lower
-            .iter()
-            .any(|x| matches!(x.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+    } else if let Some(at) = exec_at {
+        // `find . -exec grep -n x {} +` runs grep on each file it finds.
+        let inner = w[at + 1..].join(" ");
+        match command_kind(&inner, &inner).kind {
+            Kind::Look => Kind::Look,
+            Kind::Change => Kind::Change,
+            _ => Kind::Exec,
+        }
+    } else if (builtin && matches!(name.as_str(), "test" | "[" | "[["))
+        || lower.iter().any(|x| x == "--version")
     {
-        Kind::Exec
-    } else if (!first.contains(['/', '\\']) && VIEWERS.contains(&name.as_str()))
+        // The shell's `test -f x` only asks.
+        Kind::Look
+    } else if RUN_WORDS.contains(&name.as_str()) || TEST_PROGRAMS.contains(&name.as_str()) {
+        // A check runner's words are its filters: `pytest -k update`.
+        Kind::Run
+    } else if (builtin && VIEWERS.contains(&name.as_str()))
         || crate::perm::shell_is_readonly(text)
         || LOOK_WORDS.contains(&name.as_str())
         || sub.is_some_and(|s| LOOK_WORDS.contains(&s))
-        || lower.iter().any(|x| x == "--version")
     {
         Kind::Look
     } else if MUTATING_HEADS.contains(&name.as_str())
         || sub.is_some_and(|s| MUTATING_HEADS.contains(&s))
     {
+        builds = BUILD_TOOLS.contains(&name.as_str()) && sub == Some("install");
         Kind::Change
     } else if name == "git" {
         // `git fetch` or `git stash` neither checks code nor is a change to check.
         Kind::Setup
-    } else if [Some(name.as_str()), sub, next]
-        .into_iter()
-        .flatten()
-        .any(|x| RUN_WORDS.contains(&x))
+    } else if sub.is_some_and(|s| RUN_WORDS.contains(&stem(s)))
+        || (sub.is_some_and(|s| RUNNER_VERBS.contains(&s))
+            && next.is_some_and(|n| RUN_WORDS.contains(&stem(n))))
     {
         Kind::Run
     } else {
@@ -655,7 +739,24 @@ fn command_kind(text: &str, code: &str) -> Command {
         program: name,
         sub: sub.map(str::to_string),
         next: next.map(str::to_string),
+        builds,
     }
+}
+
+/// `$c[0..9]`, `$x.Count` or `$f in …`: a PowerShell expression or loop
+/// header, which runs no program. `$PYTHON -m pytest` still runs one.
+fn ps_expression(w: &[&str]) -> bool {
+    let Some(rest) = w[0].strip_prefix('$') else {
+        return false;
+    };
+    let after =
+        rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == ':');
+    after.starts_with(['[', '.']) || w.get(1).is_some_and(|x| x.eq_ignore_ascii_case("in"))
+}
+
+/// A script name's first part: `test` in `test:unit` or `test-ci`.
+fn stem(word: &str) -> &str {
+    word.split([':', '-']).next().unwrap_or(word)
 }
 
 /// Programs that run tests. Any program whose subcommand is a test word
@@ -667,17 +768,21 @@ const TEST_SUBS: &[&str] = &["test", "tests", "nextest"];
 
 /// `cmd` runs tests: one of its commands runs a test runner, by its program
 /// or its subcommand (`cargo test 2>&1 | tail`, `python -m pytest`, `npm run
-/// test`). A test word anywhere else runs none: `pip install pytest-mock`,
-/// `cat jest.config.js`, `grep test x`, a commit message.
+/// test:unit`, `yarn jest`). A test word anywhere else runs none: `pip
+/// install pytest-mock`, `cat jest.config.js`, `grep test x`, a commit message.
 pub(crate) fn runs_tests(cmd: &str) -> bool {
     let code = crate::shell_redirect::code(cmd);
-    commands(&code).into_iter().any(|at| {
+    commands(&code).into_iter().any(|(at, _)| {
         let c = command_kind(&cmd[at.clone()], &code[at]);
-        let test = |w: &Option<String>| w.as_deref().is_some_and(|w| TEST_SUBS.contains(&w));
+        let test = |w: &Option<String>| {
+            w.as_deref()
+                .map(stem)
+                .is_some_and(|w| TEST_SUBS.contains(&w) || TEST_PROGRAMS.contains(&w))
+        };
         matches!(c.kind, Kind::Run | Kind::Exec)
             && (TEST_PROGRAMS.contains(&c.program.as_str())
                 || test(&c.sub)
-                || (c.sub.as_deref() == Some("run") && test(&c.next)))
+                || (c.sub.as_deref().is_some_and(|s| RUNNER_VERBS.contains(&s)) && test(&c.next)))
     })
 }
 
@@ -1548,6 +1653,52 @@ mod tests {
             (
                 "find . -name '*.orig' -delete",
                 &["src/handler.rs", "find . -name '*.orig' -delete"],
+            ),
+            // A check runner's own words are filters, never a change or a look.
+            ("pytest -k update", &[]),
+            ("npx jest -t add", &[]),
+            ("pytest -k status", &[]),
+            ("python -m pytest -k remove", &[]),
+            // A PowerShell variable keeps what its command printed.
+            (
+                "$out = cargo test 2>&1 | Out-String; Write-Output $out",
+                &[],
+            ),
+            ("$out=cargo test", &[]),
+            ("$n = 3", code),
+            ("$env:RUST_LOG=\"debug\"", code),
+            // An index, a property or a path after `)` is data, and so is a loop header.
+            ("(Get-Content src\\handler.rs)[0..40]", code),
+            ("(Get-Content src\\handler.rs).Count", code),
+            ("cat $(pwd)/src/handler.rs", code),
+            ("$c = Get-Content src\\handler.rs; $c[10..30]", code),
+            (
+                "foreach ($f in Get-ChildItem *.rs) { Get-Content $f }",
+                code,
+            ),
+            (
+                "Get-ChildItem *.rs | ForEach-Object { Get-Content $_ }",
+                code,
+            ),
+            ("find . -name '*.rs' -exec grep -n 'fn main' {} +", code),
+            // A viewer a change pipes into shows the change's lines, not its result.
+            (
+                "pip install requests 2>&1 | tail -3",
+                &["src/handler.rs", "pip install requests 2>&1 | tail -3"],
+            ),
+            (
+                "systemctl restart nginx && systemctl status nginx | head",
+                code,
+            ),
+            // The shell's `test` and `[` only ask, and so does a package lookup.
+            ("test -f package.json && echo yes", code),
+            ("[ -f src/handler.rs ] && echo ok", code),
+            ("pip show pytest", code),
+            // `mvn install` builds the code, then installs it.
+            ("mvn install", &["mvn install"]),
+            (
+                "Add-Content src\\handler.rs x",
+                &["src/handler.rs", "Add-Content src\\handler.rs x"],
             ),
         ]);
         // A .py edit is the same: the generator ran, and only its output file is left.
