@@ -4,14 +4,20 @@ import {
   editSkill,
   getSkillDetail,
   getSkills,
+  installSkillsHub,
   openSkillFolder,
+  searchSkillsHub,
   setSkillOn,
   type SkillDetail,
   type SkillRow,
   type SkillSource,
+  type SkillsHubHit,
 } from "./api";
 import { Toggle } from "./Toggle";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
+
+export const SKILLS_HUB_NOTE =
+  "Search ClawHub, SkillsSH, GitHub (owner/repo), or a host with /.well-known/skills. New installs go through the skill scanner and quarantine.";
 
 /** The groups, in page order. Built-in skills live in the Code tab, not here. */
 export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
@@ -76,13 +82,16 @@ export function Skills({
   remote?: boolean;
 }) {
   const [rows, setRows] = useState<SkillRow[] | null>(null);
-  const { note, fail, clear } = useNote();
+  const { note, fail, clear, ok } = useNote();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [making, setMaking] = useState(false);
   const [newName, setNewName] = useState("");
   const [newWhat, setNewWhat] = useState("");
   const [edit, setEdit] = useState<SkillDetail | null>(null);
+  const [hubQuery, setHubQuery] = useState("");
+  const [hubHits, setHubHits] = useState<SkillsHubHit[] | null>(null);
+  const [hubBusy, setHubBusy] = useState(false);
 
   async function refresh() {
     setBusy(true);
@@ -155,9 +164,42 @@ export function Skills({
     }
   }
 
+  async function runHubSearch(event: FormEvent) {
+    event.preventDefault();
+    if (!hubQuery.trim() || hubBusy) return;
+    setHubBusy(true);
+    try {
+      setHubHits(await searchSkillsHub(hubQuery));
+      clear();
+    } catch (err) {
+      setHubHits([]);
+      fail(err);
+    } finally {
+      setHubBusy(false);
+    }
+  }
+
+  async function installHubHit(hit: SkillsHubHit) {
+    if (hubBusy) return;
+    setHubBusy(true);
+    try {
+      const done = await installSkillsHub(hit);
+      setRows(done.page.rows);
+      setHubHits((prev) =>
+        prev ? prev.filter((row) => !(row.source === hit.source && row.id === hit.id)) : prev,
+      );
+      ok(done.note);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setHubBusy(false);
+    }
+  }
+
   const shown = rows ? filterSkills(rows, query) : [];
   return (
     <section className="skills" aria-label="Skills">
+      <PageHead title="Skills" />
       <div className="card-buttons">
         <input
           type="search"
@@ -184,6 +226,53 @@ export function Skills({
         using it. Make a new one with New skill, or Edit one of this app's own
         to change it.
       </p>
+      {!remote && (
+        <div className="skill-group" aria-label="Skills Hub">
+          <h3>Skills Hub</h3>
+          <p className="note">{SKILLS_HUB_NOTE}</p>
+          <form className="card-buttons" onSubmit={(event) => void runHubSearch(event)}>
+            <input
+              type="search"
+              aria-label="Search Skills Hub"
+              placeholder="Search registries, owner/repo, or example.com"
+              value={hubQuery}
+              onChange={(event) => setHubQuery(event.target.value)}
+            />
+            <button type="submit" disabled={hubBusy || !hubQuery.trim()}>
+              {hubBusy ? "Searching…" : "Search Hub"}
+            </button>
+          </form>
+          {hubHits && hubHits.length === 0 && (
+            <p className="empty">No hub skills matched that search.</p>
+          )}
+          {hubHits && hubHits.length > 0 && (
+            <ul className="rows" aria-label="Skills Hub results">
+              {hubHits.map((hit) => (
+                <li
+                  key={`${hit.source}:${hit.id}`}
+                  className="card skill"
+                  aria-label={hit.name}
+                >
+                  <div className="card-title">{hit.name}</div>
+                  <div className="card-status">
+                    {hit.source}
+                    {hit.description ? ` · ${hit.description}` : ""}
+                  </div>
+                  <div className="card-buttons">
+                    <button
+                      type="button"
+                      disabled={hubBusy}
+                      onClick={() => void installHubHit(hit)}
+                    >
+                      Install
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {making && (
         <form
           className="skill-edit"

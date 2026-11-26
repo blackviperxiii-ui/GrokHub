@@ -167,5 +167,7 @@ export function useChipRow({
     );
   }
 
-  return { chips: wanted ? chips : [], picked, hide };
+  // While a reply runs the row stays, its chips off (ChipRow `busy`), so the
+  // box above it doesn't drop on Send and jump back when the reply ends.
+  return { chips: active ? chips : [], picked, hide };
 }

@@ -1,6 +1,6 @@
 pkgbase = grokhub
 	pkgdesc = Loadout: a gaming and PC companion desktop app, built with Tauri, and its LAN hub; no Electron
-	pkgver = 3.5.0
+	pkgver = 3.6.0
 	pkgrel = 1
 	url = https://github.com/blackviperxiii-ui/GrokHub
 	install = grokhub.install
@@ -21,7 +21,7 @@ pkgbase = grokhub
 	optdepends = llama-cpp: local model engine (alternative to in-app download)
 	options = !debug
 	options = !lto
-	source = grokhub::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v3.5.0
+	source = grokhub::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v3.6.0
 	sha256sums = SKIP
 
 pkgname = grokhub

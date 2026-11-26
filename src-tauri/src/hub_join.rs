@@ -452,17 +452,25 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        // The hub holds its answer until Leave has started, so the send is
+        // still out when Leave runs, however slow this machine is.
+        let (asked, got_ask) = std::sync::mpsc::channel();
+        let (leaving, got_leave) = std::sync::mpsc::channel::<()>();
         let server = std::thread::spawn(move || {
             let (mut conn, _) = listener.accept().unwrap();
             let mut buf = [0u8; 4096];
             let _ = conn.read(&mut buf);
-            std::thread::sleep(Duration::from_millis(400));
+            asked.send(()).unwrap();
+            got_leave.recv().unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+            let answered = std::time::Instant::now();
             let body = r#"{"ok":true}"#;
             let _ = write!(
                 conn,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             );
+            answered
         });
         std::fs::write(
             dir.join(FILE),
@@ -476,16 +484,17 @@ mod tests {
             let dir = dir.clone();
             std::thread::spawn(move || send(&dir, &card(), 50))
         };
-        std::thread::sleep(Duration::from_millis(100));
-        let started = std::time::Instant::now();
+        got_ask.recv().unwrap();
+        leaving.send(()).unwrap();
         assert_eq!(leave(&dir), Ok(JoinView::default()));
-        assert!(
-            started.elapsed() >= Duration::from_millis(200),
-            "Leave returned while the send was still out: {:?}",
-            started.elapsed()
-        );
+        let left = std::time::Instant::now();
         sending.join().unwrap();
-        server.join().unwrap();
+        let answered = server.join().unwrap();
+        assert!(
+            left >= answered,
+            "Leave returned {:?} before the hub answered the send",
+            answered - left
+        );
         assert_eq!(view(&dir), JoinView::default());
         assert_eq!(*TEST_TOKEN.lock().unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);

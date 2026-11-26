@@ -2,13 +2,17 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+mod a2a_route;
 pub mod doctor;
 pub mod mcp_bridge;
+pub mod node_client;
+pub mod node_host;
 pub mod oauth_cli;
 mod server;
 pub mod update;
 
-pub use server::{serve, serve_background, serve_lan};
+pub use a2a_route::{A2aDoor, PeerAsk, PeerTurns};
+pub use server::{serve, serve_background, serve_background_with, serve_lan, serve_lan_with};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Launch {
@@ -41,6 +45,9 @@ pub enum Launch {
     Update,
     /// Sign in with Grok (device code) into the shell's keychain entry.
     OAuth,
+    /// `grokhub-hub node pair|offer|run|wake|status|forget`: this device as
+    /// a companion of the app on another computer.
+    Node,
 }
 
 impl Launch {
@@ -57,6 +64,7 @@ impl Launch {
                 | Launch::BenchLocal
                 | Launch::RoutineRun
                 | Launch::RoutineManage
+                | Launch::Node
         )
     }
 }
@@ -71,6 +79,9 @@ pub fn askpass_socket(args: &[String]) -> Option<&str> {
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
+    if args.get(1).map(String::as_str) == Some("node") {
+        return Launch::Node;
+    }
     if args.get(1).map(String::as_str) == Some("bench")
         && args.get(2).map(String::as_str) == Some("local")
     {
@@ -293,6 +304,10 @@ mod tests {
         assert_eq!(
             parse_args(&args(&["grokhub-hub", "routine"])),
             Launch::Serve
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub-hub", "node", "run"])),
+            Launch::Node
         );
         // Allow seals its grant with the keyring key, so the CLI needs the
         // keyring like a routine run does.

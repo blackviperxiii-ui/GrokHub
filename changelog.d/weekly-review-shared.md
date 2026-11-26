@@ -1,1 +1,0 @@
-- The Sunday self-review's last-run guard, its Suggestion cards and its `self_review.json` writers now live in shared core, so the desktop app can run the same pass without both apps running it on one profile.

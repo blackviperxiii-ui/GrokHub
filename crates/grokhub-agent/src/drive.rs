@@ -237,6 +237,11 @@ If {product} has no way to do it, mark it cancelled, say so once in plain words 
     }
 }
 
+/// The app's note, once per run, when a change request's reply claims the
+/// work is done but [`unbacked_done`] finds nothing ran: the model gets one
+/// more step to do it or say it isn't done.
+pub const UNBACKED_DONE_NOTE: &str = "You said this is done, but no tool ran this turn to make or check the change. Do it now and check the result with a tool, or say plainly that it isn't done and why.";
+
 /// The line a change request's reply gets when it claims the work is done
 /// but no tool ran this run: nothing backs the claim, so the turn says so.
 pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {
@@ -261,23 +266,96 @@ pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {
     {
         return None;
     }
-    let words: Vec<&str> = text
+    // Only a statement claims: a question asks, and "it isn't done" or
+    // "nothing was updated" says the opposite.
+    let text = text.replace('\u{2019}', "'").replace(" - ", " — ");
+    let claims = sentences(&text).into_iter().any(|sentence| {
+        // `**Which file?**` asks too.
+        let bare = sentence.trim_end_matches(['*', '_', ')', '"', '\'', '`']);
+        let clauses: Vec<&str> = bare.split([',', ';', ':', '—', '–']).collect();
+        // A question's asking part claims nothing, but what comes before it
+        // does: `Fixed it, want me to commit?` says it is fixed.
+        let said = if bare.ends_with('?') {
+            clauses
+                .iter()
+                .position(|clause| asks(clause))
+                .unwrap_or(clauses.len() - 1)
+        } else {
+            clauses.len()
+        };
+        clauses[..said].iter().any(|clause| {
+            let words = words_of(clause);
+            (0..words.len()).any(|at| {
+                CLAIMS.iter().any(|claim| words[at..].starts_with(claim))
+                    && !words[..at]
+                        .iter()
+                        .any(|w| NEGATORS.contains(w) || w.ends_with("n't"))
+            })
+        })
+    });
+    claims.then_some("That isn't done yet: nothing ran this turn to make or check the change.")
+}
+
+/// Words that, earlier in a clause, turn its claim around: `I couldn't get
+/// it fixed`, `None of the files were updated`.
+const NEGATORS: &[&str] = &["not", "never", "nothing", "no", "none", "nobody", "unable"];
+
+/// Words a clause opens with when it asks.
+const QUESTION_WORDS: &[&str] = &[
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "is", "are", "am",
+    "was", "were", "do", "does", "did", "can", "could", "should", "shall", "will", "would", "may",
+    "might", "must", "have", "has", "had", "want", "anything", "any",
+];
+
+/// `clause` opens with a question word: `want me to commit it?`.
+fn asks(clause: &str) -> bool {
+    words_of(clause)
+        .first()
+        .is_some_and(|w| QUESTION_WORDS.contains(w))
+}
+
+/// `clause`'s words, letters and digits with their apostrophes.
+fn words_of(clause: &str) -> Vec<&str> {
+    clause
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
         .filter(|w| !w.is_empty())
-        .collect();
-    let claims = words
-        .iter()
-        .any(|w| ["done", "updated", "fixed", "completed", "finished"].contains(w))
-        || [
-            "all set",
-            "error gone",
-            "error is gone",
-            "works again",
-            "it works now",
-        ]
-        .iter()
-        .any(|p| text.contains(p));
-    claims.then_some("That isn't done yet: nothing ran this turn to make or check the change.")
+        .collect()
+}
+
+/// The words that claim a change is made.
+const CLAIMS: &[&[&str]] = &[
+    &["done"],
+    &["updated"],
+    &["fixed"],
+    &["completed"],
+    &["finished"],
+    &["all", "set"],
+    &["error", "gone"],
+    &["error", "is", "gone"],
+    &["works", "again"],
+    &["it", "works", "now"],
+];
+
+/// `text`'s sentences, trimmed, each with its end mark: cut at `.`, `!` or
+/// `?` before a space or the end, and at line ends. A dot inside a word
+/// (`app.toml`) ends nothing.
+fn sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let ends = c == '\n'
+            || (matches!(c, '.' | '!' | '?')
+                && chars.peek().is_none_or(|(_, n)| n.is_whitespace()));
+        if ends {
+            let end = if c == '\n' { i } else { i + c.len_utf8() };
+            out.push(text[start..end].trim());
+            start = i + c.len_utf8();
+        }
+    }
+    out.push(text[start..].trim());
+    out.retain(|s| !s.is_empty());
+    out
 }
 
 fn list<'a>(items: impl Iterator<Item = &'a TodoItem>) -> String {
@@ -477,6 +555,38 @@ mod tests {
         );
         // "undone" is not "done".
         assert_eq!(unbacked_done("That change is undone.", 0), None);
+        // A question, or a claim word said in the negative, claims nothing.
+        for reply in [
+            "Which config file should be updated: app.toml or local.toml?",
+            "Understood, I left the file alone, so nothing was updated.",
+            "It isn't done: I could not reach the file.",
+            "It isn\u{2019}t done yet.",
+            "Not done. I need the folder first.",
+            "No files updated.",
+            "This was never fixed upstream.",
+            "**Which file should be updated?**",
+            "I couldn't get it fixed.",
+            "I wasn't able to get the config updated.",
+            "Nothing has been updated yet.",
+            "None of the files were updated.",
+            "The file has not yet been updated.",
+        ] {
+            assert_eq!(unbacked_done(reply, 0), None, "{reply}");
+        }
+        // A claim next to a question or a negation elsewhere still claims.
+        for reply in [
+            "Updated the config. Want me to restart it?",
+            "No problem, done.",
+            "Done, but not tested.",
+            "Fixed app.toml for you.",
+            "Fixed the typo in app.toml, want me to commit it?",
+            "Done \u{2014} anything else?",
+            "I've updated the config; should I restart the service?",
+            "No problem \u{2014} done.",
+            "Sure, no problem - fixed it.",
+        ] {
+            assert_eq!(unbacked_done(reply, 0), Some(line), "{reply}");
+        }
         // A Do all summary recaps earlier turns, and a no-op says nothing changed.
         let recap = "All four fixes are through.\n\nFinished\n- Done: Restart stopped services\n- Done: Clear temp files";
         assert!(grokhub_core::recap::split_recap(recap).is_some());

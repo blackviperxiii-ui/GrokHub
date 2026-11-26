@@ -1,2 +1,0 @@
-- Shell: a small dotted orb shows while a reply hasn't started (thinking, looking something up, or working with a tool) and in the mic while it listens or turns speech into text. Plain 2D canvas, still under reduced motion, paused when hidden.
-- Shell: the built app now carries `licenses.md` with the notices of every bundled package.

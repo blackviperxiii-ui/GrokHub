@@ -1,4 +1,0 @@
-- Nothing on screen shows which model or effort Auto picked: the Auto chip, mode chips, "How Auto picks", Refresh models, why and guard cards, router change notes and Imagine's model pickers are gone. Imagine uses its default model.
-- Ask in chat and you get a straight answer: a reply from a provider or the on-device model now knows the model and the reasoning effort it was sent with.
-- Plan, outage and wait notices, the premium card and provider notes say what happened without naming a model ("Your plan changed", "Waiting for xAI", "Use a premium model", "Added 2 models from openrouter.ai.").
-- Provider and Local AI setup, OpenRouter's data policy, spend caps and the price limit stay where they were.

@@ -33,7 +33,7 @@ import { PRODUCT_NAME } from "./brand";
 import { OPEN_EVENT } from "./onboardApi";
 import { Toggle } from "./Toggle";
 import { inShell } from "./transport";
-import { ConfirmRow, StatusLine, useNote } from "./ui";
+import { ConfirmRow, PageHead, StatusLine, useNote } from "./ui";
 
 const TABS: MemoryTab[] = ["SOUL.md", "USER.md", "MEMORY.md"];
 
@@ -474,9 +474,9 @@ export function Memory() {
 
   return (
     <section className="memory" aria-label="Personal">
-      <p className="note">
+      <PageHead title="Personal">
         What {PRODUCT_NAME} knows about you, and where it learned it. It all stays on this computer.
-      </p>
+      </PageHead>
       {inShell() && (
         <button type="button" className="chip" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
           Get to know you

@@ -1,1 +1,0 @@
-- Labs: the update channel note now points to About, under Updates, instead of the cabin.

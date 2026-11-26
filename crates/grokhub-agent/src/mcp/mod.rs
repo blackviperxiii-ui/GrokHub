@@ -1,6 +1,9 @@
 //! MCP client. Sync JSON-RPC over stdio, streamable HTTP, and legacy SSE.
 //! One worker thread per stdio child or HTTP read. No tokio.
 
+mod apps;
+mod tasks;
+pub use apps::{McpAppView, UiMeta, MIME as MCP_APP_MIME};
 mod browser;
 pub use browser::{loopback_endpoint, origin_of, Attach as BrowserAttach};
 mod config;
@@ -39,6 +42,8 @@ use crate::tools::{fence, ToolOutput};
 use config::TransportDef;
 use rpc::RawTool;
 pub use rpc::{ToolHints, ToolIcon};
+pub(crate) use tasks::take_orphans;
+pub use tasks::{binding_refusal, cancel_task, seed_open_task};
 
 /// Individual tool schemas at this count. Above it, `search_tool` and
 /// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
@@ -143,6 +148,7 @@ struct ToolRec {
     output_schema: Option<Value>,
     hints: ToolHints,
     icons: Vec<ToolIcon>,
+    ui: Option<UiMeta>,
 }
 
 /// One connected MCP tool as its server's `tools/list` describes it, for a
@@ -183,6 +189,56 @@ pub fn tool_list() -> Vec<ToolInfo> {
             output_schema: tool.output_schema,
         })
         .collect()
+}
+
+/// A connected MCP tool another device may borrow: what a companion lends
+/// when its person offers `mcp` (`grokhub-hub node`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LentTool {
+    /// The `server__tool` name [`call_lent`] takes.
+    pub qualified: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub read_only: bool,
+}
+
+/// Every connected MCP tool with its input schema, for a companion to lend.
+/// Another companion's relay (`/node/v1/mcp/`) is never lent on: that
+/// companion's person allowed this computer, not whoever it lends to.
+pub fn lent_tools() -> Vec<LentTool> {
+    let tools = current_tools();
+    let (slots, _) = load_slots();
+    let relays: Vec<&String> = slots
+        .iter()
+        .filter(|(_, slot)| {
+            matches!(&lock_slot(slot).def.transport,
+                config::TransportDef::Http { url, .. } if url.contains("/node/v1/mcp/"))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    tools
+        .into_iter()
+        .filter(|tool| !relays.contains(&&tool.server))
+        .map(|tool| LentTool {
+            qualified: tool.qualified,
+            description: tool.description,
+            input_schema: tool.schema,
+            read_only: tool.hints.read_only,
+        })
+        .collect()
+}
+
+/// Call a connected MCP tool by its `server__tool` name, the way a chat on
+/// this computer would. `None` when no connected tool has that name. The
+/// answer comes back without this computer's untrusted fence: the app that
+/// borrows the tool fences it as its own MCP output.
+pub fn call_lent(qualified: &str, args: &Value) -> Option<ToolOutput> {
+    if !qualified.contains("__") {
+        return None;
+    }
+    let mut out = try_dispatch(qualified, args, &|| false)?;
+    out.text = crate::tools::fence::display_text(&out.text).into_owned();
+    Some(out)
 }
 
 struct SlotInner {
@@ -241,10 +297,29 @@ impl Conn {
         timeout: std::time::Duration,
         stop: &dyn Fn() -> bool,
         retry_safe: bool,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Value), String> {
         match self {
-            Conn::Stdio(conn) => conn.call(name, args, key, timeout),
+            Conn::Stdio(conn) => conn.call(name, args, key, timeout, stop),
             Conn::Http(conn) => conn.call(name, args, key, timeout, stop, retry_safe),
+        }
+    }
+
+    fn raw_rpc(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value, String> {
+        match self {
+            Conn::Stdio(conn) => conn.raw_rpc(method, params, timeout),
+            Conn::Http(conn) => conn.raw_rpc(method, params, timeout),
+        }
+    }
+
+    fn read_resource(&mut self, uri: &str, timeout: std::time::Duration) -> Result<Value, String> {
+        match self {
+            Conn::Stdio(conn) => conn.read_resource(uri, timeout),
+            Conn::Http(conn) => conn.read_resource(uri, timeout),
         }
     }
 
@@ -349,6 +424,38 @@ pub fn connect_in_background(workspace: &Path) {
     });
 }
 
+pub(crate) fn cancel_open_tasks(session: &str) {
+    let plan = tasks::open_by_server(session);
+    if plan.is_empty() {
+        return;
+    }
+    let slots = {
+        let held = lock_state();
+        held.slots.clone()
+    };
+    for (server, ids) in plan {
+        let Some(slot) = slots.get(&server) else {
+            continue;
+        };
+        let Ok(mut inner) = slot.try_lock() else {
+            continue;
+        };
+        if let Some(conn) = inner.conn.as_mut() {
+            for id in &ids {
+                let _ = conn.raw_rpc(
+                    "tasks/cancel",
+                    json!({ "taskId": id }),
+                    std::time::Duration::from_secs(2),
+                );
+            }
+        }
+        drop(inner);
+        for id in ids {
+            tasks::finish_id(&id);
+        }
+    }
+}
+
 pub fn shutdown_all() {
     let mut held = lock_state();
     for slot in held.slots.values() {
@@ -356,6 +463,7 @@ pub fn shutdown_all() {
     }
     held.slots.clear();
     held.loaded = false;
+    tasks::clear_memory();
 }
 
 pub fn configured() -> Vec<DoctorRow> {
@@ -709,7 +817,10 @@ pub fn save_key(name: &str, key: &str) -> Result<String, String> {
 /// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
 /// behind `search_tool` and `use_tool`.
 pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
-    let tools = current_tools();
+    let tools: Vec<ToolRec> = current_tools()
+        .into_iter()
+        .filter(|tool| apps::model_visible(tool.ui.as_ref()))
+        .collect();
     if tools.len() + native > DEFER_AFTER {
         return vec![search_schema(), use_schema()];
     }
@@ -1087,7 +1198,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     // A browser that died at launch gets one isolated relaunch, then the
     // model is pointed at web_fetch instead of a dead tool (LO-51).
     let died = match &result {
-        Ok((text, true)) => browser::launch_died(text).then(|| text.clone()),
+        Ok((text, true, _)) => browser::launch_died(text).then(|| text.clone()),
         Err(err) => browser::launch_died(err).then(|| err.clone()),
         Ok(_) => None,
     };
@@ -1114,17 +1225,43 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     // Nothing from a tab on a site the user didn't allow reaches the model.
     // The page check reads the whole answer; only then is it cut to size.
     let result = match result {
-        Ok((text, failed)) => {
+        Ok((text, failed, raw)) => {
             match browser::page_refusal(&rec.server, &rec.raw, args, &text, failed) {
-                Ok(text) => Ok((rpc::clip(text), failed)),
+                Ok(text) => Ok((rpc::clip(text), failed, raw)),
                 Err(why) => return ToolOutput::err(why),
             }
         }
         Err(err) => Err(err),
     };
     match result {
-        Ok((text, true)) => fenced_error(&text),
-        Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
+        Ok((text, true, _)) => fenced_error(&text),
+        Ok((text, false, raw)) => {
+            let mut out = ToolOutput::ok(fence::fence("mcp", &text));
+            if let Some(ui) = &rec.ui {
+                let wait = timeout.min(std::time::Duration::from_secs(15));
+                if let Ok(resource) = inner
+                    .conn
+                    .as_mut()
+                    .ok_or_else(|| "stopped".to_string())
+                    .and_then(|conn| conn.read_resource(&ui.resource_uri, wait))
+                {
+                    if let Ok((html, prefers_border)) =
+                        apps::decode_resource(&ui.resource_uri, &resource)
+                    {
+                        out.mcp_app = Some(Box::new(McpAppView {
+                            server: rec.server.clone(),
+                            tool: rec.raw.clone(),
+                            resource_uri: ui.resource_uri.clone(),
+                            html: apps::with_csp(&html, &apps::default_csp()),
+                            prefers_border,
+                            tool_input: args.clone(),
+                            tool_result: raw,
+                        }));
+                    }
+                }
+            }
+            out
+        }
         Err(err) => {
             inner.conn.take();
             inner.last_error = Some(clip_err(&err));
@@ -1140,6 +1277,45 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
             out
         }
     }
+}
+
+/// Call an app-visible MCP tool from an in-chat MCP App iframe. Rejects tools
+/// that are not app-visible. Returns the JSON-RPC `tools/call` result value.
+pub fn app_call_tool(server: &str, name: &str, args: &Value) -> Result<Value, String> {
+    let slots = slots_now();
+    let Some(slot) = slots.get(server).cloned() else {
+        return Err(format!("MCP server `{server}` is not connected"));
+    };
+    let mut inner = lock_slot(&slot);
+    let ui = inner
+        .raw
+        .iter()
+        .find(|tool| tool.name == name)
+        .and_then(|tool| tool.ui.as_ref());
+    if !apps::app_visible(ui) {
+        return Err(format!("Tool {name} is not available to apps"));
+    }
+    let timeout = inner.def.tool_timeout;
+    let Some(conn) = inner.conn.as_mut() else {
+        return Err(format!("MCP server `{server}` stopped"));
+    };
+    let (_, failed, raw) = conn.call(name, args, None, timeout, &|| false, true)?;
+    if failed {
+        return Err(raw
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or("tool reported an error")
+            .to_string());
+    }
+    Ok(raw)
+}
+
+/// Host result for a view's `ui/initialize` (JSON-RPC result payload).
+pub fn app_host_initialize() -> Value {
+    apps::host_initialize_result()
 }
 
 /// A failed MCP call for the model. The text can be the server's own words
@@ -1243,11 +1419,17 @@ fn current_tools() -> Vec<ToolRec> {
     // not waited on.
     // Tests pin config and Offline only per thread, so they connect in line.
     let side_by_side = !cfg!(test) && pending.len() > 1;
+    // Each connect thread keeps the turn's config folder, so an agent's
+    // servers start with the agent's home.
+    let pin = crate::perm::pinned_config();
     match pending.as_slice() {
         many if side_by_side => std::thread::scope(|scope| {
             for slot in many {
-                let workspace = &workspace;
-                scope.spawn(move || connect_if_needed(slot, workspace));
+                let (workspace, pin) = (&workspace, &pin);
+                scope.spawn(move || {
+                    let _config = pin.clone().map(crate::perm::ConfigGuard::set);
+                    connect_if_needed(slot, workspace)
+                });
             }
         }),
         each => {
@@ -1491,6 +1673,7 @@ fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
                     output_schema: tool.output_schema.clone(),
                     hints: tool.hints.clone(),
                     icons: tool.icons.clone(),
+                    ui: tool.ui.clone(),
                 })
             })
             .collect();
@@ -1567,6 +1750,7 @@ pub(crate) fn install_test_tools(rows: &[(&str, &str, &str, bool)]) -> TestGuard
                 ..ToolHints::default()
             },
             icons: Vec::new(),
+            ui: None,
         });
     }
     install_test_recs(tools)
@@ -1594,6 +1778,7 @@ pub(crate) fn install_test_listing(server: &str, listing: &Value) -> TestGuard {
                 output_schema: tool.output_schema,
                 hints: tool.hints,
                 icons: tool.icons,
+                ui: tool.ui,
             })
         })
         .collect();
@@ -1609,8 +1794,9 @@ fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents, install_test_tools,
-        read_mcp_text, schema_tools, search_output, try_dispatch,
+        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents,
+        install_test_listing, install_test_tools, read_mcp_text, schema_tools, search_output,
+        try_dispatch,
     };
     use crate::gate::{decide, decide_with, mcp_policy_deny, Decision, Gate, PermMode};
     use crate::perm::ConfigGuard;
@@ -2331,6 +2517,54 @@ mod tests {
         let list = listed.iter().find(|t| t.name == "list").unwrap();
         assert_eq!(list.display_name(), "list");
         assert_eq!(list.output_schema, Some(json!({"type": "object"})));
+    }
+
+    #[test]
+    fn app_only_mcp_tools_stay_off_the_model_schema() {
+        let _guard = install_test_listing(
+            "box",
+            &json!({
+                "tools": [
+                    {
+                        "name": "show",
+                        "description": "Show",
+                        "inputSchema": {"type": "object"},
+                        "_meta": {
+                            "ui": {
+                                "resourceUri": "ui://demo/app",
+                                "visibility": ["model", "app"]
+                            }
+                        }
+                    },
+                    {
+                        "name": "restock",
+                        "description": "Restock",
+                        "inputSchema": {"type": "object"},
+                        "_meta": {
+                            "ui": {
+                                "resourceUri": "ui://demo/app",
+                                "visibility": ["app"]
+                            }
+                        }
+                    },
+                    {
+                        "name": "echo",
+                        "description": "Echo",
+                        "inputSchema": {"type": "object"}
+                    }
+                ]
+            }),
+        );
+        let names: Vec<String> = schema_tools(0)
+            .into_iter()
+            .filter_map(|tool| tool.get("name")?.as_str().map(str::to_string))
+            .collect();
+        assert!(names.iter().any(|n| n == "box__show"), "{names:?}");
+        assert!(names.iter().any(|n| n == "box__echo"), "{names:?}");
+        assert!(
+            names.iter().all(|n| n != "box__restock"),
+            "app-only tool must stay off the model: {names:?}"
+        );
     }
 
     #[test]

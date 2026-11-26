@@ -1,0 +1,2 @@
+- Local AI: after an on-device reply for coding, reasoning, writing or long pastes, the chat offers one download when a model that isn't installed would do that kind of work clearly better and fits this computer well. Each task kind and each model is offered at most once a month, whatever the answer.
+- `/download <model>` starts a catalog model's download on this computer; `/download` alone opens Settings → Local AI.

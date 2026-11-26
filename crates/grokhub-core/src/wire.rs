@@ -189,6 +189,12 @@ pub enum AcpEvent {
         id: String,
         spec: Value,
     },
+    /// An MCP App view (`text/html;profile=mcp-app`) for the chat host iframe.
+    /// `app` is a serialized `McpAppView` (server, tool, html, tool result).
+    McpApp {
+        id: String,
+        app: Value,
+    },
     Permission(PermissionAsk),
     Elicit(ElicitAsk),
     ElicitComplete {
@@ -2350,7 +2356,7 @@ mod tests {
             }),
         );
         assert!(secret.secret);
-        assert_eq!(secret.field_name.as_deref(), Some("api_token"));
+        assert!((secret.field_name.as_deref()) == (Some("api_token")));
         assert!(field_asks_for_secret(
             "password",
             "Password",

@@ -1,1 +1,0 @@
-- UI checks: color-share measures amber against the full frame (all pixels, including true-black panels) on every theme, keeping the 10% cut with no OLED exemption.

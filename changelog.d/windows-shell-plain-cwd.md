@@ -1,1 +1,0 @@
-- On Windows, shell commands now start in a plain folder path instead of a `\\?\` one, so PowerShell commands that use relative paths (like `Set-Content notes.txt`) work again.

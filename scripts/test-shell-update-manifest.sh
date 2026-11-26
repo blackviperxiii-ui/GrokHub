@@ -47,10 +47,15 @@ PY
 }
 
 if check "assert m['version'] == '$ver-beta.7', m['version']"; then ok "version is the tag without v"; else bad "version is the tag without v"; fi
-if check "assert sorted(m['platforms']) == ['linux-x86_64-appimage', 'linux-x86_64-deb', 'windows-x86_64-nsis'], sorted(m['platforms'])"; then
-  ok "the AppImage, .deb and NSIS installer (no macOS build, no macOS entry)"
+if check "assert sorted(m['platforms']) == ['linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-deb', 'windows-x86_64-nsis'], sorted(m['platforms'])"; then
+  ok "the AppImage (plus plain linux-x86_64 alias), .deb and NSIS installer (no macOS build, no macOS entry)"
 else
-  bad "the AppImage, .deb and NSIS installer (no macOS build, no macOS entry)"
+  bad "the AppImage (plus plain linux-x86_64 alias), .deb and NSIS installer (no macOS build, no macOS entry)"
+fi
+if check "assert m['platforms']['linux-x86_64'] == m['platforms']['linux-x86_64-appimage']"; then
+  ok "linux-x86_64 aliases the AppImage entry"
+else
+  bad "linux-x86_64 aliases the AppImage entry"
 fi
 if check "assert m['platforms']['linux-x86_64-deb']['url'] == 'https://github.com/blackviperxiii-ui/GrokHub/releases/download/v$ver-beta.7/$deb'"; then
   ok ".deb URL is the tag's release asset"
@@ -69,7 +74,9 @@ else
 fi
 
 # The signature field decodes back to a .minisig that verifies the asset.
-for pair in "linux-x86_64-appimage:$app" "linux-x86_64-deb:$deb" "windows-x86_64-nsis:$exe"; do
+# linux-x86_64 and linux-x86_64-appimage share one AppImage file: restore after
+# each tamper so the alias check still sees the signed bytes.
+for pair in "linux-x86_64-appimage:$app" "linux-x86_64:$app" "linux-x86_64-deb:$deb" "windows-x86_64-nsis:$exe"; do
   key="${pair%%:*}"
   f="${pair#*:}"
   python3 -c 'import json,sys,base64; m=json.load(open(sys.argv[1])); sys.stdout.buffer.write(base64.b64decode(m["platforms"][sys.argv[2]]["signature"]))' "$d/latest.json" "$key" > "$TMP/back.minisig"
@@ -78,12 +85,14 @@ for pair in "linux-x86_64-appimage:$app" "linux-x86_64-deb:$deb" "windows-x86_64
   else
     bad "$key signature verifies"
   fi
+  cp "$d/$f" "$TMP/asset.bak"
   printf 'tampered\n' >> "$d/$f"
   if minisign -V -q -p "$TMP/key.pub" -m "$d/$f" -x "$TMP/back.minisig" 2>/dev/null; then
     bad "$key signature rejects a changed asset"
   else
     ok "$key signature rejects a changed asset"
   fi
+  mv "$TMP/asset.bak" "$d/$f"
 done
 
 mv "$d/$exe.minisig" "$TMP/exe.minisig.bak"
@@ -109,6 +118,21 @@ if bash "$script" "$d" "v$ver" "blackviperxiii-ui/GrokHub" >/dev/null &&
 else
   bad "a macOS build adds darwin-aarch64-app"
 fi
+# Same signature check as Linux/Windows: the plugin swaps this .app.tar.gz in place.
+python3 -c 'import json,sys,base64; m=json.load(open(sys.argv[1])); sys.stdout.buffer.write(base64.b64decode(m["platforms"]["darwin-aarch64-app"]["signature"]))' "$d/latest.json" > "$TMP/mac.minisig"
+if minisign -V -q -p "$TMP/key.pub" -m "$d/$mac" -x "$TMP/mac.minisig"; then
+  ok "darwin-aarch64-app signature verifies"
+else
+  bad "darwin-aarch64-app signature verifies"
+fi
+cp "$d/$mac" "$TMP/mac.bak"
+printf 'tampered\n' >> "$d/$mac"
+if minisign -V -q -p "$TMP/key.pub" -m "$d/$mac" -x "$TMP/mac.minisig" 2>/dev/null; then
+  bad "darwin-aarch64-app signature rejects a changed asset"
+else
+  ok "darwin-aarch64-app signature rejects a changed asset"
+fi
+mv "$TMP/mac.bak" "$d/$mac"
 rm -f "$d/$mac" "$d/$mac.minisig"
 
 mv "$d/$app" "$TMP/app.bak"

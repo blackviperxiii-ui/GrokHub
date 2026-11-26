@@ -4,6 +4,7 @@
 # replace itself in place, each with the asset's download URL and its
 # minisign signature (base64 of the .minisig file, the plugin's format).
 #   linux-x86_64-appimage  grokhub-shell-vX.Y.Z-linux-amd64.AppImage
+#   linux-x86_64           same AppImage (alias for no-bundle / older clients)
 #   linux-x86_64-deb       grokhub-shell-vX.Y.Z-linux-amd64.deb (installed
 #                          through pkexec dpkg -i)
 #   windows-x86_64-nsis    GrokHub-Shell-Setup-X.Y.Z.exe
@@ -51,6 +52,9 @@ one() {
   entries+=("$1" "$(basename "$asset")" "$(base64 -w0 < "$asset.minisig")")
 }
 one linux-x86_64-appimage "grokhub-shell-v$ver-linux-amd64.AppImage"
+# Same bytes and signature as -appimage: builds without a stamped bundle type
+# (and older updaters) look up linux-x86_64 before giving up.
+one linux-x86_64 "grokhub-shell-v$ver-linux-amd64.AppImage"
 one linux-x86_64-deb "grokhub-shell-v$ver-linux-amd64.deb"
 one windows-x86_64-nsis "GrokHub-Shell-Setup-$ver.exe"
 mac="grokhub-shell-v$ver-macos-arm64.app.tar.gz"

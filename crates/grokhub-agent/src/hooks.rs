@@ -149,22 +149,24 @@ pub enum HookRun {
     Http,
     /// Its matcher doesn't compile, so it matches no tool.
     BadMatcher,
-    /// Nothing fires its event (SessionEnd).
+    /// Nothing fires its event (kept for listing compatibility).
     NotFired,
     /// Its event only ever sends subjects its matcher misses.
     NeverMatches,
 }
 
-/// Events accepted in hook files that nothing fires yet.
-const NEVER_FIRED: &[&str] = &["SessionEnd"];
-
 /// The only subjects these events fire with: `on_session_start` from
-/// events.rs, `on_compact`, `on_notification` and `on_stop` (StopFailure,
-/// StopCancelled) from run.rs. Keep in step with those callers.
+/// events.rs, `on_compact`, `on_notification`, `on_stop` (StopFailure,
+/// StopCancelled), `on_pre_llm_call`, `on_hold_stream`, and
+/// `on_session_delete` from run.rs / session.rs. Keep in step with those
+/// callers.
 const FIXED_SUBJECTS: &[(&str, &[&str])] = &[
     ("SessionStart", &["startup"]),
+    ("SessionEnd", &["delete"]),
     ("PreCompact", &[""]),
     ("PostCompact", &[""]),
+    ("PreLlmCall", &[""]),
+    ("HoldStream", &[""]),
     ("Notification", &["permission_prompt"]),
     ("StopFailure", &[""]),
     ("StopCancelled", &[""]),
@@ -177,8 +179,6 @@ fn run_state(hook: &Loaded, attached: bool) -> HookRun {
         .map(|(_, subjects)| *subjects);
     if hook.kind != Kind::Command {
         HookRun::Http
-    } else if NEVER_FIRED.contains(&hook.event.as_str()) {
-        HookRun::NotFired
     } else if !matcher_compiles(hook) {
         HookRun::BadMatcher
     } else if fixed.is_some_and(|subjects| !matcher_ok(hook, &hook.event, subjects)) {
@@ -376,6 +376,8 @@ pub fn constrain_tool(hook: ToolHook<'_>) -> ToolConstraint {
 pub fn has_turn_hooks(session: &str) -> bool {
     const TURN: &[&str] = &[
         "UserPromptSubmit",
+        "PreLlmCall",
+        "HoldStream",
         "Stop",
         "PostToolUse",
         "PostToolUseFailure",
@@ -408,8 +410,75 @@ pub fn on_user_prompt(session: &str, workspace: &Path, text: &str) -> PromptHook
     }
 }
 
+/// Before the model request for a turn. May inject context or block the call.
+pub fn on_pre_llm_call(session: &str, workspace: &Path, model: &str) -> PromptHook {
+    let found = hooks_matching(session, "PreLlmCall", &[""]);
+    if found.is_empty() {
+        return PromptHook::Continue {
+            context: String::new(),
+        };
+    }
+    let cwd = workspace.display().to_string();
+    let body = payload("PreLlmCall", session, &cwd, "", "", "", false, model);
+    let env = identity_env("PreLlmCall", session, &cwd, "", "");
+    match run_chain(&found, workspace, body.as_bytes(), &env, true) {
+        Verdict::Deny { reason } => PromptHook::Block {
+            reason: fallback(reason),
+        },
+        Verdict::Allow { context } | Verdict::Ask { context, .. } => {
+            PromptHook::Continue { context }
+        }
+        Verdict::None => PromptHook::Continue {
+            context: String::new(),
+        },
+    }
+}
+
+/// Whether text deltas should wait until the stream finishes before leaving
+/// the cabin. A hook that prints `{"hold":true}` holds; anything else
+/// streams live. A failed or timed-out hook does not hold.
+pub fn on_hold_stream(session: &str, workspace: &Path) -> bool {
+    let found = hooks_matching(session, "HoldStream", &[""]);
+    if found.is_empty() {
+        return false;
+    }
+    let cwd = workspace.display().to_string();
+    let body = payload("HoldStream", session, &cwd, "", "", "", false, "");
+    let env = identity_env("HoldStream", session, &cwd, "", "");
+    for hook in &found {
+        if hook.kind != Kind::Command {
+            continue;
+        }
+        let merged = merge_env(&hook.env, &env);
+        let Ok(proc) = crate::tools::shell::run_hook_command(
+            workspace,
+            &hook.command,
+            body.as_bytes(),
+            &merged,
+            hook.timeout,
+            &hook.source_dir,
+        ) else {
+            continue;
+        };
+        if proc.timed_out {
+            continue;
+        }
+        if let Some(value) = extract_json(&proc.stdout) {
+            if value.get("hold").and_then(|v| v.as_bool()) == Some(true) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn on_session_start(session: &str, workspace: &Path, source: &str) {
     observe(session, workspace, "SessionStart", source, "", "", false);
+}
+
+/// A session file is about to go away (`on_session_delete` / SessionEnd).
+pub fn on_session_delete(session: &str, workspace: &Path) {
+    observe(session, workspace, "SessionEnd", "delete", "", "", false);
 }
 
 pub fn on_subagent_start(session: &str, workspace: &Path, name: &str) {
@@ -543,6 +612,10 @@ pub fn after_tool(
                 push_note(&mut extra, &context_of(value));
             }
         }
+    }
+    // A formatter hook may have rewritten the file the edit wrote.
+    if !failed {
+        crate::tools::seen::after_hook(session, workspace, name, arguments);
     }
     extra
 }
@@ -1314,8 +1387,14 @@ fn canonical_event(key: &str) -> Option<&'static str> {
         "SubagentStop" | "subagent_stop" | "subagentStop" | "SubagentEnd" | "subagent_end"
         | "subagentEnd" => "SubagentStop",
         "PreCompact" | "pre_compact" | "preCompact" => "PreCompact",
-        "PostCompact" | "post_compact" | "postCompact" => "PostCompact",
-        "SessionEnd" | "session_end" | "sessionEnd" => "SessionEnd",
+        "PostCompact" | "post_compact" | "postCompact" | "post_compaction" | "postCompaction" => {
+            "PostCompact"
+        }
+        "PreLlmCall" | "pre_llm_call" | "preLlmCall" => "PreLlmCall",
+        "HoldStream" | "hold_stream" | "holdStream" => "HoldStream",
+        "SessionEnd" | "session_end" | "sessionEnd" | "on_session_delete" | "onSessionDelete" => {
+            "SessionEnd"
+        }
         _ => return None,
     })
 }
@@ -1818,7 +1897,7 @@ mod tests {
         set_folder_trust(&repo, true).unwrap();
         let trusted = attachable(&repo, None, std::slice::from_ref(&plugin_file));
         assert_eq!(trusted.len(), 1);
-        assert_eq!(trusted[0].origin, HookOrigin::Project);
+        assert!((trusted[0].origin) == (HookOrigin::Project));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1903,7 +1982,7 @@ mod tests {
             listed,
             vec![
                 ("echo after compact".to_string(), HookRun::NeverMatches),
-                ("echo bye".to_string(), HookRun::NotFired),
+                ("echo bye".to_string(), HookRun::Runs),
                 ("echo compacting".to_string(), HookRun::Runs),
                 ("echo failed".to_string(), HookRun::Runs),
                 ("echo fine".to_string(), HookRun::Runs),
@@ -2098,5 +2177,73 @@ mod tests {
             return true;
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    #[test]
+    fn hermes_named_hooks_canonicalize() {
+        assert_eq!(canonical_event("pre_llm_call"), Some("PreLlmCall"));
+        assert_eq!(canonical_event("hold_stream"), Some("HoldStream"));
+        assert_eq!(canonical_event("post_compaction"), Some("PostCompact"));
+        assert_eq!(canonical_event("on_session_delete"), Some("SessionEnd"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_llm_call_and_hold_stream_and_session_delete_fire() {
+        let dir = scratch("life-hooks");
+        let session = format!("life-{}", std::process::id());
+        let guard = install_test_hooks(
+            &session,
+            vec![
+                TestHook {
+                    event: "pre_llm_call".into(),
+                    matcher: String::new(),
+                    command: test_echo(r#"{"decision":"deny","reason":"no model"}"#, None),
+                    timeout: Duration::from_secs(5),
+                    source_dir: dir.clone(),
+                },
+                TestHook {
+                    event: "hold_stream".into(),
+                    matcher: String::new(),
+                    command: test_echo(r#"{"hold":true}"#, None),
+                    timeout: Duration::from_secs(5),
+                    source_dir: dir.clone(),
+                },
+                TestHook {
+                    event: "on_session_delete".into(),
+                    matcher: String::new(),
+                    command: format!(
+                        "printf '%s' \"$GROK_HOOK_EVENT\" > '{}'",
+                        dir.join("ended").display()
+                    ),
+                    timeout: Duration::from_secs(5),
+                    source_dir: dir.clone(),
+                },
+                TestHook {
+                    event: "post_compaction".into(),
+                    matcher: String::new(),
+                    command: format!(
+                        "printf '%s' \"$GROK_HOOK_EVENT\" > '{}'",
+                        dir.join("compacted").display()
+                    ),
+                    timeout: Duration::from_secs(5),
+                    source_dir: dir.clone(),
+                },
+            ],
+        );
+        match on_pre_llm_call(&session, &dir, "grok-3") {
+            PromptHook::Block { reason } => assert_eq!(reason, "no model"),
+            PromptHook::Continue { .. } => panic!("expected block"),
+        }
+        assert!(on_hold_stream(&session, &dir));
+        on_compact(&session, &dir, false);
+        assert_eq!(
+            fs::read_to_string(dir.join("compacted")).unwrap(),
+            "PostCompact"
+        );
+        on_session_delete(&session, &dir);
+        assert_eq!(fs::read_to_string(dir.join("ended")).unwrap(), "SessionEnd");
+        drop(guard);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

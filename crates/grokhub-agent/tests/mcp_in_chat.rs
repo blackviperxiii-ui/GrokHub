@@ -439,6 +439,106 @@ fn an_attached_browser_answer_from_another_site_is_held_back() {
     );
 }
 
+/// Settings → Your browser save path: attach.json changes, then
+/// `browser_attach_changed` restarts a running Playwright server so the next
+/// spawn carries the new `--allowed-origins` (the app's save_browser_attach
+/// hook). Not-allowed navigate stays refused after the restart.
+#[test]
+fn playwright_restarts_after_attach_save_with_new_origins() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("pw-attach-restart");
+    let argv_log = dir.join("argv.log");
+    let attach = json!({
+        "endpoint": "http://127.0.0.1:9222",
+        "origins": ["https://github.com"]
+    });
+    std::fs::create_dir_all(dir.join("browser")).unwrap();
+    std::fs::write(dir.join("browser").join("attach.json"), attach.to_string()).unwrap();
+    let doc = json!({
+        "mcpServers": {
+            "pwrestart": {
+                "command": bin,
+                "args": ["@playwright/mcp@latest"],
+                "env": {
+                    "FAKE_MCP_ARGV_LOG": argv_log.display().to_string(),
+                    "FAKE_MCP_PAGE_URL": "https://github.com/user/my-app",
+                },
+            }
+        }
+    });
+    mcp::import_documents(&[doc.to_string()]).unwrap();
+    let rows = mcp::doctor();
+    assert_eq!(
+        (rows[0].name.as_str(), rows[0].status.as_str()),
+        ("pwrestart", "connected"),
+        "{rows:?}"
+    );
+    let first = argv_lines(&argv_log);
+    assert_eq!(first.len(), 1, "one spawn before save: {first:?}");
+    assert!(
+        first[0]
+            .iter()
+            .any(|a| a == "--allowed-origins=https://github.com"),
+        "first spawn origins: {first:?}"
+    );
+    assert!(
+        first[0]
+            .iter()
+            .any(|a| a == "--cdp-endpoint=http://127.0.0.1:9222"),
+        "first spawn cdp: {first:?}"
+    );
+
+    // Same work as save_browser_attach: persist sites, then restart Playwright.
+    let mut next = mcp::BrowserAttach {
+        endpoint: "http://127.0.0.1:9222".into(),
+        origins: Vec::new(),
+    };
+    assert_eq!(
+        next.allow("https://github.com/user/my-app").unwrap(),
+        "https://github.com"
+    );
+    assert_eq!(next.allow("https://docs.rs").unwrap(), "https://docs.rs");
+    next.save(&dir).unwrap();
+    let restarted = mcp::browser_attach_changed();
+    assert_eq!(restarted, vec!["pwrestart".to_string()], "{restarted:?}");
+
+    let after = argv_lines(&argv_log);
+    assert_eq!(after.len(), 2, "second spawn after save: {after:?}");
+    let origins = after[1]
+        .iter()
+        .find(|a| a.starts_with("--allowed-origins="))
+        .cloned()
+        .expect("allowed-origins on restart");
+    assert!(
+        origins.contains("https://github.com") && origins.contains("https://docs.rs"),
+        "restart origins: {origins}"
+    );
+
+    // Not-allowed navigate still refused after the restart.
+    let other = r#"{"action":"new","url":"https://bank.example/"}"#;
+    let out = run_qualified_with(&dir, "pwrestart__browser_tabs", other);
+    assert!(
+        out.contains("https://bank.example isn't one of them"),
+        "{out}"
+    );
+}
+
+fn argv_lines(path: &Path) -> Vec<Vec<String>> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{line}: {e}"));
+            v["argv"]
+                .as_array()
+                .expect("argv array")
+                .iter()
+                .map(|item| item.as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .collect()
+}
+
 #[test]
 fn an_attached_browser_page_past_the_answer_cut_is_still_held_back() {
     let bin = env!("CARGO_BIN_EXE_fake_mcp");

@@ -1,2 +1,0 @@
-- Four new voices: Theorycrafter (builds, stats and the math behind the meta), Gremlin (chaotic feral gamer energy), Dungeon Master (scenes, lore and quests) and Esports Caster (play-by-play hype). Until their own outfits are drawn they look like Nyx herself.
-- Lawyer-precise and Friendly Neighbor left the roster: a chat on Lawyer-precise now speaks as Concise Pro, one on Friendly Neighbor as Nyx, and copies you made of either keep working. Their pictures now show as Nyx reading and hanging out.

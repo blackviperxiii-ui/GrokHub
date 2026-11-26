@@ -1,1 +1,0 @@
-- Draft models land in one folder, `~/GrokHub/models/drafters`, in both apps, and the engine looks there, beside the model and in the desktop app's older folder, so a downloaded draft model is actually found. The desktop app checks free disk before a draft download, and the window app's speed test runs in the background and shows its whole report, draft model verdict included.

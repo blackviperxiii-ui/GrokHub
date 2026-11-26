@@ -133,6 +133,11 @@ pub fn prepare(
     if auto && automation.as_ref().is_some_and(|a| !a.enabled) {
         return Err("Its automation is off.".into());
     }
+    // A job a paired browser wrote resumes without the desktop, as it ran.
+    let gate = match &automation {
+        Some(job) => crate::automations::gate_for(config_dir, job, gate),
+        None => gate,
+    };
     let live = Live::claim(id, &card.title, others)?;
     let running = match &automation {
         Some(job) => Some(Running::claim(&job.id)?),
@@ -148,6 +153,9 @@ pub fn prepare(
         }
         // The block names the cut, so it is built before the resume clears it.
         let block = res::resume_block(c);
+        // A card whose words a paired browser wrote resumes as a browser's
+        // run, read with the words the block carries.
+        let gate = gate.with_origin(grokhub_agent::web_origin::card_origin(config_dir, id));
         let session = c
             .checkpoint
             .as_ref()
@@ -256,7 +264,15 @@ pub fn run(
     let end = end_of(&result);
     match (&job.automation, &end) {
         (Some(auto), RunEnd::Done | RunEnd::Failed(_)) => {
-            crate::automations::board_run_end(config_dir, auto, Some(&job.card_id), &result)
+            // The report is the run's words: a browser's when its gate or
+            // its session is one.
+            let session = grokhub_agent::web_origin::of_in(config_dir, Some(&job.session_id));
+            let ran = crate::automations::BoardRun {
+                job: auto,
+                asked: &auto.instructions,
+                origin: job.gate.origin.and(session),
+            };
+            crate::automations::board_run_end(config_dir, ran, Some(&job.card_id), &result)
         }
         _ => settle(config_dir, &job.card_id, job.attempt, &end, &result.text),
     }

@@ -1,7 +1,7 @@
 // Small shared pieces for the shell's pages: pop-up menus that close like
 // menus, windows that keep the keyboard inside, a status line that reads as an
 // error when it is one, an inline "are you sure" row for destructive actions,
-// and outside links that open in the browser.
+// outside links that open in the browser, and the title that opens a page.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { externalUrlOk, openExternal } from "./external";
 
@@ -102,6 +102,16 @@ export function useNote() {
     [],
   );
   return { note, ...set };
+}
+
+/** The title that opens a page, with an optional one-line lede under it. */
+export function PageHead({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <header className="page-head">
+      <h2>{title}</h2>
+      {children && <p className="page-lede">{children}</p>}
+    </header>
+  );
 }
 
 /** The note under a page's buttons, in the error colour when it is one. */

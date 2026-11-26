@@ -565,11 +565,11 @@ mod tests {
     #[test]
     fn imagine_error_mapping_oauth_key_429_moderation_video() {
         let oauth = map_imagine_error("HTTP 401: no", ImagineCredKind::OAuth, true);
-        assert_eq!(oauth.text, IMAGINE_OAUTH_DENIED);
+        assert!((oauth.text) == (IMAGINE_OAUTH_DENIED));
         assert!(oauth.offer_use_api_key);
         assert!(!oauth.offer_settings);
         let oauth_no = map_imagine_error("HTTP 403: no", ImagineCredKind::OAuth, false);
-        assert_eq!(oauth_no.text, IMAGINE_OAUTH_DENIED);
+        assert!((oauth_no.text) == (IMAGINE_OAUTH_DENIED));
         assert!(oauth_no.offer_settings);
         assert!(!oauth_no.offer_use_api_key);
         let key = map_imagine_error(
@@ -608,13 +608,13 @@ mod tests {
     #[test]
     fn imagine_bearer_order() {
         let oauth = choose_imagine_bearer(Some("oa-token"), true, "console-key").unwrap();
-        assert_eq!(oauth.kind, ImagineCredKind::OAuth);
-        assert_eq!(oauth.secret, "oa-token");
+        assert!((oauth.kind) == (ImagineCredKind::OAuth));
+        assert!((oauth.secret) == ("oa-token"));
         let dead = choose_imagine_bearer(Some("oa-token"), false, "console-key").unwrap();
         assert_eq!(dead.kind, ImagineCredKind::ConsoleKey);
-        assert_eq!(dead.secret, "console-key");
+        assert!((dead.secret) == ("console-key"));
         let only = choose_imagine_bearer(None, false, " console-key ").unwrap();
-        assert_eq!(only.secret, "console-key");
+        assert!((only.secret) == ("console-key"));
         let none = choose_imagine_bearer(None, true, "  ").unwrap_err();
         assert_eq!(none, IMAGINE_NEED_SIGNIN);
         assert!(!none.contains("grok login"));
@@ -742,7 +742,7 @@ mod tests {
             choose_xai_bearer(None, false, "  ").unwrap_err(),
             XAI_NEED_SIGNIN
         );
-        assert_eq!(METER_OAUTH, "SuperGrok pool");
-        assert_eq!(METER_API_KEY, "API credits");
+        assert!((METER_OAUTH) == ("SuperGrok pool"));
+        assert!((METER_API_KEY) == ("API credits"));
     }
 }

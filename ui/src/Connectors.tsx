@@ -15,7 +15,7 @@ import { Channels } from "./Channels";
 import { ConnectorAdd } from "./ConnectorAdd";
 import { Github } from "./Github";
 import { Hooks } from "./Hooks";
-import { ConfirmRow, StatusLine, useNote } from "./ui";
+import { ConfirmRow, PageHead, StatusLine, useNote } from "./ui";
 
 export const DISCONNECT_DETAIL =
   "Its entry leaves your connections, and its sign-in and saved token are deleted.";
@@ -85,6 +85,7 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
 
   return (
     <section className="connectors" aria-label="Connectors">
+      <PageHead title="Connectors" />
       <div className="card-buttons">
         <button type="button" disabled={busy !== null || !rows?.length} onClick={() => void check()}>
           {busy === "*" ? "Checking…" : "Check all"}

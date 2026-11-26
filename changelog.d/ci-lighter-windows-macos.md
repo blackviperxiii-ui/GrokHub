@@ -1,4 +1,0 @@
-- CI: deck and web search screenshots moved out of `windows-release` into a manual `Deck shots` workflow (`deck-shots.yml`, shot filter, 6-minute budget); `deck-shots.ps1` takes `-Only` and `-BudgetMinutes`.
-- CI: `windows-release` runs only on the nightly and manual runs.
-- CI: PRs run the shell job on Ubuntu only and skip `windows` when they only touch `ui/` or workflows other than `ci.yml`; push to main runs shell on Ubuntu and Windows.
-- CI: macOS jobs (cross-check, phone-ios, macOS shell) run only on the nightly, manual runs and tags; a nightly on an unchanged beta SHA that was already green skips the build jobs.

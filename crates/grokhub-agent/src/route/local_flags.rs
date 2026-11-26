@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use grokhub_core::local_profile::Backend;
+use grokhub_core::local_profile::{Backend, Gpu, GpuVendor};
 
 use super::local_autoconfig::GovState;
 
@@ -205,6 +205,36 @@ impl RunFlags {
             .into_iter()
             .collect()
     }
+}
+
+/// HIP device indices of discrete AMD GPUs among every AMD GPU HIP would
+/// see (probe order). `None` when there is no discrete AMD card.
+pub fn hip_discrete_devices(gpus: &[Gpu]) -> Option<String> {
+    let ids: Vec<String> = gpus
+        .iter()
+        .filter(|g| g.vendor == GpuVendor::Amd)
+        .enumerate()
+        .filter(|(_, g)| !g.integrated)
+        .map(|(i, _)| i.to_string())
+        .collect();
+    (!ids.is_empty()).then(|| ids.join(","))
+}
+
+/// Env for a ROCm launch: pin HIP to the discrete AMD GPUs so an iGPU
+/// cannot crash the run. Empty when the backend isn't ROCm, there is no
+/// discrete AMD GPU, or the user already set `HIP_VISIBLE_DEVICES`
+/// (`is_set`).
+pub fn hip_visible_env(
+    backend: Backend,
+    gpus: &[Gpu],
+    is_set: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, String)> {
+    if backend != Backend::Rocm || is_set("HIP_VISIBLE_DEVICES") {
+        return Vec::new();
+    }
+    hip_discrete_devices(gpus)
+        .map(|d| vec![("HIP_VISIBLE_DEVICES", d)])
+        .unwrap_or_default()
 }
 
 /// Nice value a low-priority child runs at on Unix.

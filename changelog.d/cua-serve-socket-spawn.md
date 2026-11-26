@@ -1,0 +1,1 @@
+- Cua: start `serve --socket` on the Bot Desktop env before `mcp`, so cua-driver 0.34 has a daemon to attach to.

@@ -1,1 +1,0 @@
-- The desktop tools can drive the Bot Desktop instead of the user's screen (`NativeDesktop::on_bot_desktop`): screenshots, pointer and keys stay on it, apps open there by name, and a fullscreen game doesn't pause them. The window tools say they don't reach it yet.

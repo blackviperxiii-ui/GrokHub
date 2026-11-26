@@ -1,1 +1,0 @@
-- Groundwork for Bot Desktop on Linux: the app can start a private virtual screen (Xvnc, or Xvfb), reachable only through a local socket with its own access cookie, and drive it with the desktop tools without touching the user's own screen.

@@ -1,1 +1,0 @@
-- Sandbox: the egress proxy lets commands reach only package registries, code hosts, model hosts and hosts named by your `WebFetch` allow rules, checked by name before any DNS lookup; addresses and `localhost` need a rule naming them, and names that resolve to local addresses aren't dialed.

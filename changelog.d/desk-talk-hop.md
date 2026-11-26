@@ -1,1 +1,0 @@
-- Desktop companion: she hops gently with the chat's voice while a reply is spoken, following how loud each moment is. Reduce motion keeps her still.

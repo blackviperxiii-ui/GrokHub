@@ -5,6 +5,7 @@
 pub use crate::local_picker::CpuSimd;
 use crate::local_picker::{self, Profile};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// What the wizard found on this machine. Zero means unknown.
@@ -111,9 +112,40 @@ impl ModelKind {
     }
 }
 
+/// The job a catalog row is for, shown in Download models. Stored beside
+/// [`LocalModel`] (not on it): the download tests build a [`LocalModel`] by
+/// hand, and that file is not part of a catalog change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UseCase {
+    #[default]
+    GeneralChat,
+    Coding,
+    Reasoning,
+    Vision,
+    ImageGen,
+    VideoGen,
+    /// Speech to text and text to speech.
+    Voice,
+}
+
+impl UseCase {
+    pub fn label(self) -> &'static str {
+        match self {
+            UseCase::GeneralChat => "General chat",
+            UseCase::Coding => "Coding",
+            UseCase::Reasoning => "Reasoning",
+            UseCase::Vision => "Vision",
+            UseCase::ImageGen => "Image gen",
+            UseCase::VideoGen => "Video gen",
+            UseCase::Voice => "Voice",
+        }
+    }
+}
+
 /// The most standard (chat) models the catalog lists. Specialty kinds don't
 /// count.
-pub const STANDARD_MODEL_CAP: usize = 25;
+pub const STANDARD_MODEL_CAP: usize = 26;
 
 /// Who removed the model's refusals, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +313,10 @@ struct CatalogRow {
     role: Option<String>,
     #[serde(default)]
     kind: Option<ModelKind>,
+    /// The job this row is for. Missing on an older signed catalog, which
+    /// then reads as general chat.
+    #[serde(default)]
+    use_case: UseCase,
     #[serde(default)]
     pairs_with: Option<String>,
     #[serde(default)]
@@ -334,7 +370,8 @@ fn leak(s: String) -> &'static str {
     s.leak()
 }
 
-fn to_model(r: CatalogRow) -> Option<LocalModel> {
+fn to_parsed(r: CatalogRow) -> Option<(LocalModel, UseCase)> {
+    let job = r.use_case;
     // The older `role = "drafter"` still marks a drafter.
     let kind = r.kind.unwrap_or(if r.role.as_deref() == Some("drafter") {
         ModelKind::Drafter
@@ -363,68 +400,102 @@ fn to_model(r: CatalogRow) -> Option<LocalModel> {
         })
         .collect::<Option<Vec<_>>>()?
         .leak();
-    Some(LocalModel {
-        id: leak(r.id),
-        name: leak(r.name),
-        repo,
-        file: leak(r.file),
-        remote_file: r.remote_file.map(leak),
-        sha256: leak(r.sha256),
-        download_mb: r.download_mb,
-        quant: leak(r.quant),
-        license: leak(r.license),
-        badges: r.badges.into_iter().map(leak).collect::<Vec<_>>().leak(),
-        tier: leak(r.tier),
-        route: leak(r.route),
-        ctx_default: r.ctx_default,
-        run_mb: r.run_mb,
-        needs_avx2: r.needs_avx2,
-        min_llama_build: r.min_llama_build,
-        optional: r.optional,
-        offered: r.offered,
-        is_drafter: kind == ModelKind::Drafter,
-        kind,
-        pairs_with: r.pairs_with.map(leak),
-        abliterated: r.abliterated.map(|a| Abliteration {
-            by: leak(a.by),
-            method: leak(a.method),
-        }),
-        refusal_score: r.refusal_score,
-        drafter: r.drafter.map(leak),
-        projector: r.projector.map(leak),
-        min_budget: r.min_budget,
-        tok_s: r.tok_s,
-        profile: LocalProfile {
-            ctx_max: r.ctx_max,
-            tok_s_tier: r.tok_s_tier,
-            gaming_safe: r.gaming_safe,
+    Some((
+        LocalModel {
+            id: leak(r.id),
+            name: leak(r.name),
+            repo,
+            file: leak(r.file),
+            remote_file: r.remote_file.map(leak),
+            sha256: leak(r.sha256),
+            download_mb: r.download_mb,
+            quant: leak(r.quant),
+            license: leak(r.license),
+            badges: r.badges.into_iter().map(leak).collect::<Vec<_>>().leak(),
+            tier: leak(r.tier),
+            route: leak(r.route),
+            ctx_default: r.ctx_default,
+            run_mb: r.run_mb,
+            needs_avx2: r.needs_avx2,
+            min_llama_build: r.min_llama_build,
+            optional: r.optional,
+            offered: r.offered,
+            is_drafter: kind == ModelKind::Drafter,
+            kind,
+            pairs_with: r.pairs_with.map(leak),
+            abliterated: r.abliterated.map(|a| Abliteration {
+                by: leak(a.by),
+                method: leak(a.method),
+            }),
+            refusal_score: r.refusal_score,
+            drafter: r.drafter.map(leak),
+            projector: r.projector.map(leak),
+            min_budget: r.min_budget,
+            tok_s: r.tok_s,
+            profile: LocalProfile {
+                ctx_max: r.ctx_max,
+                tok_s_tier: r.tok_s_tier,
+                gaming_safe: r.gaming_safe,
+            },
+            parts,
+            skills: r.skills,
         },
-        parts,
-        skills: r.skills,
-    })
+        job,
+    ))
 }
 
 /// A whole catalog: its version and every row, or `None` when it doesn't
 /// parse, any row doesn't load, or it has no default chat model. A catalog
 /// from outside the app is used only whole.
-pub(crate) fn parse_catalog(text: &str) -> Option<(u32, Vec<LocalModel>)> {
+struct LoadedCatalog {
+    version: u32,
+    models: Vec<LocalModel>,
+    jobs: HashMap<&'static str, UseCase>,
+}
+
+fn parse_loaded(text: &str) -> Option<LoadedCatalog> {
     let file = toml::from_str::<CatalogFile>(text).ok()?;
     let version = file.version;
-    let rows = file
-        .model
-        .into_iter()
-        .map(to_model)
-        .collect::<Option<Vec<_>>>()?;
-    rows.iter()
+    let mut models = Vec::new();
+    let mut jobs = HashMap::new();
+    for row in file.model {
+        let (model, job) = to_parsed(row)?;
+        jobs.insert(model.id, job);
+        models.push(model);
+    }
+    models
+        .iter()
         .any(|m| m.is_chat() && !m.optional)
-        .then_some((version, rows))
+        .then_some(LoadedCatalog {
+            version,
+            models,
+            jobs,
+        })
+}
+
+pub(crate) fn parse_catalog(text: &str) -> Option<(u32, Vec<LocalModel>)> {
+    parse_loaded(text).map(|loaded| (loaded.version, loaded.models))
+}
+
+fn active_catalog() -> &'static LoadedCatalog {
+    static LOADED: LazyLock<LoadedCatalog> = LazyLock::new(|| {
+        crate::catalog_update::saved(&crate::paths::config_dir())
+            .and_then(|text| parse_loaded(&text))
+            .or_else(|| parse_loaded(CATALOG_TOML))
+            .unwrap_or(LoadedCatalog {
+                version: 0,
+                models: Vec::new(),
+                jobs: HashMap::new(),
+            })
+    });
+    &LOADED
 }
 
 /// The version of the catalog built into this app.
 pub fn bundled_version() -> u32 {
     // Parsed once: parsing keeps the catalog's strings for the run.
     static VERSION: LazyLock<u32> =
-        LazyLock::new(|| parse_catalog(CATALOG_TOML).map_or(0, |(v, _)| v));
+        LazyLock::new(|| parse_loaded(CATALOG_TOML).map_or(0, |loaded| loaded.version));
     *VERSION
 }
 
@@ -432,14 +503,17 @@ pub fn bundled_version() -> u32 {
 /// run. A newer signed catalog saved from a release wins over the built-in
 /// one; anything else uses the built-in one (a test pins that it parses).
 pub fn local_models() -> &'static [LocalModel] {
-    static MODELS: LazyLock<Vec<LocalModel>> = LazyLock::new(|| {
-        crate::catalog_update::saved(&crate::paths::config_dir())
-            .and_then(|text| parse_catalog(&text))
-            .or_else(|| parse_catalog(CATALOG_TOML))
-            .map(|(_, rows)| rows)
-            .unwrap_or_default()
-    });
-    &MODELS
+    &active_catalog().models
+}
+
+/// The job named on the shipped (or saved) catalog row, or general chat
+/// when `id` was built by hand and never parsed.
+pub fn use_case(id: &str) -> UseCase {
+    active_catalog()
+        .jobs
+        .get(id)
+        .copied()
+        .unwrap_or(UseCase::GeneralChat)
 }
 
 impl LocalModel {
@@ -455,7 +529,7 @@ impl LocalModel {
         self.remote_file.unwrap_or(self.file)
     }
 
-    /// A model you chat with: the picker, the router and the 25 cap list
+    /// A model you chat with: the picker, the router and the chat-cap list
     /// only these, never a drafter, voice, image or other specialty row.
     pub fn is_chat(&self) -> bool {
         self.kind == ModelKind::Chat
@@ -468,12 +542,12 @@ pub fn model_by_id(id: &str) -> Option<&'static LocalModel> {
     local_models().iter().find(|m| m.id == id)
 }
 
-/// The standard models: what you chat with, the ones the 25 cap counts.
+/// The standard models: what you chat with, the ones the chat cap counts.
 pub fn standard_models() -> impl Iterator<Item = &'static LocalModel> {
     local_models().iter().filter(|m| counts_toward_cap(m))
 }
 
-/// Only chat models use up the 25; drafters, projectors, image, voice and
+/// Only chat models use up the cap; drafters, projectors, image, voice and
 /// the rest don't.
 pub fn counts_toward_cap(m: &LocalModel) -> bool {
     m.is_chat()
@@ -698,7 +772,7 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 44, "catalog parsed");
+        assert_eq!(all.len(), 47, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
         assert_eq!(
             chat.len(),
@@ -784,6 +858,108 @@ mod tests {
         assert_eq!(
             model_by_id("gemma-4-e2b-it-abliterated-q4_k").and_then(|m| m.projector),
             Some("gemma-4-e2b-it-abliterated-mmproj")
+        );
+    }
+
+    #[test]
+    fn every_row_names_a_job_and_the_coding_and_video_rows_are_pinned() {
+        let text = include_str!("../data/local_catalog.toml");
+        for block in text.split("[[model]]").skip(1) {
+            let id = block
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("id = \"")
+                        .map(|rest| rest.trim_end_matches('"'))
+                })
+                .expect("id");
+            let head = block.split("[[model.parts]]").next().unwrap();
+            assert!(head.contains("use_case = \""), "{id} has no job");
+        }
+        assert!(model_by_id("bytedance-seed-oss-36b-heretic-q4_k_m").is_none());
+        assert!(model_by_id("allenai-olmo3-7b-instruct-heretic-q4_k_s").is_none());
+        assert!(model_by_id("hf-smollm3-3b-heretic-q4_k_m").is_none());
+        assert_eq!(
+            model_by_id("qwen3-coder-30b-a3b-heretic-q4_k_m")
+                .map(|m| { (m.tier, m.optional, m.sha256, use_case(m.id)) }),
+            Some((
+                "T4",
+                true,
+                "02badbb766b2999da480c2ef9dd60b7124b7426985129b95b74319bdc1de0149",
+                UseCase::Coding,
+            ))
+        );
+        assert_eq!(
+            model_by_id("devstral-small2-24b-abliterated-q4_k_m")
+                .map(|m| { (m.tier, m.sha256, m.ctx_default, use_case(m.id)) }),
+            Some((
+                "T3",
+                "de276bac9b034db8695c802537aa6aa5bc35c133db83764d7a2217e66ce443c4",
+                12_288,
+                UseCase::Coding,
+            ))
+        );
+        assert_eq!(
+            model_by_id("qwen3-coder-30b-a3b-heretic-q4_k_m").map(|m| m.ctx_default),
+            Some(32_768)
+        );
+        let fit = model_by_id("qwen3.6-35b-a3b-abliterated-q2_k").unwrap();
+        assert_eq!(fit.ctx_default, 65_536);
+        assert_eq!(fit.run_mb, 14_513);
+        assert!(fit.run_mb <= 16_384, "the 16 GB build must fit in 16 GB");
+        assert_eq!(
+            fit.sha256,
+            "85f446fff19406aa81bd8333433fa11921038ba1b80523c2432d82623b73fb73"
+        );
+        assert_eq!(use_case(fit.id), UseCase::Coding);
+        let heads = model_by_id("qwen3.6-35b-a3b-mtp").unwrap();
+        assert_eq!(heads.kind, ModelKind::Drafter);
+        assert_eq!(
+            heads.sha256,
+            "623351aeccfb9a26991ea6a7f0d24ef993a975fb2a508e4d95d3be1f72bf58da"
+        );
+        assert_eq!(
+            model_by_id("qwen3.6-35b-a3b-heretic-q4_k_m").and_then(|m| m.drafter),
+            Some(heads.id)
+        );
+        assert_eq!(
+            model_by_id("qwen2.5-coder-7b-heretic-q4_k_m")
+                .map(|m| { (m.tier, m.sha256, use_case(m.id)) }),
+            Some((
+                "T2",
+                "8053aeda222ba79e865a6eddd268332fd4e4dbe406371318d6df1f9beae9502b",
+                UseCase::Coding,
+            ))
+        );
+        let video = model_by_id("wan2.2-ti2v-5b-q4_k_m").unwrap();
+        assert_eq!(video.kind, ModelKind::Image);
+        assert!(!video.optional);
+        assert_eq!(use_case(video.id), UseCase::VideoGen);
+        assert_eq!(
+            video.sha256,
+            "95b19697b7f98e65b0a543640e9ca7b4dfec32e2a6e3731e8e10708be52655e2"
+        );
+        assert_eq!(video.parts.len(), 2);
+        assert_eq!(
+            video.parts[0].check,
+            FileCheck::Sha256("eaea358bb438c5d211721a4feecc162000e3636e9cb96f51e216f1f44ebd12ce")
+        );
+        assert_eq!(
+            video.parts[1].check,
+            FileCheck::Sha256("e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156")
+        );
+        assert_eq!(
+            use_case("gemma-4-12b-it-abliterated-q4_k"),
+            UseCase::GeneralChat
+        );
+        assert_eq!(
+            use_case("gemma-4-12b-it-abliterated-mmproj"),
+            UseCase::Vision
+        );
+        assert_eq!(use_case("z-image-turbo-q4_k"), UseCase::ImageGen);
+        assert_eq!(use_case("parakeet-tdt-0.6b-v3-int8"), UseCase::Voice);
+        assert_eq!(
+            use_case("deepseek-r1-0528-qwen3-8b-heretic-q4_k_m"),
+            UseCase::Reasoning
         );
     }
 
@@ -876,7 +1052,10 @@ bytes = 9
         };
         let load = |part: &str| {
             let f: CatalogFile = toml::from_str(&row(part)).expect("parses");
-            f.model.into_iter().filter_map(to_model).collect::<Vec<_>>()
+            f.model
+                .into_iter()
+                .filter_map(|row| to_parsed(row).map(|(model, _)| model))
+                .collect::<Vec<_>>()
         };
         let m = load(r#"git_oid = "ab""#);
         assert_eq!(m.len(), 1);

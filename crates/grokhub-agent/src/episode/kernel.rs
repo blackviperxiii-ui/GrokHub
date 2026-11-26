@@ -16,8 +16,8 @@ use super::verify::{
 };
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
 use super::{
-    Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE,
-    STALL_REPLAN, STEP_UP_STEPS,
+    Episode, EpisodeEnd, OpenPark, StepOutput, StepShape, FANOUT_CAP, GOAL_CAP, OUTPUT_PROMPT_CAP,
+    PARK_PREFIX, REPLAN_END, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS,
 };
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
@@ -240,12 +240,15 @@ struct Run<'a, 'b> {
     /// A loop re-planned in this batch: 1a's `action_loop` finding on the
     /// same steps is already handled.
     looped: bool,
+    /// The next held output opens a new slot ([`Self::hold`]): set at the
+    /// start of a batch and of a park settle.
+    new_pass: bool,
 }
 
 /// Drive one turn of an episode. It returns when the episode ends, the
 /// ladder pauses, the worker waits on the user, or it errors. No step count
-/// or wall time stops it. Call again with the same `ep` and `view`
-/// for the next turn.
+/// or wall time stops it; [`REPLAN_END`] re-plans in a row with no progress
+/// do. Call again with the same `ep` and `view` for the next turn.
 pub fn run_episode(
     k: &KernelIn<'_>,
     ep: &mut Episode,
@@ -261,6 +264,7 @@ pub fn run_episode(
         obs: None,
         end_note: None,
         looped: false,
+        new_pass: false,
     };
     if run.ep.trail.is_empty() {
         let goal = format!(
@@ -291,6 +295,10 @@ pub fn run_episode(
         run.settle_parks(on_event);
         for note in k.steer.drain() {
             run.ep.steer(&note, k.held);
+        }
+        // After the Steer drain: the user's own new words rescue it.
+        if run.ep.stuck() {
+            return run.end_stuck(on_event);
         }
         if run.obs.is_none() {
             run.obs = run.observe();
@@ -349,7 +357,7 @@ pub fn run_episode(
             }
         }
         run.batch(&turn.calls, on_event);
-        if k.halt.halted() {
+        if k.halt.halted() || run.ep.stuck() {
             continue;
         }
         if let Some(stop) = run.check_loop() {
@@ -428,9 +436,12 @@ impl Run<'_, '_> {
         }
         self.ep.last_ms = self.now();
         let failed = shape.decision == "deny" || shape.result.starts_with("failed");
-        let stalled = self
-            .ep
-            .note_progress(&shape.decision, shape.ui_changed, failed);
+        // Looking (a screenshot, look_at_screen, zoom) changes nothing: it
+        // neither counts toward a stall nor clears the re-plan count.
+        let stalled = !observes_only(&shape.tool)
+            && self
+                .ep
+                .note_progress(&shape.decision, shape.ui_changed, failed);
         let looped = (shape.decision != "park")
             .then(|| {
                 let outcome = match (failed, shape.ui_changed) {
@@ -457,8 +468,7 @@ impl Run<'_, '_> {
     }
 
     /// A loop or [`STALL_REPLAN`] steps that moved nothing: a quiet repair
-    /// span and a re-plan note for the next step. No card, nothing counted,
-    /// no pause.
+    /// span and a re-plan note for the next step. No card, no pause.
     fn replan(&mut self, detector: &str, reason: String) {
         let step = LadderStep {
             rung: Rung::Replan,
@@ -469,10 +479,44 @@ impl Run<'_, '_> {
             reason,
             prompt: Some(REPLAN_NOTE.into()),
         };
-        let span = ladder_span(&self.ep.chat_id, &step);
+        self.replan_with(&step, REPLAN_NOTE.into());
+    }
+
+    /// Every re-plan lands here: a loop, a stall, a checker reject, or the
+    /// ladder's `Rung::Replan`. It counts the re-plan; the [`REPLAN_END`]th
+    /// in a row with no progress writes nothing and leaves the episode
+    /// stuck, which ends it ([`Self::end_stuck`]). Otherwise a quiet repair
+    /// span, the worker's note, and a step up.
+    fn replan_with(&mut self, step: &LadderStep, note: String) {
+        if self.ep.note_replan(&step.reason) {
+            return;
+        }
+        let span = ladder_span(&self.ep.chat_id, step);
         self.write(span);
-        self.ep.note = Some(REPLAN_NOTE.into());
+        self.ep.note = Some(note);
         self.ep.step_up = STEP_UP_STEPS;
+    }
+
+    /// [`REPLAN_END`] re-plans in a row moved nothing: end with a note that
+    /// names the goal and the last reason. An open card is withdrawn and
+    /// denied (fail-closed), as on Stop.
+    fn end_stuck(&mut self, on_event: &mut dyn FnMut(LoopEvent)) -> EpisodeOut {
+        let goal: String = self.ep.goal.chars().take(GOAL_CAP).collect();
+        let why = self
+            .ep
+            .replans
+            .as_ref()
+            .map(|(_, why)| why.clone())
+            .unwrap_or_default();
+        let note = format!(
+            "Couldn't finish: {goal} — stopped after {REPLAN_END} re-plans without progress ({why})"
+        );
+        self.end_with_parks_denied(
+            EpisodeEnd::Unconfirmed,
+            "ended: no progress — fail-closed Deny",
+        );
+        on_event(LoopEvent::Text(note.clone()));
+        self.out(EpisodeStop::Ended(EpisodeEnd::Unconfirmed), note)
     }
 
     /// A screenshot through the same gate as any step. Not a step itself;
@@ -512,6 +556,18 @@ impl Run<'_, '_> {
         }
         for park in self.ep.parks.iter().filter(|p| p.waiting) {
             now.push_str(&waiting_line(park));
+        }
+        // The latest pass's outputs (head and tail), after the view: the view
+        // line keeps only STEP_RESULT_CAP, and this tail is never cached.
+        // They share OUTPUT_PROMPT_CAP.
+        let share = OUTPUT_PROMPT_CAP / self.ep.outputs.len().max(1);
+        for o in &self.ep.outputs {
+            now.push_str(&format!(
+                "Latest output of [{}] {}:\n{}\n",
+                o.view_ref,
+                o.tool,
+                clipped(&o.text, share)
+            ));
         }
         let (step_text, image) = match &self.obs {
             Some(obs) => {
@@ -575,6 +631,7 @@ impl Run<'_, '_> {
         self.usage.add(&routed.out.usage);
         self.tokens = Some(routed.tokens);
         self.ep.note = None;
+        self.ep.note_asked();
         Ok(routed.out)
     }
 
@@ -695,10 +752,10 @@ impl Run<'_, '_> {
             reason: format!("{VERIFY_REJECT}: {why}"),
             prompt: Some(REPLAN_NOTE.into()),
         };
-        let span = ladder_span(&self.ep.chat_id, &step);
-        self.write(span);
-        self.ep.note = Some(format!("{REPLAN_NOTE} The independent check said: {why}"));
-        self.ep.step_up = STEP_UP_STEPS;
+        self.replan_with(
+            &step,
+            format!("{REPLAN_NOTE} The independent check said: {why}"),
+        );
         None
     }
 
@@ -716,22 +773,21 @@ impl Run<'_, '_> {
         // E1: a detector finding lifts the worker's next step one rung.
         crate::route::ladder::note_tool_error();
         let step = self.ep.ladder.next(&finding, &self.ep.trail);
+        let mut note = step.prompt.clone().unwrap_or_default();
+        if let Some(why) = why {
+            note.push_str(&format!(" The independent check said: {why}"));
+        }
+        if step.rung == Rung::Replan {
+            self.replan_with(&step, note);
+            return None;
+        }
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
-        if step.rung == Rung::Replan {
-            self.ep.step_up = STEP_UP_STEPS;
+        if step.rung == Rung::Pause {
+            return Some(EpisodeStop::LadderPause(step));
         }
-        match step.rung {
-            Rung::Retry | Rung::Backtrack | Rung::Replan => {
-                let mut note = step.prompt.clone().unwrap_or_default();
-                if let Some(why) = why {
-                    note.push_str(&format!(" The independent check said: {why}"));
-                }
-                self.ep.note = Some(note);
-                None
-            }
-            Rung::Pause => Some(EpisodeStop::LadderPause(step)),
-        }
+        self.ep.note = Some(note);
+        None
     }
 
     /// 1a still catches looping steps mid-episode.
@@ -841,6 +897,7 @@ impl Run<'_, '_> {
     /// screen long gone.
     fn settle_parks(&mut self, on_event: &mut dyn FnMut(LoopEvent)) {
         let now = self.now();
+        self.new_pass = true;
         for mut park in std::mem::take(&mut self.ep.parks) {
             let age = self.k.parks.answer_age(&park.id);
             let answer = self.k.parks.answer(&park.id);
@@ -904,19 +961,21 @@ impl Run<'_, '_> {
                     if out.failed {
                         crate::route::ladder::note_tool_error();
                     }
-                    emit(
+                    emit_app(
                         on_event,
                         &call,
                         if out.failed { "failed" } else { "completed" },
                         &out.text,
                         out.image_data_url.clone(),
+                        out.mcp_app.as_deref().cloned(),
                     );
+                    self.hold(&id, &call.name, &out);
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
                         tool: park.tool.clone(),
                         decision: "approve".into(),
                         ui_changed: ui,
-                        result: result_text(&out),
+                        result: result_text(&out, self.k.held),
                     };
                     self.record_as(
                         park.step,
@@ -976,6 +1035,7 @@ impl Run<'_, '_> {
     /// One model turn's calls. Independent reads fan out; everything else
     /// runs in order. A parked or denied hard step stops the rest.
     fn batch(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) {
+        self.new_pass = true;
         // Only reads every gate allows fan out; a denied or asked read takes
         // the one-at-a-time path, which answers it.
         let reads = calls.len() > 1
@@ -987,10 +1047,12 @@ impl Run<'_, '_> {
             return;
         }
         for (i, call) in calls.iter().enumerate() {
-            // A Pause stops before the next step; the top of the loop spends it.
+            // A Pause stops before the next step; the top of the loop spends
+            // it. A stuck episode runs nothing more; the top of the loop ends it.
             if self.k.halt.halted()
                 || self.k.cancel.is_cancelled()
                 || self.k.pause.load(Ordering::SeqCst)
+                || self.ep.stuck()
             {
                 return;
             }
@@ -1043,9 +1105,13 @@ impl Run<'_, '_> {
                 tool: c.name.clone(),
                 decision: "allow".into(),
                 ui_changed: None,
-                result: format!("{} (fan-out {returned}/{take} returned)", result_text(&out)),
+                result: format!(
+                    "{} (fan-out {returned}/{take} returned)",
+                    result_text(&out, self.k.held)
+                ),
             };
             let id = format!("s{}", self.ep.steps);
+            self.hold(&id, &c.name, &out);
             self.record(&shape, &arg_line(&c.name, &c.arguments), "soft", &id);
         }
         for c in &calls[take..] {
@@ -1135,19 +1201,44 @@ impl Run<'_, '_> {
         if out.failed {
             crate::route::ladder::note_tool_error();
         }
-        emit(
+        emit_app(
             on_event,
             call,
             if out.failed { "failed" } else { "completed" },
             &out.text,
             out.image_data_url.clone(),
+            out.mcp_app.as_deref().cloned(),
         );
+        // Zoom counts as a read here, so what it opens is readable.
+        self.hold(id, &call.name, &out);
         self.record(
-            &shape("allow", ui, result_text(&out)),
+            &shape("allow", ui, result_text(&out, self.k.held)),
             args_redacted,
             "soft",
             id,
         );
+    }
+
+    /// Keep a result for the worker's next steps, redacted (held secrets
+    /// too). One pass (a batch, or a park settle) is one slot: its first
+    /// held output replaces the last pass's, the rest join it. A desktop
+    /// or look-only step holds nothing and leaves the slot as it is.
+    fn hold(&mut self, view_ref: &str, tool: &str, out: &ToolOutput) {
+        if gate::is_desktop(tool) || gate::is_look(tool) {
+            return;
+        }
+        if std::mem::take(&mut self.new_pass) {
+            self.ep.outputs.clear();
+        }
+        let clean = grokhub_core::redact_held_secrets(
+            &grokhub_core::redact_secrets(&out.text),
+            self.k.held,
+        );
+        self.ep.outputs.push(StepOutput {
+            view_ref: view_ref.into(),
+            tool: tool.into(),
+            text: clean.trim_end().to_string(),
+        });
     }
 
     /// `harness::decide` first (the only hard gate; a desktop call is also
@@ -1354,6 +1445,24 @@ fn is_read(name: &str) -> bool {
     name == ZOOM_TOOL || gate::is_readonly(name)
 }
 
+/// A step that only looks: it changes nothing on screen or on disk.
+fn observes_only(name: &str) -> bool {
+    name == "screenshot" || name == ZOOM_TOOL || gate::is_look(name)
+}
+
+/// A held result at its share of [`OUTPUT_PROMPT_CAP`]: over it, the head
+/// and tail with the middle clipped, so a fenced result keeps its close
+/// marker and a command its exit line.
+fn clipped(text: &str, share: usize) -> String {
+    if text.chars().count() <= share {
+        return text.to_string();
+    }
+    format!(
+        "{}\n(Read a smaller part to see what was clipped.)",
+        crate::auto_review::clip_middle(text, share)
+    )
+}
+
 fn zoom(view: &EpisodeView, arguments: &str) -> ToolOutput {
     let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
     let id = args.get("span_ref").and_then(|v| v.as_str()).unwrap_or("");
@@ -1385,15 +1494,18 @@ fn arg_line(name: &str, arguments: &str) -> String {
 }
 
 /// What a step line and its span keep of a result: the text, never the
-/// image. A "no capture backend works" note is kept whole so the pause names
-/// every backend's error.
-fn result_text(out: &ToolOutput) -> String {
+/// image, redacted like the held copy (keys and held secrets)
+/// before it is cut, so a cut can't leave part of a key in the span. A
+/// "no capture backend works" note is kept whole so the pause names every
+/// backend's error.
+fn result_text(out: &ToolOutput, held: &[String]) -> String {
     let cap = if out.text.contains(CAPTURE_FAILED_HEAD) {
         super::CAPTURE_NOTE_CAP
     } else {
         super::STEP_RESULT_CAP
     };
-    let t: String = out.text.chars().take(cap).collect();
+    let clean = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(&out.text), held);
+    let t: String = clean.chars().take(cap).collect();
     if out.failed && !t.starts_with("failed") {
         format!("failed: {t}")
     } else {
@@ -1418,6 +1530,17 @@ fn emit(
     detail: &str,
     image: Option<String>,
 ) {
+    emit_app(on_event, call, status, detail, image, None);
+}
+
+fn emit_app(
+    on_event: &mut dyn FnMut(LoopEvent),
+    call: &FunctionCall,
+    status: &str,
+    detail: &str,
+    image: Option<String>,
+    app: Option<crate::mcp::McpAppView>,
+) {
     let id = if call.call_id.is_empty() {
         format!("tool-{}", call.name)
     } else {
@@ -1427,6 +1550,14 @@ fn emit(
     // never parks; only a call that ran draws its panel.
     if detail != PARKED {
         crate::run::emit_panel(on_event, &id, call, status);
+    }
+    if status == "completed" {
+        if let Some(app) = app {
+            on_event(LoopEvent::McpApp {
+                id: id.clone(),
+                app,
+            });
+        }
     }
     on_event(LoopEvent::Tool {
         id,

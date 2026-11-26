@@ -1,1 +1,0 @@
-- Pulse: a card that stays at least 60% on screen for 8 seconds counts as a light look, once per card per day. It is skipped if the card already got a reaction that day, and nothing is sent while the tab is hidden.

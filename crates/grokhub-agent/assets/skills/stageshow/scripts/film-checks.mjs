@@ -1015,7 +1015,7 @@ function detectKitOverride() {
     // The parts whose geometry the skill guarantees; the window's chrome, a
     // States slot or a Swap layer are the author's to shape
     const guarded = /\.ss-(row|tapback|bubble|facepile|avatar|stamp|receipt|toast|check|kb|keyboard|phone__(status|home|island|screen))/
-    const subject = (sel) => sel.split(',')[0].trim().replace(/^&\s*/, '').split(/\s+(?![^(]*\))|>|\+|~/).filter(Boolean).pop() || ''
+    const subject = (sel) => sel.split(',')[0].trim().replace(/^&\s*/g, '').split(/\s+(?![^(]*\))|>|\+|~/).filter(Boolean).pop() || ''
     const walk = (list) => { for (const r of list) {
       if (r.selectorText && r.style) {
         const subj = subject(r.selectorText).replace(/::?[a-z-]+(\([^)]*\))?/g, '')
@@ -1026,7 +1026,7 @@ function detectKitOverride() {
         // The example's own class on the same element: a variant the author owns
         if (!inner.test(subj) && /\.(?!ss-)[a-z][a-z0-9-]*\.ss-|\.ss-[a-z0-9-]+\.(?!ss-)[a-z]/.test(subj)) continue
         if (!guarded.test(subj)) continue
-        if ((inner.test(subj) && (sized || moved)) || (/\.ss-/.test(subj) && sized)) hits.push(r.selectorText.trim().replace(/^&\s*/, '').slice(0, 60))
+        if ((inner.test(subj) && (sized || moved)) || (/\.ss-/.test(subj) && sized)) hits.push(r.selectorText.trim().replace(/^&\s*/g, '').slice(0, 60))
       }
       if (r.cssRules) walk(r.cssRules)
     } }

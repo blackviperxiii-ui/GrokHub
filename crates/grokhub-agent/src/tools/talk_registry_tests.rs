@@ -73,7 +73,7 @@ fn names(tools: &[Value]) -> Vec<String> {
 fn index(tools: &[Value]) -> String {
     tools
         .iter()
-        .find(|t| t["name"] == LOAD_TOOL_SCHEMA)
+        .find(|t| t["name"] == TOOL_SEARCH)
         .and_then(|t| t["description"].as_str())
         .unwrap_or("")
         .to_string()
@@ -100,7 +100,7 @@ fn talk_chat_indexes_the_workspace_tools_instead_of_sending_them() {
         "{index}"
     );
     let lines: Vec<&str> = index
-        .split_once("Deferred tools (index):\n")
+        .split_once("Full deferred index:\n")
         .map(|(_, l)| l)
         .unwrap_or("")
         .lines()

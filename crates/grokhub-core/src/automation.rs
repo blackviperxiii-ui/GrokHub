@@ -28,6 +28,12 @@ pub struct Automation {
         skip_serializing_if = "crate::automation_check::CheckGate::is_plain"
     )]
     pub gate: crate::automation_check::CheckGate,
+    /// Saved condition or event-stream wait ([`crate::automation_wait`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::automation_wait::WaitTrigger::is_plain"
+    )]
+    pub wait: crate::automation_wait::WaitTrigger,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -39,6 +45,12 @@ pub struct Automation {
     /// How the last run ended. Older `automations.json` files load as clear.
     #[serde(default, skip_serializing_if = "AutoHealth::is_clear")]
     pub health: AutoHealth,
+    /// Delivery, run, and completion tracked separately from [`AutoOutcome`].
+    #[serde(
+        default,
+        skip_serializing_if = "crate::automation_wait::AutoLifecycle::is_clear"
+    )]
+    pub lifecycle: crate::automation_wait::AutoLifecycle,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,6 +119,8 @@ pub fn mark_automation_ok(mut a: Automation) -> Automation {
         error: String::new(),
         fail_streak: 0,
     };
+    // Result reached the shell/activity path: delivery ok with the run.
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(true, true);
     a
 }
 
@@ -118,6 +132,8 @@ pub fn mark_automation_failed(mut a: Automation, why: &str) -> Automation {
         a.health.error = "Run failed".into();
     }
     a.health.fail_streak = a.health.fail_streak.saturating_add(1);
+    // Error text was still delivered to the row / Fired event.
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(false, true);
     a
 }
 
@@ -125,6 +141,19 @@ pub fn mark_automation_failed(mut a: Automation, why: &str) -> Automation {
 pub fn mark_automation_stopped(mut a: Automation) -> Automation {
     a.health.outcome = AutoOutcome::Stopped;
     a.health.error.clear();
+    a.lifecycle = crate::automation_wait::AutoLifecycle {
+        delivery: crate::automation_wait::LifePhase::Ok,
+        run: crate::automation_wait::LifePhase::Stopped,
+        completion: crate::automation_wait::LifePhase::Stopped,
+    };
+    a
+}
+
+/// Mark delivery failed. Run phase stays Ok/Failed from the turn itself.
+pub fn mark_automation_delivery_failed(mut a: Automation) -> Automation {
+    let run_ok = a.health.outcome == AutoOutcome::Ok
+        || a.lifecycle.run == crate::automation_wait::LifePhase::Ok;
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(run_ok, false);
     a
 }
 
@@ -350,6 +379,7 @@ pub fn mark_automation_ran(mut a: Automation, now_ms: u64) -> Automation {
     a.last_run = Some(now_ms);
     a.run_count = a.run_count.saturating_add(1);
     a.health.outcome = AutoOutcome::Started;
+    a.lifecycle = crate::automation_wait::AutoLifecycle::started();
     if a.schedule == "once" {
         a.enabled = false;
         a.next_run = None;
@@ -418,11 +448,13 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
             heartbeat_every_min: mins,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
             run_count: 0,
             health: AutoHealth::default(),
+            lifecycle: Default::default(),
         });
     }
     let lower = t.to_ascii_lowercase();
@@ -460,11 +492,13 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
         heartbeat_every_min: 0,
         check_command: String::new(),
         gate: Default::default(),
+        wait: Default::default(),
         enabled: true,
         last_run: None,
         next_run: None,
         run_count: 0,
         health: AutoHealth::default(),
+        lifecycle: Default::default(),
     })
 }
 
@@ -1228,11 +1262,13 @@ mod tests {
                 heartbeat_every_min: 0,
                 check_command: String::new(),
                 gate: Default::default(),
+                wait: Default::default(),
                 enabled: true,
                 last_run: None,
                 next_run: Some(500),
                 run_count: 0,
                 health: Default::default(),
+                lifecycle: Default::default(),
             }],
             1_000,
         );
@@ -1291,11 +1327,13 @@ mod tests {
             heartbeat_every_min: 15,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         };
         assert!(automation_blocked_by_policy(false, true, 0));
         let skipped = mark_automation_skipped(blocked, 1_000, clock);
@@ -1312,11 +1350,13 @@ mod tests {
             heartbeat_every_min: 0,
             check_command: "test -f /missing".into(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         };
         let check_skip = mark_automation_skipped(once.clone(), 1_000, clock);
         assert!(
@@ -1337,11 +1377,13 @@ mod tests {
             heartbeat_every_min: 0,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         };
         let after = LocalClock {
             now_ms: 1_000,
@@ -1434,11 +1476,13 @@ mod tests {
             heartbeat_every_min: 0,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
             run_count: 0,
             health: AutoHealth::default(),
+            lifecycle: Default::default(),
         }
     }
 

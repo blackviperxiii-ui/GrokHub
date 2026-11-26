@@ -1,1 +1,0 @@
-Connectors → Phone and chat apps now sets up signed webhooks. Name one, copy its secret (shown only once), and point a service at `POST /v1/hook/<name>` on the hub this computer shares. The secrets file can only be read by your user account.

@@ -1,1 +1,0 @@
-- Say "save that as a routine" after the assistant does something, and the steps it just ran are saved as a routine you can run again with no model. The assistant names it and picks which values become inputs, you confirm on the card, and `grokhub-hub routine undo <name>` takes a save back. Steps that change something still need your separate OK before they run on their own.

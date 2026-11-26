@@ -1,1 +1,0 @@
-- Cabin: egui/eframe 0.37 with system fonts and color emoji, CompletionPopup slash autocomplete, and PasteImage attachments (egui_stack + egui-pop-phosphor bridges until upstream docks/phosphor release).

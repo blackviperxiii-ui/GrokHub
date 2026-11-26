@@ -3,14 +3,16 @@
 //! the cabin is not running: the cabin beats `scheduler-lease.json` from its
 //! pulse, and the shell defers while that beat is fresh.
 //!
-//! A due job gated by a check command runs that command first; only a passing
-//! check is claimed and fired, and the model gets what it printed
-//! ([`grokhub_core::automation_check`]). Under "only when it changes" an
-//! unchanged output waits with no model call, and a "without AI" job's run is
-//! the output alone. Other due jobs are claimed first (last run,
-//! count and next run saved), then run unattended under your Approvals, as
-//! Run now does: Ask stays read-only, and anything that would need an answer
-//! is skipped.
+//! A due job with a condition or event-stream wait
+//! ([`grokhub_core::automation_wait`]) is evaluated before a claim; a
+//! non-match polls again soon with no model call. A due job gated by a check
+//! command runs that command first; only a passing check is claimed and fired,
+//! and the model gets what it printed ([`grokhub_core::automation_check`]).
+//! Under "only when it changes" an unchanged output waits with no model call,
+//! and a "without AI" job's run is the output alone. Other due jobs are
+//! claimed first (last run, count and next run saved), then run unattended
+//! under your Approvals, as Run now does: Ask stays read-only, and anything
+//! that would need an answer is skipped.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,7 @@ use std::time::Duration;
 use grokhub_agent::check_decide::Decision;
 use grokhub_agent::ModelClient;
 use grokhub_core::automation_check::{check_step, CheckStep};
+use grokhub_core::automation_wait::{wait_prompt, wait_step, WaitStep};
 use grokhub_core::scheduler_lease::{
     headless_may_fire, read_lease, shell_may_fire, write_lease, LeaseOwner, SchedulerLease,
 };
@@ -82,12 +85,14 @@ pub fn local_clock(now_ms: u64, offset_min: i32) -> LocalClock {
 /// handed to `run`, one at a time, at most once per tick. The lease is checked
 /// again before each claim, so a cabin that opens mid-tick takes over. Jobs
 /// with a check command run that check first via `check`; a failing receipt
-/// advances the next run without firing.
+/// advances the next run without firing. `run` gets the job as saved, which
+/// decides whose words the run goes on, and the words it asks: the job's,
+/// or them with the lines its check printed or its wait found.
 pub fn tick(
     config_dir: &Path,
     clock: &dyn Fn() -> LocalClock,
     pid: u32,
-    run: &mut dyn FnMut(&Automation) -> RunResult,
+    run: &mut dyn FnMut(&Automation, &str) -> RunResult,
 ) -> Result<Vec<Fired>, String> {
     tick_with_check(config_dir, clock, pid, run, &mut |cmd| {
         grokhub_core::run_night_check_command(cmd)
@@ -100,7 +105,7 @@ pub fn tick_with_check(
     config_dir: &Path,
     clock: &dyn Fn() -> LocalClock,
     pid: u32,
-    run: &mut dyn FnMut(&Automation) -> RunResult,
+    run: &mut dyn FnMut(&Automation, &str) -> RunResult,
     check: &mut dyn FnMut(&str) -> String,
 ) -> Result<Vec<Fired>, String> {
     tick_deciding(config_dir, clock, pid, run, check, &mut |_, _| None)
@@ -115,7 +120,7 @@ pub fn tick_deciding(
     config_dir: &Path,
     clock: &dyn Fn() -> LocalClock,
     pid: u32,
-    run: &mut dyn FnMut(&Automation) -> RunResult,
+    run: &mut dyn FnMut(&Automation, &str) -> RunResult,
     check: &mut dyn FnMut(&str) -> String,
     decide: &mut dyn FnMut(&Automation, &str) -> Option<Decision>,
 ) -> Result<Vec<Fired>, String> {
@@ -139,7 +144,7 @@ pub fn tick_as(
     config_dir: &Path,
     clock: &dyn Fn() -> LocalClock,
     pid: u32,
-    run: &mut dyn FnMut(&Automation) -> RunResult,
+    run: &mut dyn FnMut(&Automation, &str) -> RunResult,
     check: &mut dyn FnMut(&str) -> String,
     decide: &mut dyn FnMut(&Automation, &str) -> Option<Decision>,
     preflight: &mut dyn FnMut(&Automation, bool) -> Option<String>,
@@ -161,11 +166,26 @@ pub fn tick_as(
             beat_ms: now.now_ms,
         };
         write_lease(config_dir, &beat)?;
-        // Check-gated jobs: run the gate before claiming a run. A failed or
-        // empty check, or an unchanged one under "only when it changes",
-        // waits with no model call.
+        // Condition / event-stream waits, then check-gated jobs: evaluate
+        // before claiming a run. A non-match polls again with no model call.
         let mut step = None;
+        // id, new_cursor, context
+        let mut wait_ready: Option<(String, String, String)> = None;
         if let Some(pending) = automations::next_due(config_dir, now, &seen)? {
+            match wait_step(&pending.wait, config_dir) {
+                WaitStep::Wait => {
+                    automations::settle_wait(config_dir, &pending.id, now)?;
+                    seen.insert(pending.id);
+                    continue;
+                }
+                WaitStep::Ready {
+                    context,
+                    new_cursor,
+                } => {
+                    wait_ready = Some((pending.id.clone(), new_cursor, context));
+                }
+                WaitStep::None => {}
+            }
             if let Some(cmd) = grokhub_core::night_check_command(&pending.check_command) {
                 let next = check_step(&pending.gate, &check(cmd));
                 if next.waits() {
@@ -199,6 +219,10 @@ pub fn tick_as(
         };
         seen.insert(job.id.clone());
         let step = step.filter(|(id, _)| *id == job.id).map(|(_, s)| s);
+        let (wait_cursor, wait_context) = match wait_ready {
+            Some((id, cursor, context)) if id == job.id => (Some(cursor), Some(context)),
+            _ => (None, None),
+        };
         let result = match automations::Running::claim(&job.id) {
             Ok(_held) => match &step {
                 Some(CheckStep::ScriptOnly { output }) => RunResult {
@@ -225,19 +249,26 @@ pub fn tick_as(
                             } else {
                                 picked.as_str()
                             };
-                            run(&Automation {
-                                instructions: grokhub_core::automation_check::check_prompt(
-                                    &job.instructions,
-                                    &job.check_command,
-                                    shown,
-                                    job.gate.on_change,
-                                ),
-                                ..job.clone()
-                            })
+                            let mut instructions = grokhub_core::automation_check::check_prompt(
+                                &job.instructions,
+                                &job.check_command,
+                                shown,
+                                job.gate.on_change,
+                            );
+                            if let Some(ctx) = &wait_context {
+                                instructions = wait_prompt(&instructions, ctx);
+                            }
+                            run(&job, &instructions)
                         }
                     }
                 }
-                _ => run(&job),
+                _ => {
+                    if let Some(ctx) = &wait_context {
+                        run(&job, &wait_prompt(&job.instructions, ctx))
+                    } else {
+                        run(&job, &job.instructions)
+                    }
+                }
             },
             // A Run now of it started after the claim; that run counts.
             Err(_) => continue,
@@ -247,6 +278,11 @@ pub fn tick_as(
         if let Some(CheckStep::ScriptOnly { output } | CheckStep::Ask { output, .. }) = &step {
             if !result.failed() {
                 let _ = automations::remember_check(config_dir, &job.id, output);
+            }
+        }
+        if let Some(cursor) = wait_cursor {
+            if !result.failed() {
+                let _ = automations::remember_wait_cursor(config_dir, &job.id, &cursor);
             }
         }
         // The job may have been removed while it ran.
@@ -318,9 +354,9 @@ fn tick_live(
     route: &dyn Fn() -> Result<Route, String>,
 ) -> Result<Vec<Fired>, String> {
     let clock = || local_clock(grokhub_core::now_ms(), offset);
-    let mut run = |job: &Automation| match route() {
+    let mut run = |job: &Automation, asked: &str| match route() {
         Ok((client, model, workspace, gate)) => {
-            automations::execute(config_dir, job, client, &model, workspace, gate)
+            automations::execute_asking(config_dir, job, asked, client, &model, workspace, gate)
         }
         Err(error) => RunResult {
             text: String::new(),
@@ -494,7 +530,7 @@ mod tests {
         let (dir, id) = nine_am_job("once");
         let nine = FRI_8AM + HOUR;
         let seen = RefCell::new(Vec::new());
-        let mut run = |job: &Automation| {
+        let mut run = |job: &Automation, _: &str| {
             let row = automations::load(&dir).expect("load")[0].clone();
             seen.borrow_mut()
                 .push((job.id.clone(), row.run_count, row.last_run, row.next_run));
@@ -543,7 +579,7 @@ mod tests {
         write_lease(&dir, &cabin).expect("lease");
         let before = std::fs::read_to_string(automations::path(&dir)).expect("before");
         let mut calls = 0;
-        let fired = tick(&dir, &at(nine), PID, &mut |_| {
+        let fired = tick(&dir, &at(nine), PID, &mut |_, _| {
             calls += 1;
             ok("")
         })
@@ -563,7 +599,7 @@ mod tests {
         };
         write_lease(&dir, &other).expect("other");
         assert_eq!(
-            tick(&dir, &at(nine), PID, &mut |_| ok("")).expect("tick"),
+            tick(&dir, &at(nine), PID, &mut |_, _| ok("")).expect("tick"),
             Vec::new()
         );
     }
@@ -581,7 +617,7 @@ mod tests {
             },
         )
         .expect("lease");
-        let fired = tick(&dir, &at(nine), PID, &mut |_| ok("done")).expect("tick");
+        let fired = tick(&dir, &at(nine), PID, &mut |_, _| ok("done")).expect("tick");
         assert_eq!(
             fired.iter().map(|f| f.id.clone()).collect::<Vec<_>>(),
             vec![id]
@@ -598,7 +634,7 @@ mod tests {
         // Asleep from Friday 8am to Monday 11am: three 9am slots went by.
         let monday_11 = FRI_8AM + (3 * 24 + 3) * HOUR;
         let mut calls = 0;
-        tick(&dir, &at(monday_11), PID, &mut |_| {
+        tick(&dir, &at(monday_11), PID, &mut |_, _| {
             calls += 1;
             ok("")
         })
@@ -626,7 +662,7 @@ mod tests {
             &dir,
             &at(nine),
             PID,
-            &mut |_| {
+            &mut |_, _| {
                 runs += 1;
                 ok("should not run")
             },
@@ -652,10 +688,16 @@ mod tests {
         )
         .expect("seed");
         let mut checks = Vec::new();
-        let fired = tick_with_check(&dir, &at(nine), PID, &mut |_| ok("cleaned"), &mut |cmd| {
-            checks.push(cmd.to_string());
-            "$ git status --porcelain\nexit 0 · 3ms\n M downloads\n".into()
-        })
+        let fired = tick_with_check(
+            &dir,
+            &at(nine),
+            PID,
+            &mut |_, _| ok("cleaned"),
+            &mut |cmd| {
+                checks.push(cmd.to_string());
+                "$ git status --porcelain\nexit 0 · 3ms\n M downloads\n".into()
+            },
+        )
         .expect("tick");
         assert_eq!(checks, vec!["git status --porcelain".to_string()]);
         assert_eq!(
@@ -668,9 +710,112 @@ mod tests {
     }
 
     #[test]
+    fn a_condition_wait_skips_without_firing_until_true() {
+        let dir = temp_dir("wait-cond");
+        let nine = FRI_8AM + HOUR;
+        let marker = dir.join("ready.flag");
+        let source = format!("file:{}", marker.display());
+        let seed = serde_json::json!([{
+            "id": "auto-wait",
+            "name": "when ready",
+            "schedule": "daily",
+            "time": "09:00",
+            "instructions": "go",
+            "enabled": true,
+            "nextRun": nine,
+            "wait": { "kind": "condition", "source": source },
+        }]);
+        std::fs::write(automations::path(&dir), seed.to_string()).expect("seed");
+        let mut runs = 0;
+        let fired = tick(&dir, &at(nine), PID, &mut |_, _| {
+            runs += 1;
+            ok("should not")
+        })
+        .expect("tick");
+        assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 0);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 0);
+        assert_eq!(
+            row.next_run,
+            Some(nine + grokhub_core::WAIT_POLL_MS),
+            "wait polls again soon"
+        );
+
+        std::fs::write(&marker, b"1").expect("marker");
+        let later = nine + grokhub_core::WAIT_POLL_MS;
+        let fired = tick(&dir, &at(later), PID, &mut |_, asked| {
+            runs += 1;
+            assert!(asked.contains("Saved condition"), "{asked}");
+            ok("ran")
+        })
+        .expect("tick ready");
+        assert_eq!(runs, 1);
+        assert_eq!(fired.len(), 1);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.run_count, 1);
+        assert_eq!(row.lifecycle.run, grokhub_core::LifePhase::Ok);
+        assert_eq!(row.lifecycle.delivery, grokhub_core::LifePhase::Ok);
+        assert_eq!(row.lifecycle.completion, grokhub_core::LifePhase::Ok);
+    }
+
+    #[test]
+    fn an_event_stream_wait_fires_on_new_match_and_advances_cursor() {
+        let dir = temp_dir("wait-stream");
+        let nine = FRI_8AM + HOUR;
+        std::fs::write(
+            automations::path(&dir),
+            format!(
+                r#"[{{"id":"auto-stream","name":"disk watch","schedule":"daily","time":"09:00","instructions":"alert me","enabled":true,"nextRun":{nine},"wait":{{"kind":"event_stream","source":"disk","matchText":"alert"}}}}]"#
+            ),
+        )
+        .expect("seed");
+        let mut runs = 0;
+        let fired = tick(&dir, &at(nine), PID, &mut |_, _| {
+            runs += 1;
+            ok("no")
+        })
+        .expect("empty stream");
+        assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 0);
+
+        grokhub_core::append_stream_event(&dir, "disk", "e1", "disk alert now").expect("event");
+        let later = nine + grokhub_core::WAIT_POLL_MS;
+        let fired = tick(&dir, &at(later), PID, &mut |_, asked| {
+            runs += 1;
+            assert!(asked.contains("disk alert now"));
+            ok("noted")
+        })
+        .expect("match");
+        assert_eq!(runs, 1);
+        assert_eq!(fired.len(), 1);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.wait.cursor, "e1");
+        assert_eq!(row.run_count, 1);
+
+        // Same event must not fire again.
+        let again = later + grokhub_core::WAIT_POLL_MS;
+        // Make it due again via the on-disk row (cursor already e1).
+        let mut list = automations::load(&dir).expect("load");
+        list[0].next_run = Some(again);
+        std::fs::write(
+            automations::path(&dir),
+            serde_json::to_string(&list).expect("json"),
+        )
+        .expect("rewrite");
+        let fired = tick(&dir, &at(again), PID, &mut |_, _| {
+            runs += 1;
+            ok("again")
+        })
+        .expect("no rematch");
+        assert_eq!(fired, Vec::new());
+        assert_eq!(runs, 1);
+    }
+
+    #[test]
     fn a_failed_run_marks_the_row() {
         let (dir, _id) = nine_am_job("fail");
-        let fired = tick(&dir, &at(FRI_8AM + HOUR), PID, &mut |_| RunResult {
+        let fired = tick(&dir, &at(FRI_8AM + HOUR), PID, &mut |_, _| RunResult {
             text: String::new(),
             error: "Add an xAI API key in Settings first.".into(),
             stop: "error".into(),
@@ -732,7 +877,7 @@ mod tests {
         let client = Arc::new(WantsToWrite {
             requests: Mutex::new(Vec::new()),
         });
-        let fired = tick(&dir, &at(FRI_8AM + HOUR), PID, &mut |job| {
+        let fired = tick(&dir, &at(FRI_8AM + HOUR), PID, &mut |job, _| {
             // Approvals on Ask: a scheduled run stays read-only.
             let ask =
                 crate::unattended::RunGate::scheduled(grokhub_agent::PermMode::Ask, false, None);
@@ -785,8 +930,8 @@ mod tests {
     fn only_when_it_changes_wakes_the_model_with_the_new_lines_and_not_again_for_the_same() {
         let (dir, nine) = gated_job("on-change", r#"{"onChange":true}"#);
         let mut asks = Vec::new();
-        let mut run = |job: &Automation| {
-            asks.push(job.instructions.clone());
+        let mut run = |_: &Automation, asked: &str| {
+            asks.push(asked.to_string());
             ok("noted")
         };
         let first = tick_with_check(&dir, &at(nine), PID, &mut run, &mut |_| {
@@ -820,7 +965,7 @@ mod tests {
     #[test]
     fn a_failed_model_run_keeps_the_old_output_so_the_change_shows_again() {
         let (dir, nine) = gated_job("on-change-fail", r#"{"onChange":true}"#);
-        let mut run = |_: &Automation| RunResult {
+        let mut run = |_: &Automation, _: &str| RunResult {
             text: String::new(),
             error: "busy".into(),
             stop: "error".into(),
@@ -842,7 +987,7 @@ mod tests {
             &dir,
             &at(nine),
             PID,
-            &mut |_| {
+            &mut |_, _| {
                 runs += 1;
                 ok("should not run")
             },
@@ -886,8 +1031,8 @@ mod tests {
             }),
         ]
         .into_iter();
-        let mut run = |job: &Automation| {
-            asks.push(job.instructions.clone());
+        let mut run = |_: &Automation, asked: &str| {
+            asks.push(asked.to_string());
             ok("warned")
         };
         let mut decide = |job: &Automation, shown: &str| {
@@ -949,8 +1094,8 @@ mod tests {
             &dir,
             &at(nine),
             PID,
-            &mut |job| {
-                asks.push(job.instructions.clone());
+            &mut |_, asked| {
+                asks.push(asked.to_string());
                 ok("ran")
             },
             &mut |_| receipt("/dev/sda1 91%"),
@@ -965,7 +1110,7 @@ mod tests {
             &plain,
             &at(nine),
             PID,
-            &mut |_| ok("ran"),
+            &mut |_, _| ok("ran"),
             &mut |_| receipt("/dev/sda1 91%"),
             &mut |_, _| {
                 judged += 1;
@@ -974,6 +1119,108 @@ mod tests {
         )
         .expect("tick");
         assert_eq!(judged, 0);
+    }
+
+    /// Says "noted" and keeps what it was asked.
+    #[derive(Default)]
+    struct Notes {
+        requests: Mutex<Vec<ResponsesRequest>>,
+    }
+
+    impl ModelClient for Notes {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            self.requests.lock().expect("requests").push(req.clone());
+            sink(StreamEvent::TextDelta("noted".into()));
+            Ok(TurnOutput {
+                text: "noted".into(),
+                ..TurnOutput::default()
+            })
+        }
+    }
+
+    /// A job a paired browser wrote runs without the desktop, and once the
+    /// person saves its words again here, with it, also when its run asks
+    /// them with its check's or its wait's lines added: the run is the saved
+    /// job's, whatever lines it adds. A check command the browser's words
+    /// set is the browser's until the person's words say it.
+    #[test]
+    fn a_saved_job_runs_as_saved_with_its_checks_or_its_waits_lines() {
+        use automations::RunOrigin;
+        let on = crate::unattended::RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        let clock = local_clock(FRI_8AM, 0);
+        let words = "every day at 9am Tell me if a disk is nearly full.";
+        // What each run was asked, and whether its model was given the
+        // desktop.
+        let runs = |dir: &Path, at_ms: u64, check: &mut dyn FnMut(&str) -> String| {
+            let mut seen = Vec::new();
+            let mut run = |job: &Automation, asked: &str| {
+                let model = Arc::new(Notes::default());
+                let ws = temp_dir("saved-ws");
+                let ran = automations::execute_asking(dir, job, asked, model.clone(), "m", ws, on);
+                let input = format!("{:?}", model.requests.lock().expect("requests")[0].input);
+                // The run's prompt ends with what it was asked.
+                let tail = format!("{asked:?}");
+                assert!(input.contains(&tail[1..]), "{input}");
+                let desktop = input.contains(grokhub_core::cabin_rules::DESKTOP_CABIN_LINE);
+                seen.push((asked.to_string(), desktop));
+                ran
+            };
+            tick_with_check(dir, &at(at_ms), PID, &mut run, check).expect("tick");
+            seen
+        };
+
+        let (dir, nine) = gated_job("saved-check", "{}");
+        let checked = "every day at 9am check `df -h` and tell me if a disk is nearly full.";
+        let asked = |words: &str| {
+            format!("{words}\n\nThe check command `df -h` printed this:\n```\n/dev/sda1 91%\n```")
+        };
+        let mut df = |_: &str| receipt("/dev/sda1 91%");
+        // The browser rewrites the words of a job made here and leaves its
+        // check; the person saves the words again.
+        automations::edit_by(&dir, "auto-disk", words, clock, RunOrigin::Browser).expect("web");
+        assert_eq!(runs(&dir, nine, &mut df), [(asked(words), false)]);
+        automations::edit(&dir, "auto-disk", words, clock).expect("saved here");
+        assert_eq!(runs(&dir, nine + DAY, &mut df), [(asked(words), true)]);
+        // The browser's words set the check; the person's must say it.
+        automations::edit_by(&dir, "auto-disk", checked, clock, RunOrigin::Browser).expect("web");
+        assert_eq!(
+            runs(&dir, nine + 2 * DAY, &mut df),
+            [(asked(checked), false)]
+        );
+        automations::edit(&dir, "auto-disk", words, clock).expect("check unsaid here");
+        assert_eq!(runs(&dir, nine + 3 * DAY, &mut df), [(asked(words), false)]);
+        automations::edit(&dir, "auto-disk", checked, clock).expect("check said here");
+        assert_eq!(
+            runs(&dir, nine + 4 * DAY, &mut df),
+            [(asked(checked), true)]
+        );
+
+        let dir = temp_dir("saved-wait");
+        let marker = dir.join("ready.flag");
+        std::fs::write(&marker, b"1").expect("marker");
+        let source = format!("file:{}", marker.display());
+        let seed = serde_json::json!([{
+            "id": "auto-wait",
+            "name": "disk",
+            "schedule": "daily",
+            "time": "09:00",
+            "instructions": "Tell me if a disk is nearly full.",
+            "enabled": true,
+            "nextRun": nine,
+            "wait": { "kind": "condition", "source": source },
+        }]);
+        std::fs::write(automations::path(&dir), seed.to_string()).expect("seed");
+        automations::edit_by(&dir, "auto-wait", words, clock, RunOrigin::Browser).expect("web");
+        let asked = format!("{words}\n\nSaved condition `{source}` is true.");
+        let mut no_check = |_: &str| String::new();
+        assert_eq!(runs(&dir, nine, &mut no_check), [(asked.clone(), false)]);
+        automations::edit(&dir, "auto-wait", words, clock).expect("saved here");
+        assert_eq!(runs(&dir, nine + DAY, &mut no_check), [(asked, true)]);
     }
 
     #[test]
@@ -992,7 +1239,7 @@ mod tests {
             &dir,
             &at(nine),
             PID + 1,
-            &mut |_| {
+            &mut |_, _| {
                 runs += 1;
                 ok("headless ran")
             },
@@ -1008,7 +1255,7 @@ mod tests {
             &dir,
             &at(nine + 90_000),
             PID + 1,
-            &mut |_| ok("headless ran"),
+            &mut |_, _| ok("headless ran"),
             &mut |_| String::new(),
             &mut |_, _| None,
             &mut |_, _| None,
@@ -1024,7 +1271,7 @@ mod tests {
             })
         );
         // An app that opens now is not held off by the headless beat.
-        tick(&dir, &at(nine + 100_000), PID, &mut |_| ok("app ran")).expect("tick");
+        tick(&dir, &at(nine + 100_000), PID, &mut |_, _| ok("app ran")).expect("tick");
         assert_eq!(read_lease(&dir).map(|l| l.owner), Some(LeaseOwner::Shell));
     }
 
@@ -1039,7 +1286,7 @@ mod tests {
             &dir,
             &at(nine),
             PID,
-            &mut |_| {
+            &mut |_, _| {
                 runs += 1;
                 ok("should not run")
             },

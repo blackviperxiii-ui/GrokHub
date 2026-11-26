@@ -1,0 +1,1 @@
+- Linux: prebuilt user installs (AppImage under `~/.local/bin`, including Arch/CachyOS) self-update via `linux-x86_64-appimage`; `latest.json` also lists a plain `linux-x86_64` AppImage alias.

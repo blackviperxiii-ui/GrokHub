@@ -1,2 +1,0 @@
-- Removed the retired cabin's built-in update steps, the Windows clone install script, and the unused `--version` line helpers. The docs now describe the Updates page in Settings → About and the install paths that update outside the app.
-- Updates: a build that can't update itself now says how to update it: the package manager for a .deb or AUR install, or `scripts/install.sh --channel <channel>` in the clone that built it.

@@ -1,1 +1,0 @@
-- The desktop app offers "Explain this?" above the composer when you save a new screenshot, as the cabin does. It's off by default under Settings → Behavior → Screenshot explain; a tap attaches the screenshot and nothing is sent until you send. Both apps share the switch and the offer.

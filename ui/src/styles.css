@@ -1160,6 +1160,7 @@ span.profile-avatar {
   /* These scroll the window on wider screens; here they scroll inside the
      page so their end clears the bar. */
   .journal,
+  .meetings,
   .workboard,
   .settings-page {
     flex: 1;
@@ -1564,6 +1565,7 @@ span.profile-avatar {
 
 .chat-frame > .chat {
   min-width: 0;
+  container: chat-column / inline-size;
 }
 
 .chat-side {
@@ -2504,6 +2506,22 @@ button.md-copy {
   min-height: 40px;
 }
 
+/* The window opens 900px wide, where the companion's column leaves the chat
+   under 700px and the buttons squeezed the box to two words a line. There the
+   box takes its own row and the buttons sit under it, as on a phone.
+   After the composer's own rules, which it overrides. */
+@container chat-column (max-width: 699px) {
+  .composer {
+    flex-wrap: wrap;
+  }
+
+  .composer-ghost-wrap {
+    order: -1;
+    flex: 1 0 100%;
+    width: auto;
+  }
+}
+
 /* Phones: the categories scroll sideways in one row, and the category's pages
    sit in a row above the page instead of down the side. */
 @media (max-width: 600px) {
@@ -2843,6 +2861,48 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   border-color: var(--warn-text);
 }
 
+/* MCP Apps host: sandboxed iframe for text/html;profile=mcp-app views. */
+.mcp-app {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  min-width: 0;
+}
+
+.mcp-app.bordered {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.mcp-app-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+.mcp-app-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.mcp-app-frame {
+  width: 100%;
+  min-height: 220px;
+  border: 0;
+  background: var(--bg);
+}
+
+.mcp-app-status {
+  margin: 0;
+  font-size: var(--font-caption);
+  color: var(--danger-text);
+}
+
 /* A show_panel panel: plain text, tables and buttons inside a turn card. */
 .panel-head {
   display: flex;
@@ -3074,10 +3134,17 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .memory,
 .connectors,
 .journal,
+.meetings,
 .code,
 .workboard,
 .history,
-.pulse {
+.pulse,
+.devices,
+.agents,
+.team,
+.skills,
+.imagine,
+.updates-page {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -3090,10 +3157,41 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .memory,
 .connectors,
 .journal,
-.history {
+.meetings,
+.history,
+.devices,
+.agents,
+.team,
+.skills,
+.imagine,
+.command-box,
+.updates-page {
   width: 100%;
   max-width: 880px;
   margin-inline: auto;
+}
+
+/* A page opens with its title and, when it has one, a one-line lede. */
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+
+.page-lede {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+}
+
+/* An empty or loading line sits under what it describes, not adrift
+   mid-page, so what follows it (Hooks, Routines) stays in reach. */
+:is(.automations, .memory, .connectors, .journal, .meetings, .history, .devices, .agents, .team, .skills,
+  .imagine, .command-box, .updates-page, .workboard, .mods) > .empty {
+  margin: 0;
 }
 
 .automations .add,
@@ -3236,10 +3334,6 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   overflow-wrap: anywhere;
 }
 
-/* Hooks and GitHub follow the list, so an empty list stays at the top. */
-.connectors > .empty {
-  margin: 0;
-}
 
 .hooks,
 .github {
@@ -3250,7 +3344,8 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .hooks h2,
-.github h2 {
+.github h2,
+.memory-files h2 {
   font-size: var(--font-prose);
   margin: 8px 0 0;
 }
@@ -5061,7 +5156,7 @@ a.feed-title:focus-visible {
 
   :root:not([data-reduce-motion="true"]) .rail button[aria-current="page"],
   :root:not([data-reduce-motion="true"]) :is(.settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
-  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
+  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"], .workboard-kinds [role="tab"])[aria-selected="true"] {
     animation: tab-open var(--t-base) var(--ease-out) backwards;
   }
 
@@ -5122,13 +5217,6 @@ a.feed-title:focus-visible {
 }
 
 /* Imagine: the prompt bar on top, the gallery (the cabin's wall) below. */
-.imagine {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-}
 
 .imagine-bar {
   display: flex;
@@ -5196,16 +5284,6 @@ a.feed-title:focus-visible {
 }
 
 /* Devices: this computer, Web access and the paired browsers, one column. */
-.devices {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .devices textarea {
   flex-shrink: 0;
@@ -5242,11 +5320,6 @@ a.feed-title:focus-visible {
 }
 .fleet .glow-bar.fleet-bar {
   margin-top: 4px;
-}
-.fleet .fleet-refresh {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: #000;
 }
 .fleet label {
   display: flex;
@@ -5317,6 +5390,7 @@ a.feed-title:focus-visible {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"],
 .code-run,
 button.cta,
 button.primary:not(.quick-chip) {
@@ -5331,6 +5405,7 @@ button.primary:not(.quick-chip) {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"],
 .code-run,
 button.cta,
 button.primary:not(.quick-chip) {
@@ -5662,6 +5737,25 @@ button.primary:not(.quick-chip) {
   margin: 0.5rem 0;
   user-select: all;
 }
+/* Devices → Companions: what one companion may lend, as a row of boxes. */
+.companion-offers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  border: 0;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+.companion-offers legend {
+  padding: 0;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+}
+.companion-offers label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
 /* Composer slash commands: the list sits just above the composer. */
 .slash-wrap {
   position: relative;
@@ -5969,6 +6063,89 @@ button.primary:not(.quick-chip) {
   width: 100%;
 }
 
+.workboard-kinds {
+  display: flex;
+  gap: 4px;
+}
+
+.sessions-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sessions-toolbar,
+.sessions-agent,
+.sessions-filters,
+.sessions-query,
+.sessions-pin-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sessions-filters button.active {
+  border-color: var(--red);
+}
+
+.sessions-agent {
+  width: 100%;
+}
+
+.sessions-agent input,
+.sessions-query input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.sessions-rule {
+  margin-left: 8px;
+  font-weight: 400;
+  opacity: 0.6;
+  font-size: var(--font-caption);
+}
+
+.sessions-tile .sessions-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sessions-run {
+  font-size: var(--font-caption);
+  opacity: 0.85;
+}
+
+.sessions-prs {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sessions-prs a {
+  font-size: var(--font-caption);
+}
+
+.sessions-empty,
+.sessions-col-empty,
+.sessions-help,
+.sessions-count,
+.sessions-note {
+  margin: 0;
+  opacity: 0.85;
+}
+
 .workboard-add,
 .board-edit {
   display: flex;
@@ -6120,17 +6297,72 @@ button.primary:not(.quick-chip) {
   margin: 8px 0;
 }
 
-/* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
-.agents {
-  flex: 1;
+/* Team: the person's agents, teams and task log. */
+
+.team h2 {
+  font-size: var(--font-prose);
+  margin: 0;
+}
+
+.team .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
+  gap: var(--space-8);
 }
+
+.team .card {
+  align-self: stretch;
+  max-width: none;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.team-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.team-about,
+.team-reply {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.team-reply {
+  white-space: pre-wrap;
+}
+
+.team-form {
+  gap: var(--space-8);
+}
+
+.team-form > label,
+.team-form fieldset {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.team-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.team-form .team-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+/* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
 
 .agents h2 {
   font-size: var(--font-prose);
@@ -6244,16 +6476,6 @@ button.primary:not(.quick-chip) {
 }
 
 /* The Skills page (Skills.tsx): one centered column like Connectors. */
-.skills {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .skills input[type="search"] {
   flex: 1;
@@ -6593,7 +6815,8 @@ button.primary:not(.quick-chip) {
 }
 
 .home-head h2,
-.objectives-head h2 {
+.objectives-head h2,
+.page-head h2 {
   margin: 0;
   font-size: var(--font-headline);
   letter-spacing: var(--tracking-headline);
@@ -7291,6 +7514,16 @@ button.primary:not(.quick-chip) {
   padding: var(--space-8) var(--space-12);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+
+.local-library-job {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
 }
 
 /* The model a Pulse card's Open in Settings landed on. */
@@ -8113,12 +8346,14 @@ fieldset.channel label {
   gap: 4px;
 }
 
-.code-side-tabs [role="tab"] {
+.code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"] {
   min-height: 32px;
   padding: 4px 12px;
 }
 
-.code-side-tabs [role="tab"][aria-selected="true"] {
+.code-side-tabs [role="tab"][aria-selected="true"],
+.workboard-kinds [role="tab"][aria-selected="true"] {
   border-color: var(--red);
   background: var(--tab-open-bg);
   color: var(--tab-open-text);

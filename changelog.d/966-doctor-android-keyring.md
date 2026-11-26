@@ -1,1 +1,0 @@
-- `grokhub-hub --doctor [--fix]` reports config/key perms (0600/0700), hub LAN bind and web-access TLS readiness, broken MCP connector commands, updater signature key presence and sandbox status; `--fix` tightens safe permission repairs only. Android builds seal credentials in the OS Keystore through `android-native-keyring-store` behind target cfg gates.

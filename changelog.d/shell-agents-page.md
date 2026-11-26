@@ -1,1 +1,0 @@
-- Shell: an Agents page lists the open chat's to-dos and background tasks (commands, subagents, monitors) with a Stop for each and Stop all, like the cabin's Queue; the web app gets it for chats the browser started.

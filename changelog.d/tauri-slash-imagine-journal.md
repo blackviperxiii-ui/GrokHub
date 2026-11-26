@@ -1,1 +1,0 @@
-- Desktop app: /imagine, /imagine-video, /journal, /learn, /mcps, /plugins and /resume run in the composer. Imagine and the journal open those pages, /learn reflects the chat into memory, /mcps opens Connectors, /plugins opens Settings → Labs, and /resume opens History.

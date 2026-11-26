@@ -1,1 +1,0 @@
-- Settings → Permissions: "What Loadout can read", one row per learning scope, each off until you allow it, with Revoke, the folder picker and the browser choice. It uses the same consent ledger as the cabin.

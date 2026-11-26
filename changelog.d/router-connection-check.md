@@ -1,1 +1,0 @@
-- Asking whether your Claude (or OpenRouter) key works, or which models can answer, now runs a live check and answers from what the provider said: key saved, allowed, accepted, and a one-word test reply, plus whether Grok is signed in and, in an 18+ chat, why nothing in it goes online.

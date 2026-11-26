@@ -521,7 +521,10 @@ mod tests {
             "AKIAABCDEFGHIJKLMNOP",
             "pw-fake",
         ] {
-            assert!(!out.contains(secret), "{secret} left in {out}");
+            assert!(
+                !out.contains(secret),
+                "a secret was left in the redacted text"
+            );
         }
         assert!(out.contains("/tmp/task-runner-notes.md"), "{out}");
         assert!(!holds_secret(&out), "{out}");

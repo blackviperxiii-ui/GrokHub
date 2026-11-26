@@ -21,7 +21,7 @@ import {
 import { PRODUCT_NAME } from "./brand";
 import { Routines } from "./Routines";
 import { Toggle } from "./Toggle";
-import { ConfirmRow } from "./ui";
+import { ConfirmRow, PageHead } from "./ui";
 
 export function resultLine(result: RunResult): string {
   if (result.error) return result.error;
@@ -36,6 +36,18 @@ export function checkLine(row: AutomationRow): string | null {
   if (row.gate.onChange) bits.push("only when it changes");
   if (row.gate.noAgent) bits.push("without AI");
   return bits.join(", ");
+}
+
+/** Row copy for a condition or event-stream wait. */
+export function waitLine(row: AutomationRow): string | null {
+  const w = row.wait.trim();
+  return w || null;
+}
+
+/** Row copy for delivery / run / completion. */
+export function lifecycleLine(row: AutomationRow): string | null {
+  const line = row.lifecycle.trim();
+  return line || null;
 }
 
 export const KEEP_RUNNING = "Keep running when the app is closed";
@@ -244,6 +256,7 @@ export function Automations({
 
   return (
     <section className="automations" aria-label="Automations">
+      <PageHead title="Automations" />
       <form className="add" onSubmit={add}>
         <input
           aria-label="New automation"
@@ -281,11 +294,15 @@ export function Automations({
       <ul className="rows">
         {rows?.map((row) => {
           const check = checkLine(row);
+          const wait = waitLine(row);
+          const life = lifecycleLine(row);
           return (
           <li key={row.id} className="card automation" aria-label={row.name}>
             <div className="card-title">{row.name}</div>
             <div className="card-status">{row.summary}</div>
             {check && <div className="card-check">{check}</div>}
+            {wait && <div className="card-check">{wait}</div>}
+            {life && <div className="card-status">{life}</div>}
             {row.health && <div className="card-health">{row.health}</div>}
             {results[row.id] && <pre className="card-detail">{results[row.id]}</pre>}
             {editing?.id === row.id && (

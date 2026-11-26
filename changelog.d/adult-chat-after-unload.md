@@ -1,3 +1,0 @@
-- An 18+ chat keeps answering after its local model is unloaded for a game. Each message is judged on its own: an ordinary ask is answered online with the chat's 18+ turns and voice left out, and an 18+ ask gets one line saying the local model is paused or missing.
-- A chat's summary is never replaced by the "18+ chats run only on this computer's model" line when the local model is away.
-- A local model that has to load again shows "Loading this computer's model first" instead of a silent wait, and every chat class (math, plans) gets a real reply from it.

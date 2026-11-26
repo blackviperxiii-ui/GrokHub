@@ -1,6 +1,0 @@
-- `/import` no longer adds a "Tone: …" line to SOUL.md that you did not pick: it drafts from your files as they are plus the OpenClaw notes, and a line that is already in a file is not added a second time.
-- Running `/import` again, or pressing "Add from OpenClaw" after it, no longer adds the same notes twice; Review says when the notes are already there, and the button goes away once it has added them.
-- A USER.md, SOUL.md or MEMORY.md over 1 MB is left alone by Save instead of being replaced; Review and the Saved screen name the file. An import stops before it would grow a file past that size and reads at most 64 notes files, and says what it left out.
-- `/import` on a computer with no OpenClaw or Hermes workspace says so in the chat and opens nothing; with one, it opens Review without starting Get to know you over, and Cancel or Escape closes it without marking anything skipped.
-- A tone you cleared in Get to know you stays cleared when Review is resumed after closing the app.
-- Get to know you reads and saves its files off the window's main thread, and an import only reads files it can import.

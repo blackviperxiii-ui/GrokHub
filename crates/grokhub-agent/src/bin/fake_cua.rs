@@ -1,11 +1,14 @@
 //! Fake `cua-driver` for tests. Never drives a screen.
 //!
-//! `--version` prints the pinned version. `mcp --socket <path>` speaks
-//! newline-delimited JSON-RPC on stdio and writes `<path>.log`: first its
-//! argv and `CUA_DRIVER_*` env, then every line it received.
+//! `--version` prints the pinned version. `serve --socket <path>` writes
+//! `<path>.serve.log` (argv and env), creates `<path>` as a ready marker,
+//! and parks until killed. `mcp --socket <path>` speaks newline-delimited
+//! JSON-RPC on stdio and writes `<path>.log`: first its argv and
+//! `CUA_DRIVER_*` env, then every line it received.
 
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
+use std::time::Duration;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -17,16 +20,19 @@ fn main() {
         .iter()
         .position(|a| a == "--socket")
         .and_then(|i| args.get(i + 1))
+        .cloned()
     else {
         std::process::exit(2);
     };
-    let mut log = std::fs::File::create(format!("{socket}.log")).expect("log");
-    let env: serde_json::Map<String, Value> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("CUA_DRIVER_"))
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
-    // The screen it was started on.
-    let screen: serde_json::Map<String, Value> = std::env::vars()
+    match args.first().map(String::as_str) {
+        Some("serve") => run_serve(&socket, &args),
+        Some("mcp") => run_mcp(&socket, &args),
+        _ => std::process::exit(2),
+    }
+}
+
+fn screen_env() -> serde_json::Map<String, Value> {
+    std::env::vars()
         .filter(|(k, _)| {
             [
                 "DISPLAY",
@@ -37,11 +43,38 @@ fn main() {
             .contains(&k.as_str())
         })
         .map(|(k, v)| (k, Value::String(v)))
-        .collect();
+        .collect()
+}
+
+fn cua_env() -> serde_json::Map<String, Value> {
+    std::env::vars()
+        .filter(|(k, _)| k.starts_with("CUA_DRIVER_"))
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect()
+}
+
+fn run_serve(socket: &str, args: &[String]) {
+    let mut log = std::fs::File::create(format!("{socket}.serve.log")).expect("serve log");
     let _ = writeln!(
         log,
         "{}",
-        json!({ "argv": args, "env": env, "screen": screen })
+        json!({ "argv": args, "env": cua_env(), "screen": screen_env() })
+    );
+    let _ = log.flush();
+    // Ready marker so the parent can start `mcp --socket` (real serve makes
+    // a Unix socket here; an empty file is enough for the fake).
+    std::fs::File::create(socket).expect("socket ready");
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+fn run_mcp(socket: &str, args: &[String]) {
+    let mut log = std::fs::File::create(format!("{socket}.log")).expect("log");
+    let _ = writeln!(
+        log,
+        "{}",
+        json!({ "argv": args, "env": cua_env(), "screen": screen_env() })
     );
     let mut out = std::io::stdout().lock();
     for line in std::io::stdin().lock().lines() {

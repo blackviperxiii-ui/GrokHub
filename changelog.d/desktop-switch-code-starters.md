@@ -1,0 +1,2 @@
+- Settings → General: "Let Loadout control the desktop" now saves the moment you flip it, like the other switches. Its warning note stays, and General no longer has a Save button.
+- The Code agent gets its own starter suggestions: "Run the tests", "Explain this repo" and "Find a bug to fix". They lead an empty Code chat in place of the app tour and the game and life starters.

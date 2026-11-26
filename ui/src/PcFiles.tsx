@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   addPcPrinter,
+  getHomeAssistant,
   getPcFiles,
   pcNetCsv,
   pcResumeRows,
@@ -8,12 +9,16 @@ import {
   pcTidyReview,
   pcTidyTrash,
   removePcPrinter,
+  setHomeAssistant,
+  setHomeAssistantToken,
   setPcFilesSwitch,
   setPcFolders,
   setPcModelsFolder,
   setPcPrinterOn,
+  testHomeAssistant,
   type FilesHelpers,
   type FilesKey,
+  type HomeAssistant,
   type ResumeRow,
   type TidyRow,
 } from "./pcFilesApi";
@@ -33,14 +38,18 @@ export const PRINT_NOTE =
   "Poll printers on your network (Moonraker/Klipper or OctoPrint) for status only, and get a card when a print finishes, fails, pauses or runs out of filament. Addresses stay on this PC. Off by default.";
 export const CAMERA_NOTE =
   "When a printer shares a webcam and an alert fires, attach one snapshot. Off by default.";
+export const HOME_ASSISTANT_NOTE =
+  "Let chat list, read, and control devices on your Home Assistant. Needs your address and a long-lived access token from your Home Assistant profile. The token stays in this computer's keychain. Off by default; turning it on is your consent.";
 
 /** Settings → Your PC → PC helpers, part two: files, system and printers. */
 export function PcFiles() {
   const [page, setPage] = useState<FilesHelpers | null>(null);
+  const [home, setHome] = useState<HomeAssistant | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     getPcFiles().then(setPage, (err) => setNote(String(err)));
+    getHomeAssistant().then(setHome, () => setHome(null));
   }, []);
 
   async function save(job: Promise<FilesHelpers>) {
@@ -160,10 +169,106 @@ export function PcFiles() {
           />
         </>
       )}
+
+      {home && (
+        <HomeAssistantPanel
+          home={home}
+          onChange={setHome}
+          onNote={setNote}
+        />
+      )}
       {note && (
         <p className="note" role="status">
           {note}
         </p>
+      )}
+    </div>
+  );
+}
+
+function HomeAssistantPanel({
+  home,
+  onChange,
+  onNote,
+}: {
+  home: HomeAssistant;
+  onChange: (next: HomeAssistant) => void;
+  onNote: (note: string | null) => void;
+}) {
+  const [url, setUrl] = useState(home.baseUrl);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // A saved address replaces the field's text (adjusted while rendering).
+  const [savedUrl, setSavedUrl] = useState(home.baseUrl);
+  if (savedUrl !== home.baseUrl) {
+    setSavedUrl(home.baseUrl);
+    setUrl(home.baseUrl);
+  }
+
+  async function saveHome(job: Promise<HomeAssistant>) {
+    setBusy(true);
+    try {
+      onChange(await job);
+      onNote("Saved.");
+      return true;
+    } catch (err) {
+      onNote(String(err));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="home-assistant" role="group" aria-label="Home Assistant">
+      <Toggle
+        checked={home.enabled}
+        onChange={(on) => void saveHome(setHomeAssistant(on, url.trim() || null))}
+      >
+        Let chat control Home Assistant devices
+      </Toggle>
+      <p className="note">{HOME_ASSISTANT_NOTE}</p>
+      {home.enabled && (
+        <>
+          <AddRow
+            label="Home Assistant address"
+            placeholder={home.urlHint}
+            initial={url}
+            action="Save address"
+            onAdd={(next) => {
+              setUrl(next);
+              return saveHome(setHomeAssistant(true, next));
+            }}
+          />
+          <AddRow
+            label={home.hasToken ? "Replace access token" : "Long-lived access token"}
+            placeholder={home.hasToken ? "Token saved in keychain" : "Paste token"}
+            initial={token}
+            action="Save token"
+            clearOnAdd
+            onAdd={(next) => {
+              setToken("");
+              return saveHome(setHomeAssistantToken(next));
+            }}
+          />
+          <p className="note">
+            {home.hasToken ? "A token is saved on this computer." : "No token saved yet."}
+          </p>
+          <button
+            type="button"
+            disabled={busy || !home.baseUrl.trim() || !home.hasToken}
+            onClick={() => {
+              setBusy(true);
+              testHomeAssistant()
+                .then((msg) => onNote(msg))
+                .catch((err) => onNote(String(err)))
+                .finally(() => setBusy(false));
+            }}
+          >
+            Test connection
+          </button>
+        </>
       )}
     </div>
   );

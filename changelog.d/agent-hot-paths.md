@@ -1,5 +1,0 @@
-- Agent: an image `read_file` attaches is sent once, as the picture; the tool result is a one-line note (`[image image/png 1280x720, N bytes]`) instead of the same base64 again (a 300 KB PNG was adding about 100k tokens to every later request).
-- Agent: streamed xAI replies keep accented letters and emoji whole when a network read splits one (they showed as `��`).
-- Agent: the 18+ reply check reads only the new words of each streamed delta (a 30 KB reply: 1 ms instead of over a second), and the whole-conversation 18+ scan is skipped on routes where it can't change anything.
-- Agent: a turn's session lines are written and synced once, not once per item.
-- Goals, sessions and memory nodes are replaced by rename alone, so a crash or a reader never finds the file missing mid-save.

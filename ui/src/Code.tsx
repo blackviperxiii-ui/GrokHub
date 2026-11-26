@@ -746,7 +746,8 @@ function CodeWorkspace({
   }
 
   if (tab === "skills") {
-    if (!builtins) return <p className="empty">Loading skills…</p>;
+    // A failed read shows its note above; the tab stops saying it still loads.
+    if (!builtins) return note ? null : <p className="empty">Loading skills…</p>;
     if (builtins.length === 0) return <p className="empty">No built-in skills in this project.</p>;
     return (
       <div className="code-skills">

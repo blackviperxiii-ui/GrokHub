@@ -187,6 +187,22 @@ impl AskRead {
     pub fn effort_name(&self) -> &'static str {
         rung_name(self.effort)
     }
+
+    /// Light chat the device answers as well as the cloud: a greeting, a
+    /// quick fact, everyday talk, a story or an explanation, with nothing
+    /// at stake. Research needs the web; code and reasoning need the
+    /// stronger model.
+    pub fn light_chat(&self) -> bool {
+        self.stakes == Stakes::None
+            && matches!(
+                self.kind,
+                AskKind::Greeting
+                    | AskKind::QuickFact
+                    | AskKind::Chat
+                    | AskKind::Creative
+                    | AskKind::Explain
+            )
+    }
 }
 
 const NONE: usize = 0;
@@ -520,7 +536,39 @@ const CODE_TOKENS: &[&str] = &[
 const CODE_EXTS: &[&str] = &[
     ".rs", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".java", ".kt", ".cpp", ".cc", ".c", ".h",
     ".hpp", ".cs", ".rb", ".php", ".swift", ".lua", ".sh", ".ps1", ".sql", ".toml", ".yaml",
-    ".yml", ".json", ".html", ".css", ".scss", ".vue", ".svelte", ".zig", ".dart",
+    ".yml", ".json", ".html", ".css", ".scss", ".vue", ".svelte", ".zig", ".dart", ".md", ".txt",
+    ".csv", ".log", ".ini", ".cfg", ".conf", ".env", ".xml",
+];
+
+const FILE_TASKS: &[&str] = &[
+    "read the file",
+    "read my file",
+    "read file ",
+    "write a file",
+    "write the file",
+    "write to a file",
+    "create a file",
+    "edit the file",
+    "open the file",
+    "check the file",
+    "update the file",
+    "rename the file",
+    "move the file",
+    "copy the file",
+    "delete the file",
+    "list files",
+    "list the files",
+    "find files",
+    "search files",
+    "search my files",
+    "show files",
+    "check my files",
+    "in that folder",
+    "in this folder",
+    "in my folder",
+    "in the directory",
+    "in this directory",
+    "workspace files",
 ];
 
 const EDIT_VERBS: &[&str] = &[
@@ -666,7 +714,7 @@ const TRACE: &[&str] = &[
     "error[e",
     "exception in thread",
     "at line ",
-    " line ",
+    ", line ",
     "stack backtrace",
     "core dumped",
     "exit code",
@@ -1096,6 +1144,7 @@ struct Features {
     inline_code: u32,
     code_tokens: u32,
     code_words: u32,
+    file_tasks: u32,
     paths: u32,
     trace: u32,
     broken: u32,
@@ -1145,6 +1194,7 @@ fn features(text: &str) -> Features {
     };
     f.code_tokens = CODE_TOKENS.iter().filter(|w| raw.contains(**w)).count() as u32;
     f.code_words = hits(&t, &tokens, CODE_WORDS);
+    f.file_tasks = hits(&t, &tokens, FILE_TASKS);
     f.paths = raw
         .split_whitespace()
         .filter(|w| {
@@ -1235,7 +1285,8 @@ fn features(text: &str) -> Features {
 fn score(f: &Features, cx: &AskContext) -> BTreeMap<AskKind, f64> {
     let code = (f.fenced * 3 + f.code_tokens.min(6) + f.paths.min(4) * 2 + f.inline_code.min(3))
         as f64
-        + f.code_words.min(4) as f64 * 2.0;
+        + f.code_words.min(4) as f64 * 2.0
+        + f.file_tasks.min(4) as f64 * 2.0;
     let codey = code >= 2.0;
     let mut s = BTreeMap::new();
     let short = f.chars <= 90 && f.lines <= 2;
@@ -1438,7 +1489,7 @@ fn effort(kind: AskKind, d: f64, f: &Features) -> usize {
 fn is_follow_up(f: &Features, best: f64, best_kind: AskKind) -> bool {
     (f.chars <= 120 && (f.follow > 0 || f.correction) && best < 4.0)
         || (f.correction && f.chars <= 200)
-        || (f.chars <= 40 && best_kind == AskKind::Chat && !f.greeting_only)
+        || (f.chars <= 20 && f.questions == 0 && best_kind == AskKind::Chat && !f.greeting_only)
 }
 
 /// Read one turn. Same words and context, same answer.
@@ -1785,6 +1836,27 @@ mod tests {
         assert_eq!(c.kind, AskKind::Debug);
         // A greeting after debugging is still a greeting.
         assert_eq!(read("thanks!", &cx).kind, AskKind::Greeting);
+    }
+
+    #[test]
+    fn file_tasks_route_to_coding_and_casual_turns_after_them_stay_chat() {
+        let none = AskContext::default();
+        for ask in [
+            "List the files in my folder",
+            "Read the file notes.txt",
+            "Edit the file config.ini and update the port",
+        ] {
+            let r = read(ask, &none);
+            assert_eq!(r.kind, AskKind::CodeSmall, "{ask}");
+            assert_eq!(r.lane(), "code:edit-small", "{ask}");
+        }
+        let after_file = AskContext {
+            prior: Some(AskKind::CodeSmall),
+            ..AskContext::default()
+        };
+        let casual = read("Grabbing some coffee, what a long day", &after_file);
+        assert_eq!(casual.kind, AskKind::Chat);
+        assert_eq!(casual.lane(), "chat:default");
     }
 
     #[test]

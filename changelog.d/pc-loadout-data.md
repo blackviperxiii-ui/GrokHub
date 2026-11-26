@@ -1,2 +1,0 @@
-- Home's PC Loadout tile in the new app shows the GPU and CPU temperatures (marked when hot) and the apps that start with the PC. Startup apps are read from the autostart folder on Linux, and on Windows from the Run keys and Startup folders, leaving out what Task Manager turned off. Nothing is changed.
-- Speeds now shows your ping and jitter, from the connect time the internet log already measures once a minute.

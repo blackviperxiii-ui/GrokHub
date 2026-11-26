@@ -1088,7 +1088,7 @@ mod tests {
             "placeholder",
             "09:15",
         ] {
-            assert!(!text.contains(secret), "{secret} leaked into {text}");
+            assert!(!text.contains(secret), "a secret leaked into the card text");
         }
         assert!(text.contains("zephyrtitlealpha"), "{text}");
         assert!(text.contains("host"), "{text}");

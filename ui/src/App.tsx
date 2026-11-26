@@ -9,6 +9,7 @@ import {
   listChats,
   onAutomationRan,
   onChatEvent,
+  onCompanionEvent,
   onHalt,
   onLocalEngineEvent,
   onUpdateAvailable,
@@ -91,6 +92,7 @@ const loaders = {
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  meetings: () => import("./Meetings").then((m) => ({ default: m.Meetings })),
   workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   history: () => import("./History").then((m) => ({ default: m.History })),
   home: () => import("./Home").then((m) => ({ default: m.Home })),
@@ -99,6 +101,7 @@ const loaders = {
   mods: () => import("./Mods").then((m) => ({ default: m.Mods })),
   objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
+  team: () => import("./Team").then((m) => ({ default: m.Team })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
   updates: () => import("./UpdatesDrivers").then((m) => ({ default: m.UpdatesDrivers })),
@@ -111,6 +114,7 @@ const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
+const Meetings = lazy(loaders.meetings);
 const Code = lazy(loaders.code);
 const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
@@ -119,6 +123,7 @@ const Mods = lazy(loaders.mods);
 const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
+const Team = lazy(loaders.team);
 const Settings = lazy(loaders.settings);
 const Workboard = lazy(loaders.workboard);
 const UpdatesDrivers = lazy(loaders.updates);
@@ -481,6 +486,28 @@ export function App() {
     const timer = window.setInterval(share, CLOCK_SHARE_MS);
     return () => window.clearInterval(timer);
   }, []);
+  // A companion's wake opens a new chat; what it heard is sent in the open one.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onCompanionEvent((event) => {
+      if (event.kind === "heard") {
+        if (!event.text.trim()) return;
+        setPrefill((now) => ({ text: event.text, n: (now?.n ?? 0) + 1, send: true }));
+      } else {
+        setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: newConversationId() }));
+        notify("info", `${event.name} woke this app.`, undefined, "Devices");
+      }
+      setView("chat");
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [notify]);
   // An auto-resume stopped for the day: the card waits in Blocked, and the
   // bell says so.
   useEffect(() => {
@@ -814,6 +841,10 @@ export function App() {
               openCard={openCard}
               onCards={setCardChats}
               onSwept={noteSweep}
+              onOpenChat={(id) => {
+                openSaved(id);
+                setView("chat");
+              }}
               onResume={({ prompt, conversationId }) => {
                 // The resume block goes once, as the resume turn's input.
                 setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
@@ -856,6 +887,18 @@ export function App() {
                 setView("chat");
               }}
             />
+          </Page>
+        ) : null;
+      case "team":
+        return opened.has("team") && !caps.remote ? (
+          <Page key="team" shown={shown}>
+            <Team shown={shown} />
+          </Page>
+        ) : null;
+      case "meetings":
+        return opened.has("meetings") && !caps.remote ? (
+          <Page key="meetings" shown={shown}>
+            <Meetings />
           </Page>
         ) : null;
       case "history":
@@ -1091,6 +1134,7 @@ export function App() {
                 {pageNode("code", view === "code")}
                 {pageNode("command", view === "command")}
                 {pageNode("journal", view === "journal")}
+                {pageNode("meetings", view === "meetings")}
                 {pageNode("history", view === "history")}
                 {pageNode("memory", view === "memory")}
                 {pageNode("connectors", view === "connectors")}
@@ -1101,6 +1145,7 @@ export function App() {
                 {pageNode("devices", view === "devices")}
                 {pageNode("fleet", view === "fleet")}
                 {pageNode("agents", view === "agents")}
+                {pageNode("team", view === "team")}
               </div>
               <div hidden={!isDockable(view)}>
                 <Dock
@@ -1122,6 +1167,7 @@ export function App() {
               {pageNode("code", view === "code")}
               {pageNode("command", view === "command")}
               {pageNode("journal", view === "journal")}
+              {pageNode("meetings", view === "meetings")}
               {pageNode("history", view === "history")}
               {pageNode("memory", view === "memory")}
               {pageNode("skills", view === "skills")}
@@ -1134,6 +1180,7 @@ export function App() {
               {pageNode("fleet", view === "fleet")}
               {pageNode("imagine", view === "imagine")}
               {pageNode("agents", view === "agents")}
+              {pageNode("team", view === "team")}
             </>
           )}
         </main>

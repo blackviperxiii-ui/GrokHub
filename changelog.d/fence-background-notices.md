@@ -1,1 +1,0 @@
-- Background task output and monitor lines now reach the model fenced as outside text, and a background notice never counts as your own words.

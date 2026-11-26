@@ -250,7 +250,7 @@ fn a_listed_name_with_no_value_is_an_error_that_names_it() {
 
 #[test]
 fn the_keychain_account_carries_the_project_and_name() {
-    assert_eq!(account("k1", "DEPLOY_TOKEN"), "code-secret:k1:DEPLOY_TOKEN");
+    assert!((account("k1", "DEPLOY_TOKEN")) == ("code-secret:k1:DEPLOY_TOKEN"));
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn a_secret_over_the_windows_limit_round_trips_through_the_code_store() {
     assert!(grokhub_agent::keyring_blob::utf16_units(&secret) > limit);
     set(&d, &vault, KEY, "DEPLOY_TOKEN", &secret).unwrap();
     let loaded = load_values(&d, &vault, KEY).unwrap();
-    assert_eq!(loaded.held(), vec![secret.clone()]);
+    assert!((loaded.held()) == (vec![secret.clone()]));
     delete(&d, &vault, KEY, "DEPLOY_TOKEN", true).unwrap();
     assert!(list(&d, KEY).names.is_empty());
     let _ = std::fs::remove_dir_all(&d);

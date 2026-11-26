@@ -1,2 +1,0 @@
-- Windows: PowerShell commands now read and write UTF-8, so accents and emoji in output come through intact, and commands too long for one command line run from a temporary script file instead of failing. On Linux and macOS, a command over 128 KB is turned back with a way round instead of an opaque spawn error.
-- Tests: arguments to shell commands, file writes, edits and hook stdin are checked to arrive byte for byte, backslashes, quotes, `$`, backticks, Unicode and 9 KB payloads included.

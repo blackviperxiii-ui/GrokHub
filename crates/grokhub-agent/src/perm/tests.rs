@@ -20,6 +20,15 @@ fn gate(mode: PermMode, attended: bool) -> Gate {
     }
 }
 
+/// The command left once wrappers and assignments are peeled, when the
+/// script is one plain command.
+fn peeled_primary(script: &str) -> Option<String> {
+    match analyze(script).segments?.as_slice() {
+        [seg] => Some(seg.command.clone()),
+        _ => None,
+    }
+}
+
 fn policy_of(rules: &[(&str, Action)], grants: &[&str]) -> Policy {
     let mut policy = Policy::empty();
     for (text, action) in rules {
@@ -656,6 +665,28 @@ fn claude_symlink_settings_are_ignored() {
     std::fs::create_dir_all(&via).unwrap();
     symlink(&link_dir, via.join(".claude")).unwrap();
     assert!(load_claude_project(&via).is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_grant_that_cannot_be_stored_returns_the_error() {
+    let root = ws_file("grant-store-fail");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let blocked = root.join("not-a-dir");
+    std::fs::write(&blocked, "x").unwrap();
+    let _guard = ConfigGuard::set(&blocked);
+    let err =
+        remember_allow_always(&project, "run_terminal_command", &shell("echo stick")).unwrap_err();
+    assert!(!err.is_empty(), "{err}");
+    assert!(!session_may_stick(
+        "run_terminal_command",
+        &shell("rm -rf /")
+    ));
+    assert!(session_may_stick(
+        "run_terminal_command",
+        &shell("echo stick")
+    ));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1775,4 +1806,428 @@ fn kubectl_short_flags_with_a_glued_value_are_reads() {
     ] {
         assert!(!shell_is_readonly(not_read), "{not_read} is not a read");
     }
+}
+
+/// WebFetch rules read the host the fetch dials, the way a browser parses
+/// the URL: the host ends at `/`, `\`, `?` or `#`, userinfo and the port
+/// drop off, and case, a trailing dot and `%` escapes don't change it.
+#[test]
+fn webfetch_rules_match_the_host_the_fetch_dials() {
+    let ws = Path::new("/work");
+    let ask_gate = gate(PermMode::Ask, true);
+    let fetch = |gate: &Gate, url: &str, policy: &Policy| {
+        let base = gate::decide(gate, "web_fetch", false, None);
+        govern(base, gate, "web_fetch", &shell_url(url), ws, policy)
+    };
+    let allow = policy_of(&[("WebFetch(domain:github.com)", Action::Allow)], &[]);
+    for url in [
+        "https://github.com/x",
+        "https://GitHub.com./x",
+        "https://api.github.com:443/x?y=1#z",
+    ] {
+        assert_eq!(fetch(&ask_gate, url, &allow), Decision::Run, "{url}");
+    }
+    for url in [
+        "https://evil.test?.github.com/x",
+        "https://evil.test#.github.com",
+        r"https://evil.test\.github.com/x",
+        "https://github.com@evil.test/",
+        "evil.test/?r=https://github.com",
+    ] {
+        assert_eq!(fetch(&ask_gate, url, &allow), Decision::Ask, "{url}");
+    }
+    let always = gate(PermMode::Always, true);
+    let deny = policy_of(&[("WebFetch(domain:evil.test)", Action::Deny)], &[]);
+    let refused = Decision::Refuse(gate::unattended_deny("web_fetch"));
+    for url in [
+        "https://evil.test/a",
+        "https://evil.test?a=1",
+        "https://evil.test#x",
+        r"https://evil.test\x",
+        "https://user@evil.test",
+        "https://EVIL.test.:8443",
+        "https://evil%2etest/",
+        "https:evil.test",
+        "https://evil.test]/x",
+        "https://]evil.test/x",
+        "https://evil.test[/x",
+    ] {
+        assert_eq!(fetch(&always, url, &deny), refused, "{url}");
+    }
+    // A glob rule's host part stays in the host.
+    for rule in ["WebFetch(*.github.com)", "WebFetch(https://*.github.com/*)"] {
+        let allow = policy_of(&[(rule, Action::Allow)], &[]);
+        assert_eq!(
+            fetch(&ask_gate, "https://api.github.com/x", &allow),
+            Decision::Run,
+            "{rule}"
+        );
+        for url in [
+            "https://evil.test?.github.com/x",
+            "https://evil.test/.github.com/x",
+            "https://evil.test#.github.com/",
+        ] {
+            assert_eq!(fetch(&ask_gate, url, &allow), Decision::Ask, "{rule} {url}");
+        }
+    }
+    let docs = policy_of(&[("WebFetch(https://docs.rs/serde/*)", Action::Allow)], &[]);
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs/serde/latest", &docs),
+        Decision::Run
+    );
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs/tokio/latest", &docs),
+        Decision::Ask
+    );
+    // A path rule reads the path the fetch asks for, dot segments resolved.
+    for url in [
+        "https://docs.rs/serde/../tokio/latest",
+        "https://docs.rs/serde/%2e%2e/tokio",
+        "https://docs.rs/serde/..",
+    ] {
+        assert_eq!(fetch(&ask_gate, url, &docs), Decision::Ask, "{url}");
+    }
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs/serde/./latest/?q=a/../b", &docs),
+        Decision::Run
+    );
+    let port = policy_of(&[("WebFetch(localhost:3000)", Action::Allow)], &[]);
+    assert_eq!(
+        fetch(&ask_gate, "http://localhost:3000/a", &port),
+        Decision::Run
+    );
+    assert_eq!(
+        fetch(&ask_gate, "http://localhost:4000/a", &port),
+        Decision::Ask
+    );
+    // A deny glob also matches the URL as written: it only widens.
+    let deny_text = policy_of(&[("WebFetch(*evil*)", Action::Deny)], &[]);
+    assert_eq!(fetch(&always, "https://ok.test/evil", &deny_text), refused);
+    // web_fetch trims blanks around the host and always dials https, so a
+    // URL glob reads the host trimmed and http as https.
+    let padded = [
+        "https:// evil.test/x",
+        "https://evil.test /x",
+        "https://\u{a0}evil.test/x",
+    ];
+    for rule in [
+        "WebFetch(https://evil.test/*)",
+        "WebFetch(https://evil.test)",
+    ] {
+        let deny = policy_of(&[(rule, Action::Deny)], &[]);
+        for url in ["http://evil.test/x", "HTTP://evil.test/x"]
+            .into_iter()
+            .chain(padded)
+        {
+            assert_eq!(fetch(&always, url, &deny), refused, "{rule} {url}");
+        }
+    }
+    let deny = policy_of(&[("WebFetch(evil.test/*)", Action::Deny)], &[]);
+    for url in padded {
+        assert_eq!(fetch(&always, url, &deny), refused, "{url}");
+    }
+    let deny = policy_of(&[("WebFetch(http://evil.test/*)", Action::Deny)], &[]);
+    assert_eq!(fetch(&always, "https://evil.test/x", &deny), refused);
+    let docs = policy_of(&[("WebFetch(https://docs.rs/*)", Action::Allow)], &[]);
+    assert_eq!(
+        fetch(&ask_gate, "http://docs.rs/serde", &docs),
+        Decision::Run
+    );
+    assert_eq!(
+        fetch(&ask_gate, "ftp://docs.rs/serde", &docs),
+        Decision::Ask
+    );
+    // Ports compare as numbers, 443 when none is written; an allow rule
+    // with no port allows port 443 only.
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs:0443/serde", &docs),
+        Decision::Run
+    );
+    assert_eq!(
+        fetch(&ask_gate, "https://docs.rs:8443/serde", &docs),
+        Decision::Ask
+    );
+    let default = policy_of(&[("WebFetch(https://evil.test:443/*)", Action::Deny)], &[]);
+    let zeros = policy_of(&[("WebFetch(evil.test:8443)", Action::Deny)], &[]);
+    for (url, policy) in [
+        ("https://evil.test/x", &default),
+        ("http://evil.test:0443/x", &default),
+        ("https://evil.test:08443/x", &zeros),
+    ] {
+        assert_eq!(fetch(&always, url, policy), refused, "{url}");
+    }
+    // An IPv4 address counts in any spelling.
+    let ip = policy_of(&[("WebFetch(domain:127.0.0.1)", Action::Deny)], &[]);
+    for url in ["https://2130706433/", "https://0x7f.1/", "https://0177.1/"] {
+        assert_eq!(fetch(&always, url, &ip), refused, "{url}");
+    }
+}
+
+fn shell_url(url: &str) -> String {
+    serde_json::json!({ "url": url }).to_string()
+}
+
+/// Allow always on a commit whose message holds `&&` grants that one
+/// commit. The grant is kept quoted and matched as a parsed command, so a
+/// real chain that reads the same as text still asks for its new part.
+#[test]
+fn allow_always_on_a_quoted_message_covers_only_that_one_command() {
+    let root = ws_file("grant-quoted-join");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let _guard = ConfigGuard::set(root.join("cfg"));
+    let approved = r#"git commit -m "wip && python3 evil.py""#;
+    assert!(remember_allow_always(&project, "run_terminal_command", &shell(approved)).unwrap());
+    assert_eq!(
+        load_grants(&config_dir(), &project),
+        [r#"git commit -m 'wip && python3 evil.py'"#]
+    );
+    let policy = Policy::load(&project);
+    let ask = |command: &str| {
+        at(
+            &policy,
+            PermMode::Ask,
+            true,
+            false,
+            "run_terminal_command",
+            &shell(command),
+        )
+    };
+    assert_eq!(ask("git commit -m wip && python3 evil.py"), Decision::Ask);
+    assert_eq!(ask("python3 evil.py"), Decision::Ask);
+    assert_eq!(ask(approved), Decision::Run);
+    assert_eq!(ask("git commit -m 'wip && python3 evil.py'"), Decision::Run);
+    let _ = std::fs::remove_dir_all(&root);
+
+    // A grant saved as the old lossy text covers no chain either.
+    let lossy = policy_of(&[], &["git commit -m wip && python3 evil.py"]);
+    assert_eq!(
+        at(
+            &lossy,
+            PermMode::Ask,
+            true,
+            false,
+            "run_terminal_command",
+            &shell("git commit -m wip && python3 evil.py")
+        ),
+        Decision::Ask
+    );
+    // A chain runs when each of its commands has a grant of its own.
+    let both = policy_of(
+        &[],
+        &[
+            "npm test",
+            "RUST_LOG=x timeout 30 cargo build",
+            r#"git commit -m 'it'"'"'s'"#,
+        ],
+    );
+    let run = |command: &str| {
+        at(
+            &both,
+            PermMode::Ask,
+            true,
+            false,
+            "run_terminal_command",
+            &shell(command),
+        )
+    };
+    assert_eq!(run("npm test && cargo build"), Decision::Run);
+    assert_eq!(run(r#"git commit -m "it's" ; npm test"#), Decision::Run);
+    assert_eq!(run("git commit -m its"), Decision::Ask);
+    assert_eq!(run("npm test && cargo build && make"), Decision::Ask);
+}
+
+#[test]
+fn a_rendered_command_reads_back_as_the_same_words() {
+    for words in [
+        vec!["git", "commit", "-m", "wip && python3 evil.py"],
+        vec!["echo", "it's", ""],
+        vec!["printf", "%s\\n", "$HOME", "a\"b", "#x", "{a,b}"],
+        vec!["cp", "*.txt", "~/dist/", "--opt=1"],
+    ] {
+        let words: Vec<String> = words.into_iter().map(String::from).collect();
+        let text = split::render(&words);
+        for powershell in [false, true] {
+            let back = split::analyze_with(&text, powershell).segments.unwrap();
+            assert_eq!(back.len(), 1, "{text}");
+            assert_eq!(back[0].words, words, "{text} powershell={powershell}");
+        }
+    }
+    assert_eq!(
+        split::render(&["echo".to_string(), "it's".to_string()]),
+        r#"echo 'it'"'"'s'"#
+    );
+    assert_eq!(
+        split::render(&["npm".to_string(), "test".to_string()]),
+        "npm test"
+    );
+}
+
+/// The file a long shell output's cut marker names, as the model reads it.
+#[cfg(unix)]
+fn marker_path(output: &str) -> Option<String> {
+    let rest = output.split("The whole output is in `").nth(1)?;
+    rest.split('`').next().map(str::to_string)
+}
+
+/// The cut marker of a long shell output names a file in the config folder:
+/// the gate lets `read_file` read it from that workspace only.
+#[test]
+fn the_gate_lets_read_file_reach_a_saved_output_of_its_own_workspace_only() {
+    let root = ws_file("spool-gate");
+    let cfg = root.join("cfg");
+    let _guard = ConfigGuard::set(&cfg);
+    let (ws, ws2) = (root.join("ws"), root.join("ws2"));
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&ws2).unwrap();
+    let keep = crate::tools::spool::Keep {
+        workspace: &ws,
+        session: None,
+        outside: false,
+    };
+    let saved = crate::tools::spool::save(&keep, "exit 0\nsaved").expect("saved");
+    std::fs::write(cfg.join("consent.jsonl"), "{}\n").unwrap();
+    let consent = cfg.join("consent.jsonl").display().to_string();
+    let read = |target: &str| serde_json::json!({ "target_file": target }).to_string();
+    for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+        let decide = |workspace: &Path, target: &str| {
+            gate::decide_with(
+                &gate(mode, true),
+                "read_file",
+                &read(target),
+                false,
+                None,
+                workspace,
+                Some(&Policy::load(workspace)),
+            )
+        };
+        assert_eq!(decide(&ws, &saved), Decision::Run, "{mode:?}");
+        let escapes = Decision::Refuse("path escapes the workspace".into());
+        assert_eq!(decide(&ws2, &saved), escapes, "{mode:?}");
+        assert_eq!(decide(&ws, &consent), escapes, "{mode:?}");
+        // Only read_file reaches it.
+        let write = serde_json::json!({ "path": saved, "content": "x" }).to_string();
+        let wrote = gate::decide_with(
+            &gate(mode, true),
+            "write",
+            &write,
+            false,
+            None,
+            &ws,
+            Some(&Policy::load(&ws)),
+        );
+        assert_eq!(wrote, escapes, "{mode:?}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Runs a long command, then reads back the lines its cut marker names.
+#[cfg(unix)]
+struct ReadsTheMarker {
+    requests: AtomicUsize,
+}
+
+#[cfg(unix)]
+impl ModelClient for ReadsTheMarker {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<crate::TurnOutput, ClientError> {
+        let calls = match self.requests.fetch_add(1, Ordering::SeqCst) {
+            0 => vec![FunctionCall {
+                call_id: "s1".into(),
+                name: "run_terminal_command".into(),
+                arguments: shell("seq 1 6000"),
+            }],
+            1 => {
+                let path = req
+                    .input
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        crate::InputItem::FunctionCallOutput { output, .. } => marker_path(output),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                vec![FunctionCall {
+                    call_id: "r1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({
+                        "target_file": path, "offset": 2222, "limit": 3
+                    })
+                    .to_string(),
+                }]
+            }
+            _ => Vec::new(),
+        };
+        Ok(crate::TurnOutput {
+            calls,
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_chat_with_permission_rules_reads_back_a_long_outputs_cut_lines() {
+    let root = ws_file("spool-loop");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let _guard = ConfigGuard::set(root.join("cfg"));
+    let permits = Answer {
+        answer: crate::gate::PermAnswer::Allow,
+        asks: AtomicUsize::new(0),
+    };
+    let client = ReadsTheMarker {
+        requests: AtomicUsize::new(0),
+    };
+    let policy = Policy::load(&project);
+    let input = LoopIn {
+        client: &client,
+        workspace: &project,
+        model: "grok-4.7",
+        effort: None,
+        system: "",
+        conversation_id: "spool-loop",
+        max_turns: 4,
+        usage_base: Usage::default(),
+        cancel: &CancelToken::new(),
+        steer: &crate::SteerQueue::new(),
+        halt: &Quiet,
+        gate: gate(PermMode::Ask, true),
+        desktop: None,
+        permits: &permits,
+        perms: Some(&policy),
+        context_length: 0,
+        tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
+    };
+    let mut history = Vec::new();
+    run_loop(&input, &mut history, "count to 6000", None, &mut |_| {});
+    let output_of = |id: &str| {
+        history.iter().find_map(|item| match item {
+            crate::InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                Some(output.clone())
+            }
+            _ => None,
+        })
+    };
+    let shell_out = output_of("s1").expect("the command ran");
+    assert!(
+        shell_out.contains("(output truncated: lines 2222-4001 of 6001 are cut."),
+        "{}",
+        &shell_out[..shell_out.len().min(200)]
+    );
+    assert!(marker_path(&shell_out).is_some(), "the marker names a file");
+    assert_eq!(
+        output_of("r1").as_deref(),
+        Some("2222|2221\n2223|2222\n2224|2223\n")
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -61,15 +61,62 @@ pub fn analyze_with(script: &str, powershell: bool) -> Facts {
     analyze_depth(script, powershell, 0)
 }
 
-/// The peeled command when the script is one plain segment. `None` when it does not peel cleanly.
-pub fn peeled_primary(script: &str) -> Option<String> {
-    let facts = analyze(script);
-    let segs = facts.segments?;
-    if segs.len() == 1 {
-        Some(segs[0].command.clone())
-    } else {
-        None
-    }
+/// The words of `script` when it is one plain command run as written: one
+/// segment, with no `NAME=value` before it and no wrapper (`env`, `nice`,
+/// `timeout`, …) peeled off it. `None` otherwise.
+pub fn bare_command(script: &str) -> Option<Vec<String>> {
+    let [seg] = <[Seg; 1]>::try_from(analyze(script).segments?).ok()?;
+    let [raw] = <[RawSeg; 1]>::try_from(split_words(script, cfg!(windows))?).ok()?;
+    (raw.words == seg.words).then_some(seg.words)
+}
+
+/// `words` as one command that reads back as the same words, in sh and in
+/// PowerShell: a word with anything but plain characters goes in single
+/// quotes, and a `'` in it in double quotes (`'it'"'"'s'`). A remembered
+/// grant is stored this way, so `git commit -m "a && b"` stays one command.
+pub fn render(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| {
+            let plain = !word.is_empty()
+                && word.chars().all(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(
+                            c,
+                            '-' | '_'
+                                | '.'
+                                | '/'
+                                | ':'
+                                | ','
+                                | '+'
+                                | '@'
+                                | '%'
+                                | '='
+                                | '~'
+                                | '*'
+                                | '?'
+                                | '['
+                                | ']'
+                                | '^'
+                        )
+                });
+            if plain {
+                word.clone()
+            } else {
+                let quoted: Vec<String> =
+                    word.split('\'').map(|part| format!("'{part}'")).collect();
+                quoted.join("\"'\"")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The words of `grant` when it is one plain command, as [`Seg::words`]
+/// holds them; `None` otherwise.
+pub fn grant_words(grant: &str) -> Option<Vec<String>> {
+    let segs = analyze(grant).segments?;
+    <[Seg; 1]>::try_from(segs).ok().map(|[seg]| seg.words)
 }
 
 fn analyze_depth(script: &str, powershell: bool, depth: usize) -> Facts {
@@ -115,7 +162,16 @@ fn analyze_depth(script: &str, powershell: bool, depth: usize) -> Facts {
                 dangerous: true,
             };
         }
-        let eligible = peel.eligible && assign_risk == EnvRisk::Safe;
+        // The words peeled off before the command (assignments, wrappers
+        // and the values they read) are never read as the command, so a
+        // glob there can expand into the program that runs (`timeout *
+        // git log` runs `timeout 0 sh zz git log`). Such a segment earns
+        // no pass.
+        let peeled_off = raw_seg.words.len().saturating_sub(peel.words.len());
+        let globbed = raw_seg.words[..peeled_off]
+            .iter()
+            .any(|word| word.contains(risk::GLOB));
+        let eligible = peel.eligible && assign_risk == EnvRisk::Safe && !globbed;
         let seg_danger = risk::is_dangerous(&peel.words)
             || peel.dangerous_env
             || assign_risk == EnvRisk::Injection;
@@ -345,6 +401,10 @@ fn strip_one(words: &[String]) -> Strip {
     }
 }
 
+/// `env`'s wrapped command. Changing the folder it runs in (`-C`), the
+/// path its name is looked up on (`-P`) or the name it runs under (`-a`,
+/// which git reads its command from) makes it a command the words don't
+/// show, so the segment earns no pass, as with an unvetted variable.
 fn strip_env(words: &[String]) -> Strip {
     let mut i = 1usize;
     let mut risk = EnvRisk::Safe;
@@ -400,6 +460,9 @@ fn strip_env(words: &[String]) -> Strip {
                 if words.get(i + 1).is_none() {
                     return Strip::Opaque { payload: None };
                 }
+                if tok != "--unset" {
+                    risk = worse(risk, EnvRisk::Unvetted);
+                }
                 i += 2;
                 continue;
             }
@@ -408,6 +471,9 @@ fn strip_env(words: &[String]) -> Strip {
                 || tok.starts_with("--path=")
                 || tok.starts_with("--argv0=")
             {
+                if !tok.starts_with("--unset=") {
+                    risk = worse(risk, EnvRisk::Unvetted);
+                }
                 i += 1;
                 continue;
             }
@@ -433,6 +499,9 @@ fn strip_env(words: &[String]) -> Strip {
                     return Strip::Opaque { payload };
                 }
                 'u' | 'C' | 'P' | 'a' => {
+                    if chars[idx] != 'u' {
+                        risk = worse(risk, EnvRisk::Unvetted);
+                    }
                     let glued = idx + 1 < chars.len();
                     if glued {
                         i += 1;

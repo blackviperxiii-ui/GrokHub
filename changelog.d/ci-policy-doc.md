@@ -1,1 +1,0 @@
-- CI: `docs/ci-policy.md` lists which jobs run on which event; CI screenshot artifacts (smoke, deck, web search) keep 7 days instead of 14.

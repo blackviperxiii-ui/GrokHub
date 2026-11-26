@@ -1,2 +1,0 @@
-### Added
-- On-device pictures: with Z-Image Turbo downloaded, chat draws 18+ pictures on your computer, and any picture when Grok isn't signed in, one picture per run so the model loads only while it draws and leaves memory right after. Nothing is drawn while a game or heavy app has local work paused. With the picture guard downloaded, every on-device picture is checked against the hard bans before it's shown (and deleted if it fails or the check can't answer); 18+ pictures need the guard. 18+ pictures and videos still never go online.

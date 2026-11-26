@@ -1,1 +1,0 @@
-- `/import` in the desktop app brings in an OpenClaw workspace through Get to know you's review: every line to be added to USER.md, SOUL.md or MEMORY.md is shown first, TOOLS.md and files with secrets are skipped, and nothing is written until you save.

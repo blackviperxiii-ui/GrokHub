@@ -2,18 +2,23 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod a2a;
 pub mod action_mode;
 pub mod adult_guard;
+pub mod agent_tasks;
+pub mod agent_team;
 pub mod amr;
 pub mod app_json;
 pub mod app_lock;
 pub mod appearance;
+pub mod at_context;
 pub mod attach;
 pub mod audio_check;
 pub mod auto_fix;
 pub mod automation;
 pub mod automation_check;
 pub mod automation_preflight;
+pub mod automation_wait;
 pub mod autonomy;
 pub mod autotune;
 pub mod backup_nudge;
@@ -52,6 +57,7 @@ pub mod cli_history;
 pub mod clips;
 pub mod code_resume;
 pub mod companion;
+pub mod companion_nodes;
 pub mod connectivity;
 pub mod connector;
 pub mod consult;
@@ -107,6 +113,7 @@ pub mod hf_gguf;
 pub mod history;
 pub mod hobby_paths;
 pub mod home;
+pub mod home_assistant;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
@@ -144,11 +151,13 @@ pub mod local_skills;
 pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
+pub mod meetings;
 pub mod mission;
 pub mod model_download;
 pub mod model_drop;
 pub mod model_library;
 pub mod model_lineup;
+pub mod model_offer;
 pub mod model_registry;
 pub mod mods;
 pub mod msg_channels;
@@ -164,6 +173,7 @@ pub mod onboard_identity;
 pub mod openclaw;
 pub mod organs;
 pub mod osrs_hiscores;
+pub mod outbound_webhooks;
 pub mod outcome;
 pub mod pair;
 pub mod panel_spec;
@@ -211,6 +221,7 @@ pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;
+pub mod skills_hub;
 pub mod slash;
 pub mod small_talk;
 pub mod ssrf;
@@ -242,6 +253,7 @@ pub mod voice_flow;
 pub mod voice_live;
 pub mod voice_turn;
 pub mod vstack_sync;
+pub mod wake_word;
 pub mod watch_learn;
 pub mod week_recap;
 pub mod what_changed;
@@ -279,6 +291,10 @@ pub use ask_offers::{
     SOURCE_PREFIX as ASK_OFFER_PREFIX, TICK_EVERY_MS as ASK_OFFER_TICK_MS,
     WINDOW_MS as ASK_OFFER_WINDOW_MS,
 };
+pub use at_context::{
+    find_at_refs, AtKind, AtRef, Typed, ATTACHED_CONTEXT_HEADER, ATTACHED_TOTAL_CAP,
+    FOLDER_ENTRY_CAP, GIT_COMMIT_CAP,
+};
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,
     attach_send_line, bound_scan, chat_attach_status, clip_image_args, image_pixels_ok,
@@ -290,16 +306,22 @@ pub use automation::{
     automation_alert, automation_blocked_by_policy, automation_health_line,
     automation_schedule_label, automation_summary_line, chat_may_save_automation, compute_next_run,
     describe_automation, due_automations, ensure_automation_schedule, loop_summary_line,
-    mark_automation_failed, mark_automation_ok, mark_automation_ran, mark_automation_skipped,
-    mark_automation_stopped, night_check_command, night_check_exit_code, night_check_may_fire,
-    night_check_stdout, night_counts_run, parse_clock_token, parse_nl_automation,
-    replay_automation_target, route_schedule, skip_automation, skip_night_check_receipt,
-    teach_routine, teachable_steps, user_asked_to_schedule, watch_once_keeps_running, AutoHealth,
-    AutoOutcome, Automation, AutomationAlert, ScheduleRoute,
+    mark_automation_delivery_failed, mark_automation_failed, mark_automation_ok,
+    mark_automation_ran, mark_automation_skipped, mark_automation_stopped, night_check_command,
+    night_check_exit_code, night_check_may_fire, night_check_stdout, night_counts_run,
+    parse_clock_token, parse_nl_automation, replay_automation_target, route_schedule,
+    skip_automation, skip_night_check_receipt, teach_routine, teachable_steps,
+    user_asked_to_schedule, watch_once_keeps_running, AutoHealth, AutoOutcome, Automation,
+    AutomationAlert, ScheduleRoute,
 };
 pub use automation_preflight::{
     check_binary, mark_automation_preflight_failed, mentioned_connectors, needs_model_route,
     preflight, PreflightBlock, PreflightCtx, PREFLIGHT_STOP, WELL_KNOWN_CONNECTORS,
+};
+pub use automation_wait::{
+    append_stream_event, eval_condition, lifecycle_line, mark_automation_waiting, stream_path,
+    wait_line, wait_prompt, wait_step, AutoLifecycle, LifePhase, WaitStep, WaitTrigger,
+    STREAMS_DIR, WAIT_POLL_MS,
 };
 pub use blueprint_catalog::{
     catalog as blueprint_catalog, fill as fill_blueprint, Blueprint, BlueprintSlot,
@@ -367,9 +389,9 @@ pub use chat_view::{
     strip_thinking, thought_body_key, thought_control_act, thought_fold_controls,
     thought_fold_draws, thought_fold_transition, thought_shows_acts, thought_shows_label,
     visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, BubbleDelete,
-    ChatKind, ChatView, MessageOrigin, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP,
-    CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP,
-    THOUGHT_ROW_LABEL,
+    ChatKind, ChatView, MessageOrigin, ThinkTagFold, ThinkTagOut, ThoughtFold, ThoughtFoldAct,
+    CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
+    THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use chip_health::{
     chip_health, chip_health_lines, in_holdout, log_chip_next_action, ChipHealth, SourceHealth,
@@ -393,9 +415,9 @@ pub use chips::{
     prune_retired_chip_memory, quick_chip_intent, remember_chip_click, remember_chip_dismiss,
     remember_chip_turn_outcome, remember_home_slash, remember_home_surface, remember_intent,
     remember_typed_prompt, retired_mode_value, scrub_chat_text_chip_keys, skill_offer_chip,
-    top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind, ChipMemory, ChipSignals,
-    ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX, CHIP_MEMORY_VERSION,
-    CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
+    swap_in_code_starters, top_habit_labels, CabinPace, ChipAction, ChipInput, ChipKind,
+    ChipMemory, ChipSignals, ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_HARD_MAX,
+    CHIP_MEMORY_VERSION, CHIP_VISIBLE_MAX, UNDO_CHIP_ID,
 };
 pub use connector::{
     connector_url_allowed, extract_connector_cmds, github_api_path, map_website_connector_name,
@@ -555,6 +577,12 @@ pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
     CodeTok, MdAlign, MdBlock, MdSpan,
 };
+pub use meetings::{
+    append_speech, end_meeting, follow_notes, get_meeting, search_transcripts, set_join_consent,
+    set_record_consent, start_meeting, talk, LineKind, Meeting, MeetingConsent, MeetingStatus,
+    MeetingsStore, TranscriptHit, TranscriptLine, ALREADY_LIVE, JOIN_OFF, MISSING, NO_LIVE,
+    RECORD_OFF,
+};
 pub use mission::{
     mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,
     MissionStatus, MissionView,
@@ -671,6 +699,10 @@ pub use skill::{
     skill_use_in_chat_prompt, verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillMd,
     SkillScan, SkillThreat, AUTO_SKILL_PITFALL, SKILL_LOCK_FILE,
 };
+pub use skills_hub::{
+    fetch_skill_md, install_hub_skill, parse_clawhub_search, parse_github_tree_skills,
+    parse_skills_sh_search, parse_well_known_index, search_hub, HubHit, HubSource, InstallOutcome,
+};
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
     mark_slash_result, parse_slash, shown_text, slash_effect, slash_kind, strip_slash_result,
@@ -758,6 +790,13 @@ pub use voice::{
     CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
     VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES,
     VOICE_PAUSED, VOICE_READY_HIDE_MS, VOICE_TALK_STYLE,
+};
+pub use wake_word::{
+    effective_phrases, effective_stop, match_phrase, normalize_phrase, phrase_in_text,
+    route_profile, set_default_profile, set_enabled, set_mic_consent, set_phrases, set_routes,
+    set_stop_phrases, WakeAction, WakeConfig, WakeConsent, WakeListener, WakePhase, WakeRoute,
+    DEFAULT_PHRASES, DEFAULT_STOP, LISTEN_OFF, MAX_PHRASES, MAX_ROUTES, MAX_STOP, MIC_OFF,
+    PHRASE_MAX, VOICE_BUSY,
 };
 pub use windshield::{
     build_windshield, control_at, filter_atspi_rows, is_interactive_role, keep_atspi_row,

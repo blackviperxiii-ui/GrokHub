@@ -614,7 +614,7 @@ mod tests {
             "pub const ACCOUNT: &str = \"{SHELL_KEY_ACCOUNT}\";"
         )));
         assert!(cred.contains("pub const SERVICE: &str = grokhub_core::brand::INTERNAL_ID;"));
-        assert_eq!(grokhub_agent::xai_keychain::ACCOUNT, SHELL_SIGN_IN_ACCOUNT);
+        assert!((grokhub_agent::xai_keychain::ACCOUNT) == (SHELL_SIGN_IN_ACCOUNT));
     }
 
     #[test]

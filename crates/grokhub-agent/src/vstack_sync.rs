@@ -304,8 +304,11 @@ mod tests {
     fn sync_with_installs_skips_unchanged_and_preserves_on_failure() {
         let cfg = scratch("sync-flow");
         let root1 = format!("blackviperxiii-ui-vstack-{SHA_1}");
+        // Fake versions must be >= BUILTIN_VSTACK_TAG or status falls back to
+        // bundled. They sit far above any real tag so a sync that bumps the tag
+        // doesn't break this test.
         let ar1 = make_tar_gz(&[
-            (&format!("{root1}/VERSION"), b"1.4.0\n"),
+            (&format!("{root1}/VERSION"), b"99.0.0\n"),
             (
                 &format!("{root1}/skills/alpha/SKILL.md"),
                 b"---\nname: alpha\ndescription: A.\n---\nA1\n",
@@ -317,7 +320,7 @@ mod tests {
         ]);
         let src1 = FakeUpstream {
             commit: Ok(SHA_1.into()),
-            tag: Some("v1.4.0".into()),
+            tag: Some("v99.0.0".into()),
             archive: Ok(ar1),
             archive_calls: Cell::new(0),
         };
@@ -330,7 +333,7 @@ mod tests {
         // Same commit again skips downloading tarball while updating check timestamp.
         let src_same = FakeUpstream {
             commit: Ok(SHA_1.into()),
-            tag: Some("v1.4.0".into()),
+            tag: Some("v99.0.0".into()),
             archive: Err("should not download".into()),
             archive_calls: Cell::new(0),
         };
@@ -358,7 +361,7 @@ mod tests {
         // Advancing upstream commit updates alpha, drops beta, adds gamma.
         let root2 = format!("blackviperxiii-ui-vstack-{SHA_2}");
         let ar2 = make_tar_gz(&[
-            (&format!("{root2}/VERSION"), b"1.5.0\n"),
+            (&format!("{root2}/VERSION"), b"99.1.0\n"),
             (
                 &format!("{root2}/skills/alpha/SKILL.md"),
                 b"---\nname: alpha\ndescription: A.\n---\nA2\n",
@@ -370,12 +373,12 @@ mod tests {
         ]);
         let src2 = FakeUpstream {
             commit: Ok(SHA_2.into()),
-            tag: Some("v1.5.0".into()),
+            tag: Some("v99.1.0".into()),
             archive: Ok(ar2),
             archive_calls: Cell::new(0),
         };
         let st2 = sync_with(&cfg, 400_000, &src2).unwrap();
-        assert_eq!(st2.version, "1.5.0");
+        assert_eq!(st2.version, "99.1.0");
         assert_eq!(st2.commit, SHA_2);
         assert_eq!(st2.last_error, None);
         assert!(!grokhub_core::vstack_sync::skills_dir(&cfg)

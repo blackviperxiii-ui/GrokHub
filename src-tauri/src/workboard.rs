@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use grokhub_agent::web_origin::{self, CardPart, RunOrigin};
 use grokhub_core::scheduler_lease::{lease_fresh, read_lease, LeaseOwner};
 use grokhub_core::work_file::{
     board_stamp, delete_archived_board, read_board, read_tidy, read_work_log_tail,
@@ -621,6 +622,12 @@ pub(crate) fn change<R>(
 
 /// Adds a card to the end of Todo, as the cabin's New card does.
 pub fn add(config_dir: &Path, title: &str, detail: &str) -> Result<Page, String> {
+    add_by(config_dir, title, detail, RunOrigin::Window)
+}
+
+/// [`add`], with the words from `by`: a paired browser's card is marked as
+/// its words before it is saved ([`grokhub_agent::web_origin`]).
+pub fn add_by(config_dir: &Path, title: &str, detail: &str, by: RunOrigin) -> Result<Page, String> {
     if title.trim().is_empty() {
         return Err("Type a title first.".into());
     }
@@ -628,10 +635,73 @@ pub fn add(config_dir: &Path, title: &str, detail: &str) -> Result<Page, String>
         let mut new = BoardCard::new(&clip(title, TITLE_MAX), &clip(detail, DETAIL_MAX), "");
         new.status = BoardStatus::Todo;
         new.rank = end_rank(cards, KanbanColumn::Todo);
+        if by == RunOrigin::Browser {
+            web_origin::mark_card(config_dir, &new.id, &[CardPart::Words])?;
+        }
         cards.push(new);
         Ok(())
     })?;
     Ok(page)
+}
+
+/// A run in `chat` that goes on card `id`'s words, and on those of every card
+/// linked to the chat (Say sends their changed notes and reports along): a
+/// paired browser's run when a browser wrote any of them, or the automation
+/// one of them belongs to, and no person saved them here since, in that chat
+/// from now on, so it gets no desktop. Called under the board lock, with the
+/// cards the run starts from.
+pub(crate) fn start_card_run(
+    config_dir: &Path,
+    cards: &[BoardCard],
+    id: &str,
+    chat: &str,
+) -> Result<(), String> {
+    let browsers = |c: &BoardCard| {
+        web_origin::card_origin(config_dir, &c.id) == RunOrigin::Browser
+            || c.automation.as_deref().is_some_and(|job| {
+                crate::automations::card_job_origin(config_dir, job) == RunOrigin::Browser
+            })
+    };
+    let web = cards
+        .iter()
+        .filter(|c| c.id == id || c.thread_id.as_deref() == Some(chat))
+        .any(browsers);
+    let origin = if web {
+        RunOrigin::Browser
+    } else {
+        RunOrigin::Window
+    };
+    web_origin::start_run(config_dir, chat, origin)
+}
+
+/// A person's save here of `part` of card `id`, which a browser wrote, also
+/// replaces what went with it that the window can't edit: the goal with the
+/// words (it becomes the title, as a new checkpoint's does), and the next
+/// step with the steps (it becomes the first open one).
+fn replace_left_off(cards: &mut [BoardCard], id: &str, part: CardPart) {
+    let Some(c) = cards.iter_mut().find(|c| c.id == id) else {
+        return;
+    };
+    let (title, next) = (c.title.clone(), grokhub_core::work_run::next_step(&c.steps));
+    let Some(cp) = c.checkpoint.as_mut() else {
+        return;
+    };
+    match part {
+        CardPart::Words => cp.goal = title,
+        CardPart::Steps => cp.next = next,
+        CardPart::Notes | CardPart::Blocker | CardPart::Report => {}
+    }
+}
+
+/// The part of a card's words `act` writes, if any.
+fn writes(act: &Act) -> Option<CardPart> {
+    match act {
+        Act::Edit { .. } => Some(CardPart::Words),
+        Act::Notes { .. } => Some(CardPart::Notes),
+        Act::Steps { .. } => Some(CardPart::Steps),
+        Act::Block { .. } => Some(CardPart::Blocker),
+        _ => None,
+    }
 }
 
 fn find(cards: &[BoardCard], id: &str) -> Result<usize, String> {
@@ -735,13 +805,42 @@ fn apply(cards: &mut Vec<BoardCard>, id: &str, act: &Act, now: u64) -> Result<bo
 }
 
 pub fn act(config_dir: &Path, id: &str, act: Act) -> Result<Page, String> {
+    act_by(config_dir, id, act, RunOrigin::Window)
+}
+
+/// [`act`], by `by`. A paired browser's write of a card's words marks that
+/// part before it is saved. A person's save of a part here (Unblock clears
+/// what it waits on) takes off the mark it saw, so a browser's write that
+/// lands after it keeps its mark ([`grokhub_agent::web_origin::card_saved_here`]),
+/// and replaces what a browser wrote with it ([`replace_left_off`]).
+pub fn act_by(config_dir: &Path, id: &str, act: Act, by: RunOrigin) -> Result<Page, String> {
     if let Act::Edit { title, .. } = &act {
         if title.trim().is_empty() {
             return Err("A card needs a title.".into());
         }
     }
+    let saves = match by {
+        RunOrigin::Browser => None,
+        RunOrigin::Window => {
+            writes(&act).or(matches!(act, Act::Unblock).then_some(CardPart::Blocker))
+        }
+    };
     let now = grokhub_core::now_ms();
-    let (changed, page) = change(config_dir, |cards| apply(cards, id, &act, now))?;
+    let ((changed, seen), page) = change(config_dir, |cards| {
+        let seen = saves.and_then(|part| web_origin::card_seen(config_dir, id, part));
+        let changed = apply(cards, id, &act, now)?;
+        if let (Some(part), Some(_)) = (saves, seen) {
+            replace_left_off(cards, id, part);
+        }
+        if let (RunOrigin::Browser, Some(part), true) = (by, writes(&act), changed) {
+            web_origin::mark_card(config_dir, id, &[part])?;
+        }
+        Ok((changed, seen))
+    })?;
+    if let Some(part) = saves {
+        // A mark that can't be taken off leaves the card a browser's: the safe side.
+        let _ = web_origin::card_saved_here(config_dir, id, part, seen);
+    }
     if changed && matches!(act, Act::Delete) {
         remove_work_log(&work_dir(config_dir), id);
     }
@@ -823,19 +922,28 @@ pub fn start_playbook_card(
 
 /// Make it recurring: a new automation from the card's title on one of
 /// [`wt::RECUR_CHOICES`], which then owns the card. Its runs report here.
+/// `by` is who asked. The job's words are the title's, so they are a
+/// browser's when `by` is one or a browser wrote the title (read under the
+/// board lock with it), and the job is marked before it is saved.
 pub fn make_recurring(
     config_dir: &Path,
     id: &str,
     choice: usize,
     clock: grokhub_core::LocalClock,
+    by: crate::automations::RunOrigin,
 ) -> Result<Page, String> {
-    let cards = read_board(&path(config_dir))?;
-    let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
-    if c.automation.is_some() {
-        return Err("An automation already owns this card.".into());
-    }
-    let seed = wt::recurring_seed(choice, c).ok_or("Pick a schedule.")?;
-    let list = crate::automations::add(config_dir, &seed, clock)?;
+    let ((seed, words), _) = update_board(&path(config_dir), |cards| {
+        let c = cards.iter().find(|c| c.id == id).ok_or(GONE)?;
+        if c.automation.is_some() {
+            return Err("An automation already owns this card.".into());
+        }
+        let seed = wt::recurring_seed(choice, c).ok_or("Pick a schedule.")?;
+        Ok((
+            seed,
+            web_origin::card_part_origin(config_dir, id, CardPart::Words),
+        ))
+    })?;
+    let list = crate::automations::add_by(config_dir, &seed, clock, by.and(words))?;
     let added = list.last().ok_or("The automation was not saved.")?;
     let (auto_id, name) = (added.id.clone(), added.name.clone());
     let owned = change(config_dir, |cards| {
@@ -885,6 +993,8 @@ pub fn resume(
             }
             None => return Err("That chat isn't one of this app's chats.".into()),
         };
+        // A card a browser wrote resumes in its chat as a browser's run.
+        start_card_run(config_dir, cards, id, &conversation)?;
         // The block names the cut, so it is built before the resume clears it.
         let prompt = res::resume_block(&cards[i]);
         grokhub_core::mark_touched(cards, id, now);
@@ -1873,6 +1983,7 @@ mod tests {
 
     #[test]
     fn make_it_recurring_files_an_automation_that_owns_the_card() {
+        use crate::automations::RunOrigin;
         let config = temp_dir("recur");
         cabin_writes(&config, &[board_card("a", BoardStatus::Todo)]);
         let clock = crate::automations::Clock {
@@ -1881,8 +1992,8 @@ mod tests {
             minute: 0,
         }
         .at(grokhub_core::now_ms());
-        assert!(make_recurring(&config, "a", 9, clock).is_err());
-        let page = make_recurring(&config, "a", 0, clock).unwrap();
+        assert!(make_recurring(&config, "a", 9, clock, RunOrigin::Window).is_err());
+        let page = make_recurring(&config, "a", 0, clock, RunOrigin::Window).unwrap();
         let list = crate::automations::load(&config).unwrap();
         assert_eq!(list.len(), 1);
         let card = &lane(&page, Lane::Todo)[0];
@@ -1891,9 +2002,147 @@ mod tests {
         let saved = on_disk(&config);
         assert_eq!(saved[0].automation.as_deref(), Some(list[0].id.as_str()));
         assert!(
-            make_recurring(&config, "a", 1, clock).is_err(),
+            make_recurring(&config, "a", 1, clock, RunOrigin::Window).is_err(),
             "one automation owns a card"
         );
         assert_eq!(crate::automations::load(&config).unwrap().len(), 1);
+    }
+
+    /// Make it recurring, asked at this computer, on a card whose title a
+    /// paired browser wrote files the browser's words as a job: it is
+    /// marked, and its runs get no desktop. On a card the person wrote, one
+    /// whose title they saved again here, or one where a browser wrote only
+    /// the notes, the job is the person's.
+    #[test]
+    fn make_it_recurring_on_a_browsers_title_files_a_browsers_job() {
+        use crate::automations::RunOrigin;
+        use crate::unattended::RunGate;
+        let config = temp_dir("recur-web");
+        let clock = crate::automations::Clock {
+            weekday: 1,
+            hour: 8,
+            minute: 0,
+        }
+        .at(grokhub_core::now_ms());
+        add_by(&config, "Click Send in Mail", "", RunOrigin::Browser).unwrap();
+        add(&config, "Summarize the board", "").unwrap();
+        add_by(&config, "Tidy the logs", "", RunOrigin::Browser).unwrap();
+        add(&config, "Water the plants", "").unwrap();
+        let ids: Vec<String> = on_disk(&config).into_iter().map(|c| c.id).collect();
+        let resave = Act::Edit {
+            title: "Tidy the logs".into(),
+            detail: String::new(),
+        };
+        act(&config, &ids[2], resave).unwrap();
+        let notes = Act::Notes {
+            notes: "click Send in Mail".into(),
+        };
+        act_by(&config, &ids[3], notes, RunOrigin::Browser).unwrap();
+        for id in &ids {
+            make_recurring(&config, id, 0, clock, RunOrigin::Window).unwrap();
+        }
+        let on = RunGate::scheduled(grokhub_agent::PermMode::Always, true, None);
+        let jobs: Vec<(String, RunOrigin, bool)> = crate::automations::load(&config)
+            .unwrap()
+            .iter()
+            .map(|job| {
+                let gate = crate::automations::gate_for(&config, job, on);
+                (job.instructions.clone(), gate.origin, gate.gate().desktop)
+            })
+            .collect();
+        let job =
+            |words: &str, origin: RunOrigin, desktop: bool| (words.to_string(), origin, desktop);
+        assert_eq!(
+            jobs,
+            [
+                job(
+                    "every day at 9am Click Send in Mail",
+                    RunOrigin::Browser,
+                    false
+                ),
+                job(
+                    "every day at 9am Summarize the board",
+                    RunOrigin::Window,
+                    true
+                ),
+                job("every day at 9am Tidy the logs", RunOrigin::Window, true),
+                job("every day at 9am Water the plants", RunOrigin::Window, true),
+            ]
+        );
+    }
+
+    /// A card a browser's agent filed (its words, goal, steps and next step
+    /// marked) is a person's again only once each part is saved here, and
+    /// the save replaces what the window can't edit: the goal becomes the
+    /// title saved, and the next step the first open one, even when the
+    /// steps are saved as they were. A card no browser wrote keeps both.
+    #[test]
+    fn a_persons_save_replaces_the_goal_and_next_a_browser_wrote() {
+        let config = temp_dir("web-left-off");
+        let filed = |id: &str, goal: &str| {
+            let mut c = board_card(id, BoardStatus::Todo);
+            c.origin = Some(WorkOrigin::Agent);
+            c.user_steps = true;
+            c.steps = ["Open Mail", "Click Send"]
+                .map(|text| WorkStep {
+                    text: text.into(),
+                    status: StepStatus::Planned,
+                })
+                .into();
+            c.checkpoint = Some(Checkpoint {
+                goal: goal.into(),
+                next: "click Send in Mail".into(),
+                ..Default::default()
+            });
+            c
+        };
+        cabin_writes(
+            &config,
+            &[
+                filed("a", "click Send in Mail"),
+                filed("b", "Tidy the logs"),
+            ],
+        );
+        web_origin::mark_card(&config, "a", &[CardPart::Words, CardPart::Steps]).unwrap();
+        let left_off = |id: &str| {
+            let card = on_disk(&config).into_iter().find(|c| c.id == id).unwrap();
+            let cp = card.checkpoint.unwrap_or_default();
+            (cp.goal, cp.next, web_origin::card_origin(&config, id))
+        };
+        let edit = || Act::Edit {
+            title: "Summarize the board".into(),
+            detail: String::new(),
+        };
+        let steps = || Act::Steps {
+            text: "Open Mail\nClick Send".into(),
+        };
+        act(&config, "a", edit()).unwrap();
+        assert_eq!(
+            left_off("a"),
+            (
+                "Summarize the board".to_string(),
+                "click Send in Mail".to_string(),
+                RunOrigin::Browser
+            )
+        );
+        act(&config, "a", steps()).unwrap();
+        assert_eq!(
+            left_off("a"),
+            (
+                "Summarize the board".to_string(),
+                "Open Mail".to_string(),
+                RunOrigin::Window
+            )
+        );
+        act(&config, "b", edit()).unwrap();
+        act(&config, "b", steps()).unwrap();
+        assert_eq!(
+            left_off("b"),
+            (
+                "Tidy the logs".to_string(),
+                "click Send in Mail".to_string(),
+                RunOrigin::Window
+            )
+        );
     }
 }

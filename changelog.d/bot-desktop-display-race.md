@@ -1,0 +1,1 @@
+- Bot Desktop: two screens starting at the same moment no longer fail with "Xvfb stopped at start". The one that loses the display number tries another. Stopping a screen now removes its X lock file and socket, so turning Bot Desktop on and off many times no longer runs out of display numbers.

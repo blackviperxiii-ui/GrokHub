@@ -1,2 +1,0 @@
-- The desktop app has a Notifications bell next to Activity. Finished or failed automations (with Ask about it / Find the cause), a new update, the local engine finishing or failing, a Workboard tidy (with Undo), and replies that finish or need your OK while the window is in the background all land there, with an unread number. Automation results no longer print into the chat, and the tidy banner on the Workboard is gone.
-- The Activity button reads "1 of 2 running" when work is lined up, and says its counts to screen readers.

@@ -30,8 +30,10 @@ export type View =
   | "pulse"
   | "imagine"
   | "journal"
+  | "meetings"
   | "automations"
   | "agents"
+  | "team"
   | "memory"
   | "skills"
   | "connectors"
@@ -107,8 +109,10 @@ export const VIEW_LABELS: Record<View, string> = {
   pulse: "Pulse",
   imagine: "Imagine",
   journal: "Journal",
+  meetings: "Meetings",
   automations: "Automations",
   agents: "Agents",
+  team: "Team",
   memory: "Personal",
   skills: "Skills",
   connectors: "Connectors",
@@ -134,9 +138,10 @@ export function views(caps: Capabilities): View[] {
     ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
     "imagine",
-    ...(caps.remote ? [] : (["journal"] as const)),
+    ...(caps.remote ? [] : (["journal", "meetings"] as const)),
     "automations",
     "agents",
+    ...(caps.remote ? [] : (["team"] as const)),
     "memory",
     "skills",
     "connectors",
@@ -183,6 +188,15 @@ export function moreViews(caps: Capabilities): View[] {
   return pageViews(caps).filter((view) => !rail.includes(view));
 }
 
+/** Words a Settings section answers to beyond its name, so "dark" or "theme"
+ * finds Appearance instead of only offering to ask. Shell-only: the cabin's
+ * table in paletteSynonyms.json stays as the cabin had it. */
+const SECTION_WORDS: Partial<Record<Section, readonly string[]>> = {
+  appearance: ["theme", "dark mode", "light mode", "colors", "text size", "reduce motion"],
+  account: ["api key"],
+  aiModels: ["provider"],
+};
+
 /** The rows for `query`, in order: suggestions (while nothing is typed),
  * pages, commands, slash commands (for a query that starts with `/`), recent
  * chats, Settings sections, then Ask with the typed text, which puts it in the
@@ -213,7 +227,13 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     ...named(commandRows(caps, extras)),
     ...(slash ? slashRows(extras.slash) : []),
     ...(slash ? [] : chatRows(extras.chats)),
-    ...named(settings),
+    ...(q
+      ? settings.filter(
+          (row) =>
+            answersTo(row.label, q) ||
+            (row.action.kind === "settings" && (SECTION_WORDS[row.action.section] ?? []).some((w) => w.startsWith(q))),
+        )
+      : settings),
   ];
   if (!q) return all;
   return [...all, { label: `Ask ${PRODUCT_NAME}: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];

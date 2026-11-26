@@ -28,7 +28,7 @@ import { CodeShip } from "./CodeShip";
 import { StatusTracker, statusFromWork } from "./Progress";
 import { TaskDetailWindow } from "./TaskDetail";
 import { inShell } from "./transport";
-import { useModalFocus } from "./ui";
+import { PageHead, useModalFocus } from "./ui";
 
 /** How often the page reads the queue again while it is on screen. */
 export const POLL_MS = 2000;
@@ -883,6 +883,7 @@ export function Agents({
       className={onOpenChat ? "agents" : "agents helpers-panel"}
       aria-label={onOpenChat ? "Agents" : "Helpers"}
     >
+      {onOpenChat && <PageHead title="Agents">Background jobs and to-dos for the open chat.</PageHead>}
       <div className="card-buttons">
         {onOpenChat && (
           <button type="button" disabled={!conversationId} onClick={onOpenChat}>
@@ -900,7 +901,7 @@ export function Agents({
           </button>
         )}
       </div>
-      <p className="note">{onOpenChat ? "Background jobs and to-dos for the open chat." : TASKS_NOTE}</p>
+      {!onOpenChat && <p className="note">{TASKS_NOTE}</p>}
       {note && (
         <p className="status" role="status">
           {note}

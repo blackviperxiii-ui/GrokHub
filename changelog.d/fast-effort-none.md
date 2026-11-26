@@ -1,1 +1,0 @@
-- Fast mode now sends Grok 4.3 with reasoning effort `none`, so it answers quicker than Balance, which uses the same model at its default effort (low). Quick asks on Fast's model (Consult, personality Try it, screen-recording summaries) use it too. Chat Completions now passes an effort to Grok 4.3.

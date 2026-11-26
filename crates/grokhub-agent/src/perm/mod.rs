@@ -13,6 +13,7 @@ mod claude;
 mod matchers;
 mod risk;
 mod rules;
+mod session;
 mod split;
 mod store;
 
@@ -22,14 +23,19 @@ use crate::gate::{self, Decision, Gate, PermMode};
 
 pub use claude::{import_claude_json, load_project as load_claude_project};
 pub use rules::{parse_rule, Action, PatMode, Rule, RuleParseError, Tool};
-pub use split::{analyze, peeled_primary, Facts, Seg};
+pub use split::{analyze, bare_command, Facts, Seg};
 
 pub(crate) use risk::{
-    git_words_are_read_only_query, git_words_have_unsafe_query_option, trusted_head,
+    git_words_are_read_only_query, git_words_have_unsafe_query_option, glob_may_add_option,
+    program_name, trusted_head,
+};
+pub use session::{
+    clear_conversation, earlier_failure, earlier_image, note_failure, note_store_error,
+    remember_image, remember_session, session_covers, HeldImage, GRANT_NOT_SAVED,
 };
 pub use store::{
-    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules,
-    pinned_config, project_key, remember_grant, remove_grant, save_rules, ConfigGuard,
+    add_grant_at, app_config_dir, config_dir, config_pinned, load_all_grants, load_grants,
+    load_rules, pinned_config, project_key, remember_grant, remove_grant, save_rules, ConfigGuard,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +119,7 @@ pub fn govern(
     let paths = collect_paths(name, arguments);
     if paths
         .iter()
-        .any(|path| matchers::path_escapes(workspace, path))
+        .any(|path| matchers::path_escapes(workspace, path) && !saved_output(name, workspace, path))
     {
         return Decision::Refuse("path escapes the workspace".into());
     }
@@ -133,7 +139,7 @@ pub fn govern(
         if allow_bash(policy, &facts) {
             return Decision::Run;
         }
-        if gate.attended && grant_covers(policy, &command, &facts) {
+        if gate.attended && grant_covers(policy, &facts) {
             return Decision::Run;
         }
         if readonly_shell(&facts) {
@@ -158,8 +164,38 @@ pub fn govern(
     base
 }
 
+/// Whether a shell call may be stored. Dangerous, unsplittable, and
+/// read-only commands are not. Other tools are not shell grants; the
+/// conversation holder decides those.
+pub fn session_may_stick(name: &str, arguments: &str) -> bool {
+    name == "run_terminal_command" && shell_grant_lines(arguments).is_some()
+}
+
+/// Commands of one shell call that a project grant may store, quoted so
+/// they read back as the same words ([`split::render`]).
+fn shell_grant_lines(arguments: &str) -> Option<Vec<String>> {
+    let command = command_arg(arguments)?;
+    let facts = split::analyze(&command);
+    let segs = facts.segments?;
+    if facts.dangerous || segs.iter().any(|seg| seg.dangerous || !seg.eligible) {
+        return None;
+    }
+    let lines: Vec<String> = segs
+        .iter()
+        .filter(|seg| !seg.readonly && !seg.command.trim().is_empty())
+        .map(|seg| split::render(&seg.words))
+        .collect();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
 /// Persist Allow-always for a shell call. Dangerous, unsplittable, and
-/// read-only commands are not stored. Returns whether a grant was written.
+/// read-only commands are not stored. Each command of a chain is stored on
+/// its own. Returns whether a grant was written. A write error is returned,
+/// never dropped.
 pub fn remember_allow_always(
     workspace: &Path,
     name: &str,
@@ -168,25 +204,13 @@ pub fn remember_allow_always(
     if name != "run_terminal_command" {
         return Ok(false);
     }
-    let Some(command) = command_arg(arguments) else {
+    let Some(lines) = shell_grant_lines(arguments) else {
         return Ok(false);
     };
-    let facts = split::analyze(&command);
-    let Some(segs) = facts.segments else {
-        return Ok(false);
-    };
-    if facts.dangerous || segs.iter().any(|seg| seg.dangerous || !seg.eligible) {
-        return Ok(false);
+    for line in &lines {
+        store::remember_grant(workspace, line)?;
     }
-    let mut wrote = false;
-    for seg in segs {
-        if seg.readonly || seg.command.trim().is_empty() {
-            continue;
-        }
-        store::remember_grant(workspace, &seg.command)?;
-        wrote = true;
-    }
-    Ok(wrote)
+    Ok(true)
 }
 
 pub fn mcp_matches(rule: &Rule, tool_name: &str) -> bool {
@@ -194,17 +218,33 @@ pub fn mcp_matches(rule: &Rule, tool_name: &str) -> bool {
         && matchers::rule_matches_text(rule, tool_name, rule.action != Action::Allow)
 }
 
+/// Whether a `WebFetch` rule covers a fetch of `url`, by the host, port and
+/// path web_fetch dials, read by web_fetch's own parse
+/// (`https://evil.test?.github.com` dials `evil.test`, `https://2130706433`
+/// dials `127.0.0.1`). A deny or ask rule also matches the URL the way a
+/// browser reads it, and a glob the URL as written: both only widen it.
 pub fn webfetch_matches(rule: &Rule, url: &str) -> bool {
     if !matchers::tool_reaches(rule.tool, Tool::WebFetch) {
         return false;
     }
-    match rule.pattern.as_deref() {
-        None | Some("*") | Some("") => true,
-        Some(pattern) if rule.mode == PatMode::Domain => matchers::domain_matches(pattern, url),
-        Some(pattern) => {
-            matchers::domain_matches(pattern, url) || matchers::glob_match(pattern, url, false)
-        }
-    }
+    let pattern = match rule.pattern.as_deref() {
+        None | Some("*") | Some("") => return true,
+        Some(pattern) => pattern,
+    };
+    let wide = rule.action != Action::Allow;
+    let domain = rule.mode == PatMode::Domain;
+    let hit = |target: &matchers::Target| {
+        matchers::domain_hit(pattern, &target.host)
+            || (!domain && matchers::url_glob_hit(pattern, target, wide))
+    };
+    let dialed = matchers::Target::dialed(url);
+    let read = if wide {
+        matchers::Target::read(url)
+    } else {
+        None
+    };
+    dialed.iter().chain(read.iter()).any(hit)
+        || (wide && !domain && matchers::glob_match(pattern, url, false))
 }
 
 /// An explicit ask rule matched. Auto-review must not override it.
@@ -411,6 +451,13 @@ fn sandbox_holds(name: &str, arguments: &str, workspace: &Path) -> bool {
         .is_ok_and(|args| crate::sandbox::auto_allows(&config_dir(), name, &args, workspace))
 }
 
+/// A long shell output this workspace's command saved in the config folder:
+/// the only path outside the workspace `read_file` reads, the one its cut
+/// marker names (`tools::spool::find`).
+fn saved_output(name: &str, workspace: &Path, path: &str) -> bool {
+    name == "read_file" && crate::tools::spool::find(workspace, path).is_some()
+}
+
 fn command_arg(arguments: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
     let text = value.get("command")?.as_str()?.trim().to_string();
@@ -541,24 +588,23 @@ fn allow_bash(policy: &Policy, facts: &Facts) -> bool {
     })
 }
 
-fn grant_covers(policy: &Policy, raw: &str, facts: &Facts) -> bool {
+/// Every command of the chain is read-only or has a grant that reads as the
+/// same words. A grant is matched as a parsed command, never as text, so a
+/// grant whose text holds `&&` covers no chain.
+fn grant_covers(policy: &Policy, facts: &Facts) -> bool {
     let Some(segs) = &facts.segments else {
         return false;
     };
     if segs.is_empty() || facts.dangerous || segs.iter().any(|seg| seg.dangerous || !seg.eligible) {
         return false;
     }
-    if policy.grants.iter().any(|grant| grant.trim() == raw.trim()) {
-        return true;
-    }
-    segs.iter().all(|seg| {
-        seg.readonly
-            || policy.grants.iter().any(|grant| {
-                let grant = grant.trim();
-                grant == seg.command
-                    || split::peeled_primary(grant).as_deref() == Some(seg.command.as_str())
-            })
-    })
+    let granted: Vec<Vec<String>> = policy
+        .grants
+        .iter()
+        .filter_map(|grant| split::grant_words(grant))
+        .collect();
+    segs.iter()
+        .all(|seg| seg.readonly || granted.contains(&seg.words))
 }
 
 /// A shell script made only of read-only commands (the same test that auto-allows them).

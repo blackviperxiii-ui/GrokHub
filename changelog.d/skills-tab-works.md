@@ -1,1 +1,0 @@
-- The Skills tab lists only your skills, not the built-in ones. Each skill has an on/off switch, plus Edit and Remove (with Undo), and New skill makes one from a name and what it should do. Chat never uses a skill that's switched off.

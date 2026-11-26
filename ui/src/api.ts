@@ -200,6 +200,20 @@ export type ChatEvent =
   /** A panel the agent drew with show_panel (generative UI), keyed by the
    * call that made it. The shell sends only specs the core rules allow. */
   | { kind: "panel"; id: string; spec: PanelSpec }
+  /** An MCP App view for the sandboxed in-chat host. */
+  | {
+      kind: "mcpApp";
+      id: string;
+      app: {
+        server: string;
+        tool: string;
+        resourceUri: string;
+        html: string;
+        prefersBorder?: boolean;
+        toolInput: unknown;
+        toolResult: unknown;
+      };
+    }
   /** A report_findings card: one pill per fix; a pill fills the composer. */
   | {
       kind: "findings";
@@ -253,7 +267,8 @@ export interface QuickChip {
 }
 
 /** The composer's row, Home's row and the empty palette's, as the log names them. */
-export type ChipSurface = "composer" | "home" | "palette";
+/** Where a chip row shows; "code" is the Code agent's composer, with coding starters. */
+export type ChipSurface = "composer" | "code" | "home" | "palette";
 
 /** The row for the open chat and its draft, or Home's. Empty with Settings →
  * Behavior → Suggestions off. */
@@ -405,12 +420,16 @@ export function clearApiKey(): Promise<Settings> {
 /** Runs one prompt through the agent loop; resolves with the stop reason.
  * `attachments`: paths from `stageAttachment`, in the chips' order. */
 /** Sends one message. With no `mode` the app reads the message and picks:
- * a big multi-step job plans first, anything else is answered. */
+ * a big multi-step job plans first, anything else is answered. `untyped`:
+ * texts the window put in its box for the app, a card or a model (a fix
+ * button's prompt, a Pulse card's offer), which the person didn't type, so
+ * their `@` references stay text. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode?: SessionMode,
   attachments: string[] = [],
+  untyped: string[] = [],
 ): Promise<string> {
   return invoke<string>("send_chat", {
     conversationId,
@@ -418,6 +437,7 @@ export function sendChat(
     mode,
     attachments,
     clock: wallClock(),
+    ...(untyped.length ? { untyped } : {}),
   });
 }
 
@@ -448,6 +468,8 @@ export function sideChat(
   question: string,
   ask: string,
   soFar: string,
+  /** What of `question` the window put in its box for the app (see `sendChat`). */
+  untyped: string[] = [],
 ): Promise<string> {
   return invoke<string>("side_chat", {
     conversationId,
@@ -455,6 +477,7 @@ export function sideChat(
     question,
     ask,
     soFar,
+    ...(untyped.length ? { untyped } : {}),
   });
 }
 
@@ -646,6 +669,57 @@ export function getVoiceRoute(): Promise<VoiceRouteConfig> {
 
 export function setVoiceRoute(config: VoiceRouteConfig): Promise<VoiceRouteConfig> {
   return invoke<VoiceRouteConfig>("set_voice_route", { config });
+}
+
+/** Always-listening on-device wake word (Order 970). Mic opt-in; matching stays local. */
+export interface WakeWordRoute {
+  phrase: string;
+  profileId: string;
+}
+
+export interface WakeWordPage {
+  micConsent: boolean;
+  enabled: boolean;
+  phrases: string[];
+  stopPhrases: string[];
+  routes: WakeWordRoute[];
+  defaultProfile: string;
+  phase: string;
+  voiceBusy: boolean;
+  defaultPhrases: string[];
+  defaultStop: string[];
+  privacy: string;
+}
+
+export type WakeWordAct =
+  | { kind: "setMicConsent"; on: boolean }
+  | { kind: "setEnabled"; on: boolean }
+  | { kind: "setPhrases"; phrases: string[] }
+  | { kind: "setStopPhrases"; phrases: string[] }
+  | { kind: "setRoutes"; routes: WakeWordRoute[] }
+  | { kind: "setDefaultProfile"; profileId: string }
+  | { kind: "arm" }
+  | { kind: "disarm" }
+  | { kind: "setVoiceBusy"; busy: boolean };
+
+export interface WakeWordFeedResult {
+  kind: "none" | "start_turn" | "stop" | string;
+  phrase?: string | null;
+  profileId?: string | null;
+  phase: string;
+}
+
+export function getWakeWord(): Promise<WakeWordPage> {
+  return invoke<WakeWordPage>("get_wake_word");
+}
+
+export function wakeWordAct(act: WakeWordAct): Promise<WakeWordPage> {
+  return invoke<WakeWordPage>("wake_word_act", { act });
+}
+
+/** Feed an on-device transcript into the wake matcher. Never pass cloud STT. */
+export function wakeWordFeedLocal(text: string): Promise<WakeWordFeedResult> {
+  return invoke<WakeWordFeedResult>("wake_word_feed_local", { text });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
@@ -1024,6 +1098,10 @@ export interface AutomationRow {
   /** The job's check command; empty when it has none. */
   checkCommand: string;
   gate: AutomationGate;
+  /** Condition / event-stream wait summary; empty when none. */
+  wait: string;
+  /** Delivery · run · completion line; empty while clear. */
+  lifecycle: string;
 }
 
 export interface RunResult {
@@ -1303,8 +1381,10 @@ export type SlashEffect =
   | { kind: "openNote"; view: "settings"; text: string }
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
-  /** `/plugins`: Settings → Labs. */
-  | { kind: "openSection"; section: "labs" }
+  /** `/plugins`: Settings → Labs. `/download` alone: Settings → Local AI. */
+  | { kind: "openSection"; section: "labs" | "localAi" }
+  /** `/download <model>`: that model's download starts on this computer. */
+  | { kind: "downloadModel"; id: string; name: string }
   /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
   | { kind: "shell"; check: CommandBoxVerdict }
   /** `/sync` or `/inhabit <computer>`: a send to a paired computer asks
@@ -2091,6 +2171,135 @@ export function journalToMission(
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
 }
 
+/** One meeting transcript line (src-tauri/src/meetings.rs). */
+export interface MeetingLine {
+  id: string;
+  atMs: number;
+  kind: string;
+  speaker: string;
+  text: string;
+}
+
+export interface MeetingRow {
+  id: string;
+  title: string;
+  status: string;
+  startedMs: number;
+  endedMs: number | null;
+  liveNotes: string;
+  transcript: MeetingLine[];
+}
+
+export interface MeetingHit {
+  meetingId: string;
+  meetingTitle: string;
+  lineId: string;
+  kind: string;
+  speaker: string;
+  text: string;
+  atMs: number;
+}
+
+export interface MeetingsPage {
+  consent: { join: boolean; record: boolean };
+  live: MeetingRow | null;
+  past: MeetingRow[];
+  hits: MeetingHit[];
+  query: string;
+}
+
+export type MeetingsAct =
+  | { kind: "setJoin"; on: boolean }
+  | { kind: "setRecord"; on: boolean }
+  | { kind: "start"; title: string }
+  | { kind: "followNotes"; notes: string }
+  | { kind: "talk"; text: string }
+  | { kind: "speech"; speaker: string; text: string }
+  | { kind: "end" }
+  | { kind: "search"; query: string };
+
+export function getMeetings(query = ""): Promise<MeetingsPage> {
+  return invoke<MeetingsPage>("get_meetings", { query });
+}
+
+export function meetingsAct(act: MeetingsAct, query = ""): Promise<MeetingsPage> {
+  return invoke<MeetingsPage>("meetings_act", { act, query });
+}
+
+/** Sessions board (src-tauri/src/sessions_board.rs): conversations by rules/pins. */
+export type SessionsFilter = "everyone" | "involvingMe";
+
+export interface SessionsPrLink {
+  url: string;
+  state: string;
+}
+
+export interface SessionsTile {
+  id: string;
+  title: string;
+  preview: string;
+  run: "waiting" | "failed" | "running" | "idle" | string;
+  prs: SessionsPrLink[];
+  updatedMs: number;
+  pinned: boolean;
+  columnId: string;
+}
+
+export interface SessionsColumn {
+  id: string;
+  label: string;
+  rule: string;
+  fallback: boolean;
+  tiles: SessionsTile[];
+}
+
+export interface SessionsBoardPage {
+  name: string;
+  columns: SessionsColumn[];
+  filter: SessionsFilter;
+  query: string;
+  stamp: number;
+  total: number;
+  shown: number;
+}
+
+export interface SessionsReshapeResult {
+  note: string;
+  page: SessionsBoardPage;
+}
+
+export function getSessionsBoard(
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsBoardPage> {
+  return invoke<SessionsBoardPage>("get_sessions_board", { filter, query });
+}
+
+export function sessionsBoardStamp(): Promise<number> {
+  return invoke<number>("sessions_board_stamp");
+}
+
+export function sessionsBoardPin(
+  id: string,
+  columnId: string,
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsBoardPage> {
+  return invoke<SessionsBoardPage>("sessions_board_pin", { id, columnId, filter, query });
+}
+
+export function sessionsBoardReshape(
+  instruction: string,
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsReshapeResult> {
+  return invoke<SessionsReshapeResult>("sessions_board_reshape", {
+    instruction,
+    filter,
+    query,
+  });
+}
+
 /** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
 export type BoardLane = "followUp" | "todo" | "doing" | "blocked" | "done";
 
@@ -2827,6 +3036,8 @@ export interface LibraryRow {
   id: string;
   name: string;
   line: string;
+  /** Catalog job: General chat, Coding, Reasoning, Vision, Image gen, Video gen, or Voice. */
+  useCase: string;
   about: string;
   state: LibraryRowState;
 }
@@ -3047,6 +3258,77 @@ export function stopShare(): Promise<Share> {
 
 export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
+}
+
+/** A phone or computer paired as a companion (src-tauri/src/companions.rs). */
+export interface Companion {
+  id: string;
+  name: string;
+  /** `android`, `linux`, `macos`, `windows` or `other`, as the companion says. */
+  platform: string;
+  /** The user said yes. Until then it lends nothing. */
+  approved: boolean;
+  /** What its person offers: camera, screen, location, sms, talk, wake, canvas, mcp, skills. */
+  offers: string[];
+  /** What the user allows, out of `offers`. */
+  allowed: string[];
+  online: boolean;
+  /** Unix ms. */
+  pairedAt: number;
+}
+
+/** Devices → Companions; desktop only. */
+export interface Companions {
+  on: boolean;
+  port: number;
+  /** The live pairing code; empty when none is open. Never log it. */
+  code: string;
+  /** This computer's number address on the network; empty while off or unknown. */
+  address: string;
+  companions: Companion[];
+}
+
+/** A wake or a heard line from a companion. */
+export interface CompanionEvent {
+  companion: string;
+  name: string;
+  kind: "wake" | "heard";
+  text: string;
+}
+
+export const COMPANION_EVENT = "companion-event";
+
+export function getCompanions(): Promise<Companions> {
+  return invoke<Companions>("get_companions");
+}
+
+export function startCompanions(): Promise<Companions> {
+  return invoke<Companions>("start_companions");
+}
+
+export function stopCompanions(): Promise<Companions> {
+  return invoke<Companions>("stop_companions");
+}
+
+export function newCompanionCode(): Promise<Companions> {
+  return invoke<Companions>("new_companion_code");
+}
+
+export function approveCompanion(id: string, allowed: string[]): Promise<Companions> {
+  return invoke<Companions>("approve_companion", { id, allowed });
+}
+
+export function setCompanionAllowed(id: string, allowed: string[]): Promise<Companions> {
+  return invoke<Companions>("set_companion_allowed", { id, allowed });
+}
+
+export function removeCompanion(id: string): Promise<Companions> {
+  return invoke<Companions>("remove_companion", { id });
+}
+
+/** A companion's wake or heard line, whichever page is open. */
+export function onCompanionEvent(handler: (event: CompanionEvent) => void): Promise<UnlistenFn> {
+  return subscribe<CompanionEvent>(COMPANION_EVENT, handler);
 }
 
 /** A computer on the Fleet page (src-tauri/src/fleet.rs); desktop only. */
@@ -3815,6 +4097,32 @@ export function editSkill(
   instructions: string,
 ): Promise<SkillPage> {
   return invoke<SkillPage>("edit_skill", { name, description, trigger, instructions });
+}
+
+/** Skills Hub discovery hit (ClawHub, SkillsSH, GitHub, well-known). */
+export interface SkillsHubHit {
+  source: string;
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface SkillsHubInstall {
+  page: SkillPage;
+  note: string;
+}
+
+export function searchSkillsHub(query: string): Promise<SkillsHubHit[]> {
+  return invoke<SkillsHubHit[]>("search_skills_hub", { query });
+}
+
+export function installSkillsHub(hit: SkillsHubHit): Promise<SkillsHubInstall> {
+  return invoke<SkillsHubInstall>("install_skills_hub", {
+    source: hit.source,
+    id: hit.id,
+    name: hit.name,
+    description: hit.description,
+  });
 }
 
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */

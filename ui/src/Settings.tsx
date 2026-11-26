@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   clearApiKey,
   getHaltKeys,
@@ -100,7 +100,6 @@ export function Settings({
   onOpenConnectors?: () => void;
 }) {
   const [settings, setSettings] = useState<Shape | null>(null);
-  const [desktopControl, setDesktopControl] = useState(false);
   /** Super+Shift+Esc registered system-wide; null until read. */
   const [globalHalt, setGlobalHalt] = useState<boolean | null>(null);
   /** As the OS has it; null until read. */
@@ -127,24 +126,9 @@ export function Settings({
     clear();
   }
 
-  function show(next: Shape) {
-    setSettings(next);
-    setDesktopControl(next.desktopControl);
-  }
-
-  // Runs each time Settings shows. Desktop control changed here and not saved
-  // keeps the edit; untouched, it takes the fresh value.
-  const refresh = useEffectEvent((next: Shape) => {
-    const was = settings;
-    if (!was) return show(next);
-    setSettings(next);
-    if (desktopControl === was.desktopControl) setDesktopControl(next.desktopControl);
-  });
+  // Runs each time Settings shows.
   useEffect(() => {
-    getSettings().then(
-      (next) => refresh(next),
-      fail,
-    );
+    getSettings().then(setSettings, fail);
   }, [fail]);
 
   useEffect(() => {
@@ -179,21 +163,7 @@ export function Settings({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    if (!settings) return;
-    // Defaults and Behavior save the tray, folder and approvals themselves.
-    const { closeToTray, workspace, approvals } = settings;
-    try {
-      show(await saveSettings(closeToTray, workspace, approvals, desktopControl));
-      ok("Settings saved.");
-    } catch (err) {
-      fail(err);
-    }
-  }
-
-  // These switches apply at once. Only the switch changes, so an unsaved edit
-  // in the form above stays.
+  // Every switch applies at once.
   async function flipAutostart(on: boolean) {
     try {
       setAutostartShown(await setAutostart(on));
@@ -212,10 +182,18 @@ export function Settings({
     }
   }
 
+  // Defaults and Behavior save the tray, folder and approvals themselves; this
+  // sends them back as they stand.
+  function flipDesktopControl(on: boolean) {
+    if (!settings) return;
+    const { closeToTray, workspace, approvals } = settings;
+    void flip(() => saveSettings(closeToTray, workspace, approvals, on));
+  }
+
   async function saveKey() {
     if (!key.trim()) return;
     try {
-      show(await setApiKey(key.trim()));
+      setSettings(await setApiKey(key.trim()));
       setKey("");
       ok("API key saved in your system keychain.");
     } catch (err) {
@@ -225,7 +203,7 @@ export function Settings({
 
   async function removeKey() {
     try {
-      show(await clearApiKey());
+      setSettings(await clearApiKey());
       ok("API key removed.");
     } catch (err) {
       fail(err);
@@ -284,7 +262,7 @@ export function Settings({
             {section === "general" && general()}
             {section === "account" && account()}
             <StatusLine note={note} className="note" />
-            {section === "defaults" && <Defaults settings={loaded} onSaved={show} />}
+            {section === "defaults" && <Defaults settings={loaded} onSaved={setSettings} />}
             {section === "behavior" && (
               <Behavior
                 tray={caps.tray}
@@ -367,17 +345,11 @@ export function Settings({
     if (!caps.desktopControl) return onThisComputer ?? <p className="note">{GENERAL_EMPTY}</p>;
     return (
       <>
-        <form onSubmit={save}>
-          <Toggle checked={desktopControl} onChange={setDesktopControl}>
-            Let {PRODUCT_NAME} control the desktop
-          </Toggle>
-          {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
-          {globalHalt !== null && <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>}
-          {/* Amber only while there is a change to save. */}
-          <button type="submit" className={settings && desktopControl !== settings.desktopControl ? "cta" : undefined}>
-            Save settings
-          </button>
-        </form>
+        <Toggle checked={settings?.desktopControl ?? false} onChange={flipDesktopControl} disabled={!settings}>
+          Let {PRODUCT_NAME} control the desktop
+        </Toggle>
+        {settings?.desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
+        {globalHalt !== null && <p className="note">{globalHalt ? HALT_KEYS_NOTE : HALT_KEYS_LOCAL}</p>}
         <BotDesktop />
         <BrowserAttach />
         {onThisComputer}
@@ -429,7 +401,7 @@ export function Settings({
           // Every desktop has a tray; phones have no file picker.
           canPick={caps.tray}
         />
-        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={show} />}
+        {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={setSettings} />}
         <div className="key">
           <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
           <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>

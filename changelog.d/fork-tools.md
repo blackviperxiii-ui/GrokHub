@@ -1,1 +1,0 @@
-- A forked subagent now sends its chat's tool list byte for byte, so its first request reuses the chat's cached prefix past the tools, and the chat's last request is kept for forks by moving it instead of copying it every step.

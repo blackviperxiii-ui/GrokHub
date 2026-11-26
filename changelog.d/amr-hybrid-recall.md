@@ -1,1 +1,0 @@
-- Memory: recall from your saved memories now ranks like notes recall: a closer word match (BM25) scores higher, a score halves every 30 days since the memory last changed, and meaning adds to it when the small local model is on. Private memories are ranked in memory only and never reach disk.

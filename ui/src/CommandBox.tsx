@@ -7,6 +7,7 @@ import {
   type CommandBoxView,
 } from "./api";
 import { COMMAND_DESTRUCTIVE, COMMAND_FIRST } from "./commandText";
+import { PageHead } from "./ui";
 
 export const COMMAND_TITLE = "Command line";
 export const COMMAND_ABOUT =
@@ -114,12 +115,7 @@ export function CommandBox({ onRun }: { onRun: (prompt: string) => void }) {
   const shown = [...history].reverse().slice(0, HISTORY_SHOWN);
   return (
     <section className="code command-box" aria-label={COMMAND_TITLE}>
-      <header className="code-head">
-        <div>
-          <div className="card-title">{COMMAND_TITLE}</div>
-          <div className="note">{view ? `Runs in ${view.project}` : "Reading the project folder…"}</div>
-        </div>
-      </header>
+      <PageHead title={COMMAND_TITLE}>{view ? `Runs in ${view.project}` : "Reading the project folder…"}</PageHead>
       <p className="note">{COMMAND_ABOUT}</p>
       <div className="code-test-row">
         <label className="command-box-line">

@@ -58,7 +58,7 @@ fn write_and_edit_keep_every_byte() {
     let dir = scratch("write");
     for (name, payload) in payloads() {
         let file = format!("{name}.txt");
-        let out = super::write::run(&dir, &json!({"path": file, "content": payload}));
+        let out = super::write::run(&dir, None, &json!({"path": file, "content": payload}));
         assert!(!out.failed, "{name}: {}", out.text);
         let back = std::fs::read_to_string(dir.join(&file)).unwrap();
         assert_eq!(back, payload, "{name}: write changed the bytes");
@@ -66,6 +66,7 @@ fn write_and_edit_keep_every_byte() {
         let swapped = format!("[{payload}]");
         let out = super::search_replace::run(
             &dir,
+            None,
             &json!({"file_path": file, "old_string": payload, "new_string": swapped}),
         );
         assert!(!out.failed, "{name}: {}", out.text);

@@ -1,9 +1,8 @@
 //! Spike-0 agentic harness kernel.
 //!
-//! D1: a stricter layer on top of Grok Build. GB keeps its permission prompts
-//! (Ask / Auto / Always) and computer use. The cabin only adds a pre-check in
-//! front of GB tool execution: hard floor deny, hard-class park (even under
-//! Always), and the desktop switch as Access. It never loosens GB.
+//! D1: a stricter layer in front of every tool call; it never loosens the
+//! permission pill. It adds a hard floor deny, a hard-class park (even under
+//! Always), and the desktop switch as Access.
 //! D2: Readonly / Supervised is the Settings switch "Let Grok control the
 //! desktop"; Full is one inline Work-tree card. No new chrome.
 //! D3: Windows runs the same gate on the shipped `grokhub-desktop` tools.
@@ -11,10 +10,8 @@
 //! an optional second pair of hands on Linux behind `grokhub --mcp-cua`
 //! (`cua`), off by default; its calls go through the same `decide`.
 //!
-//! Paths: A `grokhub-desktop` dispatch, B ACP ask, C headless `--deny` rules,
-//! D Grok Build's own computer use (`path_d`: `--deny` rules plus a watchdog
-//! on frames nobody asked about), E native Lab engine (`gate.rs`). Every path
-//! writes the same span.
+//! Paths: A `grokhub-desktop` dispatch and the Cua proxy, E native engine
+//! (`gate.rs`). Every path writes the same span.
 //!
 //! Spike-4a trust floor: `consent` (ConsentLedger, scopes all off) and
 //! `egress` (EgressGuard + `egress.jsonl`) answer through the same `decide`
@@ -31,8 +28,7 @@
 //! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
 //! into a prior per action class ("if unsure whether you'd be upset, ask").
 //! It is a soft-path input to `decide` (`Step::Proactive`), never a second
-//! gate, and never touches hard class. An agent-started memory forget is
-//! hard class Delete (`agent_forget`).
+//! gate, and never touches hard class.
 //!
 //! Spike-6b: `proactive` runs one auto-act the autonomy ceiling
 //! (`grokhub_core::AutoAct`) admitted, through `decide` (`Step::Proactive`)
@@ -70,11 +66,11 @@ mod egress;
 #[cfg(test)]
 mod egress_coverage;
 mod evidence;
+mod git_words;
 mod hard;
 mod ladder;
 mod mindcheck;
 mod park;
-mod path_d;
 pub mod post_turn;
 mod proactive;
 pub mod provenance;
@@ -134,11 +130,11 @@ pub use consent::{
     SCOPE_KINDS,
 };
 pub use cua::{
-    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_platform, cua_socket_path,
-    cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child, verify_cua_driver, CuaAsset,
-    CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS, CUA_DRIVER_LICENSE, CUA_DRIVER_TAG,
-    CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE,
-    CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
+    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_platform, cua_serve_args,
+    cua_socket_path, cua_spawn_args, cua_spawn_env, find_cua_driver, spawn_cua_child,
+    verify_cua_driver, CuaAsset, CuaChild, CuaGate, CuaProxy, StdioChild, CUA_ASSETS,
+    CUA_DRIVER_LICENSE, CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_MISSING_MSG,
+    CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS, CUA_UNSUPPORTED_MSG, CUA_WINDOWS_MSG,
 };
 pub use detect::{
     action_loop, approval_gate_violation, claimed_click_no_change, claims_done, claims_success,
@@ -148,6 +144,7 @@ pub use detect::{
     Evidence, Finding, SpanKind, ACTION_LOOP, APPROVAL_GATE_VIOLATION, CLAIMED_CLICK_NO_CHANGE,
     DONE_WITHOUT_CRITERIA, UNSUPPORTED_ASSURANCE,
 };
+pub(crate) use egress::shared_dir;
 pub use egress::{
     append_egress, current_origin, current_recall, egress_dest, egress_path, guard_egress,
     guard_or_park, guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,
@@ -158,25 +155,27 @@ pub use egress::{
 pub use evidence::{
     evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
 };
+pub use git_words::{
+    command_may_push, git_call, git_compiled_in, git_may_push, git_path_changed, git_runs_own,
+    is_git_name, plain_assignment, read_shell, GitCall, Run, ShellRead, HIDDEN,
+};
 pub use hard::{
-    classify, classify_ask, click_action, click_rule, click_target, click_target_class,
-    click_target_in, creates_automation, credential_action, credential_field, credential_hint,
-    delete_files_action, delete_targets, desk_classify, hard_class, hard_floor, needs_window,
-    set_mod_roots, ClickRule, ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY,
-    GB_DENY_GAPS, HEADLESS_DENY_RULES, NO_BIN_HINT, TARGET_HINT,
+    classify, click_action, click_rule, click_target, click_target_class, click_target_in,
+    creates_automation, credential_action, credential_field, credential_hint, delete_files_action,
+    delete_targets, desk_classify, hard_class, hard_floor, needs_window, set_mod_roots, ClickRule,
+    ClickTarget, HardClass, HardFloor, HardHit, NO_BIN_HINT, TARGET_HINT,
 };
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
 pub use mindcheck::{
-    agent_forget, learn, mind_key, note_prior, signals_from_cards, signals_from_changes,
-    signals_from_spans, Candidate, Clock, MindCheck, MindEvent, MindRoute, MindSignal, Prior,
-    SystemClock, AGENT_FORGET_TOOL, MIND_APPROVE_STEP, MIND_ASK_AT, MIND_ASK_FIRST_MS, MIND_DENY,
-    MIND_DISMISS_STEP, SKILL_CHANGE_KEY,
+    learn, mind_key, note_prior, signals_from_cards, signals_from_changes, signals_from_spans,
+    Candidate, Clock, MindCheck, MindEvent, MindRoute, MindSignal, Prior, SystemClock,
+    MIND_APPROVE_STEP, MIND_ASK_AT, MIND_ASK_FIRST_MS, MIND_DENY, MIND_DISMISS_STEP,
+    SKILL_CHANGE_KEY,
 };
 pub use park::{
     answer_park, clear_park, park_dir, pending_parks, post_park, take_answer, wait_park,
     ParkRequest,
 };
-pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use proactive::{
     answer_span, ledger_target, note_proactive, proactive_key, proactive_mind, proactive_span,
     run_approved_once, run_auto_act, run_offered_step, step_class, step_undo, AutoRun,

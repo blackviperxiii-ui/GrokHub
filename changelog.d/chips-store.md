@@ -1,2 +1,0 @@
-- Quick chip memory (`chips.json`) now loads and saves through one shared store with a lock, a private write and an automatic upgrade; an unreadable file is set aside instead of overwritten, and old model or effort chips are cleared on load.
-- Quick chips keep a small local log of which chips were shown and whether one was picked or hidden, with no chip text in it, so later ranking can learn from it. It never leaves the PC.

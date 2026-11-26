@@ -203,13 +203,8 @@ impl AmrStore {
         let loaded = self.load_live();
         report.locked = loaded.locked;
         report.why = loaded.why;
-        let superseded = self.superseded_ids();
         let mut hits = Vec::new();
-        for node in loaded
-            .nodes
-            .iter()
-            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-        {
+        for node in &self.visible(loaded.nodes) {
             hits.extend(match_lines(node, &query));
         }
         hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -241,13 +236,7 @@ impl AmrStore {
         if opts.cap == 0 || (words.is_empty() && opts.meaning.is_none()) {
             return Vec::new();
         }
-        let loaded = self.load_live();
-        let superseded = self.superseded_ids();
-        let nodes: Vec<Node> = loaded
-            .nodes
-            .into_iter()
-            .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-            .collect();
+        let nodes = self.visible(self.load_live().nodes);
         let decay = |node: &Node| {
             let updated = crate::pulse_sources::parse_date_ms(&node.updated).unwrap_or(0);
             let age = opts.now_ms.saturating_sub(updated) as f64 / 1000.0;
@@ -370,11 +359,13 @@ impl AmrStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        // A wiki export that read this line first writes its page first.
+        let _held = self.hold_reports()?;
         self.write_tombstone(&id, now, "")
     }
 
     /// `forgotten: <stamp>` plus `extra` lines, and the id leaves
-    /// `index.sqlite`. An existing tombstone stays as it is.
+    /// `index.sqlite` and the wiki. An existing tombstone stays as it is.
     pub(super) fn write_tombstone(
         &self,
         id: &NodeId,
@@ -386,6 +377,7 @@ impl AmrStore {
             let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
             fs::write(&marker, format!("forgotten: {stamp}\n{extra}")).map_err(io_err)?;
         }
+        self.drop_wiki_pages(&|named| named == id.as_str())?;
         self.unindex(id.as_str())
     }
 
@@ -440,9 +432,22 @@ impl AmrStore {
         }
         let marker = self.node_path(&id)?.with_extension(PAUSED_EXT);
         if paused {
+            // A dream that read this line first writes its report first.
+            let _held = self.hold_reports()?;
             if !marker.is_file() {
                 fs::write(&marker, "paused: you asked\n").map_err(io_err)?;
             }
+            // No copy of a paused line stays in a dream report: each Merged
+            // or Retired line naming it, and its USER.md proposal, go.
+            let quoted = fs::read_to_string(self.node_path(&id)?)
+                .ok()
+                .and_then(|text| Node::from_markdown(&text).ok())
+                .filter(|node| !node.sensitivity.sealed())
+                .map(|node| super::dream::report_quote(&node));
+            self.drop_dream_lines(&|named| named == id.as_str(), &|line| {
+                quoted.as_deref() == Some(line)
+            })?;
+            self.drop_wiki_pages(&|named| named == id.as_str())?;
             return self.unindex(id.as_str());
         }
         match fs::remove_file(&marker) {
@@ -521,7 +526,9 @@ impl AmrStore {
 
     /// Every live node whose `source` starts with `prefix` (Spike-8a: the
     /// `scope:` nodes the local indexers write), sorted by file name, plus how
-    /// many sealed nodes stayed shut. Opens sealed nodes in memory only.
+    /// many sealed nodes stayed shut. A paused or superseded node is still
+    /// one: it is what the scope taught, and "Forget these" tombstones it.
+    /// Opens sealed nodes in memory only.
     pub fn live_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
         let loaded = self.load_live();
         let nodes = loaded
@@ -530,6 +537,14 @@ impl AmrStore {
             .filter(|n| n.source.starts_with(prefix))
             .collect();
         (nodes, loaded.locked)
+    }
+
+    /// The nodes of [`Self::live_from_source`] that recall can return: a
+    /// paused, proposed or superseded node is left out, so a line the user
+    /// paused on Personal never reaches the model this way either.
+    pub fn recallable_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
+        let (nodes, locked) = self.live_from_source(prefix);
+        (self.visible(nodes), locked)
     }
 
     /// Node files on disk (`.md` and `.sealed`), tombstoned ones included.
@@ -641,17 +656,50 @@ impl AmrStore {
             .collect()
     }
 
-    /// Live nodes that recall can return: not tombstoned, not superseded.
-    /// Sealed nodes appear only when they opened.
+    /// Live nodes that recall can return: not tombstoned, superseded, paused
+    /// or proposed. Sealed nodes appear only when they opened.
     pub fn recallable(&self) -> (Vec<Node>, usize) {
         let loaded = self.load_live();
+        (self.visible(loaded.nodes), loaded.locked)
+    }
+
+    /// The plain nodes [`Self::recallable`] returns, read without opening or
+    /// even reading a `.sealed` file: what a reader that holds no key (the
+    /// hub's MCP bridge) may show. An id with a `.sealed` file beside its
+    /// `.md`, and a `.md` whose frontmatter says sealed, are left out. A file
+    /// that won't parse is skipped and left where it is. Sorted by file name.
+    pub fn plain_recallable(&self) -> Vec<Node> {
+        let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = read
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().and_then(|ext| ext.to_str()) == Some("md")
+                    && !path.with_extension(TOMBSTONE_EXT).is_file()
+                    && !path.with_extension(SEALED_EXT).is_file()
+            })
+            .collect();
+        files.sort();
+        let nodes = files
+            .iter()
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .filter_map(|text| Node::from_markdown(&text).ok())
+            .filter(|node| !node.sensitivity.sealed())
+            .collect();
+        self.visible(nodes)
+    }
+
+    /// `nodes` without the ones recall leaves out though they are live:
+    /// superseded, proposed or paused. Every reader that hands lines to the
+    /// model or to another app goes through this one filter.
+    fn visible(&self, nodes: Vec<Node>) -> Vec<Node> {
         let superseded = self.superseded_ids();
-        let nodes = loaded
-            .nodes
+        nodes
             .into_iter()
             .filter(|n| !superseded.contains(&n.id) && !self.held_back(n))
-            .collect();
-        (nodes, loaded.locked)
+            .collect()
     }
 
     /// `amr/index.sqlite`.
@@ -674,6 +722,28 @@ impl AmrStore {
         let index = AmrIndex::open(&self.index_path())?;
         index.replace_all(&plain)?;
         Ok(index)
+    }
+
+    /// Replace `index.sqlite`, when there is one, with a new file built from
+    /// the nodes left. A deleted row's text stays in the old file's free
+    /// pages and FTS segments, so Wipe, which deletes lines for good, starts
+    /// the file over rather than trusting the row deletes. No index is a
+    /// no-op: the store never starts one on its own.
+    pub(super) fn start_index_over(&self) -> Result<(), AmrError> {
+        let path = self.index_path();
+        if !path.is_file() {
+            return Ok(());
+        }
+        for side in ["", "-journal", "-wal", "-shm"] {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(side);
+            match fs::remove_file(PathBuf::from(name)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(io_err(err)),
+            }
+        }
+        self.rebuild_index().map(|_| ())
     }
 
     /// An in-memory index of the sealed nodes that open right now (unlock).
@@ -909,6 +979,15 @@ impl AmrStore {
             return Ok(false);
         }
         self.link(from, to, rel).map(|()| true)
+    }
+
+    /// True while `id` has a node file (`.md` or `.sealed`), tombstoned or
+    /// not: Wipe's purge is what deletes one. An id that won't parse counts
+    /// as there.
+    pub(super) fn has_node_file(&self, id: &str) -> bool {
+        NodeId::parse(id)
+            .and_then(|id| self.node_exists(&id))
+            .unwrap_or(true)
     }
 
     fn node_exists(&self, id: &NodeId) -> Result<bool, AmrError> {

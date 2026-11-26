@@ -1,2 +1,0 @@
-- Auto keeps a long chat on the same model between turns, moves it to a cheaper one only when the saving over the rest of the chat beats re-sending the history, and still moves up whenever a turn needs a stronger model.
-- Auto keeps private per-chat routing counts (prompt cache hits, model switches, escalations and how often they helped) for its own tuning; no chat text is stored.

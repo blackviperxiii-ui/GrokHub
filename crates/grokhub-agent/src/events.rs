@@ -461,6 +461,12 @@ impl NativeEngine {
             crate::hooks::attach(&self.conversation_id, &self.workspace, self.gate.attended);
         if self.history.is_empty() {
             crate::hooks::on_session_start(&self.conversation_id, &self.workspace, "startup");
+            crate::outbound_hooks::emit_session(
+                &crate::perm::config_dir(),
+                "SessionStart",
+                &self.conversation_id,
+                serde_json::json!({"source": "startup"}),
+            );
         }
         if image.is_none() && crate::compact::is_manual_compact_command(text) {
             return self.compact_now(emit);
@@ -1155,6 +1161,10 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
         LoopEvent::Plan(text) => AcpEvent::Plan(text),
         LoopEvent::Findings(body) => AcpEvent::Findings(body),
         LoopEvent::Panel { id, spec } => AcpEvent::Panel { id, spec },
+        LoopEvent::McpApp { id, app } => AcpEvent::McpApp {
+            id,
+            app: serde_json::to_value(app).unwrap_or(serde_json::Value::Null),
+        },
         LoopEvent::Permission {
             id,
             name,

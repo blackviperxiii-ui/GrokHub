@@ -1,3 +1,0 @@
-- Auto alone picks the model and effort for every step. The Default model, "Use for your chats", Models Auto may use, Local AI for chats, Steady effort and the Grok 4.7 Fast toggle are gone, and saved picks are dropped when Settings load.
-- A provider model you set up (key and permission) can join Auto's pool when it lists a price under your price limit and answers in text. xAI still answers first.
-- OpenRouter keeps only its data policy; the endpoint sort and the fallback router are gone.

@@ -417,11 +417,23 @@ pub fn make(
     stop: &dyn Fn() -> bool,
     now_ms: u64,
 ) -> Result<Made, String> {
+    make_signed(config_dir, req, stop, now_ms, bearer())
+}
+
+/// [`make`] with the bearer already looked up, so a test never reads the
+/// host's keychain.
+fn make_signed(
+    config_dir: &Path,
+    req: &Request,
+    stop: &dyn Fn() -> bool,
+    now_ms: u64,
+    signed: Result<(String, bool), String>,
+) -> Result<Made, String> {
     let run = |bearer: &str| {
         let api = grokhub_agent::imagine_client(bearer);
         generate(config_dir, req, api.as_ref(), stop, now_ms)
     };
-    match bearer() {
+    match signed {
         Ok((bearer, own)) => retry_refused(own, run(&bearer), shared_bearer, run),
         // Signed out: stills may draw here. `run_media_tool` falls through to
         // the picture model; with neither source it names both ways.
@@ -1129,9 +1141,12 @@ mod tests {
     #[test]
     fn make_without_a_bearer_names_both_ways_when_nothing_can_draw() {
         let d = dirs("make-none");
-        let err = make(&d.config, &req("a cabin", 1, Kind::Image), &|| false, NOW).unwrap_err();
+        let signed_out = || Err(NEED_SIGNIN.to_string());
+        let still = req("a cabin", 1, Kind::Image);
+        let err = make_signed(&d.config, &still, &|| false, NOW, signed_out()).unwrap_err();
         assert_eq!(err, grokhub_agent::route::local_image::NO_SOURCE);
-        let err = make(&d.config, &req("a cabin", 1, Kind::Video), &|| false, NOW).unwrap_err();
+        let video = req("a cabin", 1, Kind::Video);
+        let err = make_signed(&d.config, &video, &|| false, NOW, signed_out()).unwrap_err();
         assert_eq!(err, NEED_SIGNIN);
     }
 

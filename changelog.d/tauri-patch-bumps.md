@@ -1,1 +1,0 @@
-- Dependencies: the desktop app takes patch releases of the notification and opener plugins, toml, flate2, ureq and zip. ashpd 0.14 and xcap 0.9.10 stay held until the move to zbus 6.

@@ -1,1 +1,0 @@
-- Exported chats (Markdown and JSON) and chat search now read the way the chat showed them, without the app's internal "SLASH_RESULT" and turn tags.

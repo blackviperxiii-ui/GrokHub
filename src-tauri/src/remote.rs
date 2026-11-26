@@ -166,6 +166,10 @@ pub const WEB_COMMANDS: &[&str] = &[
     "workboard_delete_archived",
     "workboard_sweep_undo",
     "workboard_sweep_dismiss",
+    "get_sessions_board",
+    "sessions_board_stamp",
+    "sessions_board_pin",
+    "sessions_board_reshape",
     "get_behavior",
     "get_privacy",
     "get_background",
@@ -1098,6 +1102,10 @@ mod tests {
             "workboard_add",
             "workboard_act",
             "workboard_work",
+            "get_sessions_board",
+            "sessions_board_stamp",
+            "sessions_board_pin",
+            "sessions_board_reshape",
             "stage_attachment",
             "remove_attachment",
         ] {
@@ -1148,6 +1156,12 @@ mod tests {
             "journal_add",
             "journal_act",
             "journal_to_mission",
+            "get_meetings",
+            "meetings_act",
+            // Wake word mic opt-in and on-device feed stay on this computer.
+            "get_wake_word",
+            "wake_word_act",
+            "wake_word_feed_local",
             "get_permissions",
             // The GitHub token is sent with these.
             "get_github",
@@ -1194,6 +1208,8 @@ mod tests {
             "create_skill",
             "get_skill_detail",
             "edit_skill",
+            "search_skills_hub",
+            "install_skills_hub",
             "get_local_ai",
             "save_local_ai",
             "start_local_engine_download",
@@ -1370,7 +1386,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 100] = [
+        const REVIEWED: [&str; 104] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1406,6 +1422,7 @@ mod tests {
             "get_profile",
             "get_pulse",
             "get_queue",
+            "get_sessions_board",
             "get_settings",
             "get_skills",
             "get_workboard",
@@ -1451,6 +1468,9 @@ mod tests {
             "save_memory_file",
             "search_memory",
             "send_chat",
+            "sessions_board_pin",
+            "sessions_board_reshape",
+            "sessions_board_stamp",
             "set_automation_enabled",
             "set_chat_archive",
             "set_home_layout",
@@ -1533,6 +1553,10 @@ mod tests {
             "workboard_delete_archived",
             "workboard_sweep_undo",
             "workboard_sweep_dismiss",
+            "get_sessions_board",
+            "sessions_board_stamp",
+            "sessions_board_pin",
+            "sessions_board_reshape",
         ] {
             assert!(web_command(name), "{name}");
         }

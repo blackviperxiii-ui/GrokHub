@@ -1,1 +1,0 @@
-- Cards: a shared check flags any card that only counts things ("2 updates") without naming them, ends on a cut-off step, or shows nothing under its title; the quiet-hours roll-up and systems digest are tested against it.

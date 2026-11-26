@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use super::{ToolCtx, ToolOutput};
 use crate::tasks::{TaskHub, MONITOR_CAP_MS};
+use crate::web_origin::JobWords;
 
 const STORE_CAP: u64 = 32 * 1024 * 1024;
 const DAY_SECS: u64 = 24 * 60 * 60;
@@ -264,7 +265,9 @@ pub fn monitor(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     }
 }
 
-pub fn scheduler_create(args: &Value) -> ToolOutput {
+/// `session` is the run that called it: a browser run writes a browser's
+/// words ([`crate::web_origin`]).
+pub fn scheduler_create(args: &Value, session: Option<&str>) -> ToolOutput {
     let interval = text_field(args, "interval").unwrap_or_default();
     let prompt = text_field(args, "prompt").unwrap_or_default();
     if prompt.is_empty() {
@@ -279,7 +282,7 @@ pub fn scheduler_create(args: &Value) -> ToolOutput {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let task_id = text_field(args, "task_id");
-    match write_automation(&prompt, mins, fire, task_id.as_deref(), now_ms()) {
+    match write_automation(&prompt, mins, fire, task_id.as_deref(), now_ms(), session) {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(err),
     }
@@ -313,7 +316,7 @@ fn with_id_hint(err: String) -> String {
 
 /// The ids an output read waits on: `task_id` split at commas, or every
 /// entry of a `task_ids` list.
-fn task_ids(args: &Value) -> Vec<String> {
+pub(crate) fn task_ids(args: &Value) -> Vec<String> {
     let listed: Vec<String> = match text_field(args, "task_id") {
         Some(id) => id.split(',').map(String::from).collect(),
         None => args
@@ -451,16 +454,25 @@ fn ledgered(
     Ok(change.map(|c| c.seq).unwrap_or(0))
 }
 
+/// Creates a job, or with `task_id` rewrites one, for the run `session`
+/// (`None` is the run whose tool runs on this thread). A browser run's job is
+/// marked as a browser's before its words are saved, so no run ever finds
+/// them unmarked ([`crate::web_origin::note_job_write`]).
 pub(crate) fn write_automation(
     prompt: &str,
     mins: u32,
     fire: bool,
     task_id: Option<&str>,
     now_ms: u64,
+    session: Option<&str>,
 ) -> Result<String, String> {
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
+    let mark = |id: &str, before: Option<&JobWords>, after: &Automation| {
+        let after = JobWords::of(after);
+        crate::web_origin::note_job_write(&crate::perm::config_dir(), id, session, before, &after)
+    };
     let mut now = clock();
     now.now_ms = now_ms;
     let name = auto_name(prompt);
@@ -468,8 +480,9 @@ pub(crate) fn write_automation(
         let Some(row) = list.iter_mut().find(|row| row.id == id) else {
             return Err(format!("automation {id} not found"));
         };
-        row.name = name;
+        let before = JobWords::of(row);
         row.instructions = prompt.to_string();
+        row.name = name;
         row.schedule = "heartbeat".into();
         row.heartbeat_every_min = mins;
         row.enabled = true;
@@ -486,6 +499,7 @@ pub(crate) fn write_automation(
         if let Some(slot) = list.iter_mut().find(|item| item.id == id) {
             *slot = row.clone();
         }
+        mark(&id, Some(&before), &row)?;
         ledgered(&path, &id, &format!("changed to every {mins} min"), || {
             save_list(&path, &list)
         })?;
@@ -508,11 +522,13 @@ pub(crate) fn write_automation(
         heartbeat_every_min: mins,
         check_command: String::new(),
         gate: Default::default(),
+        wait: Default::default(),
         enabled: true,
         last_run: if fire { None } else { Some(now.now_ms) },
         next_run: None,
         run_count: 0,
         health: grokhub_core::AutoHealth::default(),
+        lifecycle: Default::default(),
     };
     row = ensure_automation_schedule(row, now);
     if fire {
@@ -521,6 +537,7 @@ pub(crate) fn write_automation(
     }
     let id = row.id.clone();
     list.push(row.clone());
+    mark(&id, None, &row)?;
     ledgered(&path, &id, &format!("scheduled every {mins} min"), || {
         save_list(&path, &list)
     })?;
@@ -610,6 +627,7 @@ fn auto_name(prompt: &str) -> String {
 mod tests {
     use super::*;
     use crate::tools::{dispatch, ToolCtx};
+    use crate::web_origin::RunOrigin;
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -714,10 +732,10 @@ mod tests {
         let dir = crate::harness::test_dir("auto-cap");
         let _guard = crate::perm::ConfigGuard::set(&dir);
         let now = now_ms();
-        write_automation("check the build", 10, false, None, now).unwrap();
-        write_automation("sweep the inbox", 30, false, None, now).unwrap();
+        write_automation("check the build", 10, false, None, now, None).unwrap();
+        write_automation("sweep the inbox", 30, false, None, now, None).unwrap();
         assert_eq!(
-            write_automation("water the plants", 60, false, None, now + 1).unwrap_err(),
+            write_automation("water the plants", 60, false, None, now + 1, None).unwrap_err(),
             "Not added: Loadout already made 2 automations on its own this week. \
              Keep one from its Work-tree row, or add this one yourself on the Automations page."
         );
@@ -730,7 +748,7 @@ mod tests {
         // counted from after the writes, not from `now`.
         let week_on = now_ms() + crate::harness::WEEK_MS;
         assert!(
-            write_automation("water the plants", 60, false, None, week_on).is_ok(),
+            write_automation("water the plants", 60, false, None, week_on, None).is_ok(),
             "a week on, room again"
         );
         let ledger =
@@ -749,7 +767,7 @@ mod tests {
             ]
         );
         let id = ledger.all()[0].id.clone();
-        write_automation("check the build twice", 5, false, Some(&id), now).unwrap();
+        write_automation("check the build twice", 5, false, Some(&id), now, None).unwrap();
         delete_automation(&id).unwrap();
         let ops: Vec<&str> =
             crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation)
@@ -760,6 +778,196 @@ mod tests {
         assert_eq!(ops, ["create", "create", "create", "modify", "delete"]);
         let _ = take_automation_changes();
         let _ = crate::harness::take_self_changes(&dir);
+    }
+
+    /// A job written in a chat a paired browser drives is the browser's,
+    /// by either tool and from a helper too, so asking a web chat to write
+    /// it is no way around the mark. A window chat's job is this computer's.
+    #[test]
+    fn a_browsers_chat_marks_the_jobs_its_agent_writes() {
+        let dir = scratch("web-jobs");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        crate::web_origin::start_run(&dir, "shell-web-jobs-1", RunOrigin::Browser).unwrap();
+        let call = |session: &str, name: &str, args: &str| {
+            let ctx = ToolCtx {
+                workspace: &dir,
+                desktop: None,
+                stop: &|| false,
+                tasks: None,
+                owner: None,
+                session: Some(session),
+            };
+            let out = dispatch(&ctx, name, args);
+            assert!(!out.failed, "{}", out.text);
+            out.text
+        };
+        let id_in = |text: &str| text.lines().next().unwrap()["created ".len()..].to_string();
+        let marks = || std::fs::read_to_string(dir.join(crate::web_origin::JOBS_FILE));
+        let marked = || serde_json::from_str::<serde_json::Value>(&marks().unwrap()).unwrap();
+        let web = |id: &str| {
+            let jobs = load_list(&store_path()).unwrap();
+            let job = jobs.iter().find(|job| job.id == id).unwrap();
+            crate::web_origin::job_origin(&dir, id, &JobWords::of(job)) == RunOrigin::Browser
+        };
+
+        let here = id_in(&call(
+            "shell-desk-jobs-1",
+            "scheduler_create",
+            r#"{"interval":"1h","prompt":"summarize my inbox"}"#,
+        ));
+        assert!(!web(&here));
+        assert_eq!(
+            marks().map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::NotFound)
+        );
+
+        // The browser's chat rewrites the job the window's chat made.
+        let up = call(
+            "shell-web-jobs-1",
+            "scheduler_create",
+            &format!(r#"{{"interval":"1h","prompt":"click Send in Mail","task_id":"{here}"}}"#),
+        );
+        assert_eq!(up, format!("updated {here}\nevery 60 min"));
+        assert!(web(&here));
+
+        // A helper of the browser's chat makes one with the self-manage tool.
+        let made = id_in(&call(
+            "shell-web-jobs-1/helper-1",
+            "automation_create",
+            r#"{"instructions":"take a screenshot","every":"1d","reason":"asked"}"#,
+        ));
+        assert!(web(&made));
+        assert_eq!(marked(), serde_json::json!({ &here: null, &made: null }));
+
+        // The window's chat writing again takes no mark away.
+        call(
+            "shell-desk-jobs-1",
+            "automation_modify",
+            &format!(r#"{{"id":"{made}","instructions":"take two screenshots","reason":"asked"}}"#),
+        );
+        assert_eq!(marked(), serde_json::json!({ &here: null, &made: null }));
+        assert!(web(&made));
+        let _ = take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Job `here`, made by a window chat, rewritten by the run `session`
+    /// while `on_thread`'s tool runs on this thread: what the rewrite said,
+    /// and whose words the job runs now.
+    fn rewritten_by(
+        tag: &str,
+        session: Option<&str>,
+        on_thread: Option<&str>,
+        tool: &str,
+    ) -> (String, RunOrigin) {
+        let dir = scratch(tag);
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        // A chat a browser started, on file only, as after a restart.
+        crate::web_origin::note_chat(&dir, "shell-web-run-1").unwrap();
+        // The run of a job a browser wrote.
+        crate::web_origin::start_run(&dir, "shell-auto-webjob-7-1", RunOrigin::Browser).unwrap();
+        let call = |session: Option<&str>, name: &str, args: &str| {
+            let ctx = ToolCtx {
+                workspace: &dir,
+                desktop: None,
+                stop: &|| false,
+                tasks: None,
+                owner: None,
+                session,
+            };
+            dispatch(&ctx, name, args)
+        };
+        let made = call(
+            Some("shell-desk-run-1"),
+            "scheduler_create",
+            r#"{"interval":"1h","prompt":"summarize my inbox"}"#,
+        );
+        let here = made.text.lines().next().unwrap()["created ".len()..].to_string();
+        let args = match tool {
+            "scheduler_create" => {
+                format!(r#"{{"interval":"1h","prompt":"click Send in Mail","task_id":"{here}"}}"#)
+            }
+            _ => {
+                format!(r#"{{"id":"{here}","instructions":"click Send in Mail","reason":"asked"}}"#)
+            }
+        };
+        let out = {
+            let _run = crate::web_origin::RunScope::enter(on_thread);
+            call(session, tool, &args)
+        };
+        let jobs = load_list(&store_path()).unwrap();
+        assert_eq!(jobs[0].instructions, "click Send in Mail", "{}", out.text);
+        let origin = crate::web_origin::job_origin(&dir, &here, &JobWords::of(&jobs[0]));
+        let said = out.text.replace(&here, "<id>");
+        let _ = take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        (said, origin)
+    }
+
+    /// Every run that started from a browser's words marks the jobs it
+    /// writes, whichever writer it uses: the browser's chat (after a restart
+    /// too), its helper, the run of a job a browser wrote (which rewrites a
+    /// window job), and a routine's step run inside one of those. A window
+    /// run's write is this computer's.
+    #[test]
+    fn every_run_of_a_browsers_words_marks_the_jobs_it_writes() {
+        use RunOrigin::{Browser, Window};
+        let updated = "updated <id>\nevery 60 min".to_string();
+        let modified = |by: &str| {
+            let (said, origin) = rewritten_by(by, Some(by), None, "automation_modify");
+            (said.lines().next().map(str::to_string), origin)
+        };
+        assert_eq!(
+            rewritten_by("w-desk", Some("shell-desk-run-1"), None, "scheduler_create"),
+            (updated.clone(), Window)
+        );
+        assert_eq!(
+            rewritten_by("w-chat", Some("shell-web-run-1"), None, "scheduler_create"),
+            (updated.clone(), Browser)
+        );
+        assert_eq!(
+            rewritten_by(
+                "w-help",
+                Some("shell-web-run-1/helper-3"),
+                None,
+                "scheduler_create"
+            ),
+            (updated.clone(), Browser)
+        );
+        assert_eq!(
+            rewritten_by(
+                "w-job",
+                Some("shell-auto-webjob-7-1"),
+                None,
+                "scheduler_create"
+            ),
+            (updated.clone(), Browser)
+        );
+        // A routine's step has no session of its own: it is the run whose
+        // tool ran the routine.
+        assert_eq!(
+            rewritten_by(
+                "w-step",
+                None,
+                Some("shell-auto-webjob-7-1"),
+                "scheduler_create"
+            ),
+            (updated.clone(), Browser)
+        );
+        assert_eq!(
+            rewritten_by(
+                "w-dstep",
+                None,
+                Some("shell-desk-run-1"),
+                "scheduler_create"
+            ),
+            (updated, Window)
+        );
+        // The self-manage writer, from the run of a browser's job.
+        assert_eq!(modified("shell-auto-webjob-7-1").1, Browser);
+        assert_eq!(modified("shell-desk-run-1").1, Window);
     }
 
     #[test]

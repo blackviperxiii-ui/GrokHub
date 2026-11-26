@@ -98,13 +98,16 @@ where
     let next = AtomicUsize::new(0);
     let workers = indices.len().min(MAX_PARALLEL);
     // Workers are fresh threads: they take on the run's origin, recall lines
-    // and fence nonce, so their sends are logged and classed as the run's.
+    // and fence nonce, so their sends are logged and classed as the run's,
+    // and its config folder, so an agent's reads stay in the agent's home.
+    let config = crate::perm::pinned_config();
     let origin = crate::harness::current_origin();
     let recall = crate::harness::current_recall();
     let fence_state = super::fence::capture();
     std::thread::scope(|scope| {
         for _ in 0..workers {
             scope.spawn(|| {
+                let _config = config.clone().map(crate::perm::ConfigGuard::set);
                 let _origin = crate::harness::OriginScope::enter(origin);
                 let _recall = crate::harness::RecallScope::enter(recall.clone());
                 let _trace = super::fence::enter(&fence_state);
@@ -158,6 +161,19 @@ mod tests {
             .and_then(|rest| rest.split(">>>").next())
             .unwrap_or_default()
             .to_string()
+    }
+
+    #[test]
+    fn batch_workers_read_the_runs_pinned_config_folder() {
+        let home = std::env::temp_dir().join("grokhub-batch-pin/agents/kid");
+        let _pin = crate::perm::ConfigGuard::set(&home);
+        let outs = run_parallel(&[0, 1, 2], None, &|| false, |_| {
+            ToolOutput::ok(crate::perm::config_dir().display().to_string())
+        });
+        assert_eq!(outs.len(), 3);
+        for out in &outs {
+            assert_eq!(out.text, home.display().to_string());
+        }
     }
 
     #[test]

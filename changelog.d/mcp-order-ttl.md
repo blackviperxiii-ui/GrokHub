@@ -1,1 +1,0 @@
-- MCP tools are listed in name order whatever order a server sends, and a server's ttlMs is honored: its tool list is fetched again once it runs out.

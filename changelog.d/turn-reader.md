@@ -1,1 +1,0 @@
-- Router: a turn reader works out what each typed message is for (answer it, plan a big job first, answer a side question beside a running reply, fold a correction into the work, stop, or queue a new job), with a labeled test set and a small on-device store that learns from corrections by message shape, never words.

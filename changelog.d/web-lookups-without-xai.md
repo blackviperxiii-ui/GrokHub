@@ -1,4 +1,0 @@
-- Web search and web page reading work in chats, including local-model and OpenRouter chats with no xAI sign-in, and in automations as their permission mode allows. Each lookup still goes through your approvals and WebFetch rules and stays on public addresses, except a search sent to a SearXNG server you saved on this computer or your own network. Lookups that leave this computer are logged in Privacy.
-- Offline only now refuses a web lookup before its address lookup leaves the computer.
-- Plan mode now applies your WebFetch and WebSearch rules (deny, ask and allow).
-- A picture asked for in chat now uses the on-device picture model when it is installed, instead of failing with a sign-in message.

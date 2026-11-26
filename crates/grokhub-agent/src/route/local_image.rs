@@ -67,7 +67,7 @@ pub fn kit(config_dir: &Path, models_dir: &Path) -> Option<Kit> {
 /// The kit in the usual places: `{config}/bin/sd-cpp` and `~/GrokHub/models`.
 pub fn kit_here() -> Option<Kit> {
     kit(
-        &crate::perm::config_dir(),
+        &crate::perm::app_config_dir(),
         &grokhub_core::local_draft::models_root()?,
     )
 }
@@ -116,11 +116,15 @@ pub fn can_draw_here() -> bool {
 }
 
 /// The gate offers the picture tool this turn: in the list, or in the
-/// deferred index (`name — blurb` lines) of `load_tool_schema`.
+/// deferred index (`name — blurb` lines) of `tool_search`.
 fn offered(tools: &[Value]) -> bool {
     let index_line = format!("\n{TOOL} — ");
     tools.iter().any(|t| {
         t["name"].as_str() == Some(TOOL)
+            || (t["name"].as_str() == Some(crate::tools::registry::TOOL_SEARCH)
+                && t["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains(&index_line)))
             || (t["name"].as_str() == Some(crate::tools::registry::LOAD_TOOL_SCHEMA)
                 && t["description"]
                     .as_str()
@@ -413,7 +417,7 @@ fn judge(
     picture: &Path,
     stop: &dyn Fn() -> bool,
 ) -> Result<bool, String> {
-    let config = crate::perm::config_dir();
+    let config = crate::perm::app_config_dir();
     let bin = sidecar::find_binary(&config).ok_or("The local engine isn't installed.")?;
     let (model, mmproj) = ie::guard_files(models_dir, g).ok_or("The guard's files are missing.")?;
     let port = sidecar::free_loopback_port()?;

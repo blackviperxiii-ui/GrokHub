@@ -458,7 +458,7 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_default_and_tier() {
 #[test]
 fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     let all: Vec<&LocalModel> = crate::local_setup::standard_models().collect();
-    assert_eq!(all.len(), 25, "data/local_catalog.toml parses");
+    assert_eq!(all.len(), 26, "data/local_catalog.toml parses");
     // The other makers' rows: optional, uncensored, pinned, and never claiming
     // an engine newer than they need.
     for m in all.iter().filter(|m| m.optional) {
@@ -590,7 +590,7 @@ fn an_added_file_wins_auto_home_when_it_scores_best() {
     // Both are capable (≥ CAPABLE_QUALITY); the added one is much faster.
     let slow = local_models()
         .iter()
-        .find(|m| m.id == "bytedance-seed-oss-36b-heretic-q4_k_m")
+        .find(|m| m.id == "qwen3.8-27b-heretic-q4_k_m")
         .expect("slow catalog model");
     let fast = local_models()
         .iter()

@@ -295,6 +295,70 @@ pub fn create(
     Ok(load(config_dir, workspace, home))
 }
 
+/// A Skills Hub search hit for the UI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubHit {
+    pub source: String,
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// Search public skill registries (ClawHub, SkillsSH, GitHub, well-known).
+pub fn hub_search(query: &str) -> Result<Vec<HubHit>, String> {
+    grokhub_core::search_hub(query).map(|hits| {
+        hits.into_iter()
+            .map(|h| HubHit {
+                source: h.source.as_str().to_string(),
+                id: h.id,
+                name: h.name,
+                description: h.description,
+            })
+            .collect()
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubInstall {
+    pub page: Page,
+    pub note: String,
+}
+
+/// Install a Skills Hub hit into cabin skills, through the 959 scanner.
+pub fn hub_install(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    source: &str,
+    id: &str,
+    name: &str,
+    description: &str,
+) -> Result<HubInstall, String> {
+    let source = grokhub_core::HubSource::parse(source)
+        .ok_or_else(|| format!("Unknown Skills Hub source `{source}`"))?;
+    let hit = grokhub_core::HubHit {
+        source,
+        id: id.to_string(),
+        name: name.to_string(),
+        description: description.to_string(),
+    };
+    let skills_dir = config_dir.join("skills");
+    let done = grokhub_core::install_hub_skill(&skills_dir, &hit)?;
+    let note = match &done.quarantined {
+        Some(reason) => format!(
+            "Installed {} — quarantined ({reason}). Chat won't use it until the skill is cleaned up.",
+            done.name
+        ),
+        None => format!("Installed {}. Chat can use it.", done.name),
+    };
+    Ok(HubInstall {
+        page: load(config_dir, workspace, home),
+        note,
+    })
+}
+
 /// Edit a cabin skill's description, trigger and steps — the cabin tab's
 /// three fields, trimmed the same way, saved through the ChangeLedger so
 /// Undo can put the old version back. Everything else (slash, pitfalls,

@@ -12,6 +12,7 @@ const haltHandlers = vi.hoisted(() => [] as ((stopped: string[]) => void)[]);
 const ranHandlers = vi.hoisted(() => [] as ((run: unknown) => void)[]);
 const gameNotices = vi.hoisted(() => [] as ((line: string) => void)[]);
 const updateHandlers = vi.hoisted(() => [] as ((update: unknown) => void)[]);
+const companionHandlers = vi.hoisted(() => [] as ((event: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false, library: false },
   WEB: { desktopControl: false, pulse: true, localAi: false, tray: false, webAccess: false, plugins: false, library: false, remote: true },
@@ -49,6 +50,10 @@ const api = vi.hoisted(() => ({
     return Promise.resolve(() => {});
   }),
   onLocalEngineEvent: vi.fn(() => Promise.resolve(() => {})),
+  onCompanionEvent: vi.fn((handler: (event: unknown) => void) => {
+    companionHandlers.push(handler);
+    return Promise.resolve(() => {});
+  }),
   workboardSweepUndo: vi.fn(() => Promise.resolve({})),
   listChats: vi.fn((): Promise<ChatRow[]> => Promise.resolve([{ id: "shell-c9", title: "Trip plans", created: 1, updated: 2 }])),
   shareSchedulerClock: vi.fn(() => Promise.resolve()),
@@ -355,8 +360,10 @@ describe("App", () => {
       "History",
       "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
+      "Team",
       "Personal",
       "Skills",
       "Connectors",
@@ -539,8 +546,10 @@ describe("App", () => {
       "History",
       "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
+      "Team",
       "Personal",
       "Skills",
       "Connectors",
@@ -1157,6 +1166,16 @@ describe("App", () => {
     act(() => dispatch(`data: ${JSON.stringify({ event: "workboard://auto-resume", payload: { cardId: "w-1", text } })}`));
     await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 new" }));
     expect(screen.getByRole("region", { name: "Notifications" })).toHaveTextContent(text);
+  });
+
+  it("a companion's wake opens Chat and lands in the bell", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    companionHandlers.length = 0;
+    render(<App />);
+    await waitFor(() => expect(companionHandlers.length).toBe(1));
+    act(() => companionHandlers[0]({ companion: "pixel", name: "Pixel", kind: "wake", text: "" }));
+    await userEvent.click(screen.getByRole("button", { name: "Notifications, 1 new" }));
+    expect(screen.getByRole("region", { name: "Notifications" })).toHaveTextContent("Pixel woke this app.");
   });
 
   it("an update found in the background lands in the bell", async () => {

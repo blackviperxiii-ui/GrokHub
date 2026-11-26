@@ -1,0 +1,1 @@
+- Router: classify each turn fresh so explicit-content routing never sticks to later coding, file, or casual turns, and route reasons always match the active pick.

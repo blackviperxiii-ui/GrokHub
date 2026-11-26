@@ -1,1 +1,0 @@
-- Pulse smoke: expect Not interested (no Dismiss / confirm) on feed and idea cards.

@@ -65,6 +65,7 @@ fn notes(dir: &Path, id: &str) -> Vec<String> {
 const ALWAYS: RunGate = RunGate {
     mode: PermMode::Always,
     desktop: false,
+    origin: grokhub_agent::web_origin::RunOrigin::Window,
 };
 
 fn intact_s1(session: &str) -> bool {
@@ -93,7 +94,7 @@ fn an_automation_card_continues_its_session_with_the_block_and_keeps_ask() {
     seed(&dir, vec![c]);
 
     let p = prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW).expect("prepared");
-    assert_eq!((p.session_id.as_str(), p.resume), ("s-1", true));
+    assert!((p.session_id.as_str(), p.resume) == ("s-1", true));
     // Started in Ask: the resume stays in Ask though Approvals is Always now.
     assert_eq!(p.gate.mode, PermMode::Ask);
     assert_eq!(
@@ -141,7 +142,7 @@ fn another_model_or_a_lost_session_starts_fresh_and_a_chat_card_is_not_unattende
     );
     let p = prepare(&dir, "b-1", "grok-5", ALWAYS, false, &intact_s1, 0, NOW).expect("b-1");
     assert!(!p.resume);
-    assert_eq!(p.session_id, format!("shell-resume-b-1-{NOW}"));
+    assert!((p.session_id) == (format!("shell-resume-b-1-{NOW}")));
     assert_eq!(p.gate.mode, PermMode::Always);
     assert_eq!(notes(&dir, "b-1"), ["resume: fresh session", "attempt 2"]);
 
@@ -503,5 +504,37 @@ fn a_run_whose_card_you_moved_leaves_it_where_you_put_it() {
     assert_eq!(
         notes(&dir, "b-1").last().map(String::as_str),
         Some("resume ended after the card moved")
+    );
+}
+
+/// A background card whose steps a paired browser wrote resumes as a
+/// browser's run: no desktop, with control on. A card no browser wrote keeps
+/// the desktop.
+#[test]
+fn a_card_a_browser_wrote_resumes_without_the_desktop() {
+    use grokhub_agent::web_origin::{mark_card, CardPart, RunOrigin};
+    let dir = temp_dir("web-card");
+    let always = PermissionMode::AlwaysApprove;
+    seed(
+        &dir,
+        vec![
+            interrupted("b-1", WorkKind::Background, always),
+            interrupted("b-2", WorkKind::Background, always),
+        ],
+    );
+    mark_card(&dir, "b-1", &[CardPart::Steps]).expect("mark");
+    let on = RunGate {
+        desktop: true,
+        ..ALWAYS
+    };
+    let never = |_: &str| false;
+    let web = prepare(&dir, "b-1", "grok-4.7", on, false, &never, 0, NOW).expect("b-1");
+    let here = prepare(&dir, "b-2", "grok-4.7", on, false, &never, 0, NOW).expect("b-2");
+    assert_eq!(
+        [
+            (web.gate.origin, web.gate.gate().desktop),
+            (here.gate.origin, here.gate.gate().desktop)
+        ],
+        [(RunOrigin::Browser, false), (RunOrigin::Window, true)]
     );
 }

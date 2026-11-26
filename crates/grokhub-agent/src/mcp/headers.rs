@@ -180,6 +180,7 @@ pub(crate) fn standard(body: &Value) -> Vec<(String, String)> {
     let key = match method {
         "tools/call" | "prompts/get" => "name",
         "resources/read" => "uri",
+        "tasks/get" | "tasks/update" | "tasks/cancel" => "taskId",
         _ => return out,
     };
     if let Some(name) = body
@@ -233,6 +234,14 @@ mod tests {
         );
         let note = json!({"method": "notifications/cancelled", "params": {}});
         assert!(standard(&note).is_empty());
+        let get = json!({"jsonrpc": "2.0", "id": 4, "method": "tasks/get", "params": {"taskId": "task-header-1"}});
+        assert_eq!(
+            standard(&get),
+            vec![
+                ("Mcp-Method".to_string(), "tasks/get".to_string()),
+                ("Mcp-Name".to_string(), "task-header-1".to_string())
+            ]
+        );
     }
 
     #[test]
