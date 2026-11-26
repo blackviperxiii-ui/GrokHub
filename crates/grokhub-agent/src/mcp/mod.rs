@@ -3170,8 +3170,12 @@ mod tests {
             let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
             let tool = if path == "/slow" { "hang" } else { "echo" };
             let result = match msg["method"].as_str().unwrap_or("") {
-                "initialize" => json!({"protocolVersion": super::rpc::LATEST, "capabilities": {}, "serverInfo": {"name": "hang", "version": "0"}}),
-                "tools/list" => json!({"tools": [{"name": tool, "description": tool, "inputSchema": {"type": "object"}}]}),
+                "initialize" => {
+                    json!({"protocolVersion": super::rpc::LATEST, "capabilities": {}, "serverInfo": {"name": "hang", "version": "0"}})
+                }
+                "tools/list" => {
+                    json!({"tools": [{"name": tool, "description": tool, "inputSchema": {"type": "object"}}]})
+                }
                 "tools/call" => {
                     if tool == "hang" {
                         hanging.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3185,7 +3189,10 @@ mod tests {
             let (status, out) = if id.is_null() {
                 ("202 Accepted", String::new())
             } else {
-                ("200 OK", json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string())
+                (
+                    "200 OK",
+                    json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string(),
+                )
             };
             let _ = write!(
                 sock,
@@ -3229,7 +3236,10 @@ mod tests {
             try_dispatch("slow__hang", &json!({}), &|| false).unwrap()
         });
         while !server.hanging.load(std::sync::atomic::Ordering::SeqCst) {
-            assert!(started.elapsed() < Duration::from_secs(10), "hang never arrived");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "hang never arrived"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         // Another chat, while `slow__hang` waits on its server.

@@ -936,10 +936,7 @@ mod tests {
         })
         .join()
         .unwrap();
-        for (query, text) in ["desktop", "click", "scheduler_create"]
-            .iter()
-            .zip(&found)
-        {
+        for (query, text) in ["desktop", "click", "scheduler_create"].iter().zip(&found) {
             assert!(
                 text.starts_with(&format!("No deferred tools matched `{query}`")),
                 "{query}: {text}\nindex:\n{index}"
