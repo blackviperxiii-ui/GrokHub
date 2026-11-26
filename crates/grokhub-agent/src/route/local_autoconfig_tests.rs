@@ -1501,3 +1501,130 @@ fn a_vision_launch_counts_its_projector_and_never_leaves_a_pair_refusal() {
     forget_draft_status();
     let _ = std::fs::remove_dir_all(root);
 }
+
+fn gpu_16gb_profile() -> LocalProfile {
+    machine(
+        vec![gpu(
+            GpuVendor::Nvidia,
+            "NVIDIA GeForce RTX 4060 Ti 16GB",
+            16_384,
+            Some(16_384),
+        )],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(16, 8, 0, CpuSimd::Avx2),
+    )
+}
+
+fn coding_36l(file_mb: u64) -> GgufMeta {
+    GgufMeta {
+        arch: "qwen3moe".into(),
+        block_count: 36,
+        context_length: 131_072,
+        embedding_length: 2_048,
+        head_count: 16,
+        head_count_kv: 4,
+        key_length: 128,
+        value_length: 128,
+        expert_count: 128,
+        file_mb,
+        tokenizer: None,
+        nextn_layers: 0,
+        sliding_window: 0,
+        swa_pattern: vec![],
+        kv_heads: vec![],
+        key_length_swa: 0,
+        value_length_swa: 0,
+    }
+}
+
+#[test]
+fn coding_model_on_16gb_normal_reaches_64k_with_q4_kv_and_flash_attn() {
+    let p = gpu_16gb_profile();
+    let m = coding_36l(10_500);
+    let o = Overrides::default();
+
+    let non_coding = autoconfig(&p, &m, Backend::Cuda, GovState::Normal, &o, None);
+    assert_eq!((non_coding.ngl, non_coding.ctx, non_coding.kv), (37, 32_768, KvType::Q8));
+
+    let coding = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &o, None);
+    assert_eq!(coding.ngl, 37);
+    assert_eq!(coding.ctx, 65_536);
+    assert_eq!(coding.kv, KvType::Q4);
+    assert!(coding.flash_attn);
+
+    let (gpu_budget, _) = budgets(&p, Backend::Cuda, GovState::Normal);
+    let seqs = coding.run.seqs();
+    assert!(need_mb(&m, coding.ctx, coding.kv, seqs) <= gpu_budget);
+
+    let flags = coding.to_args();
+    for pair in [
+        ["-c", "65536"],
+        ["--cache-type-k", "q4_0"],
+        ["--cache-type-v", "q4_0"],
+        ["--flash-attn", "on"],
+    ] {
+        assert!(
+            flags.windows(2).any(|w| w == pair),
+            "missing {:?} in {flags:?}",
+            pair
+        );
+    }
+}
+
+#[test]
+fn coding_model_on_16gb_keeps_q8_when_64k_fits_in_q8() {
+    let p = gpu_16gb_profile();
+    let m = coding_36l(9_500);
+    let a = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &Overrides::default(), None);
+    assert_eq!((a.ngl, a.ctx, a.kv), (37, 65_536, KvType::Q8));
+}
+
+#[test]
+fn coding_model_drops_to_single_slot_to_fit_64k_on_16gb() {
+    let p = gpu_16gb_profile();
+    let m = GgufMeta {
+        file_mb: 10_750,
+        ..swa_12b()
+    };
+    let a = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &Overrides::default(), None);
+    assert_eq!((a.ngl, a.ctx, a.kv), (49, 65_536, KvType::Q4));
+    assert_eq!(a.run.seqs(), 1);
+}
+
+#[test]
+fn coding_model_respects_throttle_and_manual_overrides() {
+    let p = gpu_16gb_profile();
+    let m = coding_36l(9_500);
+
+    let throttled = autoconfig_coding(
+        &p,
+        &m,
+        Backend::Cuda,
+        GovState::Throttle,
+        &Overrides::default(),
+        None,
+    );
+    assert_eq!(throttled.ctx, 8_192);
+
+    let manual = Overrides {
+        ctx: Some(16_384),
+        kv: Some(KvType::Q8),
+        ..Overrides::default()
+    };
+    let pinned = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &manual, None);
+    assert_eq!((pinned.ctx, pinned.kv), (16_384, KvType::Q8));
+}
+
+#[test]
+fn is_coding_model_matches_catalog_coding_models() {
+    assert!(is_coding_model(Path::new(
+        "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q2_K.gguf"
+    )));
+    assert!(is_coding_model(Path::new(
+        "Qwen3-Coder-30B-A3B-Instruct-Heretic.Q4_K_M.gguf"
+    )));
+    assert!(!is_coding_model(Path::new(
+        "Qwen3.5-9B-Ultra-Uncensored-Heretic-Q4_K_M.gguf"
+    )));
+}
