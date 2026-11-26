@@ -358,10 +358,13 @@ pub fn grant(root: &Path) -> Result<(), String> {
     result
 }
 
-/// SAFETY: `dacl` must be a valid ACL.
+/// SAFETY: `dacl` must be null or a valid ACL.
 unsafe fn has_grant(dacl: *const ACL, cap: &Sid) -> bool {
+    if dacl.is_null() {
+        return false;
+    }
     let mut info = ACL_SIZE_INFORMATION::default();
-    // SAFETY: info is the size the class asks for.
+    // SAFETY: dacl is non-null and valid; info is the size the class asks for.
     let ok = unsafe {
         GetAclInformation(
             dacl,
@@ -374,18 +377,27 @@ unsafe fn has_grant(dacl: *const ACL, cap: &Sid) -> bool {
         return false;
     }
     (0..info.AceCount).any(|i| {
-        let mut ace: *mut core::ffi::c_void = ptr::null_mut();
+        let mut raw_ace: *mut core::ffi::c_void = ptr::null_mut();
         // SAFETY: i is below AceCount; an allowed ACE's SID starts at SidStart.
         unsafe {
-            if GetAce(dacl, i, &mut ace) == 0 {
+            if GetAce(dacl, i, &mut raw_ace) == 0 || raw_ace.is_null() {
                 return false;
             }
-            if (*ace.cast::<ACE_HEADER>()).AceType != ACCESS_ALLOWED_ACE_TYPE {
+            let header = ptr::read_unaligned(raw_ace.cast::<ACE_HEADER>());
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE
+                || usize::from(header.AceSize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>()
+            {
                 return false;
             }
-            let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
-            let sid: PSID = (&raw mut (*allowed).SidStart).cast();
-            EqualSid(sid, cap.psid()) != 0 && (*allowed).Mask & ROOT_RIGHTS == ROOT_RIGHTS
+            let base = raw_ace.cast::<u8>();
+            let mask = ptr::read_unaligned(
+                base.add(std::mem::offset_of!(ACCESS_ALLOWED_ACE, Mask))
+                    .cast::<u32>(),
+            );
+            let sid: PSID = base
+                .add(std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart))
+                .cast();
+            EqualSid(sid, cap.psid()) != 0 && mask & ROOT_RIGHTS == ROOT_RIGHTS
         }
     })
 }
@@ -409,6 +421,9 @@ unsafe fn add_grant(name: &[u16], old: *const ACL, cap: &Sid) -> Result<(), Stri
     let rc = unsafe { SetEntriesInAclW(1, &entry, old, &mut new_acl) };
     if rc != 0 {
         return Err(format!("SetEntriesInAclW: error {rc}"));
+    }
+    if new_acl.is_null() {
+        return Err("SetEntriesInAclW returned null ACL".into());
     }
     // SAFETY: name is NUL-terminated; new_acl is valid.
     let rc = unsafe {
@@ -469,4 +484,40 @@ pub fn proxy_env(plan: &super::Plan) -> Vec<(String, String)> {
         }
     }
     env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_grant_rejects_null_dacl_and_finds_applied_grant() {
+        assert!(!unsafe { has_grant(ptr::null(), sandbox_sid()) });
+
+        let dir = std::env::temp_dir().join(format!("gh-win-acl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        grant(&dir).expect("grant");
+        let name = wide(&dir);
+        let mut dacl: *mut ACL = ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        let rc = unsafe {
+            GetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut dacl,
+                ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(rc, 0);
+        let found = !dacl.is_null() && unsafe { has_grant(dacl, sandbox_sid()) };
+        unsafe { LocalFree(sd) };
+        assert!(found, "sandbox ACE should be detected via has_grant");
+        grant(&dir).expect("idempotent grant");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

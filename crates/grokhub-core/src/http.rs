@@ -557,6 +557,10 @@ impl Agent {
         self.request(Method::POST, url)
     }
 
+    pub fn put(&self, url: &str) -> Request {
+        self.request(Method::PUT, url)
+    }
+
     fn request(&self, method: Method, url: &str) -> Request {
         Request {
             agent: self.clone(),
