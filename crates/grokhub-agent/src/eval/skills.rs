@@ -67,7 +67,7 @@ const FIXTURES: [SkillCase; 6] = [
     SkillCase {
         id: "skill-checklist-release",
         skill_name: "checklist-release",
-        prompt: "Write the release verification note file for v1.4.0.",
+        prompt: "What belongs in the release checklist for v1.4.0?",
         full_skill_md: "---\nname: checklist-release\ndescription: Structured release checklist with rollback plan and SHA verification.\n---\n# Release Checklist\nAlways include these exact section markers in your final note:\n- RELEASE_VERDICT\n- ROLLBACK_PLAN\n- SHA256_VERIFIED\nExplain each item briefly with crisp verification notes and never emit TBD_SKIPPED.\n",
         trimmed_skill_md: "---\nname: checklist-release\ndescription: Structured release checklist with rollback plan and SHA verification.\n---\nInclude exact markers: RELEASE_VERDICT, ROLLBACK_PLAN, SHA256_VERIFIED. Never write TBD_SKIPPED.\n",
         required_substrings: &["RELEASE_VERDICT", "ROLLBACK_PLAN", "SHA256_VERIFIED"],
@@ -76,7 +76,7 @@ const FIXTURES: [SkillCase; 6] = [
     SkillCase {
         id: "skill-json-schema-audit",
         skill_name: "json-schema-audit",
-        prompt: "Read the schema file and audit the configuration validation status.",
+        prompt: "What belongs in a JSON schema validation report?",
         full_skill_md: "---\nname: json-schema-audit\ndescription: Audit JSON schemas for required keys and strict property checks.\n---\n# JSON Schema Audit\nWhen auditing a schema payload, report all three exact status markers:\n- SCHEMA_VALID\n- REQUIRED_FIELDS\n- ADDITIONAL_PROPERTIES\nDo not include UNCHECKED anywhere in the output.\n",
         trimmed_skill_md: "---\nname: json-schema-audit\ndescription: Audit JSON schemas for required keys and strict property checks.\n---\nEmit exact markers: SCHEMA_VALID, REQUIRED_FIELDS, ADDITIONAL_PROPERTIES. Avoid UNCHECKED.\n",
         required_substrings: &["SCHEMA_VALID", "REQUIRED_FIELDS", "ADDITIONAL_PROPERTIES"],
@@ -85,7 +85,7 @@ const FIXTURES: [SkillCase; 6] = [
     SkillCase {
         id: "skill-bug-triage-format",
         skill_name: "bug-triage-format",
-        prompt: "Write a triage note file for the login timeout regression.",
+        prompt: "What belongs in a login regression triage report?",
         full_skill_md: "---\nname: bug-triage-format\ndescription: Format regression triage reports with repro steps, root cause, and severity.\n---\n# Bug Triage Format\nProduce a structured triage report containing these exact labels:\n- REPRO_STEPS\n- ROOT_CAUSE\n- SEVERITY_P1\nNever write WONT_REPRODUCE without verification.\n",
         trimmed_skill_md: "---\nname: bug-triage-format\ndescription: Format regression triage reports with repro steps, root cause, and severity.\n---\nInclude exact labels: REPRO_STEPS, ROOT_CAUSE, SEVERITY_P1. Never write WONT_REPRODUCE.\n",
         required_substrings: &["REPRO_STEPS", "ROOT_CAUSE", "SEVERITY_P1"],
@@ -94,7 +94,7 @@ const FIXTURES: [SkillCase; 6] = [
     SkillCase {
         id: "skill-sql-migration-guard",
         skill_name: "sql-migration-guard",
-        prompt: "Read the SQL migration file and review the add-index plan.",
+        prompt: "What belongs in an SQL index migration review?",
         full_skill_md: "---\nname: sql-migration-guard\ndescription: Safety guard for SQL schema migrations covering locks, backups, and rollback.\n---\n# SQL Migration Guard\nEvery migration review must explicitly include:\n- DOWN_MIGRATION\n- LOCK_RISK\n- BACKUP_CONFIRMED\nNever output NO_ROLLBACK in an approved review.\n",
         trimmed_skill_md: "---\nname: sql-migration-guard\ndescription: Safety guard for SQL schema migrations covering locks, backups, and rollback.\n---\nInclude exact checks: DOWN_MIGRATION, LOCK_RISK, BACKUP_CONFIRMED. Never output NO_ROLLBACK.\n",
         required_substrings: &["DOWN_MIGRATION", "LOCK_RISK", "BACKUP_CONFIRMED"],
@@ -103,7 +103,7 @@ const FIXTURES: [SkillCase; 6] = [
     SkillCase {
         id: "skill-changelog-entry",
         skill_name: "changelog-entry",
-        prompt: "Write a release note file for the skill telemetry addition.",
+        prompt: "What belongs in a user-facing release note?",
         full_skill_md: "---\nname: changelog-entry\ndescription: Write crisp changelog entries covering user impact, verification, and compatibility.\n---\n# Changelog Entry\nEnsure every entry contains these exact headings:\n- USER_IMPACT\n- VERIFICATION\n- BREAKING_NONE\nAvoid writing INTERNAL_JARGON.\n",
         trimmed_skill_md: "---\nname: changelog-entry\ndescription: Write crisp changelog entries covering user impact, verification, and compatibility.\n---\nInclude exact headings: USER_IMPACT, VERIFICATION, BREAKING_NONE. Never write INTERNAL_JARGON.\n",
         required_substrings: &["USER_IMPACT", "VERIFICATION", "BREAKING_NONE"],
@@ -112,7 +112,7 @@ const FIXTURES: [SkillCase; 6] = [
     SkillCase {
         id: "skill-incident-summary",
         skill_name: "incident-summary",
-        prompt: "Write a post-incident note file for the cache invalidation delay.",
+        prompt: "What belongs in a post-incident summary?",
         full_skill_md: "---\nname: incident-summary\ndescription: Summarize incidents with UTC timeline, mitigation, and follow-up actions.\n---\n# Incident Summary\nInclude these exact structured sections:\n- TIMELINE_UTC\n- MITIGATION\n- ACTION_ITEMS\nNever include BLAME_USER.\n",
         trimmed_skill_md: "---\nname: incident-summary\ndescription: Summarize incidents with UTC timeline, mitigation, and follow-up actions.\n---\nInclude exact sections: TIMELINE_UTC, MITIGATION, ACTION_ITEMS. Never include BLAME_USER.\n",
         required_substrings: &["TIMELINE_UTC", "MITIGATION", "ACTION_ITEMS"],
