@@ -6364,6 +6364,19 @@ mod tests {
         let seen = seen.lock().unwrap().clone();
         assert_eq!(seen.len(), 2, "{seen:?}");
         for (request, _) in &seen {
+            // The fence's random hex nonce can hold "4417" by chance; it isn't
+            // the person's memory, so it is left out of the check.
+            let request: String = request
+                .split("nonce=")
+                .enumerate()
+                .map(|(i, part)| {
+                    if i == 0 {
+                        part
+                    } else {
+                        part.trim_start_matches(|c: char| c.is_ascii_hexdigit())
+                    }
+                })
+                .collect();
             for fact in ["4417", "heron", "blue pot"] {
                 assert!(!request.contains(fact), "{fact}: {request}");
             }
