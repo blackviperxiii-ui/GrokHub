@@ -1074,6 +1074,9 @@ fn run_turn(
         let tools = if chat_only {
             Vec::new()
         } else {
+            if input.depth == 0 {
+                tools::registry::ensure_media_tools(input.conversation_id, user_text);
+            }
             match (
                 crate::subagent::fork_tools(input.conversation_id),
                 bound_job_tool_set(input.conversation_id),
@@ -2716,6 +2719,9 @@ fn turn_should_stop(
     empty_searches: &mut u32,
 ) -> Option<&'static str> {
     if !output.failed && call.name == "image_generate" && crate::brain::is_picture_ask(user_text) {
+        return Some(REQUEST_DONE);
+    }
+    if !output.failed && call.name == "video_generate" && crate::brain::is_video_ask(user_text) {
         return Some(REQUEST_DONE);
     }
     if call.name == "web_search" && !output.failed && output.text.contains("No results") {

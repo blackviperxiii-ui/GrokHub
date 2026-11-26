@@ -2741,14 +2741,42 @@ button.md-copy {
   margin: 0;
 }
 
-/* A picture a tool made, on its own row above the detail. */
-.card-picture {
+/* A picture or video a tool made, on its own row above the detail. */
+.card-picture,
+.card-video {
   flex-basis: 100%;
   display: block;
   max-width: min(100%, 512px);
   max-height: 512px;
   object-fit: contain;
   border-radius: var(--radius-md);
+}
+
+.card-media-actions {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-media-result {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.library-creations {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.library-creations-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .card.permission {

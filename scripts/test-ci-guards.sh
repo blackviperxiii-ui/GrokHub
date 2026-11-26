@@ -280,6 +280,39 @@ commit_pr
 LABELS=dependencies run_guard fail "grokhub-* lock version bump without release fails"
 
 fresh_pr
+printf '\nname = "serde"\nversion = "1.0.0"\n' >>"$W/Cargo.lock"
+printf '# a note\n' >>"$W/Cargo.toml"
+commit_pr
+run_guard fail "Cargo.lock churn beside a comment-only Cargo.toml edit fails"
+
+fresh_pr
+printf '\nname = "serde"\nversion = "1.0.0"\n' >>"$W/Cargo.lock"
+printf 'serde = "1"\n' >>"$W/Cargo.toml"
+commit_pr
+run_guard pass "Cargo.lock churn beside a Cargo.toml dependency edit passes"
+
+fresh_pr
+mkdir -p "$W/src-tauri"
+printf 'name = "grokhub-shell"\nversion = "1.0.0"\n\nname = "serde"\nversion = "1.0.0"\n' >"$W/src-tauri/Cargo.lock"
+commit_pr
+run_guard fail "src-tauri/Cargo.lock churn with no label fails"
+LABELS=dependencies run_guard pass "src-tauri/Cargo.lock churn with the dependencies label passes"
+
+fresh_pr
+mkdir -p "$W/src-tauri"
+printf 'name = "grokhub-shell"\nversion = "1.0.0"\n\nname = "serde"\nversion = "1.0.0"\n' >"$W/src-tauri/Cargo.lock"
+printf 'serde = "1"\n' >>"$W/Cargo.toml"
+commit_pr
+run_guard fail "src-tauri/Cargo.lock churn beside a dependency edit in the root Cargo.toml fails"
+
+fresh_pr
+mkdir -p "$W/src-tauri"
+printf 'name = "grokhub-shell"\nversion = "1.0.0"\n\nname = "serde"\nversion = "1.0.0"\n' >"$W/src-tauri/Cargo.lock"
+printf '[package]\nname = "grokhub-shell"\nversion = "1.0.0"\n\n[dependencies]\nserde = "1"\n' >"$W/src-tauri/Cargo.toml"
+commit_pr
+run_guard pass "src-tauri/Cargo.lock churn beside a src-tauri/Cargo.toml dependency edit passes"
+
+fresh_pr
 printf '      - uses: actions/cache@v4\n' >>"$W/.github/workflows/ci.yml"
 commit_pr
 run_guard fail "workflow action pinned to a tag fails"
@@ -366,6 +399,23 @@ fresh_pr
 printf '      - uses: docker://alpine@sha256:%s%s\n' "$SHA" "0123456789abcdef01234567" >>"$W/.github/workflows/ci.yml"
 commit_pr
 run_guard pass "docker action with a digest passes"
+
+fresh_pr
+mkdir -p "$W/src-tauri/src"
+printf 'fn hook() {\n    unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, None, None, 0) };\n}\n' >"$W/src-tauri/src/keys.rs"
+commit_pr
+run_guard fail "a global keyboard hook in src-tauri fails"
+
+fresh_pr
+printf 'use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;\n' >"$W/crates/grokhub-core/src/peek.rs"
+commit_pr
+run_guard fail "an anti-cheat API on line 1 of a file fails"
+
+fresh_pr
+mkdir -p "$W/src-tauri/src"
+printf '// ci-guard: allow-anticheat-api a test string, never called\nconst S: &str = "ReadProcessMemory";\n// ReadProcessMemory in a comment\n' >"$W/src-tauri/src/note.rs"
+commit_pr
+run_guard pass "an allowed or commented anti-cheat API name passes"
 
 CI_YML="$W/.github/workflows/ci.yml"
 
@@ -511,6 +561,64 @@ printf '// x\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
 commit_pr
 run_guard fail "unresolvable merge-base fails"
 "$REAL_GIT" -C "$W" remote add origin "$TMP/origin.git"
+
+# ---- scripts/install.sh: can it check the download? --------------------
+# A bin folder with only the tools install.sh needs up to its signature check,
+# a uname that says Apple silicon, and an openssl from OPENSSL_SHIM; no
+# minisign, even where the runner has one.
+IBIN="$TMP/install-bin"
+mkdir -p "$IBIN" "$TMP/install-cfg" "$TMP/install-from"
+for tool in dirname sed mktemp base64 tr rm cp cat head; do
+  ln -sf "$(command -v "$tool")" "$IBIN/$tool"
+done
+printf '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n' >"$IBIN/uname"
+# The LibreSSL in macOS 14 and 15: no Ed25519 with -rawin and no BLAKE2b.
+cat >"$TMP/libressl-stock" <<'SH'
+#!/bin/sh
+[ "$1" = version ] && { echo "LibreSSL 3.3.6"; exit 0; }
+echo "openssl: unknown option or algorithm" >&2; exit 1
+SH
+# A LibreSSL that can do both (here, the runner's own openssl behind it).
+printf '#!/bin/sh\n[ "$1" = version ] && { echo "LibreSSL 4.1.0"; exit 0; }\nexec "%s" "$@"\n' \
+  "$(command -v openssl)" >"$TMP/libressl-full"
+chmod +x "$IBIN/uname" "$TMP/libressl-stock" "$TMP/libressl-full"
+
+# run_install <expect: text in the output> <name> <openssl shim>
+run_install() {
+  local want="$1" name="$2" shim="$3" rc=0
+  cp "$shim" "$IBIN/openssl"
+  PATH="$IBIN" GROKHUB_CONFIG="$TMP/install-cfg" HOME="$TMP" \
+    "$BASH" "$SRC/scripts/install.sh" --user --from-dir "$TMP/install-from" >"$TMP/out.log" 2>&1 || rc=$?
+  if [[ $rc -ne 0 ]] && grep -qF -- "$want" "$TMP/out.log"; then
+    echo "ok   $name"
+    pass=$((pass + 1))
+  else
+    echo "FAIL $name (rc=$rc, expected the output to say: $want)"
+    sed 's/^/    | /' "$TMP/out.log"
+    failed=$((failed + 1))
+  fi
+}
+
+run_install "brew install minisign" \
+  "install.sh on a stock Apple silicon Mac asks for minisign with a macOS hint" "$TMP/libressl-stock"
+if grep -q apt-get "$TMP/out.log"; then
+  echo "FAIL install.sh gives a Mac a Linux hint"
+  failed=$((failed + 1))
+fi
+if openssl version 2>/dev/null | grep -q '^OpenSSL [3-9]'; then
+  run_install "has no SHA256SUMS" \
+    "install.sh checks signatures with a LibreSSL that has Ed25519 and BLAKE2b" "$TMP/libressl-full"
+fi
+
+# ---- scripts/pii-guard: its own fixture tests (made-up test words) ------
+if python3 "$SRC/scripts/pii-guard/test_pii_guard.py" >"$TMP/out.log" 2>&1; then
+  echo "ok   pii-guard fixture tests"
+  pass=$((pass + 1))
+else
+  echo "FAIL pii-guard fixture tests"
+  sed 's/^/    | /' "$TMP/out.log"
+  failed=$((failed + 1))
+fi
 
 echo "passed=$pass failed=$failed"
 (( failed == 0 ))

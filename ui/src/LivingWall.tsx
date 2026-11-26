@@ -5,7 +5,7 @@ import { Toggle } from "./Toggle";
 
 /** The cabin's words for Settings → Behavior → Living wall. */
 export const LIVING_WALL_TITLE = "Living wall";
-export const LIVING_WALL_HELP = `Every few hours ${PRODUCT_NAME} paints a new cover for the Imagine gallery, two low-quality Imagine stills each. Twenty live. Oldest leaves first. Off by default.`;
+export const LIVING_WALL_HELP = `Every few hours ${PRODUCT_NAME} paints a new cover for Library → Creations, two low-quality stills each. Twenty live. Oldest leaves first. Off by default.`;
 
 /**
  * Living wall switch in Settings → Behavior. Same `app.json` `imagineWall` key

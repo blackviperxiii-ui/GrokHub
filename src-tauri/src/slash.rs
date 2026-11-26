@@ -301,8 +301,8 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row("/update", "Open Updates", "/update")
     },
-    row("/imagine", "Open Imagine", "/imagine "),
-    row("/imagine-video", "Open Imagine video", "/imagine-video "),
+    row("/imagine", "Make an image in chat", "/imagine "),
+    row("/imagine-video", "Make a video in chat", "/imagine-video "),
     ShellCmd {
         desktop_only: true,
         ..row("/journal", "Open the decision journal", "/journal")
@@ -1948,7 +1948,7 @@ mod tests {
             .expect("/learn reflect is listed");
         assert_eq!(reflect.disabled, None);
         let help = help();
-        assert!(help.contains("/imagine — Open Imagine"));
+        assert!(help.contains("/imagine — Make an image in chat"));
         assert!(help.contains("/journal — Open the decision journal"));
         assert!(help.contains("/learn — Reflect this chat into memory"));
         assert!(help.contains("/mcps — Open Connectors"));

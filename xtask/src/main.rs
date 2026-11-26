@@ -80,14 +80,20 @@ fn is_semver(v: &str) -> bool {
 fn bump_check(root: &Path) -> Result<(), String> {
     let version = read_version(root)?;
     check_cargo_toml(root, &version)?;
-    check_contains(root, "packaging/PKGBUILD", &format!("pkgver={version}"))?;
-    check_contains(root, "packaging/aur/PKGBUILD", &format!("pkgver={version}"))?;
-    check_contains(
+    check_lines(root, "packaging/PKGBUILD", "pkgver=", version.as_str())?;
+    check_lines(root, "packaging/aur/PKGBUILD", "pkgver=", version.as_str())?;
+    check_lines(
         root,
         "packaging/aur/.SRCINFO",
-        &format!("pkgver = {version}"),
+        "pkgver = ",
+        version.as_str(),
     )?;
-    check_contains(root, "packaging/aur/.SRCINFO", &format!("#tag=v{version}"))?;
+    check_lines(
+        root,
+        "packaging/aur/.SRCINFO",
+        "#tag=",
+        &format!("v{version}"),
+    )?;
     check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
     check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;
     check_reference(root, &version)?;
@@ -104,10 +110,53 @@ fn check_cargo_toml(root: &Path, version: &str) -> Result<(), String> {
         .nth(1)
         .and_then(|s| s.split("[workspace.dependencies]").next())
         .ok_or_else(|| "Cargo.toml missing [workspace.package]".to_string())?;
-    if !pkg.contains(&needle) {
+    let mut versions = pkg
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.split('=').next().map(str::trim) == Some("version"));
+    if versions.next() != Some(needle.as_str()) || versions.next().is_some() {
         return Err(format!(
             "Cargo.toml [workspace.package] version is not {version}"
         ));
+    }
+    Ok(())
+}
+
+/// Every `key` in `rel`, comment lines aside, is followed by exactly `want`
+/// (up to the next space or quote), and there is at least one. `pkgver=3.6.01`
+/// and a stale value beside a matching comment both fail.
+fn check_lines(root: &Path, rel: &str, key: &str, want: &str) -> Result<(), String> {
+    let text = read_rel(root, rel)?;
+    let expected = format!("{key}{want}");
+    let mut seen = false;
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        // `#tag=` sits inside a source URL; any other key starts its line.
+        let at = if key.starts_with('#') {
+            line.find(key)
+        } else {
+            line.starts_with(key).then_some(0)
+        };
+        let Some(at) = at else { continue };
+        let value = line[at + key.len()..]
+            .trim_matches(['"', '\''])
+            .split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .next()
+            .unwrap_or("");
+        if value != want {
+            return Err(format!(
+                "{rel}:{} has {:?}, not {expected:?}",
+                n + 1,
+                format!("{key}{value}")
+            ));
+        }
+        seen = true;
+    }
+    if !seen {
+        return Err(format!("{rel} missing {expected:?}"));
     }
     Ok(())
 }
@@ -713,6 +762,65 @@ mod tests {
         assert_eq!(
             bump_check(&fx.0).unwrap_err(),
             "src-tauri/tauri.conf.json missing \"\\\"version\\\": \\\"3.0.2\\\",\""
+        );
+    }
+
+    #[test]
+    fn check_catches_a_pkgbuild_whose_pkgver_only_starts_with_version() {
+        let fx = Fixture::new();
+        fx.put("packaging/PKGBUILD", "pkgver=3.0.21\n");
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "packaging/PKGBUILD:1 has \"pkgver=3.0.21\", not \"pkgver=3.0.2\""
+        );
+    }
+
+    #[test]
+    fn check_catches_a_stale_pkgver_next_to_a_comment() {
+        let fx = Fixture::new();
+        fx.put("packaging/aur/PKGBUILD", "# pkgver=3.0.2\npkgver=3.0.1\n");
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "packaging/aur/PKGBUILD:2 has \"pkgver=3.0.1\", not \"pkgver=3.0.2\""
+        );
+        fx.put("packaging/aur/PKGBUILD", "# pkgver=3.0.2\n");
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "packaging/aur/PKGBUILD missing \"pkgver=3.0.2\""
+        );
+    }
+
+    #[test]
+    fn check_catches_a_srcinfo_pointing_at_another_tag() {
+        let fx = Fixture::new();
+        fx.put(
+            "packaging/aur/.SRCINFO",
+            "pkgver = 3.0.2\nsource = grokhub::git+#tag=v3.0.21\n",
+        );
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "packaging/aur/.SRCINFO:2 has \"#tag=v3.0.21\", not \"#tag=v3.0.2\""
+        );
+        fx.put(
+            "packaging/aur/.SRCINFO",
+            "pkgver = 3.0.2\nsource = grokhub::git+#tag=v3.0.2\nsource = other::git+#tag=v2.9.0\n",
+        );
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "packaging/aur/.SRCINFO:3 has \"#tag=v2.9.0\", not \"#tag=v3.0.2\""
+        );
+    }
+
+    #[test]
+    fn check_catches_a_workspace_version_hidden_behind_a_comment() {
+        let fx = Fixture::new();
+        fx.put(
+            "Cargo.toml",
+            "[workspace.package]\n# version = \"3.0.2\"\nversion = \"3.0.1\"\n[workspace.dependencies]\n",
+        );
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "Cargo.toml [workspace.package] version is not 3.0.2"
         );
     }
 

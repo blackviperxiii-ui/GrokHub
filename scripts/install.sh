@@ -212,11 +212,36 @@ minisig_ok() {
   return "$ok"
 }
 
+# can_check_signatures: minisign is installed, or this openssl does what
+# minisig_ok needs. The openssl is tried on known answers (RFC 8032 test 2 for
+# Ed25519 with -rawin, RFC 7693's BLAKE2b-512 of "abc") rather than read from
+# its version, so OpenSSL 3 and any LibreSSL with both pass, and the LibreSSL
+# that ships with macOS (neither) doesn't.
 can_check_signatures() {
   command -v minisign >/dev/null 2>&1 && return 0
   command -v openssl >/dev/null 2>&1 || return 1
-  # pkeyutl -rawin for Ed25519 arrived in OpenSSL 3.
-  [[ "$(openssl version 2>/dev/null)" =~ ^OpenSSL\ ([3-9]|[1-9][0-9]) ]]
+  local t ok=1
+  t="$(mktemp -d)"
+  if printf '%s' 'MCowBQYDK2VwAyEAPUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=' | base64 -d >"$t/der" 2>/dev/null &&
+    printf '%s' 'kqAJqfDUyrhyDoILX2QlQKKye1QWUD+Ps3YiI+vbadoIWsHkPhWZbkWPNhPQ8R2MOHsurrQwKu6wDSkWErsMAA==' | base64 -d >"$t/sig" 2>/dev/null &&
+    printf 'r' >"$t/msg" && printf 'abc' >"$t/abc" &&
+    openssl pkey -pubin -inform DER -in "$t/der" -out "$t/pem" >/dev/null 2>&1 &&
+    openssl pkeyutl -verify -pubin -inkey "$t/pem" -rawin -in "$t/msg" -sigfile "$t/sig" >/dev/null 2>&1 &&
+    openssl dgst -blake2b512 -binary "$t/abc" >"$t/b2" 2>/dev/null &&
+    [[ "$(base64 <"$t/b2" | tr -d '\n')" == 'uoClP5gcTQ1qJ5e2nxL26UwhLxRoWsS3SxK7b9v/otF9h8U5Kqt5LcJS1d5FM8yVGNOKqNvxklq5I4bt1ACZIw==' ]]; then
+    ok=0
+  fi
+  rm -rf "${t:?}"
+  return "$ok"
+}
+
+# What to install so the download can be checked, for this computer.
+signature_tool_hint() {
+  if [[ "$(uname -s)" == Darwin ]]; then
+    echo "checking the download needs minisign, and the openssl that comes with macOS can't check its signatures; install minisign (brew install minisign) and run this again"
+  else
+    echo "checking the download needs minisign or OpenSSL 3; install one (for example sudo apt-get install minisign) and run this again"
+  fi
 }
 
 sha256_of() {
@@ -263,8 +288,7 @@ install_prebuilt() {
     Darwin/arm64) pattern='grokhub-shell-v[^ ]*-macos-arm64[.]dmg' ;;
     *) die "there is no prebuilt app for $os $arch yet; run scripts/install.sh --from-source in a clone" ;;
   esac
-  can_check_signatures ||
-    die "checking the download needs minisign or OpenSSL 3; install one (for example sudo apt-get install minisign) and run this again"
+  can_check_signatures || die "$(signature_tool_hint)"
   [[ -n "$FROM_DIR" ]] || command -v curl >/dev/null 2>&1 || die "downloading needs curl"
   if [[ "$SYSTEM" -eq 1 && "$(id -u)" -ne 0 ]]; then
     die "--system needs root"

@@ -272,6 +272,7 @@ pub fn dispatch_for_job(
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args, ctx.session),
         "scheduler_delete" => control::scheduler_delete(&args),
+        ptc::NAME => ptc::run(ctx, &args),
         run_routine::NAME => run_routine::run(ctx, &args),
         save_routine::NAME => save_routine::run(ctx, &args),
         "connection_delete" => connections::delete(&args),
@@ -341,6 +342,9 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
+    // Snapshot first, as a foreground command does, so `/rewind step` can
+    // undo what it does to the tree.
+    crate::file_checkpoint::before_shell(ctx.workspace, command);
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, ctx.workspace);
     match tasks.spawn_for(ctx.workspace, command, ctx.owner, plan) {
         Ok(id) => ToolOutput::ok(format!("task id: {id}\nstatus: running")),
@@ -708,6 +712,100 @@ mod tests {
     use super::*;
     use std::net::IpAddr;
     use web_fetch::PageFetch;
+
+    /// Says yes to every step, so a script step that asks runs.
+    struct Yes;
+
+    impl crate::routine_run::Approve for Yes {
+        fn approve(&self, _: &str, _: &str, _: &str) -> bool {
+            true
+        }
+    }
+
+    /// A routine's script step runs its script end to end: `dispatch`
+    /// reaches the sandboxed runner instead of refusing it as read-only.
+    #[test]
+    fn a_routine_script_step_runs_end_to_end() {
+        use crate::routine_run::{run, Ended, RunSpec};
+        let dir = std::env::temp_dir().join(format!("tools-script-step-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("check.py"), "print('mount is', ARGS['mount'])\n").unwrap();
+        let routine = grokhub_core::routine::Routine::parse(
+            &json!({
+                "version": 1, "name": "script",
+                "inputs": { "mount": { "type": "string", "default": "/srv" } },
+                "steps": [{ "id": "check", "script": "check.py", "args": { "mount": "{{inputs.mount}}" } }],
+                "result": "{{check.stdout}}"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stop = || false;
+        let report = run(&RunSpec {
+            routine: &routine,
+            dir: &dir,
+            workspace: &dir,
+            inputs: serde_json::Map::new(),
+            dry_run: false,
+            approve: Some(&Yes),
+            desktop: None,
+            stop: &stop,
+            brain: None,
+            words: None,
+        });
+        assert_eq!(
+            (&report.ended, report.result.as_deref().map(str::trim)),
+            (&Ended::Finished, Some("mount is /srv")),
+            "{}",
+            report.text()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A command run in the background is snapshotted first, as a
+    /// foreground one is, so `/rewind step` puts back what it changed.
+    #[test]
+    fn a_background_command_can_be_rewound() {
+        use crate::file_checkpoint as fcp;
+        let base = std::env::temp_dir().join(format!("tools-bg-rewind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (cfg, ws) = (base.join("cfg"), base.join("ws"));
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::create_dir_all(&ws).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        fcp::clear_active_for_tests();
+        let notes = ws.join("notes.txt");
+        std::fs::write(&notes, "original").unwrap();
+        let step = fcp::begin_step("conv-bg").unwrap();
+        let stop = || false;
+        let ctx = ToolCtx {
+            workspace: &ws,
+            desktop: None,
+            stop: &stop,
+            tasks: Some(crate::tasks::TaskHub::new("tools-bg")),
+            owner: None,
+            session: None,
+        };
+        let out = dispatch(
+            &ctx,
+            "run_terminal_command",
+            r#"{"command":"rm -f notes.txt","is_background":true}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        for _ in 0..200 {
+            if !notes.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(!notes.exists(), "the background rm ran");
+        let restored = fcp::restore_step("conv-bg", step).unwrap();
+        assert!(restored.contains("1 file"), "{restored}");
+        assert_eq!(std::fs::read_to_string(&notes).unwrap(), "original");
+        fcp::clear_active_for_tests();
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn web_fetch_works_without_a_bearer_and_imagine_waits_for_one() {

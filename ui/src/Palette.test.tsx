@@ -42,7 +42,6 @@ describe("paletteRows", () => {
       "Chat",
       "History",
       "Pulse",
-      "Imagine",
       "Journal",
       "Meetings",
       "Automations",
@@ -81,7 +80,6 @@ describe("paletteRows", () => {
       "Objectives",
       "Chat",
       "History",
-      "Imagine",
       "Journal",
       "Meetings",
       "Automations",
@@ -105,7 +103,7 @@ describe("paletteRows", () => {
       "Settings: Background",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
   });
 
   it("lists Mods right after Library on a desktop that has it, never on the web", () => {
@@ -146,12 +144,11 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(16, 19)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(15, 18)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Home",
       "Objectives",
       "Chat",
-      "Imagine",
       "Automations",
       "Agents",
       "Personal",
@@ -209,7 +206,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(19, 25)).toEqual([
+    expect(rows.slice(18, 24)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -257,7 +254,6 @@ describe("the rail and its More list", () => {
     expect(moreViews(DESKTOP)).toEqual([
       "objectives",
       "history",
-      "imagine",
       "journal",
       "meetings",
       "automations",
@@ -271,7 +267,7 @@ describe("the rail and its More list", () => {
       "fleet",
       "updates",
     ]);
-    expect(moreViews(WEB)).toEqual(["objectives", "imagine", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
+    expect(moreViews(WEB)).toEqual(["objectives", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
   });
 
   it("lists only the given pages: no suggestions, commands, chats, sections or Ask", () => {
@@ -279,7 +275,6 @@ describe("the rail and its More list", () => {
     expect(withExtras(DESKTOP, "", extras)).toEqual([
       "Objectives",
       "History",
-      "Imagine",
       "Journal",
       "Meetings",
       "Automations",
@@ -489,8 +484,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 26, the last, ends at 1076.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 976, behavior: "auto" });
+      // Row 25, the last, ends at 1036.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 936, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

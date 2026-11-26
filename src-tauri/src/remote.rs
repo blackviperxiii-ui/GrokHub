@@ -150,6 +150,8 @@ pub const WEB_COMMANDS: &[&str] = &[
     "imagine_cancel",
     "imagine_image",
     "chat_picture",
+    "chat_media",
+    "save_chat_media_to_library",
     "get_skills",
     "nyx_look",
     "get_queue",
