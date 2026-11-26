@@ -340,8 +340,10 @@ async function main() {
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
-    // They are not on the rail: More lists them.
-    for (const view of ["Automations", "Connectors", "Personal"]) {
+    // Connectors is on the rail; More lists the other two.
+    await page.locator("nav.rail button", { hasText: "MCPs & Connectors" }).click();
+    await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ timeout: 10000 });
+    for (const view of ["Automations", "Personal"]) {
       await page.locator("nav.rail button.rail-more").click();
       await page.getByRole("dialog", { name: "More pages" }).getByRole("option", { name: view, exact: true }).click();
       await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ timeout: 10000 });
