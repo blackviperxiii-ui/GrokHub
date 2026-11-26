@@ -134,6 +134,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-code/src/chat_push.rs", 2, "chat push guard's match on the fetch and pull verbs"),
     ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
     ("crates/grokhub-agent/src/routine_draft.rs", 1, "saved-step tool label list (web_fetch is \"fetch\")"),
+    ("crates/grokhub-agent/src/file_checkpoint.rs", 1, "/rewind snapshot's list of git verbs that change the working tree"),
     ("src-tauri/src/sessions_board.rs", 1, "Sessions board PR link parser: the /pull/ segment of a github.com URL in transcript text"),
 ];
 

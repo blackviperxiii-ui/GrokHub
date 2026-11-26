@@ -6074,7 +6074,8 @@ linter (or run the changed file) before you finish: a re-read or git status does
     fn a_helper_whose_check_failed_hands_back_without_the_note() {
         let (out, history, requests) = failing_crate_then(
             "helper-check-failed",
-            "cargo check --offline --target-dir target",
+            // CI sets CARGO_TERM_COLOR=always; plain text keeps the error readable.
+            "cargo check --offline --color never --target-dir target",
         );
         assert_eq!(out.stop, StopReason::EndTurn);
         // The build ran and failed; its result says so, and it was the check.
@@ -6091,7 +6092,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
         assert_eq!(
             ended,
             [(
-                "cargo check --offline --target-dir target",
+                "cargo check --offline --color never --target-dir target",
                 "exit 101".to_string()
             )]
         );
