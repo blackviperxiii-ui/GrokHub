@@ -34,10 +34,7 @@ pub fn desktop_entry_uses_prefix_bin(entry: &str, prefix: &str) -> bool {
     let exec = format!("Exec={bin} %u");
     let exec_plain = format!("Exec={bin}");
     let try_exec = format!("TryExec={bin}");
-    entry
-        .lines()
-        .any(|l| l == exec || l == exec_plain)
-        && entry.lines().any(|l| l == try_exec)
+    entry.lines().any(|l| l == exec || l == exec_plain) && entry.lines().any(|l| l == try_exec)
 }
 
 #[cfg(test)]

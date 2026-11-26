@@ -47,8 +47,7 @@ pub struct SkillInstallPreview {
 pub fn is_skill_install_url(url: &str) -> bool {
     let u = url.trim();
     let lower = u.to_ascii_lowercase();
-    lower.starts_with("loadout://skill/install")
-        || lower.starts_with("loadout:skill/install")
+    lower.starts_with("loadout://skill/install") || lower.starts_with("loadout:skill/install")
 }
 
 /// Pull `identifier` from `loadout://skill/install?identifier=…`.
@@ -250,7 +249,11 @@ fn preview_for_target(
                 skills: Vec::new(),
             }
         }
-        SkillInstallTarget::Library { id, name, description } => {
+        SkillInstallTarget::Library {
+            id,
+            name,
+            description,
+        } => {
             let key = skill_dir_name(id);
             let dest = config_dir.join("skills").join(&key);
             SkillInstallPreview {
@@ -311,10 +314,8 @@ mod tests {
             "library/weekly-meal-plan"
         );
         assert_eq!(
-            parse_skill_install_url(
-                "loadout://skill/install?identifier=clawhub/good-skill&x=1"
-            )
-            .unwrap(),
+            parse_skill_install_url("loadout://skill/install?identifier=clawhub/good-skill&x=1")
+                .unwrap(),
             "clawhub/good-skill"
         );
         assert!(is_skill_install_url(
@@ -325,14 +326,10 @@ mod tests {
 
     #[test]
     fn preview_library_shows_source_and_destination() {
-        let root = std::env::temp_dir().join(format!(
-            "gh-skill-link-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("gh-skill-link-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let preview =
-            preview_skill_install(&root, "library/weekly-meal-plan").unwrap();
+        let preview = preview_skill_install(&root, "library/weekly-meal-plan").unwrap();
         assert_eq!(preview.source, "Skills Library");
         assert_eq!(preview.name, "Weekly Meal Plan");
         assert_eq!(preview.kind, "skill");
@@ -346,10 +343,8 @@ mod tests {
 
     #[test]
     fn preview_backend_dev_bundle_lists_three_skills() {
-        let root = std::env::temp_dir().join(format!(
-            "gh-skill-bundle-prev-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("gh-skill-bundle-prev-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let preview = preview_skill_install(&root, "bundle/backend-dev").unwrap();
@@ -364,7 +359,9 @@ mod tests {
             ]
         );
         assert!(
-            preview.destination.ends_with("skill-bundles/backend-dev.yaml"),
+            preview
+                .destination
+                .ends_with("skill-bundles/backend-dev.yaml"),
             "{}",
             preview.destination
         );
@@ -381,12 +378,7 @@ mod tests {
             }
             other => panic!("expected hub, got {other:?}"),
         }
-        match resolve_skill_install_identifier(
-            root,
-            "github/acme/skills/review",
-        )
-        .unwrap()
-        {
+        match resolve_skill_install_identifier(root, "github/acme/skills/review").unwrap() {
             SkillInstallTarget::Hub(h) => {
                 assert_eq!(h.source, HubSource::GitHub);
                 assert_eq!(h.id, "acme/skills/review");

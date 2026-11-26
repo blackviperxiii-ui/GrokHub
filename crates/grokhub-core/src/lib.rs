@@ -704,7 +704,7 @@ pub use skill::{
     SKILL_LOCK_FILE,
 };
 pub use skill_bundles::{
-    bundle_by_slug, bundle_load_prompt, builtin_bundles, list_bundles, parse_bundle_yaml,
+    builtin_bundles, bundle_by_slug, bundle_load_prompt, list_bundles, parse_bundle_yaml,
     skill_bundles_dir, write_bundle_yaml, SkillBundle,
 };
 pub use skill_install_link::{

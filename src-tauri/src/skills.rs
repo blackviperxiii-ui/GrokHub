@@ -1204,8 +1204,8 @@ mod tests {
             "scanner lock records the installed skill"
         );
 
-        let bundle = confirm_install(&cfg, &ws, Some(&home), "bundle/backend-dev")
-            .expect("bundle install");
+        let bundle =
+            confirm_install(&cfg, &ws, Some(&home), "bundle/backend-dev").expect("bundle install");
         assert!(
             bundle.note.contains("Saved bundle backend-dev"),
             "{}",

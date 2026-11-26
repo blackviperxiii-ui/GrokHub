@@ -79,7 +79,7 @@ pub fn list_bundles(config_dir: &Path) -> Vec<SkillBundle> {
         out.retain(|b| b.slug() != slug);
         out.push(bundle);
     }
-    out.sort_by(|a, b| a.slug().cmp(&b.slug()));
+    out.sort_by_key(|a| a.slug());
     out
 }
 
@@ -297,10 +297,7 @@ instruction: |
 
     #[test]
     fn user_yaml_overrides_builtin_slug() {
-        let root = std::env::temp_dir().join(format!(
-            "gh-bundles-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("gh-bundles-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let dir = skill_bundles_dir(&root);
         fs::create_dir_all(&dir).unwrap();
