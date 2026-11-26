@@ -990,6 +990,56 @@ export function initScript(theme = "ops-dark") {
           return { model: "grok", temperature: 0.7 };
         case "get_skills":
           return fix.skills;
+        case "get_skill_library":
+          return {
+            packs: [
+              {
+                id: "everyday-life",
+                name: "Everyday Life Pack",
+                description:
+                  "Twelve practical workflows for meals, home upkeep, budgets, trips, tough messages, habits, and PC tidying.",
+                category: "Everyday Life",
+                total: 2,
+                installed: 0,
+              },
+            ],
+            categories: ["Finance & Shopping", "Home & Meals"],
+            items: [
+              {
+                id: "weekly-meal-plan",
+                name: "Weekly Meal Plan",
+                description:
+                  "Build a 7-day meal plan around dietary needs, budget, and a grouped grocery list.",
+                category: "Home & Meals",
+                tags: ["meals", "groceries"],
+                pack: "everyday-life",
+                trigger: "plan meals for the week",
+                instructions: "1. Ask about servings and dietary needs.\n2. Draft 7-day plan with grouped list.",
+                pitfalls: "Do not invent specialty ingredients when staples work.",
+                installed: false,
+              },
+              {
+                id: "monthly-budget-check",
+                name: "Monthly Budget Check",
+                description:
+                  "Group expenses into fixed needs, flexible spending, and savings targets.",
+                category: "Finance & Shopping",
+                tags: ["budget", "savings"],
+                pack: "everyday-life",
+                trigger: "review my monthly budget and spending",
+                instructions: "1. Group expenses cleanly.\n2. Highlight top categories to trim.",
+                pitfalls: "Never give regulated tax or investment advice.",
+                installed: false,
+              },
+            ],
+          };
+        case "install_library_skill":
+        case "install_library_pack":
+          return {
+            page: fix.skills,
+            library: { packs: [], categories: [], items: [] },
+            note: "Installed from Skills Library. Chat can use it.",
+          };
         case "get_memory_files":
           return fix.memoryFiles;
         case "get_battlenet":

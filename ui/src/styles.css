@@ -6703,6 +6703,66 @@ button.primary:not(.quick-chip) {
   font-size: var(--font-caption);
 }
 
+.skill-pack-card {
+  margin-bottom: 12px;
+}
+
+.skill-pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.skill-library-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.skill-library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-category-tag {
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.skill-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.skill-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+}
+
 /* A card's one-line read of its own numbers: a dot in its tone, then the line. */
 .verdict {
   display: flex;

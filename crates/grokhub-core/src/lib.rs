@@ -221,6 +221,7 @@ pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;
+pub mod skill_pack;
 pub mod skills_hub;
 pub mod slash;
 pub mod small_talk;
@@ -694,11 +695,17 @@ pub use shortcuts::{
 pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use skill::{
     apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill,
-    load_skill_lock, match_skill, parse_skill_md, patch_skill, prefer_patch,
-    propose_skill_from_turn, render_skill_md, save_skill_lock, scan_skill_md, skill_dir_name,
-    skill_follow_block, skill_lock_path, skill_quarantine_reason, skill_safe,
-    skill_use_in_chat_prompt, verify_and_record_skill, SkillLockEntry, SkillLockfile, SkillMd,
-    SkillScan, SkillThreat, AUTO_SKILL_PITFALL, SKILL_LOCK_FILE,
+    load_skill_lock, match_skill, parse_skill_md, parse_skill_meta, patch_skill, prefer_patch,
+    propose_skill_from_turn, render_skill_md, render_skill_md_with_meta, save_skill_lock,
+    scan_skill_md, skill_dir_name, skill_follow_block, skill_lock_path, skill_quarantine_reason,
+    skill_safe, skill_use_in_chat_prompt, validate_skill_md_text, verify_and_record_skill,
+    SkillLockEntry, SkillLockfile, SkillMd, SkillMeta, SkillScan, SkillThreat, AUTO_SKILL_PITFALL,
+    SKILL_LOCK_FILE,
+};
+pub use skill_pack::{
+    install_library_skill, install_library_skill_text, library_pack_by_id, library_packs,
+    library_skill_by_id, library_skills, render_library_skill_md, LibrarySkill, PackInfo,
+    EVERYDAY_LIFE_PACK, EVERYDAY_LIFE_SKILLS,
 };
 pub use skills_hub::{
     fetch_skill_md, install_hub_skill, parse_clawhub_search, parse_github_tree_skills,

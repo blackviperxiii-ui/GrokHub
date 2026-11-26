@@ -3,15 +3,20 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillDetail,
+  SkillLibraryPage,
   SkillPage,
   SkillRow,
   SkillSource,
   SkillsHubHit,
   SkillsHubInstall,
+  SkillLibraryInstall,
 } from "./api";
 
 const api = vi.hoisted(() => ({
   getSkills: vi.fn<() => Promise<SkillPage>>(),
+  getSkillLibrary: vi.fn<() => Promise<SkillLibraryPage>>(),
+  installLibrarySkill: vi.fn<(id: string) => Promise<SkillLibraryInstall>>(),
+  installLibraryPack: vi.fn<(packId: string) => Promise<SkillLibraryInstall>>(),
   openSkillFolder:
     vi.fn<(source: SkillSource, name: string) => Promise<void>>(),
   setSkillOn: vi.fn<(name: string, on: boolean) => Promise<SkillPage>>(),
@@ -32,12 +37,14 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 
 import {
+  filterLibrarySkills,
   filterSkills,
   SKILL_GROUPS,
   SKILL_OFF_NOTE,
   Skills,
   SKILLS_EMPTY,
   SKILLS_HUB_NOTE,
+  SKILLS_LIBRARY_NOTE,
   SKILLS_NONE_MATCHED,
 } from "./Skills";
 
@@ -398,5 +405,142 @@ describe("Skills", () => {
     expect(api.getSkills).toHaveBeenCalledTimes(2);
     await userEvent.click(screen.getByRole("button", { name: "Connectors" }));
     expect(onOpenConnectors).toHaveBeenCalledTimes(1);
+  });
+
+  it("Skills Library browses by category, previews steps, and installs single skills and the Everyday Life Pack", async () => {
+    const libraryPage: SkillLibraryPage = {
+      packs: [
+        {
+          id: "everyday-life",
+          name: "Everyday Life Pack",
+          description: "Twelve practical workflows.",
+          category: "Everyday Life",
+          total: 2,
+          installed: 0,
+        },
+      ],
+      categories: ["Finance & Shopping", "Home & Meals"],
+      items: [
+        {
+          id: "weekly-meal-plan",
+          name: "Weekly Meal Plan",
+          description: "Build a 7-day meal plan and grouped grocery list.",
+          category: "Home & Meals",
+          tags: ["meals", "groceries"],
+          pack: "everyday-life",
+          trigger: "plan meals for the week",
+          instructions: "1. Gather dietary needs.\n2. Group grocery list.",
+          pitfalls: "Stick to everyday staples.",
+          installed: false,
+        },
+        {
+          id: "monthly-budget-check",
+          name: "Monthly Budget Check",
+          description: "Group expenses into fixed needs and savings targets.",
+          category: "Finance & Shopping",
+          tags: ["budget", "money"],
+          pack: "everyday-life",
+          trigger: "review my monthly budget and spending",
+          instructions: "1. Summarize numbers.\n2. Highlight top cuts.",
+          pitfalls: "No investment advice.",
+          installed: false,
+        },
+      ],
+    };
+
+    expect(filterLibrarySkills(libraryPage.items, "Home & Meals", "").map((i) => i.id)).toEqual([
+      "weekly-meal-plan",
+    ]);
+    expect(filterLibrarySkills(libraryPage.items, "", "budget").map((i) => i.id)).toEqual([
+      "monthly-budget-check",
+    ]);
+
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.getSkillLibrary.mockResolvedValue(libraryPage);
+
+    const installedMealRow = row({
+      name: "Weekly Meal Plan",
+      description: "Build a 7-day meal plan and grouped grocery list.",
+      trigger: "plan meals for the week",
+      category: "Home & Meals",
+      pack: "everyday-life",
+    });
+    const afterOneLib: SkillLibraryPage = {
+      ...libraryPage,
+      packs: [{ ...libraryPage.packs[0], installed: 1 }],
+      items: [
+        { ...libraryPage.items[0], installed: true },
+        libraryPage.items[1],
+      ],
+    };
+    api.installLibrarySkill.mockResolvedValue({
+      page: { rows: [...ROWS, installedMealRow] },
+      library: afterOneLib,
+      note: "Installed Weekly Meal Plan. Chat can use it.",
+    });
+
+    const installedBudgetRow = row({
+      name: "Monthly Budget Check",
+      description: "Group expenses into fixed needs and savings targets.",
+      trigger: "review my monthly budget and spending",
+      category: "Finance & Shopping",
+      pack: "everyday-life",
+    });
+    const afterPackLib: SkillLibraryPage = {
+      ...libraryPage,
+      packs: [{ ...libraryPage.packs[0], installed: 2 }],
+      items: libraryPage.items.map((item) => ({ ...item, installed: true })),
+    };
+    api.installLibraryPack.mockResolvedValue({
+      page: { rows: [...ROWS, installedMealRow, installedBudgetRow] },
+      library: afterPackLib,
+      note: "Installed 1 skills from Everyday Life Pack.",
+    });
+
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    const lib = await screen.findByRole("region", { name: "Skills Library" });
+    expect(within(lib).getByText(SKILLS_LIBRARY_NOTE)).toBeInTheDocument();
+    expect(within(lib).getByText(/0 of 2 installed/)).toBeInTheDocument();
+
+    // Filter by category pill
+    await userEvent.click(within(lib).getByRole("button", { name: "Home & Meals" }));
+    expect(within(lib).getByRole("article", { name: "Weekly Meal Plan" })).toBeInTheDocument();
+    expect(within(lib).queryByRole("article", { name: "Monthly Budget Check" })).toBeNull();
+
+    // Reset to All and search
+    await userEvent.click(within(lib).getByRole("button", { name: "All" }));
+    await userEvent.type(within(lib).getByLabelText("Search Skills Library"), "grocery");
+    expect(within(lib).getByRole("article", { name: "Weekly Meal Plan" })).toBeInTheDocument();
+    expect(within(lib).queryByRole("article", { name: "Monthly Budget Check" })).toBeNull();
+    await userEvent.clear(within(lib).getByLabelText("Search Skills Library"));
+
+    // Preview steps and pitfalls
+    const mealCard = within(lib).getByRole("article", { name: "Weekly Meal Plan" });
+    await userEvent.click(within(mealCard).getByRole("button", { name: "Preview" }));
+    expect(within(mealCard).getByText(/Stick to everyday staples/)).toBeInTheDocument();
+
+    // Install single skill
+    await userEvent.click(within(mealCard).getByRole("button", { name: "Install" }));
+    expect(api.installLibrarySkill).toHaveBeenCalledWith("weekly-meal-plan");
+    expect(
+      await screen.findByText("Installed Weekly Meal Plan. Chat can use it."),
+    ).toBeInTheDocument();
+    expect(within(lib).getByText(/1 of 2 installed/)).toBeInTheDocument();
+
+    // Install rest of pack
+    await userEvent.click(within(lib).getByRole("button", { name: "Install pack" }));
+    expect(api.installLibraryPack).toHaveBeenCalledWith("everyday-life");
+    expect(
+      await within(lib).findByRole("button", { name: "Pack installed" }),
+    ).toBeDisabled();
+  });
+
+  it("hides Skills Library in remote web mode", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} remote />);
+    await screen.findByRole("listitem", { name: "deploy-site" });
+    expect(screen.queryByRole("region", { name: "Skills Library" })).toBeNull();
+    expect(api.getSkillLibrary).not.toHaveBeenCalled();
   });
 });
