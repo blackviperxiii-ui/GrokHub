@@ -3,7 +3,8 @@
 //!
 //! GROKHUB_EVAL_API_KEY=... cargo run -p grokhub-agent --example live_eval -- \
 //!     --budget-usd 1.00 [--k 3] [--model grok-4.3] [--effort low] [--only recall] \
-//!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--suite default|coding] [--out report.md]
+//!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--suite default|coding|skills] \
+//!     [--ablate-skill <skill-name>] [--skill-override <path>] [--out report.md]
 //!
 //! `--auth signin` (Grok only) uses the app's saved "Sign in with Grok",
 //! billed to the SuperGrok pool, instead of GROKHUB_EVAL_API_KEY. It takes
@@ -98,6 +99,9 @@ fn main() {
     let mut out = None;
     let mut signin = false;
     let mut resume = false;
+    let mut suite_explicit = false;
+    let mut ablate_skill: Option<String> = None;
+    let mut skill_override_path: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         let value = args.get(i + 1).cloned().unwrap_or_default();
@@ -127,7 +131,20 @@ fn main() {
             "--provider" => opts.provider = Provider::parse(&value).unwrap_or_else(|e| fail(&e)),
             "--provider-model" => provider_model = Some(value),
             "--suite" => {
-                opts.suite = grokhub_agent::EvalSuite::parse(&value).unwrap_or_else(|e| fail(&e))
+                suite_explicit = true;
+                opts.suite = grokhub_agent::EvalSuite::parse(&value).unwrap_or_else(|e| fail(&e));
+            }
+            "--ablate-skill" => {
+                if value.trim().is_empty() {
+                    fail("--ablate-skill takes a non-empty skill name");
+                }
+                ablate_skill = Some(value);
+            }
+            "--skill-override" => {
+                if value.trim().is_empty() {
+                    fail("--skill-override takes a path to a trimmed SKILL.md");
+                }
+                skill_override_path = Some(value);
             }
             "--out" => out = Some(value),
             "--call-timeout-secs" => {
@@ -170,11 +187,28 @@ fn main() {
         }
         i += 2;
     }
+    if ablate_skill.is_some() {
+        if suite_explicit && opts.suite != grokhub_agent::EvalSuite::Skills {
+            fail("--ablate-skill requires --suite skills");
+        }
+        opts.suite = grokhub_agent::EvalSuite::Skills;
+    }
+    let skill_override = skill_override_path.map(|path| {
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| fail(&format!("--skill-override: could not read {path}: {e}")));
+        if body.trim().is_empty() {
+            fail("--skill-override file is empty");
+        }
+        body
+    });
     let Some(budget) = budget else {
         fail("--budget-usd is required (at most 5.00)");
     };
     if opts.suite == grokhub_agent::EvalSuite::Coding && out.is_none() {
         fail("--suite coding needs --out (it writes <out>.results.json)");
+    }
+    if opts.suite == grokhub_agent::EvalSuite::Skills && out.is_none() {
+        fail("--suite skills needs --out (it writes <out>.results.json)");
     }
     let budget = grokhub_agent::parse_live_budget(&budget).unwrap_or_else(|e| fail(&e));
     if signin && opts.provider != Provider::Grok {
@@ -235,6 +269,51 @@ fn main() {
         let _ = std::fs::remove_file(file);
     }
     let md_path = out.as_ref().map(std::path::PathBuf::from);
+    if opts.suite == grokhub_agent::EvalSuite::Skills {
+        let mut skill_opts = grokhub_agent::SkillAblationOpts::new(opts.model.clone());
+        skill_opts.effort = opts.effort.clone();
+        skill_opts.k = opts.k;
+        skill_opts.only = opts.only.clone();
+        skill_opts.provider = opts.provider;
+        skill_opts.ablate_skill = ablate_skill;
+        skill_opts.skill_override = skill_override;
+        skill_opts.call_timeout = opts.call_timeout;
+        skill_opts.retry = opts.retry;
+        skill_opts.deadline = opts.deadline;
+        let report = grokhub_agent::run_skill_ablation_with(
+            client,
+            &skill_opts,
+            budget,
+            &mut |so_far, last| {
+                eprintln!(
+                    "try {}: {} [{}] {}",
+                    so_far.attempts.len(),
+                    last.case_id,
+                    last.arm.label(),
+                    if last.pass { "pass" } else { "fail" },
+                );
+                if let Some(md) = &md_path {
+                    let body = grokhub_agent::render_skill_ablation(so_far);
+                    let _ = grokhub_agent::write_live_atomic(md, body.as_bytes());
+                    let _ = grokhub_agent::write_skill_ablation_results(so_far, md);
+                }
+            });
+        if let Some(why) = &report.stopped {
+            eprintln!("stopped early: {why}");
+        }
+        let md = grokhub_agent::render_skill_ablation(&report);
+        if let Some(path) = &md_path {
+            if let Err(err) = grokhub_agent::write_live_atomic(path, md.as_bytes()) {
+                fail(&format!("could not write report: {err}"));
+            }
+            if let Err(err) = grokhub_agent::write_skill_ablation_results(&report, path) {
+                fail(&format!("could not write the results file: {err}"));
+            }
+        }
+        print!("{md}");
+        let _ = std::fs::remove_dir_all(&scratch);
+        return;
+    }
     let report = grokhub_agent::run_live_with(client, &opts, budget, &mut |so_far, last| {
         eprintln!(
             "try {}/{}: {} {}{}",

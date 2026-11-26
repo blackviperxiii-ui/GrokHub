@@ -361,6 +361,70 @@ pub struct TurnKept {
     pub folded: usize,
 }
 
+/// Tracks per-skill telemetry for a single agent turn without adding text
+/// fields or touching existing session metrics.
+#[derive(Default)]
+struct SkillTurnTracker {
+    turns: u32,
+    tool_calls: u32,
+    skills: Vec<String>,
+}
+
+impl SkillTurnTracker {
+    fn note_call(&mut self, call: &FunctionCall) {
+        self.tool_calls = self.tool_calls.saturating_add(1);
+        if call.name != "skill" {
+            return;
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&call.arguments) else {
+            return;
+        };
+        let raw = val
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| val.get("skill").and_then(|v| v.as_str()));
+        let Some(name) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return;
+        };
+        if !self.skills.iter().any(|seen| seen == name) {
+            self.skills.push(name.to_string());
+        }
+    }
+
+    fn note_calls(&mut self, calls: &[FunctionCall]) {
+        for call in calls {
+            self.note_call(call);
+        }
+    }
+
+    fn flush(&self, config_dir: &Path, out: &LoopOut) {
+        if self.skills.is_empty() {
+            return;
+        }
+        let stop_reason = crate::route::skill_metrics::stop_reason_label(&out.stop);
+        let passed = matches!(out.stop, StopReason::EndTurn);
+        let output_tokens = out
+            .usage
+            .output_tokens
+            .saturating_add(out.usage.reasoning_tokens);
+        let now_ms = grokhub_core::now_ms();
+        for skill_id in &self.skills {
+            let facts = crate::route::skill_metrics::SkillTurnFacts {
+                skill_id,
+                turns: self.turns,
+                tool_calls: self.tool_calls,
+                input_tokens: out.usage.input_tokens,
+                output_tokens,
+                cost_in_usd_ticks: out.usage.cost_in_usd_ticks,
+                stop_reason,
+                passed,
+            };
+            crate::route::skill_metrics::note_turn(config_dir, &facts, now_ms);
+        }
+    }
+}
+
 fn finish(
     input: &LoopIn<'_>,
     stop: StopReason,
@@ -635,7 +699,17 @@ pub(crate) fn run_loop_from(
     // Deleting a message from the chat waits until this reply is done.
     let _replying =
         (input.depth == 0).then(|| crate::session::mark_replying(input.conversation_id));
-    let mut out = run_turn(input, history, user_text, image, &mut kept, on_event);
+    let mut skill_track = SkillTurnTracker::default();
+    let mut out = run_turn(
+        input,
+        history,
+        user_text,
+        image,
+        &mut kept,
+        &mut skill_track,
+        on_event,
+    );
+    skill_track.flush(&crate::perm::config_dir(), &out);
     out.kept = kept;
     crate::client::pair_orphan_calls(history);
     out
@@ -647,6 +721,7 @@ fn run_turn(
     user_text: &str,
     image: Option<&str>,
     kept: &mut Kept,
+    skill_track: &mut SkillTurnTracker,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
     let Kept {
@@ -902,6 +977,7 @@ fn run_turn(
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         turns = turns.saturating_add(1);
+        skill_track.turns = turns;
         let turn_top = crate::timing::lap("loop:pre_request");
         if input.cancel.is_cancelled() {
             return finish(input, StopReason::Cancelled, usage, compacted_once, true);
@@ -1747,6 +1823,7 @@ fn run_turn(
                         on_event,
                     ) {
                         ReadonlyBatchOutcome::Ran(n) => {
+                            skill_track.note_calls(&calls[call_i..call_i + n]);
                             call_i += n;
                             if input.cancel.is_cancelled() {
                                 return finish(
@@ -1787,6 +1864,9 @@ fn run_turn(
                     &output.text,
                     output.image_data_url.clone(),
                 );
+                if !refused {
+                    skill_track.note_call(call);
+                }
                 if !refused && is_image_tool(&call.name) && output_produced_image(&output) {
                     image_produced_in_turn = true;
                 }
@@ -2172,6 +2252,9 @@ fn run_turn(
             if usage_pending(&extra_usage) {
                 usage.add(&extra_usage);
                 emit_usage(on_event, &usage, history, input.context_length);
+            }
+            if !refused {
+                skill_track.note_call(call);
             }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
@@ -12825,6 +12908,69 @@ linter (or run the changed file) before you finish: a re-read or git status does
             })
             .collect();
         assert_eq!(notes, vec![1, 1], "HOOK-NOTE counts per request");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn runtime_turn_records_per_skill_invocation_metrics() {
+        let dir = workspace("skill-metrics-turn");
+        let config = dir.join("config");
+        let skill_dir = dir.join(".grok").join("skills").join("release-audit");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: release-audit\ndescription: Audit release steps\n---\nCheck version and changelog.\n",
+        )
+        .unwrap();
+        crate::skills::invalidate_discover_cache();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+
+        let usage1 = Usage {
+            input_tokens: 400,
+            output_tokens: 80,
+            cost_in_usd_ticks: 1_000_000,
+            ..Default::default()
+        };
+        let usage2 = Usage {
+            input_tokens: 600,
+            output_tokens: 120,
+            cost_in_usd_ticks: 2_000_000,
+            ..Default::default()
+        };
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("sk-1", "skill", r#"{"name":"release-audit"}"#)],
+                    usage1,
+                ),
+                ScriptTurn {
+                    text: "Audit done.".into(),
+                    calls: Vec::new(),
+                    usage: usage2,
+                    truncated: false,
+                },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+
+        let out = run_conv(&script, &dir, "skill-metrics-conv", "audit release");
+        assert_eq!(out.stop, StopReason::EndTurn);
+
+        let metrics = crate::route::skill_metrics::load(&config);
+        let row = &metrics.skills["release-audit"];
+        assert_eq!(row.invocations, 1);
+        assert_eq!(row.passed, 1);
+        assert_eq!(row.failed, 0);
+        assert_eq!(row.turns, 2);
+        assert_eq!(row.tool_calls, 1);
+        assert_eq!(row.input_tokens, 1_000);
+        assert_eq!(row.output_tokens, 200);
+        assert_eq!(row.cost_in_usd_ticks, 3_000_000);
+        assert_eq!(row.stop_reasons.get("end_turn").copied(), Some(1));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

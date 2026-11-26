@@ -806,10 +806,10 @@ impl Pick {
 
 /// What one try spent, as [`Capped`] saw it.
 #[derive(Default)]
-struct TryLog {
-    usage: Usage,
-    calls: u32,
-    picks: Vec<Pick>,
+pub(super) struct TryLog {
+    pub(super) usage: Usage,
+    pub(super) calls: u32,
+    pub(super) picks: Vec<Pick>,
 }
 
 /// A failure that came after the request reached the model, so its input
@@ -949,7 +949,7 @@ impl Capped {
     }
 
     /// The try's usage, model calls and picks so far, reset for the next try.
-    fn take_usage(&self) -> TryLog {
+    pub(super) fn take_usage(&self) -> TryLog {
         std::mem::take(&mut *self.usage.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
@@ -1011,11 +1011,12 @@ impl ModelClient for Capped {
 }
 
 /// Which task list a live run uses. `Default` is the chat and diagnostics set.
-/// `Coding` is the 30 fixed coding tasks.
+/// `Coding` is the 30 fixed coding tasks. `Skills` runs the skill ablation suite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvalSuite {
     Default,
     Coding,
+    Skills,
 }
 
 impl EvalSuite {
@@ -1023,7 +1024,8 @@ impl EvalSuite {
         match raw {
             "default" => Ok(Self::Default),
             "coding" => Ok(Self::Coding),
-            _ => Err("--suite takes default or coding".into()),
+            "skills" => Ok(Self::Skills),
+            _ => Err("--suite takes default, coding, or skills".into()),
         }
     }
 
@@ -1031,6 +1033,7 @@ impl EvalSuite {
         match self {
             Self::Default => "default",
             Self::Coding => "coding",
+            Self::Skills => "skills",
         }
     }
 }
@@ -1413,6 +1416,7 @@ pub fn run_live_with(
     let source = match opts.suite {
         EvalSuite::Default => tasks(),
         EvalSuite::Coding => coding_tasks(),
+        EvalSuite::Skills => Vec::new(),
     };
     let list: Vec<LiveTask> = source
         .into_iter()

@@ -74,6 +74,7 @@ pub mod score;
 pub mod session_metrics;
 pub mod signals;
 pub mod sizing;
+pub mod skill_metrics;
 pub mod sources;
 pub mod spend;
 pub mod table;

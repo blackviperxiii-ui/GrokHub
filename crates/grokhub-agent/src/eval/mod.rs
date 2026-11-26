@@ -42,6 +42,7 @@ pub mod metrics;
 pub mod naturalness;
 pub mod paired;
 pub mod recall_set;
+pub mod skills;
 pub mod sycophancy;
 pub mod turn_endings;
 
