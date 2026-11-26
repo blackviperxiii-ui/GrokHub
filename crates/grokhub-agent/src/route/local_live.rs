@@ -339,6 +339,28 @@ pub fn routing_reason(rules: &[String], handoff_rule: Option<&str>) -> &'static 
     }
 }
 
+/// Plain-English local routing reason for one turn. Only a turn whose own ask
+/// is explicit shows the explicit-content reason; a clean turn kept local by an
+/// 18+ voice says so directly instead of blaming explicit content.
+pub fn local_reason(
+    rules: &[String],
+    handoff_rule: Option<&str>,
+    forced_adult_local: bool,
+    ask_adult: bool,
+    must_stay: bool,
+) -> &'static str {
+    let adult_rule = forced_adult_local || rules.iter().any(|r| r == "adult:local_only");
+    if adult_rule && ask_adult {
+        "keeping explicit content on this computer"
+    } else if adult_rule && must_stay {
+        "18+ voice stays on this computer"
+    } else if adult_rule {
+        "selected for on-device execution"
+    } else {
+        routing_reason(rules, handoff_rule)
+    }
+}
+
 /// Formats the chat loading note with an optional routing reason.
 pub fn loading_note(reason: Option<&str>) -> String {
     match reason.map(str::trim).filter(|r| !r.is_empty()) {
@@ -524,6 +546,22 @@ mod tests {
                 "{} (Reason: already warm on this computer.)",
                 super::super::local::LOCAL_LOADING_NOTE
             )
+        );
+        assert_eq!(
+            super::local_reason(&["adult:local_only".into()], None, false, true, false),
+            "keeping explicit content on this computer"
+        );
+        assert_eq!(
+            super::local_reason(&["adult:local_only".into()], None, false, false, true),
+            "18+ voice stays on this computer"
+        );
+        assert_eq!(
+            super::local_reason(&["local:no_keys".into()], None, false, false, false),
+            "no online sign-in or API key is configured"
+        );
+        assert_eq!(
+            super::local_reason(&["size:warm_local".into()], None, false, false, false),
+            "already warm on this computer"
         );
     }
 

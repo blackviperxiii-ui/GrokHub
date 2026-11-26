@@ -297,9 +297,14 @@ pub fn call_model(
         ..RouteCall::default()
     };
     rc.providers = true;
-    // Failover PR 6: the router hears the turn is explicit up front,
-    // from the same scrubbed input the guard below reads.
-    rc.adult = adult::explicit(&sent.input);
+    let ask_adult = adult::ask_explicit(&sent.input);
+    let must_stay = adult::voice_on(&sent.input);
+    let background = call.class.trim().starts_with("background:");
+    rc.adult = if background {
+        adult::explicit(&sent.input)
+    } else {
+        ask_adult || must_stay
+    };
     let now = grokhub_core::now_ms();
     // "It tries again on your next message": a person's turn is the retry.
     local::retry_for_turn(&call.class);
@@ -318,22 +323,28 @@ pub fn call_model(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
-    // 18+ chat runs on this computer's model only, never online.
+    // 18+ asks and 18+ voices run on this computer's model only, never online.
     let bench = user_bench::load(&dir);
+    let mut forced_adult_local = false;
     if adult::to_local(&sent.input, dest) {
-        if let Some(notice) = adult::no_local_notice() {
-            let out = adult::notice_answer(&call.class, &notice)?;
-            let tokens = CallTokens::of(&sent, &out.usage);
-            return Ok(Routed { out, tokens });
+        let stripped =
+            !background && !must_stay && !ask_adult && adult::leave_adult_out(&mut sent.input);
+        if !stripped {
+            if let Some(notice) = adult::no_local_notice() {
+                let out = adult::notice_answer(&call.class, &notice)?;
+                let tokens = CallTokens::of(&sent, &out.usage);
+                return Ok(Routed { out, tokens });
+            }
+            if bench.blocks_local() {
+                return Err(ClientError::Protocol(
+                    "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
+                        .into(),
+                ));
+            }
+            on_device = true;
+            forced_adult_local = true;
+            sent.model = local::live_tier().to_string();
         }
-        if bench.blocks_local() {
-            return Err(ClientError::Protocol(
-                "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
-                    .into(),
-            ));
-        }
-        on_device = true;
-        sent.model = local::live_tier().to_string();
     }
     let mut on_provider = decision.on_provider() && !on_device;
     let started = std::time::Instant::now();
@@ -352,7 +363,13 @@ pub fn call_model(
     for attempt in 0..4 {
         tried.push(sent.model.clone());
         let step = if on_device {
-            let r = local_live::routing_reason(&active_decision.route.rule_ids, None);
+            let r = local_live::local_reason(
+                &active_decision.route.rule_ids,
+                None,
+                forced_adult_local,
+                ask_adult,
+                must_stay,
+            );
             local_live::note_route_reason(&call.conversation_id, r);
             local::serve(&call.class, &text, cancel)
         } else if on_provider {
@@ -1334,7 +1351,8 @@ impl Router {
             .filter(|id| {
                 !local::is_local(id)
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
-                    || (warm_chat && local::admits(&warm_gate, id, input.class, input.ctx_tokens))
+                    || ((warm_chat || input.adult)
+                        && local::admits(&warm_gate, id, input.class, input.ctx_tokens))
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
