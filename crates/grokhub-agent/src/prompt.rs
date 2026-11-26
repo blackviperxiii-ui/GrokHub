@@ -413,6 +413,42 @@ fn facts_block(workspace: &Path) -> String {
     grokhub_core::env_facts::prompt_block(&facts)
 }
 
+/// Real OS home and workspace paths so the model never guesses a username or
+/// user folder path. Stripped of Windows verbatim `\\?\` prefixes.
+pub(crate) fn paths_block(workspace: &Path, home: Option<&Path>) -> String {
+    let format_path = |p: &Path| {
+        let raw = p.to_string_lossy();
+        let windows = cfg!(windows)
+            || raw.starts_with(r"\\?\")
+            || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+        grokhub_core::canonical_session_cwd(&raw, windows)
+    };
+    let mut lines = Vec::new();
+    if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
+        let cleaned = format_path(h);
+        if !cleaned.is_empty() {
+            lines.push(format!("- Home: `{cleaned}`"));
+        }
+    }
+    if workspace.as_os_str().is_empty() {
+        lines.push(
+            "- Workspace: (none selected — ask the user to pick a folder before running file or shell tools)".to_string(),
+        );
+    } else {
+        let cleaned = format_path(workspace);
+        if !cleaned.is_empty() {
+            lines.push(format!("- Workspace: `{cleaned}`"));
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<paths>\nReal OS paths on this computer (use these exact paths; never guess a username or home directory):\n{}\n</paths>",
+        lines.join("\n")
+    )
+}
+
 fn compose(
     stable_rules: &str,
     volatile_tail: &str,
@@ -449,6 +485,13 @@ fn compose(
     if !facts.is_empty() {
         out.push_str("\n\n");
         out.push_str(&facts);
+    }
+    if !peer {
+        let paths = paths_block(workspace, home);
+        if !paths.is_empty() {
+            out.push_str("\n\n");
+            out.push_str(&paths);
+        }
     }
     if profile.want_skills(need) {
         let skills =
@@ -1166,5 +1209,30 @@ mod tests {
         );
         assert!(note.contains("windows case fold"), "{note}");
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn system_prompt_carries_real_os_home_and_workspace_paths() {
+        let win_home = Path::new(r"C:\Users\alice");
+        let win_ws = Path::new(r"\\?\C:\Users\alice\GrokHub-Work");
+        let block = paths_block(win_ws, Some(win_home));
+        assert!(block.contains("<paths>"));
+        assert!(block.contains(r"- Home: `C:\Users\alice`"), "{block}");
+        assert!(
+            block.contains(r"- Workspace: `C:\Users\alice\GrokHub-Work`"),
+            "{block}"
+        );
+        assert!(!block.contains(r"\\?\"), "{block}");
+
+        // Empty workspace explicitly tells the model to ask the user to pick a folder.
+        let empty_ws = paths_block(Path::new(""), Some(win_home));
+        assert!(empty_ws.contains("pick a folder"), "{empty_ws}");
+
+        // Chat includes `<paths>`, while Peer keeps personal paths out.
+        let chat = compose("", "", win_ws, Some(win_home), PromptProfile::Chat, PromptNeed::NONE);
+        assert!(chat.contains(r"- Home: `C:\Users\alice`"));
+        assert!(chat.contains(r"- Workspace: `C:\Users\alice\GrokHub-Work`"));
+        let peer = compose("", "", win_ws, Some(win_home), PromptProfile::Peer, PromptNeed::NONE);
+        assert!(!peer.contains("<paths>"));
     }
 }

@@ -1,9 +1,30 @@
 use std::path::PathBuf;
 
 pub fn user_home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+    user_home_in(
+        cfg!(windows),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+/// Resolve the OS user home directory without guessing.
+/// On Windows, `USERPROFILE` takes precedence over a divergent `HOME`
+/// (matching [`session_home`]); on Unix, `HOME` takes precedence.
+pub fn user_home_in(
+    windows: bool,
+    home: Option<std::ffi::OsString>,
+    userprofile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let keep = |v: Option<std::ffi::OsString>| {
+        v.filter(|s| !s.to_string_lossy().trim().is_empty())
+            .map(PathBuf::from)
+    };
+    if windows {
+        keep(userprofile).or_else(|| keep(home))
+    } else {
+        keep(home).or_else(|| keep(userprofile))
+    }
 }
 
 /// `GROKHUB_CONFIG` when it names a folder (blank counts as unset).
@@ -120,6 +141,32 @@ pub fn cabin_session_cwd(
     let work = cabin_work_root(windows, home, userprofile);
     let picked = crate::project::resolve_acp_cwd(project_dir, session.as_deref(), &work);
     canonical_session_cwd(&picked, windows)
+}
+
+/// Resolve a Chat/Hangout workspace and ensure the per-user default Loadout
+/// workspace folder (`<home>/GrokHub-Work`) exists on disk when missing.
+///
+/// A custom folder the user picked that was later deleted or moved is NOT
+/// silently created here, so the workspace check surfaces a clear prompt.
+pub fn ensure_chat_workspace(
+    project_dir: &str,
+    windows: bool,
+    home: Option<&str>,
+    userprofile: Option<&str>,
+) -> PathBuf {
+    let resolved = cabin_session_cwd(project_dir, windows, home, userprofile);
+    let path = PathBuf::from(&resolved);
+    let default_root = canonical_session_cwd(&cabin_work_root(windows, home, userprofile), windows);
+    let is_default = project_dir.trim().is_empty()
+        || if windows {
+            resolved.eq_ignore_ascii_case(&default_root)
+        } else {
+            resolved == default_root
+        };
+    if is_default && !path.as_os_str().is_empty() && !path.is_dir() {
+        let _ = std::fs::create_dir_all(&path);
+    }
+    path
 }
 
 /// History is `grok sessions list` scoped to the chat cwd. An empty draft has
@@ -262,5 +309,51 @@ mod tests {
             true
         ));
         assert!(!chat_appears_in_history("/home/user", Some(&list), true));
+    }
+
+    #[test]
+    fn user_home_in_prefers_userprofile_on_windows_and_home_on_unix() {
+        let win_home = user_home_in(
+            true,
+            Some(r"C:\Users\alice\AppData\Local".into()),
+            Some(r"C:\Users\alice".into()),
+        );
+        assert_eq!(win_home, Some(PathBuf::from(r"C:\Users\alice")));
+
+        let win_blank_profile = user_home_in(
+            true,
+            Some(r"C:\Users\fallback".into()),
+            Some("   ".into()),
+        );
+        assert_eq!(win_blank_profile, Some(PathBuf::from(r"C:\Users\fallback")));
+
+        let unix_home = user_home_in(
+            false,
+            Some("/home/alice".into()),
+            Some(r"C:\Users\alice".into()),
+        );
+        assert_eq!(unix_home, Some(PathBuf::from("/home/alice")));
+    }
+
+    #[test]
+    fn ensure_chat_workspace_creates_default_folder_only() {
+        let root = std::env::temp_dir().join(format!("gh-ensure-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let home_str = root.to_string_lossy().into_owned();
+
+        // Unbound chat creates `<home>/GrokHub-Work` if missing.
+        let created = ensure_chat_workspace("", false, Some(&home_str), None);
+        assert_eq!(created, root.join("GrokHub-Work"));
+        assert!(created.is_dir());
+
+        // Missing custom folder is NOT silently created.
+        let missing = root.join("deleted-project");
+        let missing_str = missing.to_string_lossy().into_owned();
+        let kept = ensure_chat_workspace(&missing_str, false, Some(&home_str), None);
+        assert_eq!(kept, missing);
+        assert!(!kept.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

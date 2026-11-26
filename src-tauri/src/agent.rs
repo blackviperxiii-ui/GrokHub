@@ -115,16 +115,16 @@ fn volatile_tail(voice: &str, config_dir: &std::path::Path, conversation_id: &st
 }
 
 /// The folder the agent works in: the one picked in Settings, or the
-/// cabin's default session folder.
+/// cabin's default session folder (created on disk if missing).
 pub fn workspace_for(picked: &str) -> PathBuf {
     let home = std::env::var("HOME").ok();
     let profile = std::env::var("USERPROFILE").ok();
-    PathBuf::from(grokhub_core::cabin_session_cwd(
+    grokhub_core::paths::ensure_chat_workspace(
         picked,
         cfg!(windows),
         home.as_deref(),
         profile.as_deref(),
-    ))
+    )
 }
 
 /// What the UI renders. Engine events the shell does not show yet map to `None`.
