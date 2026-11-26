@@ -20,8 +20,8 @@ on:
     # turns on auto-merge (auto-merge.yml) for the run that is already green.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   # Nightly full run on beta (~3 AM America/Chicago): nightly.yml dispatches
-  # this workflow on beta with nightly=true. It runs everything PRs and beta
-  # pushes skip (cross-check, shell, phones, windows-release, deny). When
+  # this workflow on beta with nightly=true. It adds what beta pushes skip
+  # (cross-check, macOS shell, phone-ios, windows-release, deny). When
   # beta's HEAD already had a green nightly, the build jobs skip (see
   # `changes` and `nightly-green`).
   workflow_dispatch:
@@ -35,11 +35,14 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same PR, or a newer push to beta (light gate only),
-# cancels the run it replaces. Main, tags, nightly and manual runs finish.
+# A newer push to the same PR cancels the run it replaces. Pushes never
+# cancel: beta pushes carry windows and shell, so a run that is building
+# finishes and every finished run is a real result for its commit. GitHub
+# keeps at most one pending run per group, so a burst of merges queues only
+# the newest one behind the running one.
 concurrency:
   group: ci-${{ inputs.nightly && 'nightly-beta' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/beta') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI profile: no incremental artifacts, line tables instead of full debug
 # info (less to link and write, most of all on Windows). The release build
@@ -85,7 +88,7 @@ jobs:
       code: ${{ steps.dedup.outputs.cache-hit != 'true' && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' || steps.paths.outputs.embedded == 'true') }}
       skip: ${{ steps.dedup.outputs.cache-hit == 'true' }}
       sha: ${{ steps.sha.outputs.sha }}
-      # Heavy outputs are false on push to beta; nightly covers beta instead.
+      # deny and the macOS jobs are off on push to beta; nightly covers them.
       # merge_group always runs deny: queued PRs get the supply-chain check.
       deny: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && steps.paths.outputs.deny == 'true') }}
       # macOS (cross-check, phone-ios, macOS shell): nightly, manual and tags only.
@@ -672,7 +675,15 @@ jobs:
           ui/node_modules/.bin/playwright install --with-deps chromium
           node ui/e2e/web.mjs
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2
+        with:
+          tool: nextest
+      # nextest runs each test in its own process, in parallel (same profile
+      # as linux-tests and windows-parts; src-tauri is its own workspace, so
+      # the config file is named). It skips doctests, so `cargo test --doc`
+      # keeps them.
+      - run: cargo nextest run --manifest-path src-tauri/Cargo.toml --locked --config-file .config/nextest.toml --profile ci
+      - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked
       # Release installer/AppImage/dmg. Skipped on pull_request and on push
       # to beta: the debug smoke build below already compiles the shell the
       # smoke test drives, and release.yml builds the beta channel bundles
@@ -869,9 +880,11 @@ jobs:
 
   # Clippy once, tests in two parts so a beta push waits for the slower
   # half instead of the whole nextest run. Both parts restore the same
-  # windows-test cache the shell job uses for the dev sidecar. Part 1 is
-  # the one that saves it. Every test still runs: count partitions cover
-  # the suite, and doctests stay on part 1 (nextest does not run them).
+  # windows-test cache the shell job uses for the dev sidecar. Every test
+  # still runs: count partitions cover the suite. Part 1's nextest half runs
+  # about a minute longer, so clippy rides on part 2 (and part 2 saves the
+  # cache, so clippy's check output stays warm) and doctests on part 1
+  # (nextest does not run them).
   # `windows` is the required check: it fails unless both parts passed.
   windows-parts:
     needs: changes
@@ -893,11 +906,11 @@ jobs:
         with:
           shared-key: windows-test
           cache-on-failure: true
-          save-if: ${{ matrix.part == 1 && (github.event_name == 'push' || inputs.nightly == true) }}
+          save-if: ${{ matrix.part == 2 && (github.event_name == 'push' || inputs.nightly == true) }}
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
-      # must be deleted, not allowed. Once, on part 1.
+      # must be deleted, not allowed. Once, on part 2.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-        if: matrix.part == 1
+        if: matrix.part == 2
       - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2
         with:
           tool: nextest
