@@ -1388,7 +1388,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 104] = [
+        const REVIEWED: [&str; 106] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1399,6 +1399,7 @@ mod tests {
             "apply_memory_raw_tidy",
             "approve_memory_row",
             "cancel_chat",
+            "chat_media",
             "chat_picture",
             "check_connectors",
             "chip_outcome",
@@ -1465,6 +1466,7 @@ mod tests {
             "restore_memory_file",
             "run_automation",
             "run_slash",
+            "save_chat_media_to_library",
             "save_feed_prompt",
             "save_memory",
             "save_memory_file",
