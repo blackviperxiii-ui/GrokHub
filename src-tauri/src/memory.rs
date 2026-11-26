@@ -285,8 +285,8 @@ const WIPED_NOTES: [&str; 2] = ["USER.md", "MEMORY.md"];
 
 /// Delete every learned line about the user for good, and empty the global
 /// USER.md and MEMORY.md, leaving no copy of them: not the `.prev` copy a
-/// save keeps, dream's backup, the recall index, the wiki's pages or the
-/// nightly dream's Pulse cards. Project notes in the work folder are the
+/// save keeps, dream's backup, the recall index, the wiki's pages, the
+/// nightly dream's Pulse cards or Pulse's "From memory" topics. Project notes in the work folder are the
 /// project's, so they stay, and so does session memory, the chats' own words;
 /// `/forget <topic>` takes lines out of both. A running memory dream holds
 /// lines it read before the Wipe and would write them back after it (its
@@ -320,6 +320,10 @@ pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
     grokhub_agent::drop_global_copies(&held)?;
     drop(held);
     drop_dream_cards(None)?;
+    // Pulse's "From memory" topics were copied out of the notes just emptied.
+    crate::interests::update(&grokhub_agent::perm::config_dir(), |p| {
+        p.drop_source(grokhub_core::interests::InterestSource::Memory)
+    })?;
     Ok(Wiped {
         removed: report.removed,
         locked: report.locked,
@@ -2000,6 +2004,60 @@ mod tests {
                 ..Default::default()
             })
         }
+    }
+
+    /// Pulse's first run copies topics out of USER.md and MEMORY.md. Wipe
+    /// takes those "From memory" topics off too, keeps a topic the person
+    /// typed, and leaves no file in the config folder holding the wiped words.
+    #[test]
+    fn wipe_takes_the_topics_pulse_copied_from_the_notes() {
+        let d = dirs("wipe-interests");
+        let config = grokhub_agent::perm::config_dir();
+        save_file(
+            "USER.md",
+            "Interests: Quillfeather gardening, tortoise care\n",
+            "",
+        )
+        .unwrap();
+        save(
+            &d.workspace,
+            true,
+            "I follow Brambleton rugby\nInterests: Brambleton rugby\n",
+            "",
+        )
+        .unwrap();
+        crate::interests::add(&config, "Formula 1").unwrap();
+        assert_eq!(crate::interests::seed_once(&config, 7), Ok(3));
+        let topics = || -> Vec<(String, String)> {
+            let mut got: Vec<(String, String)> = crate::interests::load(&config)
+                .topics
+                .into_iter()
+                .map(|t| (t.topic, t.source))
+                .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(
+            topics(),
+            vec![
+                ("Brambleton rugby".to_string(), "From memory".to_string()),
+                ("Formula 1".to_string(), "Added by you".to_string()),
+                (
+                    "Quillfeather gardening".to_string(),
+                    "From memory".to_string()
+                ),
+                ("tortoise care".to_string(), "From memory".to_string()),
+            ]
+        );
+        wipe(&d.workspace).unwrap();
+        assert_eq!(
+            topics(),
+            vec![("Formula 1".to_string(), "Added by you".to_string())]
+        );
+        assert_eq!(files_holding(&config, "quillfeather"), Vec::<String>::new());
+        assert_eq!(files_holding(&config, "brambleton"), Vec::<String>::new());
+        // Seeding ran once, so the emptied notes don't seed again.
+        assert_eq!(crate::interests::seed_once(&config, 8), Ok(0));
     }
 
     /// Wipe while the engine's own dream of MEMORY.md waits on its model: the
