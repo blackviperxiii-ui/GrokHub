@@ -5,7 +5,7 @@ export type AgentKind = "role" | "family" | "staff" | "customer";
 export type AgentAccess = "read_only" | "ask" | "auto";
 
 /** One agent, as `agent-team.json` keeps it. Fields the page doesn't edit
- * (`tools`, `playbooks`, `share`) ride along unchanged. */
+ * (`tools`, `playbooks`) ride along unchanged. */
 export interface AgentProfile {
   id: string;
   name: string;
@@ -18,7 +18,19 @@ export interface AgentProfile {
   playbooks?: string[] | null;
   model_tier?: string;
   talks_to?: string[];
+  /** Paired computers may message it, the ones in `share_with`. */
   share: boolean;
+  /** Device ids of the paired computers that may message it. */
+  share_with?: string[];
+}
+
+/** A computer paired with this one, from Devices > Share. */
+export interface PairedComputer {
+  /** Its device id; two computers can share a name. */
+  id: string;
+  name: string;
+  /** Unix ms; 0 before its first call. */
+  lastSeen: number;
 }
 
 export interface AgentTeam {
@@ -64,6 +76,11 @@ export function getTeam(): Promise<TeamPage> {
 
 export function saveAgent(agent: AgentProfile, add: boolean): Promise<TeamPage> {
   return invoke<TeamPage>("team_save_agent", { agent, add });
+}
+
+/** The computers paired with this one. Desktop only: elsewhere it rejects. */
+export function pairedComputers(): Promise<PairedComputer[]> {
+  return invoke<PairedComputer[]>("team_computers");
 }
 
 export function removeAgent(id: string): Promise<TeamPage> {

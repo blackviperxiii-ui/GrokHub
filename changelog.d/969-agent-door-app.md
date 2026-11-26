@@ -1,0 +1,1 @@
+- Share an agent with a paired computer: on the Team page, an agent's form lists the computers paired under Devices > Share, and the ones you tick can message that agent over the app's hub (A2A at `/a2a/v1`). It answers read only, with your sign-in, and the task log names the computer. Stopping share, or unticking a computer, stops its running turns.
