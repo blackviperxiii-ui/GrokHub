@@ -23,6 +23,8 @@ pub struct ToolSet {
     allow: Option<BTreeSet<String>>,
     /// When filtering, keep MCP discovery / qualified MCP tools.
     mcp: bool,
+    /// When true, do not auto-allow `load_tool_schema` (lean coding).
+    strict: bool,
 }
 
 impl ToolSet {
@@ -30,6 +32,7 @@ impl ToolSet {
     pub const FULL: Self = Self {
         allow: None,
         mcp: true,
+        strict: false,
     };
 
     /// Whether this set leaves schemas and dispatch unrestricted.
@@ -46,6 +49,25 @@ impl ToolSet {
         Self {
             allow: Some(allow),
             mcp: false,
+            strict: false,
+        }
+    }
+
+    /// Allowlist of exact tool names: no shell/MCP aliases, and no
+    /// `load_tool_schema` bypass (lean coding).
+    pub fn only_strict(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut allow = BTreeSet::new();
+        for name in names {
+            let name = name.into();
+            let name = name.trim();
+            if !name.is_empty() {
+                allow.insert(name.to_string());
+            }
+        }
+        Self {
+            allow: Some(allow),
+            mcp: false,
+            strict: true,
         }
     }
 
@@ -58,6 +80,11 @@ impl ToolSet {
     /// Scheduled / headless default: same lean set as [`ToolSet::background`].
     pub fn unattended() -> Self {
         Self::background()
+    }
+
+    /// Local coding turns: read / find / edit / shell / test output / repo_map.
+    pub fn coding() -> Self {
+        super::coding::tool_set()
     }
 
     /// Allow MCP `search_tool` / `use_tool` / `server__tool` names through the filter.
@@ -96,7 +123,7 @@ impl ToolSet {
         if allow.contains(name) {
             return true;
         }
-        if name == super::registry::LOAD_TOOL_SCHEMA {
+        if !self.strict && name == super::registry::LOAD_TOOL_SCHEMA {
             return true;
         }
         if self.mcp && is_mcp_name(name) {
