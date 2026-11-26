@@ -1,0 +1,7 @@
+- Automations: when the agent rewords a job, the job keeps its schedule, and a paused job stays paused. Before, it turned into an every-minute job and switched back on.
+- Routines: script steps run. Before, every script step stopped with "read-only in this phase".
+- Automations: a job that watches an event stream fires once for each new line, even when two lines read the same. It also keeps firing after the stream file is cleared or rotated.
+- Automations: a Run now that starts while another job's check runs no longer lets a second job run without its own check.
+- Automations: a daily job fires at its set time on the day daylight saving ends, not an hour early.
+- Routines: a routine whose timer you change fires at the new time only, not once more at the old time.
+- /rewind: a command run in the background is snapshotted first, so a step that ran one can be undone.

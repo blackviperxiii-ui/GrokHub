@@ -298,3 +298,54 @@ fn all_lists_broken_routines_with_their_problems() {
     assert_eq!(list[1].0, dir.join("fine"));
     assert_eq!(list[1].1.as_ref().map(|r| r.name.as_str()), Ok("fine"));
 }
+
+#[test]
+fn an_edited_timer_fires_at_its_new_time_only() {
+    let config = temp("timer-edit");
+    let morning = |at: &str| json!({ "version": 1, "name": "report", "triggers": [{ "timer": at }], "steps": echo() });
+    save(&config, morning("daily 09:00"));
+    // Primed on Thursday at 08:00: the next slot is 09:00.
+    assert_eq!(due(&config, at(8 * HOUR)), Vec::new());
+    assert_eq!(
+        load_state(&config).routines["report"].next_run,
+        Some(9 * HOUR)
+    );
+    // Moved to 18:00 before 09:00: nothing at 09:00, one run at 18:00.
+    save(&config, morning("daily 18:00"));
+    assert_eq!(due(&config, at(8 * HOUR + 30 * MIN)), Vec::new());
+    assert_eq!(
+        load_state(&config).routines["report"].next_run,
+        Some(18 * HOUR)
+    );
+    assert_eq!(due(&config, at(9 * HOUR + MIN)), Vec::new());
+    assert_eq!(
+        names(&due(&config, at(18 * HOUR + MIN))),
+        vec![("report".to_string(), "timer".to_string())]
+    );
+    assert_eq!(
+        load_state(&config).routines["report"].next_run,
+        Some(DAY + 18 * HOUR)
+    );
+    let _ = std::fs::remove_dir_all(&config);
+}
+
+/// A state file saved before timers were remembered keeps its slot, so a
+/// slot missed while the app was closed still fires once.
+#[test]
+fn an_older_state_file_keeps_its_missed_slot() {
+    let config = temp("timer-old-state");
+    save(
+        &config,
+        json!({ "version": 1, "name": "report", "triggers": [{ "timer": "daily 09:00" }], "steps": echo() }),
+    );
+    std::fs::write(
+        routine::routines_dir(&config).join(STATE_FILE),
+        format!(r#"{{"routines":{{"report":{{"nextRun":{}}}}}}}"#, 9 * HOUR),
+    )
+    .unwrap();
+    assert_eq!(
+        names(&due(&config, at(11 * HOUR))),
+        vec![("report".to_string(), "timer".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&config);
+}

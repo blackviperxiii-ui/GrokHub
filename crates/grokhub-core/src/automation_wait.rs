@@ -247,19 +247,27 @@ fn stream_step(config_dir: &Path, stream_id: &str, match_text: &str, cursor: &st
         Err(_) => return WaitStep::Wait,
     };
     let needle = match_text.trim();
-    let mut after_cursor = cursor.is_empty();
-    for line in raw.lines() {
+    let mut events = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        let at = offset;
+        offset += line.len();
         let line = line.trim();
-        if line.is_empty() {
-            continue;
+        if !line.is_empty() {
+            events.push(parse_stream_line(line, at));
         }
-        let (id, text) = parse_stream_line(line);
-        if !after_cursor {
-            if id == cursor {
-                after_cursor = true;
-            }
-            continue;
-        }
+    }
+    // Events after the cursor's last line are new. A cursor no line has
+    // any more means the file was cleared or rotated: every event is new.
+    let start = match cursor {
+        "" => 0,
+        cursor => events
+            .iter()
+            .rposition(|e| e.id == cursor || e.legacy_id.as_deref() == Some(cursor))
+            .map_or(0, |at| at + 1),
+    };
+    for event in events.into_iter().skip(start) {
+        let text = event.text;
         if !needle.is_empty() && !text.contains(needle) {
             continue;
         }
@@ -276,15 +284,25 @@ fn stream_step(config_dir: &Path, stream_id: &str, match_text: &str, cursor: &st
         };
         return WaitStep::Ready {
             context,
-            new_cursor: id,
+            new_cursor: event.id,
         };
     }
     WaitStep::Wait
 }
 
-/// One JSON object per line: `{"id":"…","text":"…"}`. Plain text lines get a
-/// synthetic id from their byte offset label `line-N`.
-fn parse_stream_line(line: &str) -> (String, String) {
+/// One line of a stream file.
+struct StreamEvent {
+    id: String,
+    /// The id an older build gave a plain line (`line-<hash>`), so a cursor
+    /// it saved still marks its place.
+    legacy_id: Option<String>,
+    text: String,
+}
+
+/// One JSON object per line: `{"id":"…","text":"…"}`. A plain text line's
+/// id is `line-<byte offset>-<hash>`, so the same text twice is two events,
+/// and a line written at the same offset after the file was cleared is new.
+fn parse_stream_line(line: &str, offset: usize) -> StreamEvent {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
         let id = v
             .get("id")
@@ -297,10 +315,19 @@ fn parse_stream_line(line: &str) -> (String, String) {
             .unwrap_or(line)
             .to_string();
         if !id.is_empty() {
-            return (id, text);
+            return StreamEvent {
+                id,
+                legacy_id: None,
+                text,
+            };
         }
     }
-    (format!("line-{}", simple_hash(line)), line.to_string())
+    let hash = simple_hash(line);
+    StreamEvent {
+        id: format!("line-{offset}-{hash:x}"),
+        legacy_id: Some(format!("line-{hash}")),
+        text: line.to_string(),
+    }
 }
 
 fn simple_hash(s: &str) -> u64 {
@@ -505,6 +532,84 @@ mod tests {
             ..wait
         };
         assert_eq!(wait_step(&after, &dir), WaitStep::Wait);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Polls `wait` `polls` times the way the scheduler does: a Ready
+    /// fires and its cursor is kept. Returns each fired event's text.
+    fn poll(wait: &mut WaitTrigger, dir: &Path, polls: usize) -> Vec<String> {
+        let mut fired = Vec::new();
+        for _ in 0..polls {
+            if let WaitStep::Ready {
+                context,
+                new_cursor,
+            } = wait_step(wait, dir)
+            {
+                fired.push(context.lines().last().unwrap_or("").to_string());
+                *wait = wait.remember_cursor(&new_cursor);
+            }
+        }
+        fired
+    }
+
+    fn stream_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gh-wait-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(STREAMS_DIR)).unwrap();
+        dir
+    }
+
+    fn watch(source: &str) -> WaitTrigger {
+        WaitTrigger {
+            kind: "event_stream".into(),
+            source: source.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn identical_plain_lines_each_fire_once() {
+        let dir = stream_dir("dup");
+        let path = stream_path(&dir, "log");
+        std::fs::write(&path, "disk full\ndisk full\n").unwrap();
+        let mut wait = watch("log");
+        assert_eq!(poll(&mut wait, &dir, 6), ["disk full", "disk full"]);
+        std::fs::write(&path, "A\nB\nA\n").unwrap();
+        let mut wait = watch("log");
+        assert_eq!(poll(&mut wait, &dir, 8), ["A", "B", "A"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_event_after_the_stream_is_cleared_still_fires() {
+        let dir = stream_dir("cleared");
+        append_stream_event(&dir, "disk", "e1", "first").unwrap();
+        append_stream_event(&dir, "disk", "e2", "second").unwrap();
+        let mut wait = watch("disk");
+        assert_eq!(poll(&mut wait, &dir, 3), ["first", "second"]);
+        std::fs::write(stream_path(&dir, "disk"), "").unwrap();
+        assert_eq!(poll(&mut wait, &dir, 2), Vec::<String>::new());
+        append_stream_event(&dir, "disk", "e3", "third").unwrap();
+        assert_eq!(poll(&mut wait, &dir, 3), ["third"]);
+        // A plain-text log that is truncated and written again also fires.
+        let path = stream_path(&dir, "log");
+        std::fs::write(&path, "old one\nold two\n").unwrap();
+        let mut wait = watch("log");
+        assert_eq!(poll(&mut wait, &dir, 3), ["old one", "old two"]);
+        std::fs::write(&path, "new\n").unwrap();
+        assert_eq!(poll(&mut wait, &dir, 3), ["new"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A cursor saved before plain lines carried their offset still marks
+    /// where the job got to, so an upgrade doesn't replay the stream.
+    #[test]
+    fn a_cursor_saved_by_an_older_build_keeps_its_place() {
+        let dir = stream_dir("legacy");
+        std::fs::write(stream_path(&dir, "log"), "A\nB\nC\n").unwrap();
+        let mut wait = watch("log");
+        wait.cursor = format!("line-{}", simple_hash("B"));
+        assert_eq!(poll(&mut wait, &dir, 3), ["C"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
