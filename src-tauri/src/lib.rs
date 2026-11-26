@@ -101,6 +101,7 @@ pub mod local_engine;
 mod local_governor;
 mod local_model_checks;
 mod local_use;
+mod mcp_app_frame;
 #[cfg(test)]
 mod md_fixtures;
 pub mod meetings;
@@ -249,6 +250,9 @@ struct ShellState {
     focus_help: Mutex<focus_help::FocusHelp>,
     /// The game launch companion's running and just-closed game.
     game_session: Mutex<game_companion::Session>,
+    /// Counts the Chat tab's chat loads and picks: a load that finishes
+    /// after a newer one started is stale and doesn't set the chat to reopen.
+    chat_pick: Mutex<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1195,6 +1199,34 @@ fn set_last_chat(state: &ShellState, conversation_id: &str) {
     if state.code_sessions.holds(conversation_id) {
         return;
     }
+    let mut pick = state.chat_pick.lock().unwrap_or_else(|e| e.into_inner());
+    *pick += 1;
+    save_last_chat(state, conversation_id);
+}
+
+/// A chat load starting: it makes every load and pick before it stale. A Code
+/// tab session's load leaves the Chat tab's alone.
+fn begin_chat_load(state: &ShellState, conversation_id: &str) -> u64 {
+    let mut pick = state.chat_pick.lock().unwrap_or_else(|e| e.into_inner());
+    if !state.code_sessions.holds(conversation_id) {
+        *pick += 1;
+    }
+    *pick
+}
+
+/// A chat load done: its chat is the one to reopen unless a newer load or
+/// pick started since.
+fn end_chat_load(state: &ShellState, ticket: u64, conversation_id: &str) {
+    let pick = state.chat_pick.lock().unwrap_or_else(|e| e.into_inner());
+    if *pick == ticket {
+        save_last_chat(state, conversation_id);
+    }
+}
+
+fn save_last_chat(state: &ShellState, conversation_id: &str) {
+    if state.code_sessions.holds(conversation_id) {
+        return;
+    }
     let now = current(state);
     if now.last_chat == conversation_id {
         return;
@@ -2098,9 +2130,10 @@ async fn load_chat(
     limit: Option<usize>,
 ) -> Result<history::Transcript, String> {
     let dir = state.config_dir.clone();
+    let ticket = begin_chat_load(&state, &id);
     let shown =
         off_main(move || history::load(&dir, &id, limit.unwrap_or(history::LOAD_CAP))).await??;
-    set_last_chat(&state, &shown.id);
+    end_chat_load(&state, ticket, &shown.id);
     Ok(shown)
 }
 
@@ -2115,12 +2148,14 @@ async fn chat_zoom(state: State<'_, ShellState>, id: String) -> Result<chat_zoom
 #[tauri::command]
 async fn get_start_chat(state: State<'_, ShellState>) -> Result<history::Transcript, String> {
     let dir = state.config_dir.clone();
+    // Main is never a Code tab session.
+    let ticket = begin_chat_load(&state, "");
     let shown = off_main(move || {
         let id = chat_tabs::ensure_main(&dir, grokhub_core::now_ms())?;
         history::load(&dir, &id, history::LOAD_CAP)
     })
     .await??;
-    set_last_chat(&state, &shown.id);
+    end_chat_load(&state, ticket, &shown.id);
     Ok(shown)
 }
 
@@ -9212,6 +9247,9 @@ pub fn run() {
     let builder = os_extras::plugins(builder);
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    // MCP Apps run in a page of their own, with its own CSP.
+    let builder = builder
+        .register_uri_scheme_protocol(mcp_app_frame::SCHEME, |_, _| mcp_app_frame::response());
     let built = builder
         .setup(|app| {
             #[cfg(mobile)]
@@ -9335,6 +9373,7 @@ pub fn run() {
                 #[cfg(desktop)]
                 focus_help: Mutex::new(focus_help::FocusHelp::default()),
                 game_session: Mutex::default(),
+                chat_pick: Mutex::default(),
             });
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
@@ -10952,7 +10991,32 @@ mod web_command_tests {
             #[cfg(desktop)]
             focus_help: Mutex::new(crate::focus_help::FocusHelp::default()),
             game_session: Mutex::default(),
+            chat_pick: Mutex::default(),
         }
+    }
+
+    /// Opening chat A, then chat B before A's load is back: B is the chat
+    /// shown, so B is the one the app reopens, whatever order the loads end.
+    #[test]
+    fn a_stale_chat_load_does_not_set_the_chat_to_reopen() {
+        let dir = temp_dir("stale-load");
+        let state = state_at(&dir);
+        let a = super::begin_chat_load(&state, "chat-a");
+        let b = super::begin_chat_load(&state, "chat-b");
+        super::end_chat_load(&state, b, "chat-b");
+        super::end_chat_load(&state, a, "chat-a");
+        assert_eq!(super::current(&state).last_chat, "chat-b");
+        assert_eq!(crate::settings::load(&dir).last_chat, "chat-b");
+        // A message sent in C while D still loads: C is what's on screen.
+        let d = super::begin_chat_load(&state, "chat-d");
+        super::set_last_chat(&state, "chat-c");
+        super::end_chat_load(&state, d, "chat-d");
+        assert_eq!(super::current(&state).last_chat, "chat-c");
+        // A load nothing overtook sets its chat.
+        let e = super::begin_chat_load(&state, "chat-e");
+        super::end_chat_load(&state, e, "chat-e");
+        assert_eq!(crate::settings::load(&dir).last_chat, "chat-e");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A chat the window started, then closed there (or the app restarted):

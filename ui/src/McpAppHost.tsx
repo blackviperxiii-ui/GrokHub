@@ -2,7 +2,8 @@
  * in a sandboxed iframe and talks to this page over postMessage JSON-RPC:
  * ui/initialize, tool-input / tool-result, tools/call, ui/open-link. */
 import { useEffect, useRef, useState } from "react";
-import { call as invoke } from "./transport";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { call as invoke, inShell } from "./transport";
 import { PRODUCT_NAME } from "./brand";
 import { openExternal, externalUrlOk } from "./external";
 
@@ -21,6 +22,13 @@ type JsonRpc =
   | { jsonrpc: "2.0"; id: string | number | null; result?: unknown; error?: { code: number; message: string } };
 
 const PROTOCOL = "2026-01-26";
+
+/** The frame's page, served with a CSP of its own (src-tauri
+ * mcp_app_frame.rs): a `srcdoc` frame would inherit this page's CSP, which
+ * blocks the app's inline script. It asks for the app's HTML when it loads. */
+function frameUrl(): string {
+  return inShell() ? convertFileSrc("frame", "mcp-app") : "/mcp-app-frame";
+}
 
 export function McpAppHost({ id, app }: { id: string; app: McpAppPayload }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -49,6 +57,16 @@ export function McpAppHost({ id, app }: { id: string; app: McpAppPayload }) {
       win.postMessage({ jsonrpc: "2.0", ...payload }, "*");
     };
     switch (msg.method) {
+      case "ui/notifications/sandbox-proxy-ready":
+        win.postMessage(
+          {
+            jsonrpc: "2.0",
+            method: "ui/notifications/sandbox-resource-ready",
+            params: { html: app.html },
+          },
+          "*",
+        );
+        return;
       case "ui/initialize": {
         let hostInfo = { name: PRODUCT_NAME, version: "0" };
         let hostCapabilities = { serverTools: {}, serverResources: {} };
@@ -188,11 +206,12 @@ export function McpAppHost({ id, app }: { id: string; app: McpAppPayload }) {
         <span className="mcp-app-server">{app.server}</span>
       </div>
       <iframe
+        key={source}
         ref={frame}
         className="mcp-app-frame"
         title={`MCP App ${app.tool}`}
         sandbox="allow-scripts"
-        srcDoc={app.html}
+        src={frameUrl()}
         referrerPolicy="no-referrer"
       />
       {status && <p className="mcp-app-status">{status}</p>}
