@@ -39,6 +39,9 @@ const api = vi.hoisted(() => ({
   codeSessionLead: vi.fn<(conversationId: string) => Promise<boolean>>(),
   codeSessionLeft: vi.fn<(conversationId: string) => Promise<{ goal: string; next: string; blocker: string } | null>>(),
   codeSessionResume: vi.fn<(conversationId: string) => Promise<string>>(),
+  codePanelState: vi.fn(),
+  codePanelSettingsSave: vi.fn(),
+  codePanelBackupRestore: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -186,7 +189,7 @@ function Tab({ shown }: { shown: boolean }) {
 const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
 
 
-async function openSideTab(name: "Projects" | "Editor" | "Tests" | "Skills" | "Helpers") {
+async function openSideTab(name: "Projects" | "Editor" | "Tests" | "Skills" | "Helpers" | "Settings") {
   await userEvent.click(await screen.findByRole("tab", { name }));
 }
 
@@ -232,6 +235,24 @@ describe("Code tab", () => {
       mode: "ask",
       blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
     });
+    api.codePanelState.mockReset();
+    api.codePanelState.mockResolvedValue({
+      workspace: "/work/demo",
+      isRepo: true,
+      branch: "beta",
+      settings: {
+        localOnlyNonstop: false,
+        backupBeforeRisky: false,
+        maxRepeatedFailures: 3,
+        stallTimeoutMins: 15,
+        backupRetentionWarn: 20,
+      },
+      backups: [],
+      retentionWarnLimit: 20,
+      retentionWarning: null,
+    });
+    api.codePanelSettingsSave.mockReset();
+    api.codePanelBackupRestore.mockReset();
   });
 
   afterEach(() => {
@@ -860,10 +881,17 @@ describe("Code tab", () => {
   });
 
   
-  it("puts Projects first, then Editor/Tests/Skills/Helpers, with Projects the default open tab", async () => {
+  it("puts Projects first, then Editor/Tests/Skills/Helpers/Settings, with Projects the default open tab", async () => {
     localStorage.removeItem(CODE_SIDE_TAB_KEY);
     expect(readSideTab()).toBe("projects");
-    expect(CODE_SIDE_TABS.map((t) => t.id)).toEqual(["projects", "editor", "tests", "skills", "helpers"]);
+    expect(CODE_SIDE_TABS.map((t) => t.id)).toEqual([
+      "projects",
+      "editor",
+      "tests",
+      "skills",
+      "helpers",
+      "settings",
+    ]);
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
     render(<Code shown onOpenSettings={() => {}} />);
@@ -874,12 +902,13 @@ describe("Code tab", () => {
     expect(children.some((c) => c.includes("code-side") || c.includes("code"))).toBe(true);
     expect(screen.getByRole("separator", { name: "Resize agent and editor" })).toBeInTheDocument();
     const labels = screen.getAllByRole("tab").map((el) => el.textContent);
-    expect(labels).toEqual(["Projects", "Editor", "Tests", "Skills", "Helpers"]);
+    expect(labels).toEqual(["Projects", "Editor", "Tests", "Skills", "Helpers", "Settings"]);
     expect(screen.getByRole("tab", { name: "Projects" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Editor" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Tests" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Skills" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Helpers" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByTestId("bar").closest("[hidden]")).toBeNull();
     expect(screen.queryByRole("heading", { name: CODE_TESTS })).toBeNull();
     // Helpers stay mounted (hidden) so live updates continue off-tab.
@@ -1054,5 +1083,33 @@ describe("Code tab", () => {
     expect(chat).toHaveTextContent("session chat-7");
     expect(screen.getByTestId("agent-tasks")).toHaveAttribute("data-active", "false");
     expect(chat.closest(".code-tab")).toHaveAttribute("hidden");
+  });
+
+  it("opens the Settings side tab and shows the Local route chip when Local models only is turned on", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codePanelSettingsSave.mockResolvedValue({
+      workspace: "/work/demo",
+      isRepo: true,
+      branch: "beta",
+      settings: {
+        localOnlyNonstop: true,
+        backupBeforeRisky: false,
+        maxRepeatedFailures: 3,
+        stallTimeoutMins: 15,
+        backupRetentionWarn: 20,
+      },
+      backups: [],
+      retentionWarnLimit: 20,
+      retentionWarning: null,
+    });
+    render(<Tab shown />);
+    expect(screen.queryByLabelText("Model route: Local")).toBeNull();
+    await openSideTab("Settings");
+    const toggle = await screen.findByRole("switch", {
+      name: "Local models only and nonstop coding",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(toggle);
+    expect(await screen.findByLabelText("Model route: Local")).toHaveTextContent("Local");
   });
 });
