@@ -112,15 +112,18 @@ fn clip_error(why: &str) -> String {
     out
 }
 
-/// The scheduled turn finished with a reply. `delivered` is whether the
-/// place its result goes (the job's board card) took it.
-pub fn mark_automation_ok(mut a: Automation, delivered: bool) -> Automation {
+/// The scheduled turn finished with a reply. `delivery` is whether the place
+/// its result goes (the job's board card) took it, or that it had none.
+pub fn mark_automation_ok(
+    mut a: Automation,
+    delivery: crate::automation_wait::Delivery,
+) -> Automation {
     a.health = AutoHealth {
         outcome: AutoOutcome::Ok,
         error: String::new(),
         fail_streak: 0,
     };
-    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(true, delivered);
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(true, delivery);
     a
 }
 
@@ -133,7 +136,10 @@ pub fn mark_automation_failed(mut a: Automation, why: &str) -> Automation {
     }
     a.health.fail_streak = a.health.fail_streak.saturating_add(1);
     // Error text was still delivered to the row / Fired event.
-    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(false, true);
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(
+        false,
+        crate::automation_wait::Delivery::Landed,
+    );
     a
 }
 
@@ -1670,7 +1676,7 @@ mod tests {
         let stopped = mark_automation_stopped(a.clone());
         assert_eq!(stopped.health.fail_streak, 2, "a halt is not a success");
         assert!(automation_health_line(&stopped).is_none());
-        let ok = mark_automation_ok(a, true);
+        let ok = mark_automation_ok(a, crate::automation_wait::Delivery::Landed);
         assert!(ok.health.fail_streak == 0 && ok.health.error.is_empty());
         assert!(automation_health_line(&ok).is_none());
         let long = mark_automation_failed(job("b"), &"x".repeat(500));
@@ -1683,8 +1689,8 @@ mod tests {
     /// not delivered and not complete.
     #[test]
     fn a_good_run_is_delivered_only_when_its_result_landed() {
-        use crate::automation_wait::LifePhase;
-        let landed = mark_automation_ok(mark_automation_ran(job("a"), 1_000), true);
+        use crate::automation_wait::{Delivery, LifePhase};
+        let landed = mark_automation_ok(mark_automation_ran(job("a"), 1_000), Delivery::Landed);
         assert_eq!(
             (
                 landed.lifecycle.run,
@@ -1693,7 +1699,7 @@ mod tests {
             ),
             (LifePhase::Ok, LifePhase::Ok, LifePhase::Ok)
         );
-        let lost = mark_automation_ok(mark_automation_ran(job("b"), 1_000), false);
+        let lost = mark_automation_ok(mark_automation_ran(job("b"), 1_000), Delivery::Lost);
         assert_eq!(
             (
                 lost.lifecycle.run,
@@ -1705,6 +1711,29 @@ mod tests {
         assert!(
             automation_health_line(&lost).is_none(),
             "the run itself was fine"
+        );
+    }
+
+    /// A good run with nowhere to hand its result on (a script-only job) is
+    /// complete, and its delivery reads neither ok nor failed.
+    #[test]
+    fn a_good_run_with_no_destination_is_complete_and_not_failed() {
+        use crate::automation_wait::{lifecycle_line, Delivery, LifePhase};
+        let a = mark_automation_ok(
+            mark_automation_ran(job("c"), 1_000),
+            Delivery::NoDestination,
+        );
+        assert_eq!(
+            (
+                a.lifecycle.run,
+                a.lifecycle.delivery,
+                a.lifecycle.completion
+            ),
+            (LifePhase::Ok, LifePhase::None, LifePhase::Ok)
+        );
+        assert_eq!(
+            lifecycle_line(&a.lifecycle).as_deref(),
+            Some("run ok · delivery — · completion ok")
         );
     }
 

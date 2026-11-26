@@ -260,7 +260,7 @@ pub fn run(
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
-        delivered: false,
+        delivery: grokhub_core::Delivery::NoDestination,
     };
     let end = end_of(&result);
     match (&job.automation, &end) {
