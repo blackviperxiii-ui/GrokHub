@@ -63,15 +63,9 @@ pub fn list_with(config_dir: &Path, may_read: &dyn Fn(&str) -> bool) -> Vec<Arti
 
 fn from_chat(config_dir: &Path, chat: &ChatRow) -> Vec<Artifact> {
     let mut out = Vec::new();
-    let media = config_dir
-        .join("sessions")
-        .join(&chat.id)
-        .join("media");
+    let media = config_dir.join("sessions").join(&chat.id).join("media");
     out.extend(scan_dir(&media, chat, true));
-    let attach = config_dir
-        .join("sessions")
-        .join(&chat.id)
-        .join("attach");
+    let attach = config_dir.join("sessions").join(&chat.id).join("attach");
     out.extend(scan_dir(&attach, chat, false));
     out.extend(links_in_transcript(config_dir, chat));
     out
@@ -246,8 +240,7 @@ pub fn matches_query(item: &Artifact, query: &str) -> bool {
     if q.is_empty() {
         return true;
     }
-    item.name.to_ascii_lowercase().contains(&q)
-        || item.chat_title.to_ascii_lowercase().contains(&q)
+    item.name.to_ascii_lowercase().contains(&q) || item.chat_title.to_ascii_lowercase().contains(&q)
 }
 
 /// Open a listed artifact: a file in its app, or a link in the browser.
@@ -363,8 +356,11 @@ mod tests {
             r#"{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":{}}}]}}"#,
             serde_json::to_string(body).unwrap()
         );
-        std::fs::write(sessions.join(format!("{id}.jsonl")), format!("{header}\n{line}\n"))
-            .unwrap();
+        std::fs::write(
+            sessions.join(format!("{id}.jsonl")),
+            format!("{header}\n{line}\n"),
+        )
+        .unwrap();
     }
 
     fn png_bytes() -> Vec<u8> {
@@ -451,12 +447,13 @@ mod tests {
     fn ownership_filter_hides_other_chats() {
         let d = dirs("own");
         write_session(&d.config, "shell-mine", "mine", "https://mine.example/");
-        write_session(&d.config, "shell-theirs", "theirs", "https://theirs.example/");
-        let media = d
-            .config
-            .join("sessions")
-            .join("shell-mine")
-            .join("media");
+        write_session(
+            &d.config,
+            "shell-theirs",
+            "theirs",
+            "https://theirs.example/",
+        );
+        let media = d.config.join("sessions").join("shell-mine").join("media");
         std::fs::create_dir_all(&media).unwrap();
         std::fs::write(media.join("a.png"), png_bytes()).unwrap();
 
