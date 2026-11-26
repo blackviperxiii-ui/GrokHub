@@ -90,6 +90,18 @@ pub(crate) fn has_job_tool_set(session: &str) -> bool {
     }
 }
 
+/// Job allowlist, or the lean coding set for a local coding turn.
+fn turn_tool_set(session: &str, model: &str) -> Option<ToolSet> {
+    if let Some(set) = bound_job_tool_set(session) {
+        return Some(set);
+    }
+    let brief = crate::checkpoint::turn_brief(session);
+    if tools::coding::wants(session, model, brief.as_ref()) {
+        return Some(ToolSet::coding());
+    }
+    None
+}
+
 fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
     let Ok(mut map) = job_tool_sets().lock() else {
         return None;
@@ -1035,6 +1047,14 @@ fn run_turn(
         // Order 0.5: casual Hangout sends no tools unless this ask is an
         // action or the Brief is a task. A missing Brief keeps today's list.
         let chat_only = turn_is_chat_only(input.conversation_id, user_text);
+        let turn_brief = crate::checkpoint::turn_brief(input.conversation_id);
+        // Order 27: local coding turns get the lean code-tool set (and lean
+        // prompt). Hangout chat-only still wins with an empty list.
+        let lean_coding = !chat_only
+            && tools::coding::wants(input.conversation_id, input.model, turn_brief.as_ref());
+        if lean_coding {
+            tools::coding::apply_lean_prompt(&mut wire);
+        }
         let tools = if chat_only {
             Vec::new()
         } else {
@@ -1044,6 +1064,7 @@ fn run_turn(
             ) {
                 (Some(parents), _) => parents,
                 (None, Some(set)) => tools::schemas_for_job(&gate, &set),
+                (None, None) if lean_coding => tools::schemas_for_job(&gate, &ToolSet::coding()),
                 (None, None) => tools::schemas_for(&gate),
             }
         };
@@ -1055,6 +1076,7 @@ fn run_turn(
             conversation_id: input.conversation_id.to_string(),
             tools,
             hosted_search: !chat_only
+                && !lean_coding
                 && hosted_for_step(
                     &gate,
                     input.perms,
@@ -3335,7 +3357,7 @@ fn run_readonly_tool_batch(
             owner,
             session: Some(session),
         };
-        let set = bound_job_tool_set(session);
+        let set = turn_tool_set(session, input.model);
         tools::dispatch_for_job(&ctx, &call.name, &call.arguments, set.as_ref())
     });
 
@@ -3411,9 +3433,10 @@ fn dispatch_tool_call(
         session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
-    // A job's tool set holds for the tools the loop runs itself too: a
-    // helper, a message to an agent, plan mode and the todo list.
-    let job_set = bound_job_tool_set(input.conversation_id);
+    // A job's tool set (or the lean coding set on a local coding turn) holds
+    // for the tools the loop runs itself too: a helper, a message to an
+    // agent, plan mode and the todo list.
+    let job_set = turn_tool_set(input.conversation_id, input.model);
     if job_set.as_ref().is_some_and(|set| !set.allows(&call.name)) {
         return (
             ToolOutput::err(tools::tool_set_refusal(&call.name)),
@@ -8755,6 +8778,137 @@ linter (or run the changed file) before you finish: a re-read or git status does
             ev,
             LoopEvent::Text(t) if t == tools::CANT_DO_HERE
         )));
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Order 27: a local coding turn offers only the lean code tools.
+    #[test]
+    fn a_local_coding_turn_offers_only_code_tools() {
+        let dir = workspace("lean-coding-tools");
+        let conv = "lean-coding-27";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let _legacy = tools::registry::LegacyPromptGuard::set();
+        // Scripted client stays on grok; force the lean coding profile on.
+        let _lean = tools::coding::ForceGuard::set(Some(true));
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        struct RecordsTools {
+            names: Mutex<Vec<Vec<String>>>,
+            inner: Script,
+        }
+        impl ModelClient for RecordsTools {
+            fn stream(
+                &self,
+                req: &ResponsesRequest,
+                cancel: &CancelToken,
+                sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<crate::TurnOutput, ClientError> {
+                let names = req
+                    .tools
+                    .iter()
+                    .filter_map(|t| t["name"].as_str().map(str::to_string))
+                    .collect();
+                self.names.lock().unwrap().push(names);
+                self.inner.stream(req, cancel, sink)
+            }
+        }
+        let coding = RecordsTools {
+            names: Mutex::new(Vec::new()),
+            inner: said(&["patched"]),
+        };
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &coding,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 2,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        run_loop(
+            &input,
+            &mut history,
+            "fix the average helper",
+            None,
+            &mut |_| {},
+        );
+        let offered = coding.names.lock().unwrap();
+        assert_eq!(offered.len(), 1, "{offered:?}");
+        assert_eq!(
+            offered[0],
+            vec![
+                "read_file".to_string(),
+                "list_dir".to_string(),
+                "grep".to_string(),
+                "glob".to_string(),
+                "get_command_or_subagent_output".to_string(),
+                "write".to_string(),
+                "search_replace".to_string(),
+                "run_terminal_command".to_string(),
+            ]
+        );
+        assert_eq!(offered[0].len(), tools::coding::CODING_TOOLS_LIVE);
+        drop(_lean);
+        // A casual Hangout turn still offers zero tools (Order 0.5).
+        let _off = tools::coding::ForceGuard::set(Some(false));
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Chat, crate::brain::Care::Casual, &[]),
+        );
+        let casual = RecordsTools {
+            names: Mutex::new(Vec::new()),
+            inner: said(&["hey"]),
+        };
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: &casual,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 2,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        run_loop(&input, &mut history, "hey how are you", None, &mut |_| {});
+        let empty: Vec<Vec<String>> = vec![vec![]];
+        assert_eq!(casual.names.lock().unwrap().as_slice(), empty.as_slice());
         crate::perm::clear_conversation(conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
