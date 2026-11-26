@@ -3,9 +3,7 @@
 //! one-click backup restore.
 
 use crate::{off_main, workspace, ShellState};
-use grokhub_agent::code_panel::{
-    self, BackupList, PanelSettings, PanelState, RestoreResult,
-};
+use grokhub_agent::code_panel::{self, BackupList, PanelSettings, PanelState, RestoreResult};
 use tauri::State;
 
 /// Code tab Settings panel: current project settings, backups, and retention status.

@@ -2133,7 +2133,8 @@ fn run_turn(
                 );
             }
             let nonstop_stop = nonstop_guard.as_mut().and_then(|g| {
-                let step_label = format!("{} {}", call.name, card_action(input.conversation_id, call));
+                let step_label =
+                    format!("{} {}", call.name, card_action(input.conversation_id, call));
                 g.note_call(
                     &key,
                     &step_label,

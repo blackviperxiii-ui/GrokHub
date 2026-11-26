@@ -3,9 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use grokhub_core::model_registry::{
-    Capability, Credential, ModelMeta, ModelRecord, ModelState, Prices, Registry, SourceKind,
-};
+use grokhub_core::model_registry::{Credential, Listing, ModelMeta, Prices, Registry, SourceKind};
 
 use super::*;
 use crate::gate::Decision;
@@ -54,43 +52,27 @@ fn init_git_repo(dir: &Path, branch: &str) {
 fn test_registry() -> Registry {
     let mut reg = Registry::default();
     reg.entitlement.credential = Credential::ApiKey;
-    reg.models.insert(
-        "grok-4.7".into(),
-        ModelRecord {
-            id: "grok-4.7".into(),
-            state: ModelState::Available,
-            meta: ModelMeta {
-                source: SourceKind::Xai,
-                context_length: Some(500_000),
-                capabilities: vec![
-                    Capability::Text,
-                    Capability::Tools,
-                    Capability::Reasoning,
-                    Capability::Vision,
-                ],
-                prices: Prices {
-                    input_usd_per_m: Some(2.0),
-                    output_usd_per_m: Some(10.0),
-                    cached_input_usd_per_m: Some(0.5),
-                },
-                ..ModelMeta::default()
-            },
-            ..ModelRecord::default()
+    let grok = ModelMeta {
+        id: "grok-4.7".into(),
+        context_length: Some(500_000),
+        prices: Prices {
+            prompt: Some(20_000),
+            completion: Some(100_000),
+            ..Prices::default()
         },
-    );
-    reg.models.insert(
-        "local:small".into(),
-        ModelRecord {
-            id: "local:small".into(),
-            state: ModelState::Available,
-            meta: ModelMeta {
-                source: SourceKind::Local,
-                context_length: Some(32_768),
-                capabilities: vec![Capability::Text, Capability::Tools],
-                ..ModelMeta::default()
-            },
-            ..ModelRecord::default()
-        },
+        efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
+        tool_calling: Some(true),
+        ..ModelMeta::default()
+    };
+    reg.apply_refresh(
+        &[
+            Listing::new(SourceKind::XaiApi, vec![grok]),
+            Listing::new(
+                SourceKind::Local,
+                vec![crate::route::local::tier_meta("local:small")],
+            ),
+        ],
+        1_000,
     );
     reg
 }
@@ -194,7 +176,10 @@ fn ac3_checkpoint_commits_on_work_branch_and_never_commits_on_main() {
     assert_eq!(git_in(&repo, &["rev-parse", "HEAD"]), head_on_main);
     assert_eq!(main_entry.strategy, BackupStrategy::GitStash);
     // Working tree stayed intact for the upcoming action.
-    assert_eq!(fs::read_to_string(repo.join("app.txt")).unwrap(), "dirty on main\n");
+    assert_eq!(
+        fs::read_to_string(repo.join("app.txt")).unwrap(),
+        "dirty on main\n"
+    );
 
     // Switch to a work branch: checkpoint commits directly on the work branch.
     git_in(&repo, &["checkout", "-b", "work/feature-1"]);
@@ -271,7 +256,10 @@ fn ac4_nonstop_guard_stops_on_repeated_failures_stall_timer_and_repetition_cut()
 
     // 2. Stops after 15 minutes with no progress.
     let timer_guard = NonstopGuard::new(&settings, 1_000_000);
-    assert_eq!(timer_guard.check_clock("task-2: fix parser", 1_000_000 + 14 * 60_000), None);
+    assert_eq!(
+        timer_guard.check_clock("task-2: fix parser", 1_000_000 + 14 * 60_000),
+        None
+    );
     let stall_stop = timer_guard
         .check_clock("task-2: fix parser", 1_000_000 + 15 * 60_000)
         .expect("15 min without progress must stop");
@@ -406,9 +394,18 @@ fn ac5_dry_run_delete_creates_backup_before_tool_runs_and_classifies_all_risky_k
     assert_eq!(backup.strategy, BackupStrategy::FolderCopy);
     assert!(backup.ref_value.starts_with(".loadout-backups/"));
     let backup_copy = folder.join(&backup.ref_value).join("important.txt");
-    assert!(backup_copy.is_file(), "backup copy must exist before delete");
-    assert_eq!(fs::read_to_string(&backup_copy).unwrap(), "precious data v1\n");
-    assert!(victim.is_file(), "victim file must still exist when backup finishes");
+    assert!(
+        backup_copy.is_file(),
+        "backup copy must exist before delete"
+    );
+    assert_eq!(
+        fs::read_to_string(&backup_copy).unwrap(),
+        "precious data v1\n"
+    );
+    assert!(
+        victim.is_file(),
+        "victim file must still exist when backup finishes"
+    );
 
     // Now the delete tool runs.
     fs::remove_file(&victim).unwrap();
@@ -421,7 +418,10 @@ fn ac5_dry_run_delete_creates_backup_before_tool_runs_and_classifies_all_risky_k
     assert_eq!(restored.id, backup.id);
     assert_eq!(restored.restored_files, 1);
     assert_eq!(fs::read_to_string(&victim).unwrap(), "precious data v1\n");
-    assert!(backup_copy.is_file(), "restore must never delete the backup");
+    assert!(
+        backup_copy.is_file(),
+        "restore must never delete the backup"
+    );
 }
 
 #[test]
@@ -449,7 +449,11 @@ fn ac6_retention_limit_only_warns_and_never_auto_deletes_backups() {
 
     let b3 = create_backup(&cfg, &folder, RiskyActionKind::Overwrite, "backup 3").unwrap();
     let listed = list_backups(&cfg, &folder);
-    assert_eq!(listed.backups.len(), 3, "old backups must never be auto-deleted");
+    assert_eq!(
+        listed.backups.len(),
+        3,
+        "old backups must never be auto-deleted"
+    );
     let warn = listed
         .retention_warning
         .expect("exceeding threshold 2 must show warning");
@@ -588,4 +592,3 @@ fn ac5_and_ac6_git_repo_backup_and_one_click_restore_preserves_backup() {
     assert_eq!(listed.backups.len(), 1);
     assert!(listed.backups[0].restored_at_ms.is_some());
 }
-

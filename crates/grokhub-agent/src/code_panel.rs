@@ -65,15 +65,7 @@ const SKIP_COPY_DIRS: &[&str] = &[
 const SHELL_TOOLS: &[&str] = &["run_terminal_command", "monitor"];
 
 /// Shell commands that delete files or directories.
-const DELETE_COMMANDS: &[&str] = &[
-    "rm",
-    "rmdir",
-    "unlink",
-    "del",
-    "erase",
-    "remove-item",
-    "ri",
-];
+const DELETE_COMMANDS: &[&str] = &["rm", "rmdir", "unlink", "del", "erase", "remove-item", "ri"];
 
 /// Shell commands that overwrite files.
 const OVERWRITE_COMMANDS: &[&str] = &[
@@ -541,7 +533,7 @@ pub fn list_backups(config_dir: &Path, workspace: &Path) -> BackupList {
         .find(|p| p.project_key == key)
         .map(|p| p.backups)
         .unwrap_or_default();
-    backups.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+    backups.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
     let retention_warning = retention_warning_for(backups.len(), settings.backup_retention_warn);
     BackupList {
         workspace: workspace.to_string_lossy().into_owned(),
@@ -740,7 +732,9 @@ fn classify_words(words: &[String], workspace: &Path) -> Option<RiskyActionKind>
             Some("rm") => return Some(RiskyActionKind::Delete),
             Some("reset") | Some("clean") => return Some(RiskyActionKind::GitDiscard),
             Some("checkout") | Some("restore") => {
-                let explicit_discard = rest.iter().any(|w| w == "--" || w == "-f" || w == "--force");
+                let explicit_discard = rest
+                    .iter()
+                    .any(|w| w == "--" || w == "-f" || w == "--force");
                 if explicit_discard || has_uncommitted_changes(workspace) {
                     return Some(RiskyActionKind::GitDiscard);
                 }
@@ -864,7 +858,10 @@ pub fn current_branch(dir: &Path) -> Option<String> {
 /// Detect the repo's default branch from `origin/HEAD`, falling back to
 /// `main` (and `master` if present when no remote HEAD is set).
 pub fn detected_default_branch(dir: &Path) -> Option<String> {
-    if let Some(sym) = git_ok(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+    if let Some(sym) = git_ok(
+        dir,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) {
         if let Some(branch) = sym.strip_prefix("origin/") {
             if !branch.is_empty() {
                 return Some(branch.to_string());
@@ -1048,14 +1045,9 @@ fn backup_git_repo(
     }
 
     if dirty {
-        if let Some(entry) = try_git_stash_snapshot(
-            workspace,
-            id,
-            now_ms,
-            action_kind,
-            label,
-            branch.clone(),
-        ) {
+        if let Some(entry) =
+            try_git_stash_snapshot(workspace, id, now_ms, action_kind, label, branch.clone())
+        {
             return Ok(entry);
         }
         if safe_work_branch {
@@ -1384,7 +1376,8 @@ fn restore_dir_recursive(
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            fs::copy(&path, &dest).map_err(|e| format!("could not restore {}: {e}", rel.display()))?;
+            fs::copy(&path, &dest)
+                .map_err(|e| format!("could not restore {}: {e}", rel.display()))?;
             *count += 1;
         }
     }
