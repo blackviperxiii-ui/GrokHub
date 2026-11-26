@@ -663,9 +663,7 @@ fn resolve_app_media(
     let mime = mime(path).ok_or_else(|| not_ours.to_string())?;
     let file = std::fs::canonicalize(path).map_err(|_| gone.to_string())?;
     let root = std::fs::canonicalize(config_dir).map_err(|_| not_ours.to_string())?;
-    let rel = file
-        .strip_prefix(&root)
-        .map_err(|_| not_ours.to_string())?;
+    let rel = file.strip_prefix(&root).map_err(|_| not_ours.to_string())?;
     let parts: Vec<_> = rel.components().map(|c| c.as_os_str()).collect();
     let chat = match parts.as_slice() {
         [dir, _] if *dir == "media" || *dir == "imagine" || *dir == "imagine-wall" => None,
@@ -1559,7 +1557,13 @@ mod tests {
 
         let page = load(&d.config, true).unwrap();
         assert_eq!(page.tiles.len(), 2);
-        assert!(page.tiles.iter().any(|t| t.prompt == "neon fox" && !t.video));
-        assert!(page.tiles.iter().any(|t| t.prompt == "ocean waves" && t.video));
+        assert!(page
+            .tiles
+            .iter()
+            .any(|t| t.prompt == "neon fox" && !t.video));
+        assert!(page
+            .tiles
+            .iter()
+            .any(|t| t.prompt == "ocean waves" && t.video));
     }
 }
