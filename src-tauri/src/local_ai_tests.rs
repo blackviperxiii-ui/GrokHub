@@ -562,7 +562,7 @@ fn optional_makers_follow_the_defaults_and_are_never_preselected() {
         apple(16_384),
     ] {
         let (_, selected, picker) = page(&m);
-        assert_eq!(picker.models.iter().filter(|r| r.optional).count(), 20);
+        assert_eq!(picker.models.iter().filter(|r| r.optional).count(), 21);
         assert!(!picker.models.iter().any(|r| r.optional && r.preselected));
         assert!(!ls::model_by_id(&selected).is_some_and(|x| x.optional));
         // Within a bucket, no optional row sits above a default one.
