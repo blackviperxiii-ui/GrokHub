@@ -235,8 +235,7 @@ pub(crate) fn add_catalog(
     match record(&name, reason, Some(Value::Object(obj)))? {
         Some(_) | None => {}
     }
-    let next_turn =
-        "Its tools join the next turn once this chat's tool list refreshes.";
+    let next_turn = "Its tools join the next turn once this chat's tool list refreshes.";
     match entry.auth {
         CatalogAuth::None | CatalogAuth::Own => Ok(format!(
             "added catalog connection {name} ({label}). {next_turn}",
@@ -303,18 +302,15 @@ fn add_catalog_oauth(entry: &CatalogEntry) -> Result<String, String> {
                 offered_flag.store(true, Ordering::SeqCst);
                 Ok(())
             }
-            None => Err(format!(
-                "No sign-in card for {label}, so nothing was kept."
-            )),
+            None => Err(format!("No sign-in card for {label}, so nothing was kept.")),
         }
     };
     let stop = || {
         let id = card_id.borrow().clone();
-        match id.and_then(|id| crate::mcp::try_take_elicit(&session, &id)) {
-            Some(crate::mcp::ElicitAnswer::Decline)
-            | Some(crate::mcp::ElicitAnswer::Cancel) => true,
-            _ => false,
-        }
+        matches!(
+            id.and_then(|id| crate::mcp::try_take_elicit(&session, &id)),
+            Some(crate::mcp::ElicitAnswer::Decline) | Some(crate::mcp::ElicitAnswer::Cancel)
+        )
     };
     match crate::mcp::sign_in_until(&name, &open, &stop) {
         Ok(line) => Ok(format!(
@@ -352,8 +348,7 @@ fn add_inner(
         let command = text(args, "command");
         if !url.is_empty() || !command.is_empty() {
             return Err(
-                "catalog_id already carries the install recipe; leave url and command out."
-                    .into(),
+                "catalog_id already carries the install recipe; leave url and command out.".into(),
             );
         }
         return add_catalog(&entry, &reason, ask);
@@ -1151,7 +1146,10 @@ mod tests {
             "{line}"
         );
         let text = std::fs::read_to_string(root.join("mcp.json")).unwrap();
-        assert!(text.contains("auth-ok") && text.contains(&server.url()), "{text}");
+        assert!(
+            text.contains("auth-ok") && text.contains(&server.url()),
+            "{text}"
+        );
         assert!(crate::harness::open_mcp_signin(&root, "auth-ok").is_some());
     }
 }

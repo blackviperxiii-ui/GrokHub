@@ -186,17 +186,8 @@ pub(super) fn forget(server: &str) {
 
 /// Sign in to `server` at `url` in the browser `open` launches. Returns the
 /// line naming the account ("Signed in to Linear as ada@example.com").
-pub(super) fn sign_in(
-    server: &str,
-    url: &str,
-    open: &dyn Fn(&str) -> Result<(), String>,
-    wait: Duration,
-) -> Result<String, String> {
-    sign_in_until(server, url, open, wait, &|| false)
-}
-
-/// [`sign_in`] that also ends once `stop` says so (Decline on the chat
-/// sign-in card), so cancel leaves no half-finished OAuth wait.
+/// Ends once `stop` says so (Decline on the chat sign-in card), so cancel
+/// leaves no half-finished OAuth wait.
 pub(super) fn sign_in_until(
     server: &str,
     url: &str,
@@ -499,6 +490,15 @@ pub(super) mod tests {
             }
         }
         String::new()
+    }
+
+    fn sign_in(
+        server: &str,
+        url: &str,
+        open: &dyn Fn(&str) -> Result<(), String>,
+        wait: Duration,
+    ) -> Result<String, String> {
+        sign_in_until(server, url, open, wait, &|| false)
     }
 
     /// The browser: approve at once by calling the loopback with `code`.
