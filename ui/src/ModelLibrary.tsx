@@ -171,11 +171,18 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
     }
   };
 
-  const downloadHf = async (repo: string, path: string) => {
+  // A split quant is every one of its parts. The first part, which Auto
+  // loads, goes last, so Auto never picks it before the rest are here.
+  const downloadHf = async (repo: string, paths: string[]) => {
     setHfBusy(true);
     setHfNote(null);
     try {
-      setHfNote(await downloadHfGguf(repo, path));
+      const [first, ...rest] = paths;
+      let said = "";
+      for (const path of [...rest, first]) {
+        if (path) said = await downloadHfGguf(repo, path);
+      }
+      setHfNote(said);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -245,7 +252,7 @@ export function ModelLibrary({ focus }: { focus?: LibraryFocus } = {}) {
                       type="button"
                       className="quiet"
                       disabled={hfBusy || file.fitKind === "no"}
-                      onClick={() => void downloadHf(hfRepo, file.paths[0] ?? "")}
+                      onClick={() => void downloadHf(hfRepo, file.paths)}
                     >
                       Download into Auto
                     </button>

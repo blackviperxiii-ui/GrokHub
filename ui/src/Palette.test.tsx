@@ -3,7 +3,17 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, QuickChip } from "./api";
-import { hasPage, moreViews, NO_SOURCES, Palette, paletteRows, railViews, type PaletteExtras, type PaletteSources } from "./Palette";
+import {
+  hasPage,
+  moreViews,
+  NO_SOURCES,
+  Palette,
+  paletteRows,
+  railSections,
+  railViews,
+  type PaletteExtras,
+  type PaletteSources,
+} from "./Palette";
 import { answersTo, PALETTE_SYNONYMS, shellKeys, type ChatHit, type CommandRunners } from "./paletteCommands";
 
 vi.mock("./api", () => ({}));
@@ -268,6 +278,79 @@ describe("the rail and its More list", () => {
       "updates",
     ]);
     expect(moreViews(WEB)).toEqual(["objectives", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
+  });
+
+  it("Simple mode pins a page onto the rail and drops it from More", () => {
+    const opts = { mode: "simple" as const, pinned: ["automations", "skills"] as const };
+    expect(railViews({ ...DESKTOP, code: true }, { ...opts, pinned: [...opts.pinned] })).toEqual([
+      "home",
+      "chat",
+      "code",
+      "pulse",
+      "library",
+      "automations",
+      "skills",
+      "settings",
+    ]);
+    expect(moreViews({ ...DESKTOP, code: true }, { ...opts, pinned: [...opts.pinned] })).toEqual([
+      "objectives",
+      "command",
+      "history",
+      "journal",
+      "meetings",
+      "agents",
+      "team",
+      "memory",
+      "connectors",
+      "workboard",
+      "devices",
+      "fleet",
+      "updates",
+    ]);
+  });
+
+  it("Advanced mode puts every page on the rail and leaves More empty", () => {
+    const desktop = { ...DESKTOP, code: true, mods: true };
+    expect(railViews(desktop, { mode: "advanced", pinned: [] })).toEqual([
+      "home",
+      "objectives",
+      "chat",
+      "code",
+      "command",
+      "history",
+      "pulse",
+      "journal",
+      "meetings",
+      "automations",
+      "agents",
+      "team",
+      "memory",
+      "skills",
+      "connectors",
+      "workboard",
+      "devices",
+      "fleet",
+      "library",
+      "mods",
+      "updates",
+      "settings",
+    ]);
+    expect(moreViews(desktop, { mode: "advanced", pinned: [] })).toEqual([]);
+    expect(moreViews(WEB, { mode: "advanced", pinned: [] })).toEqual([]);
+    expect(railSections(desktop, { mode: "advanced", pinned: ["automations"] }).map((s) => s.id)).toEqual([
+      "core",
+      "work",
+      "make",
+      "you",
+      "pc",
+    ]);
+    expect(railSections(desktop, { mode: "advanced", pinned: ["automations"] }).find((s) => s.id === "work")?.views).toEqual([
+      "workboard",
+      "agents",
+      "team",
+      "objectives",
+      "command",
+    ]);
   });
 
   it("lists only the given pages: no suggestions, commands, chats, sections or Ask", () => {

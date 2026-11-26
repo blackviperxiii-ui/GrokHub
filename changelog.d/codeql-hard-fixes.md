@@ -1,0 +1,1 @@
+- Hardened hub request parsing with per-route body size limits and strict typed schemas, and added null/size bounds checks to Windows sandbox ACL inspection.

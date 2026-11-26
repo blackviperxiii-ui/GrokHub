@@ -698,36 +698,108 @@ fn evaluate(expr: &str) -> Option<(f64, usize, u32)> {
 
 // --- Counts --------------------------------------------------------------
 
+/// A test runner in command position in one of the line's commands, not a
+/// line that only names one (`grep "cargo test" ci.yml`, `echo npm test`).
 pub(crate) fn is_test_command(command: &str) -> bool {
-    let c = command.to_lowercase();
-    [
-        "cargo test",
-        "cargo nextest",
-        "npm test",
-        "npm run test",
-        "pnpm test",
-        "pnpm run test",
-        "yarn test",
-        "bun test",
-        "pytest",
-        "go test",
-        "jest",
-        "vitest",
-        "dotnet test",
-        "mvn test",
-        "gradle test",
-        "gradlew test",
-        "ctest",
-        "make test",
-        "phpunit",
-        "rspec",
-        "mix test",
-        "deno test",
-        "flutter test",
-        "unittest",
-    ]
-    .iter()
-    .any(|t| c.contains(t))
+    command_segments(&command.to_lowercase())
+        .iter()
+        .any(|segment| runs_tests(segment))
+}
+
+const TEST_RUNNERS: [&str; 24] = [
+    "cargo test",
+    "cargo nextest",
+    "npm test",
+    "npm run test",
+    "pnpm test",
+    "pnpm run test",
+    "yarn test",
+    "bun test",
+    "pytest",
+    "go test",
+    "jest",
+    "vitest",
+    "dotnet test",
+    "mvn test",
+    "gradle test",
+    "gradlew test",
+    "ctest",
+    "make test",
+    "phpunit",
+    "rspec",
+    "mix test",
+    "deno test",
+    "flutter test",
+    "unittest",
+];
+
+/// The commands of a shell line: split at `;`, `&`, `|` and line breaks
+/// outside quotes.
+fn command_segments(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote = None;
+    for c in line.chars() {
+        match quote {
+            Some(q) => {
+                cur.push(c);
+                if c == q {
+                    quote = None;
+                }
+            }
+            None if matches!(c, '\'' | '"') => {
+                quote = Some(c);
+                cur.push(c);
+            }
+            None if matches!(c, ';' | '&' | '|' | '\n') => out.push(std::mem::take(&mut cur)),
+            None => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out.retain(|segment| !segment.trim().is_empty());
+    out
+}
+
+/// One command (lowercase) starts a test runner, after any `VAR=value`
+/// settings and wrappers such as `time`, `npx`, `uv run` or `python -m`.
+/// `bash -c "..."` is read inside its quotes.
+fn runs_tests(segment: &str) -> bool {
+    let mut words: Vec<&str> = segment.split_whitespace().collect();
+    loop {
+        let first = words.first().copied().unwrap_or("");
+        let second = words.get(1).copied().unwrap_or("");
+        if matches!(first, "bash" | "sh" | "zsh" | "pwsh" | "powershell")
+            && matches!(second, "-c" | "-lc" | "-command")
+        {
+            let inner = words[2..].join(" ");
+            return is_test_command(inner.trim_matches(|c| c == '"' || c == '\''));
+        }
+        let setting = first.contains('=') && !first.starts_with('-');
+        let wrapper = matches!(
+            first,
+            "time" | "env" | "sudo" | "nice" | "exec" | "command" | "npx" | "bunx" | "pnpx"
+        );
+        let runs_with = (matches!(first, "uv" | "poetry" | "pipenv" | "pdm" | "hatch" | "rye")
+            && second == "run")
+            || (first.starts_with("python") && second == "-m");
+        let skip = if setting || wrapper {
+            1
+        } else if runs_with {
+            2
+        } else {
+            0
+        };
+        if skip == 0 || words.len() <= skip {
+            break;
+        }
+        words.drain(..skip);
+    }
+    let line = words.join(" ");
+    let line = line.strip_prefix("./").unwrap_or(&line);
+    TEST_RUNNERS.iter().any(|runner| {
+        line.strip_prefix(runner)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', ':']))
+    })
 }
 
 /// What a test run's own summary says.
@@ -1938,5 +2010,46 @@ mod tests {
             )),
             vec![PUSHED_TEST]
         );
+    }
+
+    #[test]
+    fn a_command_that_only_names_the_test_command_is_not_a_test_run() {
+        for (command, output) in [
+            (
+                "grep -rn \"cargo test\" .github",
+                ".github/workflows/ci.yml:12: run: cargo test",
+            ),
+            ("echo 'run npm test next'", "run npm test next"),
+            (
+                "git log --grep='pytest' --oneline",
+                "abc123 Fix pytest flags",
+            ),
+            ("cat Makefile | grep 'go test'", "\tgo test ./..."),
+        ] {
+            assert!(!is_test_command(command), "{command}");
+            let ran = [
+                shell("cargo test -p app", false, CARGO_RED),
+                shell(command, true, output),
+            ];
+            assert_eq!(
+                kinds(&check("Fixed it, all tests pass now.", &ran)),
+                vec![TESTS_FAILED],
+                "{command}"
+            );
+        }
+        for command in [
+            "cargo test -p app",
+            "cd app && npm test",
+            "RUST_LOG=debug cargo nextest run",
+            "python -m pytest -q",
+            "uv run pytest tests/",
+            "npx jest --ci",
+            "./gradlew test",
+            "bash -c \"cargo test\"",
+            "time go test ./...",
+            "python3 -m unittest discover",
+        ] {
+            assert!(is_test_command(command), "{command}");
+        }
     }
 }

@@ -55,6 +55,14 @@ import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
 import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, moreViews, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
+import {
+  loadRailPrefs,
+  RAIL_PREFS_EVENT,
+  saveRailPrefs,
+  type RailMode,
+  type RailPrefs,
+  type RailSectionId,
+} from "./railPrefs";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
@@ -201,6 +209,58 @@ export function App() {
   const [caps, setCaps] = useState<Capabilities>(() => (inShell() ? CORE_ONLY : WEB));
   // The palette: everything (Ctrl+K, Command), or the rail's More, pages only.
   const [palette, setPalette] = useState<false | "all" | "more">(false);
+  // Sidebar v2: Simple (core + pins) or Advanced (every page grouped).
+  const [railPrefs, setRailPrefs] = useState<RailPrefs>(() => loadRailPrefs());
+  const setRail = useCallback((next: RailPrefs) => {
+    setRailPrefs(next);
+    saveRailPrefs(next);
+  }, []);
+  const setRailMode = useCallback(
+    (mode: RailMode) => setRail({ ...railPrefs, mode }),
+    [railPrefs, setRail],
+  );
+  const setRailPin = useCallback(
+    (page: View, on: boolean) => {
+      const pinned = on
+        ? railPrefs.pinned.includes(page)
+          ? railPrefs.pinned
+          : [...railPrefs.pinned, page]
+        : railPrefs.pinned.filter((v) => v !== page);
+      setRail({ ...railPrefs, pinned });
+    },
+    [railPrefs, setRail],
+  );
+  const toggleRailSection = useCallback(
+    (id: RailSectionId) => {
+      const collapsed = railPrefs.collapsed.includes(id)
+        ? railPrefs.collapsed.filter((s) => s !== id)
+        : [...railPrefs.collapsed, id];
+      setRail({ ...railPrefs, collapsed });
+    },
+    [railPrefs, setRail],
+  );
+  useEffect(() => {
+    function onPrefs(event: Event) {
+      const detail = (event as CustomEvent<RailPrefs>).detail;
+      if (detail) setRailPrefs(detail);
+    }
+    window.addEventListener(RAIL_PREFS_EVENT, onPrefs);
+    return () => window.removeEventListener(RAIL_PREFS_EVENT, onPrefs);
+  }, []);
+  // Phone tab bar keeps Simple overflow even when Advanced is saved.
+  const [railNarrow, setRailNarrow] = useState(() => window.matchMedia?.("(max-width: 600px)").matches ?? false);
+  useEffect(() => {
+    const mq = window.matchMedia?.("(max-width: 600px)");
+    if (!mq) return;
+    const sync = () => setRailNarrow(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const railNav = {
+    mode: (railNarrow ? "simple" : railPrefs.mode) as RailMode,
+    pinned: railPrefs.pinned,
+  };
   const [sheet, setSheet] = useState(false);
   const paletteChips = useChipRow({ surface: "palette", active: palette === "all" });
   const [signedOut, setSignedOut] = useState(false);
@@ -1056,10 +1116,16 @@ export function App() {
         <Rail
           caps={caps}
           view={view}
+          mode={railPrefs.mode}
+          pinned={railPrefs.pinned}
+          collapsed={railPrefs.collapsed}
           moreOpen={palette === "more"}
           onOpen={setView}
           onMore={() => setPalette((open) => (open === "more" ? false : "more"))}
           onChatMenu={setTabMenu}
+          onMode={setRailMode}
+          onPin={setRailPin}
+          onToggleSection={toggleRailSection}
           profile={profile}
           // The web app's Settings has no Account page: the avatar only shows there.
           onProfile={caps.remote ? undefined : () => run({ kind: "settings", section: "account" })}
@@ -1087,7 +1153,12 @@ export function App() {
             />
           )}
           {palette === "more" && (
-            <Palette caps={caps} only={moreViews(caps)} onPick={run} onClose={() => setPalette(false)} />
+            <Palette
+              caps={caps}
+              only={moreViews(caps, railNav)}
+              onPick={run}
+              onClose={() => setPalette(false)}
+            />
           )}
           {tabMenu && <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />}
           {sheet && (
