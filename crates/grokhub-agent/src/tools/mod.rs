@@ -453,9 +453,8 @@ pub fn workspace_missing(path: &Path) -> bool {
 /// Clear, actionable error when the workspace folder is missing or unreadable.
 pub(crate) fn workspace_unavailable_error(workspace: &Path, err: &std::io::Error) -> String {
     let raw = workspace.to_string_lossy();
-    let windows = cfg!(windows)
-        || raw.starts_with(r"\\?\")
-        || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    let windows =
+        cfg!(windows) || raw.starts_with(r"\\?\") || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
     let shown = grokhub_core::canonical_session_cwd(&raw, windows);
     if shown.is_empty() {
         format!(
@@ -473,9 +472,8 @@ pub(crate) fn workspace_unavailable_error(workspace: &Path, err: &std::io::Error
 /// prefix while telling the user and model what to do.
 pub fn path_escape_guidance(workspace: &Path, requested: &str) -> String {
     let raw = workspace.to_string_lossy();
-    let windows = cfg!(windows)
-        || raw.starts_with(r"\\?\")
-        || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    let windows =
+        cfg!(windows) || raw.starts_with(r"\\?\") || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
     let ws = grokhub_core::canonical_session_cwd(&raw, windows);
     let target = requested.trim();
     if target.is_empty() {
@@ -1110,7 +1108,10 @@ mod tests {
             Path::new(r"C:\Users\alice\GrokHub-Work"),
             r"C:\Users\alice\Desktop\todo.txt",
         );
-        assert!(guidance.contains("path escapes the workspace"), "{guidance}");
+        assert!(
+            guidance.contains("path escapes the workspace"),
+            "{guidance}"
+        );
         assert!(
             guidance.contains(r"C:\Users\alice\Desktop\todo.txt"),
             "{guidance}"

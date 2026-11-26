@@ -320,11 +320,8 @@ mod tests {
         );
         assert_eq!(win_home, Some(PathBuf::from(r"C:\Users\alice")));
 
-        let win_blank_profile = user_home_in(
-            true,
-            Some(r"C:\Users\fallback".into()),
-            Some("   ".into()),
-        );
+        let win_blank_profile =
+            user_home_in(true, Some(r"C:\Users\fallback".into()), Some("   ".into()));
         assert_eq!(win_blank_profile, Some(PathBuf::from(r"C:\Users\fallback")));
 
         let unix_home = user_home_in(

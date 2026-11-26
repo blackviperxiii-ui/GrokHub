@@ -2258,7 +2258,10 @@ fn windows_drive_paths_stay_strict_while_matching_case_and_verbatim_prefix() {
         ws,
         r"D:\Users\alice\GrokHub-Work\notes.txt"
     ));
-    assert!(matchers::path_escapes(ws, r"C:\Users\alice\Desktop\secret.txt"));
+    assert!(matchers::path_escapes(
+        ws,
+        r"C:\Users\alice\Desktop\secret.txt"
+    ));
     assert!(matchers::path_escapes(ws, r"..\outside.txt"));
     assert!(matchers::path_escapes(ws, "~/notes.txt"));
 }

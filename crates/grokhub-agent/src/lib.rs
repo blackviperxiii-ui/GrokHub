@@ -165,7 +165,7 @@ pub use plan_skills::{
     CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
 };
 pub use prompt::{
-    chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
+    chat_volatile_tail, paths_block, prompt_need_from_job, system_prompt, system_prompt_parts,
     system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
 };
 pub use repo_rules::{

@@ -85,6 +85,12 @@ pub fn system_prompt_for(
         rules.push_str("\n\n");
         rules.push_str(&crate::code_agent::skills_block());
     }
+    let home = grokhub_core::user_home();
+    let paths = grokhub_agent::paths_block(workspace, home.as_deref());
+    if !paths.is_empty() {
+        rules.push_str("\n\n");
+        rules.push_str(&paths);
+    }
     grokhub_agent::system_prompt_parts(&rules, &volatile, workspace)
 }
 
@@ -2944,6 +2950,21 @@ mod tests {
         let ws = std::path::Path::new("/tmp");
         assert!(!system_prompt(ws, false, "").contains("grokhub-desktop"));
         assert!(system_prompt(ws, true, "").contains("grokhub-desktop"));
+    }
+
+    #[test]
+    fn system_prompt_carries_real_os_paths_before_voice() {
+        let ws = std::path::Path::new(r"\\?\C:\Users\alice\GrokHub-Work");
+        let voice = "Personality: Pirate. Talk like a pirate.";
+        let prompt = system_prompt(ws, false, voice);
+        let at_paths = prompt.find("<paths>").expect("paths block");
+        let at_voice = prompt.find(voice).expect("voice");
+        assert!(at_paths < at_voice, "{prompt}");
+        assert!(
+            prompt.contains(r"- Workspace: `C:\Users\alice\GrokHub-Work`"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains(r"\\?\C:\Users\alice"), "{prompt}");
     }
 
     #[test]

@@ -415,7 +415,7 @@ fn facts_block(workspace: &Path) -> String {
 
 /// Real OS home and workspace paths so the model never guesses a username or
 /// user folder path. Stripped of Windows verbatim `\\?\` prefixes.
-pub(crate) fn paths_block(workspace: &Path, home: Option<&Path>) -> String {
+pub fn paths_block(workspace: &Path, home: Option<&Path>) -> String {
     let format_path = |p: &Path| {
         let raw = p.to_string_lossy();
         let windows = cfg!(windows)
@@ -485,13 +485,6 @@ fn compose(
     if !facts.is_empty() {
         out.push_str("\n\n");
         out.push_str(&facts);
-    }
-    if !peer {
-        let paths = paths_block(workspace, home);
-        if !paths.is_empty() {
-            out.push_str("\n\n");
-            out.push_str(&paths);
-        }
     }
     if profile.want_skills(need) {
         let skills =
@@ -1228,11 +1221,15 @@ mod tests {
         let empty_ws = paths_block(Path::new(""), Some(win_home));
         assert!(empty_ws.contains("pick a folder"), "{empty_ws}");
 
-        // Chat includes `<paths>`, while Peer keeps personal paths out.
-        let chat = compose("", "", win_ws, Some(win_home), PromptProfile::Chat, PromptNeed::NONE);
-        assert!(chat.contains(r"- Home: `C:\Users\alice`"));
-        assert!(chat.contains(r"- Workspace: `C:\Users\alice\GrokHub-Work`"));
-        let peer = compose("", "", win_ws, Some(win_home), PromptProfile::Peer, PromptNeed::NONE);
+        // Peer and offline eval compose stay free of local OS paths unless injected.
+        let peer = compose(
+            "",
+            "",
+            win_ws,
+            Some(win_home),
+            PromptProfile::Peer,
+            PromptNeed::NONE,
+        );
         assert!(!peer.contains("<paths>"));
     }
 }

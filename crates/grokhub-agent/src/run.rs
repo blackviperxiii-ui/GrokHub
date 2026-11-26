@@ -2599,7 +2599,7 @@ fn refuse_without_workspace(name: &str, workspace: &Path, decision: Decision) ->
                 || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
             let shown = grokhub_core::canonical_session_cwd(&raw, windows);
             Decision::Refuse(format!(
-                "No workspace in this chat: folder `{shown}` does not exist on disk. Create it or pick a folder in Chat or Settings → Workspace, then try again."
+                "No workspace in this chat: folder `{shown}` does not exist on disk. Pick a folder in Chat or Settings → Workspace (or create it), then try again."
             ))
         }
     } else {
