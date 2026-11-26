@@ -8,6 +8,7 @@ mod desktop;
 pub(crate) mod fence;
 mod glob;
 mod grep;
+pub(crate) mod hangout;
 pub(crate) mod home_assistant;
 mod html_md;
 mod list_dir;
@@ -37,6 +38,7 @@ pub(crate) mod web_search;
 pub(crate) mod workspace_tools;
 mod write;
 
+pub use hangout::CANT_DO_HERE;
 pub use registry::Settings as DeferredToolsSettings;
 #[cfg(test)]
 pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
