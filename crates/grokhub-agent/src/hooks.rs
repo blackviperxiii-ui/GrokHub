@@ -460,7 +460,9 @@ pub fn on_hold_stream(session: &str, workspace: &Path) -> bool {
         ) else {
             continue;
         };
-        if proc.timed_out {
+        // A hook that failed (non-zero exit) or timed out does not hold, even
+        // when it printed `{"hold":true}` before it failed.
+        if proc.timed_out || proc.exit_code != Some(0) {
             continue;
         }
         if let Some(value) = extract_json(&proc.stdout) {
@@ -2243,6 +2245,31 @@ mod tests {
         );
         on_session_delete(&session, &dir);
         assert_eq!(fs::read_to_string(dir.join("ended")).unwrap(), "SessionEnd");
+        drop(guard);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hold_stream_hook_that_fails_does_not_hold() {
+        let dir = scratch("hold-failed");
+        let session = format!("hold-failed-{}", std::process::id());
+        let hook = |command: String| TestHook {
+            event: "hold_stream".into(),
+            matcher: String::new(),
+            command,
+            timeout: Duration::from_secs(5),
+            source_dir: dir.clone(),
+        };
+        let guard =
+            install_test_hooks(&session, vec![hook(test_echo(r#"{"hold":true}"#, Some(1)))]);
+        assert!(
+            !on_hold_stream(&session, &dir),
+            "a hook that exited 1 failed, so the stream stays live"
+        );
+        drop(guard);
+        let guard =
+            install_test_hooks(&session, vec![hook(test_echo(r#"{"hold":true}"#, Some(0)))]);
+        assert!(on_hold_stream(&session, &dir), "exit 0 holds");
         drop(guard);
         let _ = fs::remove_dir_all(&dir);
     }

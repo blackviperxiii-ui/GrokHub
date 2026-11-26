@@ -620,6 +620,9 @@ pub(crate) fn run_loop_from(
     }
     // Failover PR 7: a new run starts with a clean hand-off chain.
     crate::route::handoff::begin(input.conversation_id);
+    // Deleting a message from the chat waits until this reply is done.
+    let _replying =
+        (input.depth == 0).then(|| crate::session::mark_replying(input.conversation_id));
     let mut out = run_turn(input, history, user_text, image, &mut kept, on_event);
     out.kept = kept;
     crate::client::pair_orphan_calls(history);
@@ -853,6 +856,9 @@ fn run_turn(
     let mut turns = 0u32;
     // Steps sent again after a busy or dropped model, this turn.
     let mut resumes = 0u32;
+    // The message a PreLlmCall hook's note went on last: its index, its text
+    // with the note, and its length before it.
+    let mut hook_noted: Option<(usize, String, usize)> = None;
     // Item 33: a step budget learned from past runs of this kind.
     let mut turn_budget = crate::turn_budget::TurnBudget::new(
         (input.depth == 0)
@@ -1002,10 +1008,20 @@ fn run_turn(
                 );
             }
             crate::hooks::PromptHook::Continue { context } if !context.is_empty() => {
+                let at = history.len().saturating_sub(1);
                 if let Some(InputItem::Message { content, .. }) = history.last_mut() {
                     if let Some(ContentPart::InputText(text)) = content.first_mut() {
+                        // A resend of the same step: the note this hook added
+                        // last time comes off first, so the request is the same.
+                        if let Some((noted_at, noted, before)) = hook_noted.take() {
+                            if noted_at == at && *text == noted {
+                                text.truncate(before);
+                            }
+                        }
+                        let before = text.len();
                         text.push('\n');
                         text.push_str(&context);
+                        hook_noted = Some((at, text.clone(), before));
                     }
                 }
             }
@@ -10138,9 +10154,9 @@ linter (or run the changed file) before you finish: a re-read or git status does
     fn a_reply_that_says_the_tests_pass_after_a_red_run_gets_one_note() {
         let dir = workspace("post-check");
         let conv = format!("post-check-{}", std::process::id());
-        // Prints a cargo-style summary and fails, in bash and PowerShell alike.
-        let red =
-            r#"{"command":"echo 'test result: FAILED. 3 passed; 1 failed'; exit 1 # cargo test"}"#;
+        // A test runner that prints a cargo-style summary and fails, in bash
+        // and PowerShell alike. A comment naming `cargo test` is not a run.
+        let red = r#"{"command":"function pytest { echo 'test result: FAILED. 3 passed; 1 failed'; exit 1; }; pytest"}"#;
         let script = scripted(vec![
             turn("", vec![call("t1", "run_terminal_command", red)]),
             turn("Done, all tests pass.", Vec::new()),
@@ -11698,6 +11714,149 @@ linter (or run the changed file) before you finish: a re-read or git status does
             &second[at + 1],
             InputItem::FunctionCall { call_id, .. } if call_id == "c1"
         ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One run of chat `conv` saying `ask`, with the folder's config pinned.
+    fn run_conv(client: &dyn ModelClient, dir: &std::path::Path, conv: &str, ask: &str) -> LoopOut {
+        let input = LoopIn {
+            client,
+            workspace: dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: conv,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        crate::perm::clear_conversation(conv);
+        run_loop(&input, &mut Vec::new(), ask, None, &mut |_| {})
+    }
+
+    /// Deletes the chat's saved "hi" while its reply streams.
+    struct ForgetsMidReply {
+        conv: &'static str,
+        got: Mutex<Vec<Result<crate::session::Forgotten, String>>>,
+    }
+    impl ModelClient for ForgetsMidReply {
+        fn stream(
+            &self,
+            _req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            let forgot = crate::session::forget_message(
+                self.conv,
+                crate::session::Forget::Ask {
+                    text: "hi",
+                    later: 0,
+                },
+            );
+            self.got.lock().unwrap().push(forgot);
+            Ok(crate::TurnOutput {
+                text: "All done.".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn deleting_a_message_while_the_loop_replies_waits_for_the_reply() {
+        let dir = workspace("forget-mid-reply");
+        let _config = crate::perm::ConfigGuard::set(dir.join("config"));
+        let conv = "native-forget-mid-reply";
+        crate::session::record_turn(
+            conv,
+            "/work",
+            "grok-4.7",
+            &[msg("user", "hi"), msg("assistant", "hello")],
+            &Usage::default(),
+            "",
+            "hi",
+        )
+        .unwrap();
+        let client = ForgetsMidReply {
+            conv,
+            got: Mutex::new(Vec::new()),
+        };
+        let out = run_conv(&client, &dir, conv, "and now?");
+        assert!(matches!(out.stop, StopReason::EndTurn), "{:?}", out.stop);
+        assert_eq!(
+            *client.got.lock().unwrap(),
+            vec![Err(crate::session::FORGET_BUSY.to_string())]
+        );
+        // Once the reply is done, the same delete goes through.
+        assert_eq!(
+            crate::session::forget_message(
+                conv,
+                crate::session::Forget::Ask {
+                    text: "hi",
+                    later: 0
+                }
+            ),
+            Ok(crate::session::Forgotten::Removed)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_resent_step_carries_the_pre_llm_hook_context_once() {
+        let dir = workspace("pre-llm-resend");
+        let conv = "pre-llm-resend";
+        let _hooks = crate::hooks::install_test_hooks(
+            conv,
+            vec![crate::hooks::TestHook {
+                event: "pre_llm_call".into(),
+                matcher: String::new(),
+                command: crate::hooks::test_echo(r#"{"additionalContext":"HOOK-NOTE"}"#, None),
+                timeout: std::time::Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        let client = BusyThen {
+            fails: 1,
+            before: "",
+            err: at_capacity,
+            seen: Mutex::new(Vec::new()),
+        };
+        let out = run_conv(&client, &dir, conv, "read the note");
+        assert!(matches!(out.stop, StopReason::EndTurn), "{:?}", out.stop);
+        let notes: Vec<usize> = client
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|input| {
+                input
+                    .iter()
+                    .map(|item| match item {
+                        InputItem::Message { content, .. } => content
+                            .iter()
+                            .map(|part| match part {
+                                ContentPart::InputText(t) => t.matches("HOOK-NOTE").count(),
+                                ContentPart::InputImage(_) => 0,
+                            })
+                            .sum(),
+                        _ => 0,
+                    })
+                    .sum()
+            })
+            .collect();
+        assert_eq!(notes, vec![1, 1], "HOOK-NOTE counts per request");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

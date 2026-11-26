@@ -1,0 +1,9 @@
+- A chat whose first save was cut off by a crash can be used again: the next message brings its header back instead of every later turn failing to load.
+- Renaming a chat, deleting a message or naming a new chat while a reply is being saved no longer drops saved turns.
+- Deleting a message waits for the running reply in every chat, not only in scheduled runs.
+- A summary compaction keeps the current ask word for word even when it is large, such as a message with several screenshots.
+- A PreLlmCall hook's note goes into a step sent again after a busy model once, not twice.
+- A HoldStream hook that fails no longer holds the streaming reply.
+- The finish check no longer mistakes a command that only names the test command (such as a grep for it) for the test run, so a failed run still shows.
+- Connector and MCP form fields named key, API key, access key, private key, passphrase or PIN are treated as secrets.
+- The self-review issue copy now removes Windows user names from lowercase paths and from paths in debug output.

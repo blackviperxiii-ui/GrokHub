@@ -158,6 +158,14 @@ fn tombs() -> &'static Mutex<HashSet<String>> {
     TOMBS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// One writer at a time for every session file. A rename, a deleted message,
+/// a new title or a torn-line repair reads the whole file and replaces it, so
+/// a turn appended in between would land in the replaced copy and be lost.
+fn file_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 fn next_stamp() -> u64 {
     static STAMP: AtomicU64 = AtomicU64::new(1);
     STAMP.fetch_add(1, Ordering::Relaxed)
@@ -189,6 +197,39 @@ fn tombstone(id: &str) {
         .lock()
         .unwrap_or_else(|err| err.into_inner())
         .insert(id.to_string());
+}
+
+fn replying() -> &'static Mutex<std::collections::HashMap<String, usize>> {
+    static REPLYING: OnceLock<Mutex<std::collections::HashMap<String, usize>>> = OnceLock::new();
+    REPLYING.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Held while the agent loop writes a chat's reply ([`mark_replying`]).
+pub(crate) struct ReplyGuard {
+    id: String,
+}
+
+impl Drop for ReplyGuard {
+    fn drop(&mut self) {
+        let mut map = replying().lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(count) = map.get_mut(&self.id) {
+            *count -= 1;
+            if *count == 0 {
+                map.remove(&self.id);
+            }
+        }
+    }
+}
+
+/// A reply of chat `id` is running in the agent loop, whichever engine
+/// started it: [`forget_message`] refuses until the guard drops.
+pub(crate) fn mark_replying(id: &str) -> ReplyGuard {
+    *replying()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .entry(id.to_string())
+        .or_insert(0) += 1;
+    ReplyGuard { id: id.to_string() }
 }
 
 /// Register a running native session. [`delete_session`] cancels it before the file goes away.
@@ -458,6 +499,12 @@ fn read_head(path: &Path, fallback_id: &str) -> Option<SessionHead> {
 }
 
 pub fn load_session(id: &str) -> Result<SessionInfo, String> {
+    let _lock = file_lock();
+    load_locked(id)
+}
+
+/// [`load_session`] for a caller that holds [`file_lock`].
+fn load_locked(id: &str) -> Result<SessionInfo, String> {
     let path = session_file(id)?;
     read_session(&path, safe_id(id)?, true)
 }
@@ -727,6 +774,7 @@ pub fn fork_session(id: &str) -> Result<SessionInfo, String> {
     let new_id = format!("native-{}", grokhub_core::uid("n"));
     info.forked_from = std::mem::replace(&mut info.id, new_id);
     info.created = grokhub_core::now_ms();
+    let _lock = file_lock();
     write_session(&info)?;
     bump_history();
     Ok(info)
@@ -738,7 +786,8 @@ pub fn rename_session(id: &str, title: &str) -> Result<(), String> {
     if tombstoned(&id) {
         return Ok(());
     }
-    match load_session(&id) {
+    let lock = file_lock();
+    match load_locked(&id) {
         Ok(mut info) => {
             info.title = title;
             info.renamed = true;
@@ -760,6 +809,7 @@ pub fn rename_session(id: &str, title: &str) -> Result<(), String> {
             write_session(&info)?;
         }
     }
+    drop(lock);
     bump_history();
     Ok(())
 }
@@ -888,20 +938,26 @@ pub const FORGET_BUSY: &str = "Wait for the reply to finish, then delete the mes
 
 /// Take one message out of a saved session so the model never reads it again.
 /// Records kept by an earlier compaction are searched too; a call and its
-/// output always go together. Refuses while a run is live on `id`.
+/// output always go together. Refuses while a run is live on `id` or the
+/// agent loop is writing its reply.
 pub fn forget_message(id: &str, what: Forget<'_>) -> Result<Forgotten, String> {
     let id = safe_id(id)?.to_string();
-    if runs()
+    let running = runs()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .contains_key(&id)
-    {
+        .contains_key(&id);
+    let replying = replying()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(&id);
+    if running || replying {
         return Err(FORGET_BUSY.into());
     }
+    let lock = file_lock();
     if !session_file(&id)?.is_file() {
         return Ok(Forgotten::NotSaved);
     }
-    let mut info = load_session(&id)?;
+    let mut info = load_locked(&id)?;
     let visible = visible_slots(&info.records);
     // An ask goes out as typed, or with a note the app put before or after it
     // (a resume recap, a skill's follow-up). Exact matches win; the wrapped
@@ -957,6 +1013,7 @@ pub fn forget_message(id: &str, what: Forget<'_>) -> Result<Forgotten, String> {
     }
     drop_slots(&mut info.records, &doomed);
     write_session(&info)?;
+    drop(lock);
     bump_history();
     Ok(Forgotten::Removed)
 }
@@ -1431,7 +1488,8 @@ fn note_title(id: &str, user_text: &str) -> Result<(), String> {
     if user_text.trim().is_empty() || tombstoned(id) {
         return Ok(());
     }
-    let mut info = load_session(id)?;
+    let _lock = file_lock();
+    let mut info = load_locked(id)?;
     if info.renamed || !default_title(&info.title, id) {
         return Ok(());
     }
@@ -1451,7 +1509,12 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
         return Ok(());
     }
     let path = session_file(id)?;
-    if path.is_file() {
+    let _lock = file_lock();
+    // A file with no whole line yet (a header torn by a crash, or the empty
+    // file its repair leaves) gets the header again: a turn appended after
+    // it would otherwise read back as a chat with no header.
+    let headless = path.is_file() && !has_whole_line(&path);
+    if path.is_file() && !headless {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
@@ -1468,6 +1531,9 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
     });
     let mut bytes = serde_json::to_vec(&header).map_err(|err| err.to_string())?;
     bytes.push(b'\n');
+    if headless {
+        return replace_file(&path, &bytes);
+    }
     match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(mut file) => {
             file.write_all(&bytes).map_err(|err| err.to_string())?;
@@ -1477,6 +1543,25 @@ fn touch(id: &str, cwd: &str, model: &str) -> Result<(), String> {
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(err) => Err(err.to_string()),
+    }
+}
+
+/// The file holds a `\n`-ended line that is not blank: what
+/// [`split_kept_lines`] keeps as a header. Reads only up to that line.
+fn has_whole_line(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return false,
+            Ok(_) if line.last() != Some(&b'\n') => return false,
+            Ok(_) if line.iter().all(u8::is_ascii_whitespace) => {}
+            Ok(_) => return true,
+        }
     }
 }
 
@@ -1492,6 +1577,7 @@ fn append_lines(id: &str, lines: &[u8]) -> Result<(), String> {
         return Ok(());
     }
     let path = session_file(id)?;
+    let _lock = file_lock();
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -1503,6 +1589,8 @@ fn append_lines(id: &str, lines: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Replace the whole file. The caller holds [`file_lock`] from before it read
+/// what it writes back.
 fn write_session(info: &SessionInfo) -> Result<(), String> {
     if tombstoned(&info.id) {
         return Ok(());
@@ -2987,6 +3075,67 @@ mod tests {
         fs::write(&path, b"{\"id\":\"native-torn\",\"tit").unwrap();
         let err = load_session(id);
         assert!(err.is_err(), "{err:?}");
+    }
+
+    #[test]
+    fn a_turn_saved_after_a_torn_header_reads_back() {
+        let (_dir, _guard) = isolated("torn-head");
+        for (id, load_first) in [("native-torn-head-a", true), ("native-torn-head-b", false)] {
+            let path = session_file(id).unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            // A crash while the first write of the chat was going out.
+            fs::write(&path, format!("{{\"id\":\"{id}\",\"tit")).unwrap();
+            if load_first {
+                assert_eq!(load_session(id).err().as_deref(), Some("empty session"));
+                assert_eq!(fs::read_to_string(&path).unwrap(), "");
+            }
+            record_turn(
+                id,
+                "/work",
+                "grok-4.7",
+                &[user("after the crash")],
+                &Usage::default(),
+                "",
+                "after the crash",
+            )
+            .unwrap();
+            let loaded = load_session(id).unwrap_or_else(|err| panic!("{id}: {err}"));
+            assert_eq!(loaded.input(), vec![user("after the crash")], "{id}");
+            assert_eq!(loaded.title, "after the crash", "{id}");
+        }
+    }
+
+    #[test]
+    fn renaming_while_a_reply_is_saved_keeps_every_turn() {
+        let (dir, _guard) = isolated("rename-race");
+        let id = "native-rename-race";
+        let turns = 300;
+        let saver = std::thread::spawn({
+            let dir = dir.clone();
+            move || {
+                let _guard = crate::perm::ConfigGuard::set(&dir);
+                for i in 0..turns {
+                    record_turn(
+                        id,
+                        "/work",
+                        "grok-4.7",
+                        &[assistant(&format!("reply {i}"))],
+                        &Usage::default(),
+                        "",
+                        "",
+                    )
+                    .unwrap();
+                }
+            }
+        });
+        for i in 0..200 {
+            rename_session(id, &format!("Name {i}")).unwrap();
+        }
+        saver.join().unwrap();
+        let info = load_session(id).unwrap();
+        assert_eq!(info.input().len(), turns);
+        assert_eq!(info.title, "Name 199");
+        assert!(info.renamed);
     }
 
     #[test]
