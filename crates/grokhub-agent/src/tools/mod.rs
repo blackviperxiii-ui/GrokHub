@@ -790,7 +790,7 @@ mod tests {
         let out = dispatch(
             &ctx,
             "run_terminal_command",
-            r#"{"command":"rm -f notes.txt","is_background":true}"#,
+            r#"{"command":"rm notes.txt","is_background":true}"#,
         );
         assert!(!out.failed, "{}", out.text);
         for _ in 0..200 {
