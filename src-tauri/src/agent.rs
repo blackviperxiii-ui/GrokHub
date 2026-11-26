@@ -2737,7 +2737,15 @@ mod tests {
             Some(made.to_string())
         );
         assert_eq!(
+            picture(card("image_edit", "completed", done.clone())),
+            Some(made.to_string())
+        );
+        assert_eq!(
             picture(card("image_generate", "in_progress", done.clone())),
+            None
+        );
+        assert_eq!(
+            picture(card("image_edit", "failed", done.clone())),
             None
         );
         assert_eq!(picture(card("read_file", "completed", done)), None);

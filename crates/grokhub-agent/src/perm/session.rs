@@ -4,6 +4,8 @@
 //! next user turn. It never allows a call the gate refused. An identical
 //! successful call (same tool, same arguments) reuses the earlier result.
 
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 const CHATS: usize = 256;
@@ -152,18 +154,45 @@ pub fn earlier_failure(id: &str, tool: &str, args: &str) -> Option<String> {
         })
 }
 
+fn canonical_json_value(value: Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(s.trim().to_string()),
+        Value::Array(items) => Value::Array(items.into_iter().map(canonical_json_value).collect()),
+        Value::Object(map) => {
+            let sorted: BTreeMap<String, Value> = map
+                .into_iter()
+                .map(|(k, v)| (k, canonical_json_value(v)))
+                .collect();
+            Value::Object(sorted.into_iter().collect())
+        }
+        other => other,
+    }
+}
+
+fn canonical_args(tool: &str, args: &str) -> String {
+    if !matches!(tool, "image_generate" | "image_edit") {
+        return args.to_string();
+    }
+    match serde_json::from_str::<Value>(args) {
+        Ok(value) => serde_json::to_string(&canonical_json_value(value))
+            .unwrap_or_else(|_| args.trim().to_string()),
+        Err(_) => args.trim().to_string(),
+    }
+}
+
 /// Remember a successful tool result for this conversation. The next identical
 /// call (same tool, same arguments) returns it without running again.
 pub fn remember_result(id: &str, tool: &str, args: &str, text: &str, image: Option<&str>) {
     if id.is_empty() || tool.is_empty() {
         return;
     }
+    let key_args = canonical_args(tool, args);
     let mut book = book();
     let chat = chat(&mut book, id);
     if let Some(held) = chat
         .results
         .iter_mut()
-        .find(|held| held.tool == tool && held.args == args)
+        .find(|held| held.tool == tool && held.args == key_args)
     {
         held.text = text.to_string();
         held.image = image.map(str::to_string);
@@ -171,20 +200,21 @@ pub fn remember_result(id: &str, tool: &str, args: &str, text: &str, image: Opti
     }
     chat.results.push(Cached {
         tool: tool.to_string(),
-        args: args.to_string(),
+        args: key_args,
         text: text.to_string(),
         image: image.map(str::to_string),
     });
 }
 
 pub fn earlier_result(id: &str, tool: &str, args: &str) -> Option<HeldResult> {
+    let key_args = canonical_args(tool, args);
     book()
         .iter()
         .find(|(key, _)| key == id)
         .and_then(|(_, chat)| {
             chat.results
                 .iter()
-                .find(|held| held.tool == tool && held.args == args)
+                .find(|held| held.tool == tool && held.args == key_args)
                 .map(|held| HeldResult {
                     text: held.text.clone(),
                     image: held.image.clone(),
@@ -294,6 +324,38 @@ mod tests {
             Some("Allow always was not saved for this project: permission denied")
         );
         assert!(note_store_error(id, "permission denied").is_none());
+        clear_conversation(id);
+    }
+
+    #[test]
+    fn image_cache_normalizes_reordered_json_and_covers_image_edit() {
+        let id = "sess-ac3-canonical-img";
+        clear_conversation(id);
+        remember_image(
+            id,
+            r#"{"prompt": "a red fox", "size": "1024x1024"}"#,
+            "IMAGINE: https://cdn.example/fox.png",
+            Some("file:///fox.png"),
+        );
+        let reordered = r#"{ "size": "1024x1024", "prompt": "  a red fox  " }"#;
+        let hit = earlier_image(id, reordered).expect("normalized hit");
+        assert_eq!(hit.text, "IMAGINE: https://cdn.example/fox.png");
+        assert_eq!(hit.image.as_deref(), Some("file:///fox.png"));
+
+        remember_result(
+            id,
+            "image_edit",
+            r#"{"image":"https://cdn.example/fox.png","prompt":"make it darker"}"#,
+            "IMAGINE: https://cdn.example/fox-dark.png",
+            None,
+        );
+        let edit_hit = earlier_result(
+            id,
+            "image_edit",
+            r#"{"prompt": "  make it darker ", "image": "https://cdn.example/fox.png"}"#,
+        )
+        .expect("normalized edit hit");
+        assert_eq!(edit_hit.text, "IMAGINE: https://cdn.example/fox-dark.png");
         clear_conversation(id);
     }
 }

@@ -786,6 +786,8 @@ fn run_turn(
     let mut nested_agents = crate::prompt::NestedAgents::new(input.workspace);
     let mut repeats = Repeats::default();
     let mut empty_searches = 0u32;
+    let mut image_produced_in_turn = false;
+    let mut shell_image_cmds: HashSet<String> = HashSet::new();
     let mut breaker = crate::denials::Breaker::default();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
@@ -1785,6 +1787,9 @@ fn run_turn(
                     &output.text,
                     output.image_data_url.clone(),
                 );
+                if !refused && is_image_tool(&call.name) && output_produced_image(&output) {
+                    image_produced_in_turn = true;
+                }
                 let stop = turn_should_stop(user_text, call, &output, &mut empty_searches);
                 if refused {
                     push_refusal(history, input.conversation_id, call, output);
@@ -1803,6 +1808,15 @@ fn run_turn(
                     );
                     return finish(input, StopReason::EndTurn, usage, compacted_once, true);
                 }
+                call_i += 1;
+                continue;
+            }
+            if image_produced_in_turn && is_image_tool(&call.name) {
+                let output = ToolOutput::err(REQUEST_DONE);
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
             }
@@ -1851,6 +1865,15 @@ fn run_turn(
                 continue;
             }
             let key = repeat_key(call);
+            if call.name == "run_terminal_command" && shell_image_cmds.contains(&key) {
+                let output = ToolOutput::err(REQUEST_DONE);
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_refusal(history, input.conversation_id, call, output);
+                call_i += 1;
+                continue;
+            }
             if repeats.count(&key) >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
                 let id = tool_id(call);
@@ -2224,6 +2247,13 @@ fn run_turn(
                     grokhub_core::now_ms(),
                 )
             });
+            if !output.failed && is_image_tool(&call.name) && output_produced_image(&output) {
+                image_produced_in_turn = true;
+            }
+            if !output.failed && shell_output_produced_image(call, &output) {
+                image_produced_in_turn = true;
+                shell_image_cmds.insert(key.clone());
+            }
             let stop = turn_should_stop(user_text, call, &output, &mut empty_searches);
             if refused {
                 push_refusal(history, input.conversation_id, call, output);
@@ -2667,7 +2697,10 @@ fn session_allows(conversation: &str, name: &str, arguments: &str) -> bool {
 /// the same session. Writes, shell, and reads stay out: the repeat and stall
 /// guards need those to run again.
 fn session_replay_tool(name: &str) -> bool {
-    matches!(name, "web_search" | "web_fetch" | "image_generate")
+    matches!(
+        name,
+        "web_search" | "web_fetch" | "image_generate" | "image_edit"
+    )
 }
 
 /// An identical successful lookup call in this session returns its earlier result.
@@ -2714,13 +2747,91 @@ fn failure_sticks(text: &str) -> bool {
     text != SEARCH_EMPTY_STOP
 }
 
+fn is_image_tool(name: &str) -> bool {
+    matches!(name, "image_generate" | "image_edit")
+}
+
+fn output_produced_image(output: &ToolOutput) -> bool {
+    !output.failed
+        && (output.image_data_url.is_some()
+            || output
+                .text
+                .lines()
+                .any(|line| line.trim_start().starts_with("IMAGINE:")))
+}
+
+fn asks_for_post_image_action(user_text: &str) -> bool {
+    let lower = user_text.to_ascii_lowercase();
+    const FOLLOW_UP_VERBS: &[&str] = &[
+        "and save",
+        "then save",
+        "and email",
+        "then email",
+        "and send it",
+        "then send it",
+        "and resize",
+        "then resize",
+        "and crop",
+        "then crop",
+        "and convert",
+        "then convert",
+        "and commit",
+        "then commit",
+        "and upload",
+        "then upload",
+        "and post",
+        "then post",
+        "and put it in",
+        "then put it in",
+        "and attach",
+        "then attach",
+        "and open it",
+        "then open it",
+        "and compress",
+        "then compress",
+        "and share",
+        "then share",
+    ];
+    FOLLOW_UP_VERBS.iter().any(|phrase| lower.contains(phrase))
+}
+
+fn is_image_shell_command(call: &FunctionCall) -> bool {
+    if call.name != "run_terminal_command" {
+        return false;
+    }
+    let cmd = serde_json::from_str::<serde_json::Value>(&call.arguments)
+        .ok()
+        .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    const IMAGE_BINS: &[&str] = &[
+        "sd-cli",
+        "sd.exe",
+        "stable-diffusion",
+        "z-image",
+        "flux-cli",
+        "imagine_cli",
+    ];
+    IMAGE_BINS.iter().any(|bin| cmd.contains(bin))
+}
+
+fn shell_output_produced_image(call: &FunctionCall, output: &ToolOutput) -> bool {
+    !output.failed
+        && call.name == "run_terminal_command"
+        && (output_produced_image(output) || is_image_shell_command(call))
+}
+
 fn turn_should_stop(
     user_text: &str,
     call: &FunctionCall,
     output: &ToolOutput,
     empty_searches: &mut u32,
 ) -> Option<&'static str> {
-    if !output.failed && call.name == "image_generate" && crate::brain::is_picture_ask(user_text) {
+    if !output.failed
+        && ((is_image_tool(&call.name) && output_produced_image(output))
+            || shell_output_produced_image(call, output))
+        && !asks_for_post_image_action(user_text)
+    {
         return Some(REQUEST_DONE);
     }
     if !output.failed && call.name == "video_generate" && crate::brain::is_video_ask(user_text) {
@@ -2747,6 +2858,22 @@ fn abandon_calls(
         on_event(LoopEvent::Text(SEARCH_EMPTY_STOP.to_string()));
     }
     for call in calls.iter().skip(from) {
+        if reason == REQUEST_DONE && is_image_tool(&call.name) {
+            if let Some(held) = replay_result(conversation_id, call) {
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(
+                    on_event,
+                    &id,
+                    call,
+                    "completed",
+                    &held.text,
+                    held.image_data_url.clone(),
+                );
+                push_output(history, conversation_id, call, held);
+                continue;
+            }
+        }
         let output = ToolOutput::err(reason);
         let id = tool_id(call);
         emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
@@ -8705,6 +8832,276 @@ linter (or run the changed file) before you finish: a re-read or git status does
             "{}",
             outputs[1].1
         );
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn follow_up_image_generate_stops_after_one_call() {
+        let dir = workspace("image-followup");
+        let conv = "image-followup-ac1";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::media::IMAGE_RUNS.store(0, Ordering::SeqCst);
+        let imagine = std::sync::Arc::new(FoxImagine {
+            posts: AtomicUsize::new(0),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            imagine: Some(imagine as std::sync::Arc<dyn crate::tools::media::ImagineApi>),
+            ..Default::default()
+        });
+        let script = script_calls(vec![vec![
+            call(
+                "img-dark-1",
+                "image_generate",
+                r#"{"prompt":"make it darker"}"#,
+            ),
+            call("search-2", "web_search", r#"{"query":"lighting"}"#),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "make it darker",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.turns.lock().unwrap().len(), 1);
+        assert_eq!(crate::tools::media::IMAGE_RUNS.load(Ordering::SeqCst), 1);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "img-dark-1");
+        assert!(outputs[0].1.contains("https://cdn.example/fox.png"));
+        assert_eq!(outputs[1].0, "search-2");
+        assert_eq!(outputs[1].1, REQUEST_DONE);
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_edit_stops_after_one_call_and_caps_second_image_in_same_turn() {
+        let dir = workspace("image-edit-stop");
+        let conv = "image-edit-stop-ac2";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::media::IMAGE_RUNS.store(0, Ordering::SeqCst);
+        let imagine = std::sync::Arc::new(FoxImagine {
+            posts: AtomicUsize::new(0),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            imagine: Some(imagine as std::sync::Arc<dyn crate::tools::media::ImagineApi>),
+            ..Default::default()
+        });
+        let edit_args = r#"{"image":"https://cdn.example/fox.png","prompt":"add a red hat"}"#;
+        let script = script_calls(vec![vec![
+            call("edit-1", "image_edit", edit_args),
+            call("gen-2", "image_generate", r#"{"prompt":"try again"}"#),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "now add a red hat",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(crate::tools::media::IMAGE_RUNS.load(Ordering::SeqCst), 1);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "edit-1");
+        assert!(outputs[0].1.contains("https://cdn.example/fox.png"));
+        assert_eq!(outputs[1].0, "gen-2");
+        assert_eq!(outputs[1].1, REQUEST_DONE);
+
+        crate::tools::media::IMAGE_RUNS.store(0, Ordering::SeqCst);
+        let cap_script = script_calls(vec![vec![
+            call(
+                "edit-a",
+                "image_edit",
+                r#"{"image":"https://cdn.example/fox.png","prompt":"make it brighter"}"#,
+            ),
+            call(
+                "gen-b",
+                "image_generate",
+                r#"{"prompt":"second image in same turn"}"#,
+            ),
+        ]]);
+        let (cap_out, cap_history, _) = drive(
+            &cap_script,
+            &dir,
+            conv,
+            "make it brighter and save it",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(cap_out.stop, StopReason::EndTurn);
+        assert_eq!(crate::tools::media::IMAGE_RUNS.load(Ordering::SeqCst), 1);
+        let cap_outputs = tool_outputs(&cap_history);
+        assert_eq!(cap_outputs[1].0, "gen-b");
+        assert_eq!(cap_outputs[1].1, REQUEST_DONE);
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reordered_json_args_hit_replay_image_without_rerunning() {
+        let dir = workspace("image-reorder");
+        let conv = "image-reorder-ac3";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::media::IMAGE_RUNS.store(0, Ordering::SeqCst);
+        let imagine = std::sync::Arc::new(FoxImagine {
+            posts: AtomicUsize::new(0),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            imagine: Some(imagine as std::sync::Arc<dyn crate::tools::media::ImagineApi>),
+            ..Default::default()
+        });
+        let args_a = r#"{"prompt":"a red fox in snow","resolution":"1k"}"#;
+        let args_b = r#"{ "resolution": "1k", "prompt": "  a red fox in snow  " }"#;
+        let script = script_calls(vec![vec![
+            call("img-r1", "image_generate", args_a),
+            call("img-r2", "image_generate", args_b),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "go",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(crate::tools::media::IMAGE_RUNS.load(Ordering::SeqCst), 1);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].1, outputs[1].1);
+        assert!(outputs[1].1.contains("https://cdn.example/fox.png"));
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn image_producing_shell_command_stops_and_never_reruns_in_same_turn() {
+        let dir = workspace("shell-img-cap");
+        let conv = "shell-img-cap-ac4";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let cmd_json = r#"{"command":"echo IMAGINE: out.png"}"#;
+        let script = script_calls(vec![vec![
+            call("sh-img-1", "run_terminal_command", cmd_json),
+            call("sh-img-2", "run_terminal_command", cmd_json),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Always,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "render a poster",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.turns.lock().unwrap().len(), 1);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "sh-img-1");
+        assert!(outputs[0].1.contains("IMAGINE: out.png"));
+        assert_eq!(outputs[1].0, "sh-img-2");
+        assert_eq!(outputs[1].1, REQUEST_DONE);
+
+        let repeat_script = script_calls(vec![vec![
+            call("sh-repeat-1", "run_terminal_command", cmd_json),
+            call("sh-repeat-2", "run_terminal_command", cmd_json),
+        ]]);
+        let (rep_out, rep_history, _) = drive(
+            &repeat_script,
+            &dir,
+            conv,
+            "render a poster and save it",
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(rep_out.stop, StopReason::EndTurn);
+        let rep_outputs = tool_outputs(&rep_history);
+        assert_eq!(rep_outputs[1].0, "sh-repeat-2");
+        assert_eq!(rep_outputs[1].1, REQUEST_DONE);
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_image_generate_does_not_early_stop() {
+        let dir = workspace("image-fail-ac6");
+        let conv = "image-fail-ac6";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        struct FailImagine;
+        impl crate::tools::media::ImagineApi for FailImagine {
+            fn post_json(
+                &self,
+                _path: &str,
+                _body: &serde_json::Value,
+            ) -> Result<serde_json::Value, String> {
+                Err("backend offline".into())
+            }
+            fn get_json(&self, _path: &str) -> Result<serde_json::Value, String> {
+                Err("backend offline".into())
+            }
+        }
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            imagine: Some(std::sync::Arc::new(FailImagine)),
+            ..Default::default()
+        });
+        let script = script_calls(vec![vec![call(
+            "img-err-1",
+            "image_generate",
+            r#"{"prompt":"draw me a red fox"}"#,
+        )]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "draw me a red fox",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.turns.lock().unwrap().len(), 0);
+        let outputs = tool_outputs(&history);
+        assert!(outputs[0].1.contains("backend offline"));
         crate::perm::clear_conversation(conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
