@@ -83,6 +83,19 @@ fn phase_none(p: &LifePhase) -> bool {
     p.is_none()
 }
 
+/// Where a fire's result went. A job with nowhere to hand its result on
+/// (a script-only run, a check that decided there was nothing to do) has no
+/// destination: its delivery is neither landed nor lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// The destination (the job's board card) took the result.
+    Landed,
+    /// The result had a destination and did not land there.
+    Lost,
+    /// The run had nowhere to hand its result on.
+    NoDestination,
+}
+
 /// One fire's delivery, run, and completion.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -110,18 +123,18 @@ impl AutoLifecycle {
     }
 
     /// Finish a fire. Delivery fail does not require a failed run.
-    pub fn settled(run_ok: bool, delivery_ok: bool) -> Self {
+    pub fn settled(run_ok: bool, delivery: Delivery) -> Self {
         let run = if run_ok {
             LifePhase::Ok
         } else {
             LifePhase::Failed
         };
-        let delivery = if delivery_ok {
-            LifePhase::Ok
-        } else {
-            LifePhase::Failed
+        let (delivery, delivered) = match delivery {
+            Delivery::Landed => (LifePhase::Ok, true),
+            Delivery::Lost => (LifePhase::Failed, false),
+            Delivery::NoDestination => (LifePhase::None, true),
         };
-        let completion = if run_ok && delivery_ok {
+        let completion = if run_ok && delivered {
             LifePhase::Ok
         } else {
             LifePhase::Failed
@@ -615,13 +628,13 @@ mod tests {
 
     #[test]
     fn lifecycle_separates_delivery_from_run() {
-        let life = AutoLifecycle::settled(true, false);
+        let life = AutoLifecycle::settled(true, Delivery::Lost);
         assert_eq!(life.run, LifePhase::Ok);
         assert_eq!(life.delivery, LifePhase::Failed);
         assert_eq!(life.completion, LifePhase::Failed);
-        let both = AutoLifecycle::settled(true, true);
+        let both = AutoLifecycle::settled(true, Delivery::Landed);
         assert_eq!(both.completion, LifePhase::Ok);
-        let run_fail = AutoLifecycle::settled(false, true);
+        let run_fail = AutoLifecycle::settled(false, Delivery::Landed);
         assert_eq!(run_fail.run, LifePhase::Failed);
         assert_eq!(run_fail.delivery, LifePhase::Ok);
         assert_eq!(run_fail.completion, LifePhase::Failed);
@@ -638,10 +651,15 @@ mod tests {
             wait_line(&wait).as_deref(),
             Some("waits until `file:/tmp/ready`")
         );
-        let life = AutoLifecycle::settled(true, true);
+        let life = AutoLifecycle::settled(true, Delivery::Landed);
         assert_eq!(
             lifecycle_line(&life).as_deref(),
             Some("run ok · delivery ok · completion ok")
+        );
+        let nowhere = AutoLifecycle::settled(true, Delivery::NoDestination);
+        assert_eq!(
+            lifecycle_line(&nowhere).as_deref(),
+            Some("run ok · delivery — · completion ok")
         );
     }
 

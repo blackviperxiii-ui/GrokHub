@@ -376,10 +376,10 @@ pub struct RunResult {
     pub text: String,
     pub error: String,
     pub stop: String,
-    /// The place the result goes took it: the job's board card was written.
-    /// A run that had nothing to hand on counts as delivered.
+    /// Whether the place the result goes (the job's board card) took it, or
+    /// that the run had nowhere to hand it on.
     #[serde(skip)]
-    pub delivered: bool,
+    pub delivery: grokhub_core::Delivery,
 }
 
 /// Jobs a Run now or a scheduled run is working on. A second run of the same
@@ -503,14 +503,14 @@ fn run_on_board(
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
-        delivered: false,
+        delivery: grokhub_core::Delivery::Lost,
     };
     let ran = BoardRun {
         job,
         asked: prompt,
         origin: gate.origin,
     };
-    result.delivered = board_run_end(config_dir, ran, card.as_deref(), &result);
+    result.delivery = board_run_end(config_dir, ran, card.as_deref(), &result);
     result
 }
 
@@ -524,7 +524,7 @@ fn settle(a: Automation, result: &RunResult) -> Automation {
     if result.failed() {
         grokhub_core::mark_automation_failed(a, &result.error)
     } else {
-        grokhub_core::mark_automation_ok(a, result.delivered)
+        grokhub_core::mark_automation_ok(a, result.delivery)
     }
 }
 
@@ -564,7 +564,7 @@ pub fn run_now_preflight(
             text: String::new(),
             error: why,
             stop: grokhub_core::PREFLIGHT_STOP.into(),
-            delivered: false,
+            delivery: grokhub_core::Delivery::NoDestination,
         });
     }
     let _running = Running::claim(id)?;
@@ -821,12 +821,12 @@ pub(crate) fn board_run_end(
     ran: BoardRun<'_>,
     card: Option<&str>,
     done: &RunResult,
-) -> bool {
+) -> grokhub_core::Delivery {
     use grokhub_agent::web_origin::{card_saved_here, card_seen, mark_card};
     use grokhub_core::work_resume as res;
     use grokhub_core::work_run::{self as wr, RunEnd};
     let Some(card) = card else {
-        return false;
+        return grokhub_core::Delivery::Lost;
     };
     let job = ran.job;
     let now = grokhub_core::now_ms();
@@ -877,7 +877,11 @@ pub(crate) fn board_run_end(
         }
         (cut, replaced, filed)
     });
-    let delivered = matches!(landed, Ok((_, _, true)));
+    let delivered = if matches!(landed, Ok((_, _, true))) {
+        grokhub_core::Delivery::Landed
+    } else {
+        grokhub_core::Delivery::Lost
+    };
     let (cut, replaced, _) = landed.unwrap_or((false, None, false));
     if let Some((id, seen)) = replaced {
         // A mark that can't be taken off leaves the report a browser's: the safe side.
