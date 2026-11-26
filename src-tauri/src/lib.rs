@@ -35,6 +35,7 @@ pub mod chips;
 pub mod claude_chat;
 mod code_agent;
 mod code_keep;
+mod code_panel_cmd;
 mod code_rollback;
 mod code_sessions;
 pub mod command_box;
@@ -1275,6 +1276,11 @@ async fn chat_turn(
     // bundled skills always on.
     let coding = own_folder.is_some();
     code_agent::bind(&state.config_dir, &conversation_id, coding);
+    grokhub_agent::code_panel::bind_session(
+        &conversation_id,
+        &state.config_dir,
+        own_folder.as_deref(),
+    );
     // A scratch chat feeds nothing that outlives it: no taste note, no
     // repeated-ask offers, no task outcomes.
     let scratch = grokhub_agent::scratch::is_scratch(&conversation_id);
@@ -1958,6 +1964,7 @@ fn end_chat(state: &ShellState, conversation_id: &str) {
         lead::closed(&state.config_dir, conversation_id);
     }
     code_agent::bind(&state.config_dir, conversation_id, false);
+    grokhub_agent::code_panel::bind_session(conversation_id, &state.config_dir, None);
     if current(state).last_chat == conversation_id {
         set_last_chat(state, "");
     }
@@ -9714,6 +9721,10 @@ pub fn run() {
             code_rollback::code_revert_list,
             code_rollback::code_revert_plan,
             code_rollback::code_revert_run,
+            code_panel_cmd::code_panel_state,
+            code_panel_cmd::code_panel_settings_save,
+            code_panel_cmd::code_panel_backups,
+            code_panel_cmd::code_panel_backup_restore,
             code_secret_list,
             code_secret_set,
             code_secret_delete,

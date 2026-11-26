@@ -2231,3 +2231,37 @@ fn a_chat_with_permission_rules_reads_back_a_long_outputs_cut_lines() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn windows_drive_paths_stay_strict_while_matching_case_and_verbatim_prefix() {
+    let ws = Path::new(r"\\?\C:\Users\alice\GrokHub-Work");
+    assert!(!matchers::path_escapes(
+        ws,
+        r"C:\Users\alice\GrokHub-Work\notes.txt"
+    ));
+    assert!(!matchers::path_escapes(
+        ws,
+        "c:/users/alice/grokhub-work/sub/file.txt"
+    ));
+    assert!(!matchers::path_escapes(
+        ws,
+        r"\\?\C:\Users\alice\GrokHub-Work\notes.txt"
+    ));
+    assert!(!matchers::path_escapes(ws, "notes.txt"));
+
+    // Sibling prefix, other drive, parent traversal, and home outside workspace stay strictly blocked.
+    assert!(matchers::path_escapes(
+        ws,
+        r"C:\Users\alice\GrokHub-Work-other\notes.txt"
+    ));
+    assert!(matchers::path_escapes(
+        ws,
+        r"D:\Users\alice\GrokHub-Work\notes.txt"
+    ));
+    assert!(matchers::path_escapes(
+        ws,
+        r"C:\Users\alice\Desktop\secret.txt"
+    ));
+    assert!(matchers::path_escapes(ws, r"..\outside.txt"));
+    assert!(matchers::path_escapes(ws, "~/notes.txt"));
+}

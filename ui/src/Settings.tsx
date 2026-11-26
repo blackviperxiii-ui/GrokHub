@@ -131,6 +131,21 @@ export function Settings({
     getSettings().then(setSettings, fail);
   }, [fail]);
 
+  // Auto setup saves settings (approvals among them) on its own, so after a
+  // visit there the copy here is read again before anything writes it back.
+  const autoSetupSeen = useRef(false);
+  useEffect(() => {
+    if (section === "autoSetup") {
+      autoSetupSeen.current = true;
+      return;
+    }
+    if (!autoSetupSeen.current) return;
+    getSettings().then((next) => {
+      autoSetupSeen.current = false;
+      setSettings(next);
+    }, fail);
+  }, [section, fail]);
+
   useEffect(() => {
     if (!caps.desktopControl || caps.remote) return;
     getHaltKeys().then(
@@ -183,11 +198,15 @@ export function Settings({
   }
 
   // Defaults and Behavior save the tray, folder and approvals themselves; this
-  // sends them back as they stand.
+  // sends them back as they stand, read again first if Auto setup may have
+  // changed them.
   function flipDesktopControl(on: boolean) {
     if (!settings) return;
-    const { closeToTray, workspace, approvals } = settings;
-    void flip(() => saveSettings(closeToTray, workspace, approvals, on));
+    const shown = settings;
+    void flip(async () => {
+      const { closeToTray, workspace, approvals } = autoSetupSeen.current ? await getSettings() : shown;
+      return saveSettings(closeToTray, workspace, approvals, on);
+    });
   }
 
   async function saveKey() {

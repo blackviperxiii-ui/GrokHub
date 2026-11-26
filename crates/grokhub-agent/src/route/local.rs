@@ -1115,6 +1115,12 @@ pub(super) fn serve_request_noting(
     let n_ctx = rt
         .context_tokens()
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
+    // Order 27: a local coding turn keeps only code tools and a lean prompt
+    // before the window fit (frontier / Hangout chat-only never reach here).
+    if crate::tools::coding::wants_on_device(&req.conversation_id) {
+        crate::tools::coding::filter_tools(&mut req.tools);
+        crate::tools::coding::apply_lean_prompt(&mut req.input);
+    }
     // A picture ask, or a computer that can draw, keeps the picture tool
     // even on a small window, and the device is told it can draw.
     let can_draw = super::local_image::can_draw_here();

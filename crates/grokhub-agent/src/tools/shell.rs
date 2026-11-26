@@ -388,7 +388,7 @@ pub(crate) fn run_adoptable(
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
         Ok(path) => path,
-        Err(err) => return ToolOutput::err(format!("workspace is not available: {err}")),
+        Err(err) => return ToolOutput::err(super::workspace_unavailable_error(workspace, &err)),
     };
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, &cwd);
     let mut guard = plan

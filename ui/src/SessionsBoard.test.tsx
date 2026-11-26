@@ -13,6 +13,12 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
+const external = vi.hoisted(() => ({
+  openExternal: vi.fn<(url: string) => Promise<void>>(),
+}));
+
+vi.mock("./external", () => external);
+
 import { SESSIONS_EMPTY, SessionsBoard } from "./SessionsBoard";
 
 function page(over: Partial<SessionsBoardPage> = {}): SessionsBoardPage {
@@ -62,6 +68,32 @@ describe("SessionsBoard", () => {
     api.sessionsBoardReshape.mockReset();
     api.getSessionsBoard.mockResolvedValue(page());
     api.sessionsBoardStamp.mockResolvedValue(1);
+    external.openExternal.mockReset();
+    external.openExternal.mockResolvedValue(undefined);
+  });
+
+  it("opens a PR link in the system browser", async () => {
+    render(<SessionsBoard onOpenChat={() => {}} />);
+    await userEvent.click(await screen.findByRole("link", { name: /PR · open/i }));
+    expect(external.openExternal).toHaveBeenCalledTimes(1);
+    expect(external.openExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/1");
+  });
+
+  it("background reloads keep the applied query, not text still being typed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<SessionsBoard onOpenChat={() => {}} />);
+      await screen.findByText("Ship Sessions board");
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.type(screen.getByLabelText("Filter by title"), "half typed");
+      api.getSessionsBoard.mockClear();
+      api.sessionsBoardStamp.mockResolvedValue(2);
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(api.getSessionsBoard).toHaveBeenCalled());
+      expect(api.getSessionsBoard.mock.calls[0]).toEqual(["everyone", ""]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows run-status tiles and PR links from the page", async () => {

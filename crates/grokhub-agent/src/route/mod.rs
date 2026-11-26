@@ -22,6 +22,7 @@ pub mod coaching;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
+pub mod frontier_usage;
 pub mod goal;
 pub mod guard;
 pub mod handoff;
@@ -349,7 +350,9 @@ pub fn call_model(
     let mut on_provider = decision.on_provider() && !on_device;
     let started = std::time::Instant::now();
     crate::harness::replay::clear_last();
-    let allow_failover = voice_route::active_reply_pref(&dir).is_none();
+    let allow_failover = voice_route::active_reply_pref(&dir).is_none()
+        && !crate::code_panel::session_local_only(&call.conversation_id)
+        && !crate::code_panel::session_local_only(&call.session);
     let session_key = if call.session.is_empty() {
         call.conversation_id.as_str()
     } else {
@@ -607,6 +610,8 @@ pub struct RouteInput<'a> {
     pub probation_canary: Option<&'a str>,
     /// Active voice session reply source preference (`None` = Auto).
     pub voice_reply: Option<voice_route::ReplyPref>,
+    /// Code tab "Local models only and nonstop coding" is enabled for this project.
+    pub code_local_only: bool,
     /// User-benched models/providers to exclude from routing.
     pub user_bench: user_bench::UserBench,
 }
@@ -1267,7 +1272,10 @@ impl Router {
         // A picture moves the turn online only when the device would have
         // taken it and an online model that reads pictures is left: a turn
         // that went online anyway never says the picture moved it.
-        if !local::is_local(&route.model) || !local_vision::reads_online(input) {
+        if input.code_local_only
+            || !local::is_local(&route.model)
+            || !local_vision::reads_online(input)
+        {
             return route;
         }
         let online = Self::choose_among(input, reg, profiles, table, now_ms, true);
@@ -1562,6 +1570,27 @@ impl Router {
                 && local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
         });
+        let code_local_gate = local::LocalGate {
+            offline: true,
+            hard_tool: false,
+            ..input.local.clone()
+        };
+        let code_local_id = reg.models.keys().map(String::as_str).find(|id| {
+            !input.user_bench.matches_model(id)
+                && local::admits(&code_local_gate, id, input.class, input.ctx_tokens)
+                && policy::fits(
+                    reg,
+                    profiles,
+                    id,
+                    policy::Fit {
+                        ctx_tokens: 0,
+                        needs_image: false,
+                        ..fit
+                    },
+                    &input.spend,
+                    now_ms,
+                )
+        });
         // Failover PR 5, the warm-local rule (corrected 2026-11-07): a model
         // already loaded on the device takes a less challenging turn by
         // default — no cloud spend, no cold start — unless the turn is
@@ -1595,11 +1624,35 @@ impl Router {
             && ((input.local.sensitive && !input.local.cloud_grant)
                 || (input.local.offline
                     && local::eligible_if_running(&input.local, input.class, input.ctx_tokens))
+                || (input.code_local_only
+                    && local::eligible_if_running(&code_local_gate, input.class, input.ctx_tokens))
                 || (matches!(input.voice_reply, Some(voice_route::ReplyPref::LocalOnly))
                     && local::eligible_if_running(&as_offline, input.class, input.ctx_tokens)))
         {
-            // Sensitive data, offline mode, or voice Local only: keep on the paused device.
+            // Sensitive data, offline mode, Code local-only, or voice Local only:
+            // keep on the paused device.
             local_paused(&mut rules)
+        } else if input.code_local_only {
+            // Code tab "Local models only and nonstop coding": route strictly to
+            // local models and never escalate to a frontier model.
+            match code_local_id {
+                Some(id) => {
+                    rules.push("code:local_only".into());
+                    ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: None,
+                    }
+                }
+                None => {
+                    rules.push("code:no_local".into());
+                    ModelPick {
+                        model: input.current_model.trim().to_string(),
+                        no_route: true,
+                        replaced: None,
+                    }
+                }
+            }
         } else if local::privacy_only(&input.local) {
             // Sensitive data and no cloud grant: the device or nothing.
             match ids.iter().find(|id| local::is_local(id)) {

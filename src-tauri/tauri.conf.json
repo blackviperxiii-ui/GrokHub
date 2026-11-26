@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GrokHub Shell",
+  "productName": "Loadout",
   "version": "3.6.0",
   "identifier": "dev.grokhub.shell",
   "build": {

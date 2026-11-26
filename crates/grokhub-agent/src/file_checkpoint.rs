@@ -187,7 +187,8 @@ pub fn before_write(path: &Path) {
         files: Vec::new(),
         snapshot: None,
     });
-    if manifest.files.iter().any(|f| f.path == key) || in_snapshot(&manifest, &key) {
+    if manifest.files.iter().any(|f| f.path == key) || in_snapshot(&manifest, &canonical_key(path))
+    {
         return;
     }
     let entry = if path.is_file() {
@@ -1163,6 +1164,22 @@ fn path_key(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// `path` spelled the way a snapshot's canonical root is, so a short or
+/// differently cased spelling (Windows `RUNNER~1`) still matches. Falls back
+/// to the parent's canonical form for a path that does not exist yet.
+fn canonical_key(path: &Path) -> String {
+    if let Ok(full) = path.canonicalize() {
+        return path_key(&full);
+    }
+    match (
+        path.parent().and_then(|p| p.canonicalize().ok()),
+        path.file_name(),
+    ) {
+        (Some(parent), Some(name)) => path_key(&parent.join(name)),
+        _ => path_key(path),
+    }
+}
+
 fn display_path(key: &str) -> String {
     // Prefer the leaf name for the list; keep full when short.
     let leaf = key.rsplit('/').next().unwrap_or(key);
@@ -1590,6 +1607,27 @@ mod tests {
         assert!(!ws.join("keep.txt").exists());
         assert_eq!(fs::read(ws.join("made.txt")).unwrap(), b"made");
         assert_eq!(fs::read(ws.join("gen/x.rs")).unwrap(), b"generated");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A workspace reached by another spelling (a link here, a short
+    /// `RUNNER~1` name on Windows) still matches the snapshot's canonical root.
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_through_another_spelling_of_the_workspace_keeps_the_snapshot() {
+        let (base, ws, _guard) = scratch("wlink");
+        let link = base.join("ws-link");
+        std::os::unix::fs::symlink(&ws, &link).unwrap();
+        let path = link.join("a.txt");
+        fs::write(&path, b"v1").unwrap();
+        let step = begin_step("conv-link").unwrap();
+        assert_eq!(before_shell(&link, "rm -f b.txt"), 1);
+        fs::write(&path, b"v2").unwrap();
+        before_write(&path);
+        let m = load_manifest(&step_dir("conv-link", step)).unwrap();
+        assert!(m.files.is_empty(), "{:?}", m.files);
+        restore_step("conv-link", step).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"v1");
         let _ = fs::remove_dir_all(&base);
     }
 

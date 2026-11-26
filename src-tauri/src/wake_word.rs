@@ -4,6 +4,7 @@
 //! transcript snippets for matching — never cloud STT for always-listen.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use grokhub_core::{
@@ -18,6 +19,9 @@ const STORE_CAP: u64 = 256 * 1024;
 
 static STORE: Mutex<()> = Mutex::new(());
 static LISTENER: Mutex<Option<(PathBuf, WakeListener)>> = Mutex::new(None);
+/// Whether voice mode holds the mic, kept even before a listener exists so a
+/// listener built later starts paused.
+static VOICE_BUSY: AtomicBool = AtomicBool::new(false);
 
 fn store() -> MutexGuard<'static, ()> {
     STORE.lock().unwrap_or_else(|err| err.into_inner())
@@ -31,6 +35,7 @@ fn path(config_dir: &Path) -> PathBuf {
 fn reset_listener() {
     let mut slot = LISTENER.lock().unwrap_or_else(|err| err.into_inner());
     *slot = None;
+    VOICE_BUSY.store(false, Ordering::SeqCst);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -187,7 +192,9 @@ where
     };
     if need_new {
         let cfg = load_unlocked(config_dir)?;
-        *slot = Some((config_dir.to_path_buf(), WakeListener::new(cfg)));
+        let mut listen = WakeListener::new(cfg);
+        listen.set_voice_busy(VOICE_BUSY.load(Ordering::SeqCst));
+        *slot = Some((config_dir.to_path_buf(), listen));
     }
     let listen = slot
         .as_mut()
@@ -232,7 +239,10 @@ pub fn act(config_dir: &Path, act: Act) -> Result<Page, String> {
                 listen.arm().map_err(|e| e.to_string())?;
             }
             Act::Disarm => listen.disarm(),
-            Act::SetVoiceBusy { busy } => listen.set_voice_busy(busy),
+            Act::SetVoiceBusy { busy } => {
+                VOICE_BUSY.store(busy, Ordering::SeqCst);
+                listen.set_voice_busy(busy);
+            }
         }
         // Turning listen off or clearing consent drops the phase.
         if !listen.config.enabled || !listen.config.consent.mic {
@@ -253,9 +263,10 @@ pub fn feed_local(config_dir: &Path, text: &str) -> Result<FeedResult, String> {
 }
 
 /// Pause or resume wake matching when open-mic / push-to-talk owns the mic.
-/// No-op when the listener was never loaded.
+/// A listener loaded later picks the flag up when it is built.
 pub fn set_voice_busy_flag(busy: bool) {
     let mut slot = LISTENER.lock().unwrap_or_else(|err| err.into_inner());
+    VOICE_BUSY.store(busy, Ordering::SeqCst);
     if let Some((_, listen)) = slot.as_mut() {
         listen.set_voice_busy(busy);
     }
@@ -328,6 +339,32 @@ mod tests {
         assert!(err.contains("paused") || err.contains("owns the mic"));
         act(&root, Act::SetVoiceBusy { busy: false }).unwrap();
         act(&root, Act::Disarm).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn voice_mode_started_before_wake_loads_still_pauses_wake() {
+        reset_listener();
+        let root = temp_config("early-voice");
+        // Voice mode takes the mic before the wake listener exists.
+        set_voice_busy_flag(true);
+        let page = load(&root).unwrap();
+        assert!(page.voice_busy);
+        act(&root, Act::SetMicConsent { on: true }).unwrap();
+        act(&root, Act::SetEnabled { on: true }).unwrap();
+        act(
+            &root,
+            Act::SetPhrases {
+                phrases: vec!["hey cabin".into()],
+            },
+        )
+        .unwrap();
+        act(&root, Act::Arm).unwrap();
+        assert!(feed_local(&root, "hey cabin").is_err());
+        set_voice_busy_flag(false);
+        let hit = feed_local(&root, "hey cabin").unwrap();
+        assert_eq!(hit.kind, "start_turn");
+        reset_listener();
         let _ = std::fs::remove_dir_all(&root);
     }
 
