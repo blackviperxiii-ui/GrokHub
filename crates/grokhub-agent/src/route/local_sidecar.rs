@@ -3427,16 +3427,17 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let model = dir.join("model.gguf");
+        let model = dir.join("models").join("m.gguf");
+        std::fs::create_dir_all(model.parent().expect("models")).unwrap();
         std::fs::write(&model, b"gguf").unwrap();
-        let _bin_env = EnvSet::set("GROKHUB_LLAMA_SERVER", bin.as_os_str());
-        let _model_env = EnvSet::set("GROKHUB_LOCAL_MODEL", model.as_os_str());
+        clear_paths_cache();
+        let paths = resolve_paths(&dir).expect("the test engine and model");
         let _on = crate::route::local::ForceOn::with(None);
         let _need =
             super::super::local_scale::NeedGuard::set(super::super::local_scale::Need::Normal);
         let mut planted = idle_child_sidecar(600, unix_secs());
-        planted.model = model.clone();
-        planted.binary = bin.clone();
+        planted.model = paths.model.clone();
+        planted.binary = paths.binary.clone();
         *global_slot().lock().unwrap() = Some(planted);
         let pid = global_pid().expect("planted");
         assert!(
@@ -3451,27 +3452,9 @@ mod tests {
         }
         assert!(!seen.exists(), "llama-server was not started again");
         stop_global();
+        clear_paths_cache();
         set_last_error(None);
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// Puts an environment variable back when the test ends.
-    struct EnvSet(&'static str);
-
-    impl EnvSet {
-        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
-            // SAFETY: the suite runs one test at a time, and this guard
-            // clears the variable before the next test starts.
-            unsafe { std::env::set_var(key, value) };
-            Self(key)
-        }
-    }
-
-    impl Drop for EnvSet {
-        fn drop(&mut self) {
-            // SAFETY: same as `set`.
-            unsafe { std::env::remove_var(self.0) };
-        }
     }
 
     /// A long-running stand-in child (not llama-server) in a [`Sidecar`].
@@ -4880,6 +4863,9 @@ mod tests {
         std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
         assert!(resolve_paths(&dir).is_none());
         std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        // Same timestamp tick: the folder mtime does not move, so the earlier
+        // "nothing here" answer would stand. Both files are on disk now.
+        clear_paths_cache();
         let p = resolve_paths(&dir).expect("paths");
         assert!(p.binary.ends_with(llama_server_name()));
         assert!(p.model.ends_with("a.gguf"));
