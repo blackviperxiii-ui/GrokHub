@@ -1056,6 +1056,8 @@ mod tests {
             source: "https://example.com/auth-demo".into(),
             capabilities: vec!["echo".into()],
             permissions: "Test only.".into(),
+            tools: Vec::new(),
+            env: Default::default(),
         };
         let (tx, inbox) = crate::mcp::ElicitInbox::pair();
         crate::mcp::attach_elicit("oauth-deny", inbox);
@@ -1121,6 +1123,8 @@ mod tests {
             source: "https://example.com/auth-ok".into(),
             capabilities: vec!["echo".into()],
             permissions: "Test only.".into(),
+            tools: Vec::new(),
+            env: Default::default(),
         };
         let (tx, inbox) = crate::mcp::ElicitInbox::pair();
         crate::mcp::attach_elicit("oauth-ok", inbox);

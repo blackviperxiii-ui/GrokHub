@@ -16,6 +16,9 @@ export const KEY_CARD_DETAIL =
 
 export const PASTE_HINT = '{"mcpServers": {"name": {"command": "npx", "args": ["…"]}}}';
 
+export const PICKER_EMPTY =
+  "Tools load after connect. All start on; turn individual tools off on the connector card.";
+
 /** How a catalog connector signs in once it's added. */
 export function authLine(row: CatalogRow): string {
   switch (row.auth) {
@@ -48,6 +51,8 @@ export function ConnectorAdd({
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [card, setCard] = useState<KeyCard | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [picking, setPicking] = useState<CatalogRow | null>(null);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
   const { note, ok, fail } = useNote();
 
   async function load(refresh: boolean) {
@@ -96,6 +101,24 @@ export function ConnectorAdd({
     } finally {
       setBusy(null);
     }
+  }
+
+  function openPicker(row: CatalogRow) {
+    const next: Record<string, boolean> = {};
+    for (const tool of row.tools) next[tool] = true;
+    setPicked(next);
+    setPicking(row);
+  }
+
+  async function confirmPicker() {
+    if (!picking) return;
+    const row = picking;
+    const include =
+      row.tools.length === 0
+        ? null
+        : row.tools.filter((tool) => picked[tool]);
+    setPicking(null);
+    await run(row.id, () => addCatalogConnector(row.id, include));
   }
 
   async function startKey(row: CatalogRow) {
@@ -166,6 +189,52 @@ export function ConnectorAdd({
           </button>
         </div>
       )}
+      {picking && (
+        <div className="card connector-tool-picker" role="dialog" aria-label={`Pick tools for ${picking.name}`}>
+          <div className="card-title">Pick tools for {picking.name}</div>
+          <div className="card-detail-line">{picking.permissions}</div>
+          <div className="card-status">
+            <a href={picking.source} target="_blank" rel="noreferrer">
+              Source
+            </a>
+          </div>
+          {picking.tools.length === 0 ? (
+            <p className="note">{PICKER_EMPTY}</p>
+          ) : (
+            <ul className="connector-tools" aria-label={`${picking.name} tools to install`}>
+              {picking.tools.map((tool) => (
+                <li key={tool}>
+                  <label className="switch">
+                    <span>{tool}</span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label={`${picking.name} ${tool} on`}
+                      checked={picked[tool] ?? false}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setPicked((all) => ({ ...all, [tool]: on }));
+                      }}
+                    />
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="card-buttons">
+            <button
+              type="button"
+              disabled={busy !== null || (picking.tools.length > 0 && !picking.tools.some((t) => picked[t]))}
+              onClick={() => void confirmPicker()}
+            >
+              {busy === picking.id ? "Adding…" : "Add with selected tools"}
+            </button>
+            <button type="button" className="quiet" disabled={busy !== null} onClick={() => setPicking(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {tab === "catalog" ? (
         <>
           <div className="card-buttons">
@@ -195,12 +264,13 @@ export function ConnectorAdd({
                 </div>
                 <div className="card-detail-line">{row.description}</div>
                 <div className="card-status">{authLine(row)}</div>
+                <div className="card-status">{row.permissions}</div>
                 <div className="card-buttons">
                   {!row.installed && (
                     <button
                       type="button"
-                      disabled={busy !== null}
-                      onClick={() => void run(row.id, () => addCatalogConnector(row.id))}
+                      disabled={busy !== null || picking !== null}
+                      onClick={() => openPicker(row)}
                     >
                       {busy === row.id ? "Adding…" : "Add"}
                     </button>

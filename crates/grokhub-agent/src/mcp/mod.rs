@@ -98,6 +98,7 @@ fn cabin_cua_def() -> Option<ServerDef> {
         token_ref: None,
         token_env: None,
         disabled_tools: Default::default(),
+        include_tools: None,
     })
 }
 
@@ -528,12 +529,20 @@ pub fn shutdown_all() {
     tasks::clear_memory();
 }
 
+fn tool_offered(def: &ServerDef, raw: &str) -> bool {
+    !def.disabled_tools.contains(raw)
+        && match &def.include_tools {
+            None => true,
+            Some(include) => include.contains(raw),
+        }
+}
+
 fn doctor_tools(def: &ServerDef, listed: &[ToolRec]) -> Vec<DoctorTool> {
     listed
         .iter()
         .map(|tool| DoctorTool {
             name: tool.raw.clone(),
-            enabled: !def.disabled_tools.contains(&tool.raw),
+            enabled: tool_offered(def, &tool.raw),
         })
         .collect()
 }
@@ -807,9 +816,10 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
     Ok(line)
 }
 
-/// Connectors page per-tool switch: add or drop `tool` in the server's
-/// `disabledTools` list. A disabled tool is never offered to the model and
-/// never runs through chat. The server stays connected.
+/// Connectors page per-tool switch. With an install-time `includeTools`
+/// allowlist, toggling rewrites that list; otherwise it updates
+/// `disabledTools`. A tool left out is never offered to the model and never
+/// runs through chat. The server stays connected.
 pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, String> {
     let tool = tool.trim();
     if tool.is_empty() {
@@ -830,20 +840,28 @@ pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, St
         .ok_or_else(|| format!("{server} isn't one of this app's connections"))?;
     let mut entry: serde_json::Map<String, Value> =
         serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
-    let mut disabled: std::collections::BTreeSet<String> = entry
-        .get("disabledTools")
-        .or_else(|| entry.get("disabled_tools"))
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            item.as_str()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .collect();
-    let was_on = !disabled.contains(tool);
+    let read_set = |keys: &[&str]| -> std::collections::BTreeSet<String> {
+        keys.iter()
+            .find_map(|k| entry.get(*k))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .collect()
+    };
+    let has_include = entry.contains_key("includeTools") || entry.contains_key("include_tools");
+    let mut include = read_set(&["includeTools", "include_tools"]);
+    let mut disabled = read_set(&["disabledTools", "disabled_tools"]);
+    let was_on = if has_include {
+        include.contains(tool) && !disabled.contains(tool)
+    } else {
+        !disabled.contains(tool)
+    };
     let line = if on {
         format!("Turned on {server}'s {tool}")
     } else {
@@ -852,7 +870,19 @@ pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, St
     if was_on == on {
         return Ok(line);
     }
-    if on {
+    if has_include {
+        if on {
+            include.insert(tool.to_string());
+            disabled.remove(tool);
+        } else {
+            include.remove(tool);
+        }
+        entry.remove("include_tools");
+        entry.insert(
+            "includeTools".into(),
+            json!(include.iter().cloned().collect::<Vec<_>>()),
+        );
+    } else if on {
         disabled.remove(tool);
     } else {
         disabled.insert(tool.to_string());
@@ -864,7 +894,7 @@ pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, St
         entry.remove("disabled_tools");
         entry.insert(
             "disabledTools".into(),
-            json!(disabled.into_iter().collect::<Vec<_>>()),
+            json!(disabled.iter().cloned().collect::<Vec<_>>()),
         );
     }
     let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
@@ -877,17 +907,14 @@ pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, St
         crate::harness::ChangeTarget::put(&target, Some(&bytes))
     })?;
     // Keep the connection; only the offered tool list changes. Sync the
-    // slot's disabled set and the file fingerprint so the next load does
+    // slot's filter sets and the file fingerprint so the next load does
     // not tear the server down over this write.
     {
         let mut held = lock_state();
         if let Some(slot) = held.slots.get(server) {
             let mut inner = lock_slot(slot);
-            if on {
-                inner.def.disabled_tools.remove(tool);
-            } else {
-                inner.def.disabled_tools.insert(tool.to_string());
-            }
+            inner.def.include_tools = if has_include { Some(include) } else { None };
+            inner.def.disabled_tools = disabled;
         }
         let (r#gen, mtime) = fingerprint(&path);
         held.r#gen = r#gen;
@@ -933,7 +960,9 @@ pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
     let obj = entry
         .as_object()
         .ok_or("a connector entry must be a JSON object")?;
-    if ["headers", "env", "bearerToken", "bearer_token", "tokenRef"]
+    // Catalog installs may carry non-secret `env` (a local URL) and an
+    // `includeTools` picker list. Headers and sealed token fields stay out.
+    if ["headers", "bearerToken", "bearer_token", "tokenRef"]
         .iter()
         .any(|k| obj.contains_key(*k))
     {
@@ -1632,7 +1661,7 @@ fn model_tools() -> Vec<ToolRec> {
         .filter(|tool| {
             slots
                 .get(&tool.server)
-                .map(|slot| !lock_slot(slot).def.disabled_tools.contains(&tool.raw))
+                .map(|slot| tool_offered(&lock_slot(slot).def, &tool.raw))
                 .unwrap_or(true)
         })
         .collect()
@@ -2058,6 +2087,45 @@ mod tests {
             super::set_enabled("nope", false),
             Err("nope isn't one of this app's connections".into())
         );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn include_tools_from_the_install_picker_limits_chat() {
+        let (dir, _guard) = temp_cfg("include-tools");
+        std::fs::write(
+            dir.join("mcp.json"),
+            r#"{"mcpServers":{"wiki":{"command":"definitely-not-a-real-binary-xyz","includeTools":["ask"]}}}"#,
+        )
+        .unwrap();
+        super::invalidate();
+        let _snap = install_test_tools(&[
+            ("wiki", "ask", "ask a question", true),
+            ("wiki", "read", "read a page", true),
+        ]);
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["wiki__ask"]);
+        assert!(try_dispatch("wiki__read", &json!({}), &|| false).is_none());
+        assert_eq!(
+            super::set_tool_enabled("wiki", "read", true),
+            Ok("Turned on wiki's read".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(text.contains("\"includeTools\""), "{text}");
+        assert!(text.contains("read"), "{text}");
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"wiki__ask"), "{names:?}");
+        assert!(names.contains(&"wiki__read"), "{names:?}");
         super::shutdown_all();
         super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);

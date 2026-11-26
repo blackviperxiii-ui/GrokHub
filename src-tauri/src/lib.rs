@@ -3467,9 +3467,10 @@ async fn connector_catalog(
 async fn add_catalog_connector(
     state: State<'_, ShellState>,
     id: String,
+    include_tools: Option<Vec<String>>,
 ) -> Result<connectors::Changed, String> {
     let workspace = workspace(&state);
-    off_main(move || connectors::add_catalog(&workspace, &id)).await?
+    off_main(move || connectors::add_catalog(&workspace, &id, include_tools)).await?
 }
 
 #[tauri::command]
