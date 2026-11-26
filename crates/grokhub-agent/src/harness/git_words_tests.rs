@@ -550,7 +550,12 @@ fn a_word_is_gits_own_exactly_when_the_installed_git_ignores_an_alias_of_it() {
     ] {
         let runs_alias = alias_runs(word).unwrap();
         seen.push((word, runs_alias));
-        assert_eq!(git_runs_own(word), !runs_alias, "{word}");
+        // A "not git's own" can come from the installed git's list taking
+        // over its 3 s limit on a loaded runner (the safe answer), so that
+        // answer is asked up to 3 times. An "own" is never asked again, and
+        // a real miss fails all 3.
+        let own = (0..3).any(|_| git_runs_own(word));
+        assert_eq!(own, !runs_alias, "{word}");
     }
     let _ = std::fs::remove_dir_all(&dir);
     // The sample holds both kinds on any git.

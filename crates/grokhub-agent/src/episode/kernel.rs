@@ -975,7 +975,7 @@ impl Run<'_, '_> {
                         tool: park.tool.clone(),
                         decision: "approve".into(),
                         ui_changed: ui,
-                        result: result_text(&out),
+                        result: result_text(&out, self.k.held),
                     };
                     self.record_as(
                         park.step,
@@ -1105,7 +1105,10 @@ impl Run<'_, '_> {
                 tool: c.name.clone(),
                 decision: "allow".into(),
                 ui_changed: None,
-                result: format!("{} (fan-out {returned}/{take} returned)", result_text(&out)),
+                result: format!(
+                    "{} (fan-out {returned}/{take} returned)",
+                    result_text(&out, self.k.held)
+                ),
             };
             let id = format!("s{}", self.ep.steps);
             self.hold(&id, &c.name, &out);
@@ -1209,7 +1212,7 @@ impl Run<'_, '_> {
         // Zoom counts as a read here, so what it opens is readable.
         self.hold(id, &call.name, &out);
         self.record(
-            &shape("allow", ui, result_text(&out)),
+            &shape("allow", ui, result_text(&out, self.k.held)),
             args_redacted,
             "soft",
             id,
@@ -1491,15 +1494,18 @@ fn arg_line(name: &str, arguments: &str) -> String {
 }
 
 /// What a step line and its span keep of a result: the text, never the
-/// image. A "no capture backend works" note is kept whole so the pause names
-/// every backend's error.
-fn result_text(out: &ToolOutput) -> String {
+/// image, redacted like the held copy (keys and held secrets)
+/// before it is cut, so a cut can't leave part of a key in the span. A
+/// "no capture backend works" note is kept whole so the pause names every
+/// backend's error.
+fn result_text(out: &ToolOutput, held: &[String]) -> String {
     let cap = if out.text.contains(CAPTURE_FAILED_HEAD) {
         super::CAPTURE_NOTE_CAP
     } else {
         super::STEP_RESULT_CAP
     };
-    let t: String = out.text.chars().take(cap).collect();
+    let clean = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(&out.text), held);
+    let t: String = clean.chars().take(cap).collect();
     if out.failed && !t.starts_with("failed") {
         format!("failed: {t}")
     } else {
