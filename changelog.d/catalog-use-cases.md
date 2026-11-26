@@ -1,0 +1,1 @@
+- Download models tags every on-device model with its job (general chat, coding, reasoning, vision, image gen, video gen, or voice), adds Qwen coder and Devstral Small 2 rows, adds Wan 2.2 5B for short local video on an 8 GB GPU or larger, and drops three overlapping general chats.

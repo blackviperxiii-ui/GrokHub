@@ -160,6 +160,68 @@ fn more_than_one_slot_shares_one_kv_pool_and_the_prompt_cache_is_reused() {
     assert_eq!(none.seqs(), 1);
 }
 
+fn amd(name: &str, integrated: bool) -> Gpu {
+    Gpu {
+        vendor: GpuVendor::Amd,
+        name: name.into(),
+        vram_mb: if integrated { 0 } else { 16_384 },
+        free_vram_mb: None,
+        integrated,
+        unified: false,
+        driver: String::new(),
+    }
+}
+
+#[test]
+fn a_rocm_launch_pins_hip_to_the_discrete_amd_gpus() {
+    // iGPU first (HIP 0), then the discrete card (HIP 1).
+    let with_igpu = [
+        amd("AMD Radeon Graphics", true),
+        amd("AMD Radeon RX 9070 XT", false),
+    ];
+    assert_eq!(hip_discrete_devices(&with_igpu).as_deref(), Some("1"));
+    assert_eq!(
+        hip_visible_env(Backend::Rocm, &with_igpu, |_| false),
+        vec![("HIP_VISIBLE_DEVICES", "1".to_string())]
+    );
+    // Two discrete cards keep both, comma-joined in probe order.
+    let dual = [
+        amd("AMD Radeon RX 7900 XTX", false),
+        amd("AMD Radeon RX 9070 XT", false),
+    ];
+    assert_eq!(hip_discrete_devices(&dual).as_deref(), Some("0,1"));
+    assert_eq!(
+        hip_visible_env(Backend::Rocm, &dual, |_| false),
+        vec![("HIP_VISIBLE_DEVICES", "0,1".to_string())]
+    );
+    // iGPU alone: nothing to pin.
+    let igpu = [amd("AMD Radeon Graphics", true)];
+    assert_eq!(hip_discrete_devices(&igpu), None);
+    assert_eq!(hip_visible_env(Backend::Rocm, &igpu, |_| false), vec![]);
+}
+
+#[test]
+fn a_user_set_hip_visible_devices_is_left_alone_and_vulkan_is_untouched() {
+    let with_igpu = [
+        amd("AMD Radeon Graphics", true),
+        amd("AMD Radeon RX 9070 XT", false),
+    ];
+    assert_eq!(
+        hip_visible_env(Backend::Rocm, &with_igpu, |k| k == "HIP_VISIBLE_DEVICES"),
+        vec![],
+        "the user's own value wins"
+    );
+    assert_eq!(
+        hip_visible_env(Backend::Vulkan, &with_igpu, |_| false),
+        vec![],
+        "Vulkan never gets HIP_VISIBLE_DEVICES"
+    );
+    assert_eq!(
+        hip_visible_env(Backend::Cuda, &with_igpu, |_| false),
+        vec![]
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_low_priority_child_runs_at_nice_ten() {

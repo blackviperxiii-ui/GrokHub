@@ -1,0 +1,1 @@
+- Model downloads use the catalog SHA-256 when Hugging Face masks the file hash, and still verify the finished file.

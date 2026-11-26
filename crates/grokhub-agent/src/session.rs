@@ -223,6 +223,7 @@ fn stop_run(id: &str) {
 
 /// Cancel the run registered for `id`. Does not walk linked child engines.
 pub(crate) fn cancel_token(id: &str) {
+    crate::mcp::cancel_open_tasks(id);
     let live = runs()
         .lock()
         .unwrap_or_else(|err| err.into_inner())

@@ -156,6 +156,36 @@ fn agents_message_their_list_and_their_lead_but_not_sideways() {
 }
 
 #[test]
+fn a_paired_computer_reaches_only_an_agent_shared_with_it() {
+    let mut file = household();
+    file.agents[2].share = true;
+    file.agents[2].share_with = vec!["laptop".into()];
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "front-desk", &[]),
+        Ok(())
+    );
+    let unknown = Err(Refusal::UnknownAgent("front-desk".into()));
+    assert_eq!(
+        file.may_message(Sender::Peer("desk-pc"), "front-desk", &[]),
+        unknown
+    );
+    file.agents[2].share = false;
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "front-desk", &[]),
+        unknown
+    );
+    // An agent that isn't shared answers like one that doesn't exist.
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "planner", &[]),
+        Err(Refusal::UnknownAgent("planner".into()))
+    );
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "ghost", &[]),
+        Err(Refusal::UnknownAgent("ghost".into()))
+    );
+}
+
+#[test]
 fn a_customer_agent_only_answers() {
     let file = household();
     assert_eq!(
@@ -290,6 +320,18 @@ fn every_rule_names_what_broke() {
         (
             Box::new(|f| f.agents[0].talks_to.push("researcher".into())),
             "`planner` lists `researcher` twice in talks_to.",
+        ),
+        (
+            Box::new(|f| f.agents[2].share_with = vec!["laptop".into(), "laptop".into()]),
+            "`front-desk` lists computer `laptop` twice in share_with.",
+        ),
+        (
+            Box::new(|f| f.agents[2].share_with = vec![" ".into()]),
+            "`front-desk` lists a computer id that is empty or longer than 128 characters.",
+        ),
+        (
+            Box::new(|f| f.agents[2].share_with = (0..17).map(|n| format!("pc-{n}")).collect()),
+            "`front-desk` is shared with more than 16 computers.",
         ),
         (
             Box::new(|f| f.agents[0].tools = vec!["rm -rf".into()]),

@@ -29,8 +29,10 @@ const MIB: u64 = 1_024 * 1_024;
 pub struct LibraryRow {
     pub id: String,
     pub name: String,
-    /// Name, size, fit, Uncensored, licence.
+    /// Name, size, fit, job, Uncensored, licence.
     pub line: String,
+    /// The catalog job, in the words the row shows (`Coding`, `Video gen`).
+    pub use_case: String,
     /// What it is for, and why when the fit isn't clean.
     pub about: String,
     /// `download`, `resume`, `queued`, `downloading`, `downloaded`, `inUse`
@@ -285,6 +287,7 @@ fn build(
             id: m.id.into(),
             name: m.name.into(),
             line: lib::row_line(r),
+            use_case: ls::use_case(m.id).label().into(),
             about,
             state,
         }
@@ -912,7 +915,9 @@ mod tests {
 
     #[test]
     fn a_device_reply_offers_one_better_model_per_task_and_reads_this_pc_only_when_needed() {
-        const CODER: &str = "qwen3.6-35b-a3b-heretic-q4_k_m";
+        // Qwen3 Coder 30B codes at 90, ahead of Qwen 3.6 at 85, and this
+        // 12 GB GPU still has room for it.
+        const CODER: &str = "qwen3-coder-30b-a3b-heretic-q4_k_m";
         let dir = config("offer");
         let read = std::cell::Cell::new(0);
         let pc_rows = || {

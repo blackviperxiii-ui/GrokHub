@@ -1,0 +1,30 @@
+name: Nightly
+
+# The nightly full CI run and beta pre-release (~3 AM America/Chicago).
+# Schedules fire from the default branch (main), in main's cache scope, which
+# every branch can read. Building beta there would let beta's code write those
+# caches, so this job checks out nothing: it dispatches ci.yml and release.yml
+# on beta with nightly=true, and they build in beta's own scope.
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  beta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch CI and Release on beta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for workflow in ci.yml release.yml; do
+            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/dispatches" \
+              -f ref=beta -f 'inputs[nightly]=true'
+            echo "dispatched $workflow on beta"
+          done

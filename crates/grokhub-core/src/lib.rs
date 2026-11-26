@@ -389,9 +389,9 @@ pub use chat_view::{
     strip_thinking, thought_body_key, thought_control_act, thought_fold_controls,
     thought_fold_draws, thought_fold_transition, thought_shows_acts, thought_shows_label,
     visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, BubbleDelete,
-    ChatKind, ChatView, MessageOrigin, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP,
-    CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP,
-    THOUGHT_ROW_LABEL,
+    ChatKind, ChatView, MessageOrigin, ThinkTagFold, ThinkTagOut, ThoughtFold, ThoughtFoldAct,
+    CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
+    THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use chip_health::{
     chip_health, chip_health_lines, in_holdout, log_chip_next_action, ChipHealth, SourceHealth,

@@ -9,7 +9,7 @@ Columns, left to right:
 - **Beta**: a push to `beta`, which every merged PR makes.
 - **Main**: a push to `main`, made by a promotion or a hotfix.
 - **Tag**: a `v*` tag.
-- **Nightly**: the 08:00 UTC schedule. It fires from `main` but builds `beta`.
+- **Nightly**: `nightly.yml` fires at 08:00 UTC from `main` and dispatches `ci.yml` and `release.yml` on `beta` with `nightly=true`. The build runs in `beta`'s cache scope, so `beta`'s code never writes the caches of `main`, which every branch reads.
 - **Manual**: `workflow_dispatch`.
 
 ## ci.yml
@@ -54,7 +54,7 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 
 7. The nightly skips everything after `plan` when `vX.Y.Z-beta.N` already exists, which means nothing new landed on `beta`.
 
-- Rust caches (`shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
+- Rust caches (`shell-<os>`) are used only on the `beta` ref, the nightly included. Tags build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
 - A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing, and the `guards` job fails when that call is missing or is not the first command for a tag (`scripts/ci-guards.sh`).
 - `publish` downloads only the `shell-*` artifacts.
@@ -67,6 +67,7 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | Workflow | Runs on |
 |---|---|
 | `pii-guard.yml` (required `pii-guard`) | PR, Queue, push to `beta` and `main`. Superseded PR and beta runs are cancelled. |
+| `nightly.yml` | Schedule (08:00 UTC) and manual. Dispatches the `ci.yml` and `release.yml` nightly on `beta`. Builds nothing. |
 | `auto-merge.yml` | PR events into `beta`. Turns on squash auto-merge. Builds nothing. |
 | `retarget.yml` | PRs opened against `main`. Moves them to `beta`. Builds nothing. |
 | `cards-sync.yml`, `claude.yml` | Bot workflows: schedule, issue, review and manual triggers. They build nothing. |

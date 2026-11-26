@@ -68,6 +68,12 @@ pub struct ChatMetrics {
     /// model that wrote them, then by the tool they ran as.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub repairs: BTreeMap<String, BTreeMap<String, u32>>,
+    /// Local tool calls checked against their schema.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tool_calls: u32,
+    /// Of those, the ones whose arguments missed the schema.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub malformed: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +157,23 @@ impl SessionMetrics {
         *n = n.saturating_add(1);
         c.updated_ms = now_ms;
     }
+
+    /// One local tool call, well formed or not. `malformed` is a schema miss.
+    pub fn note_local_tool(&mut self, chat: &str, malformed: bool, now_ms: u64) {
+        if chat.is_empty() {
+            return;
+        }
+        let c = self.chat_mut(chat);
+        c.tool_calls = c.tool_calls.saturating_add(1);
+        if malformed {
+            c.malformed = c.malformed.saturating_add(1);
+        }
+        c.updated_ms = now_ms;
+    }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// Every chat's counters added up, as rates.
@@ -167,6 +190,10 @@ pub struct SessionSummary {
     pub escalation_pct: f64,
     /// Escalated calls that answered over escalated calls, percent.
     pub precision_pct: f64,
+    /// Local tool calls checked against a schema.
+    pub tool_calls: u32,
+    /// Schema misses over those calls, percent.
+    pub malformed_pct: f64,
 }
 
 fn pct(part: u64, whole: u64) -> f64 {
@@ -197,6 +224,21 @@ pub fn summary(m: &SessionMetrics) -> SessionSummary {
         escalations: escalations as u32,
         escalation_pct: pct(escalations, calls),
         precision_pct: pct(sum(|c| c.precise as u64), escalations),
+        tool_calls: sum(|c| c.tool_calls as u64) as u32,
+        malformed_pct: pct(sum(|c| c.malformed as u64), sum(|c| c.tool_calls as u64)),
+    }
+}
+
+/// `malformed` of `tool_calls`, as a percent the eval report can print.
+/// `None` when no local tool call was checked.
+pub fn malformed_rate(tool_calls: u32, malformed: u32) -> Option<String> {
+    if tool_calls == 0 {
+        None
+    } else {
+        Some(format!(
+            "{:.1}% ({malformed}/{tool_calls})",
+            malformed as f64 * 100.0 / tool_calls as f64
+        ))
     }
 }
 
@@ -223,6 +265,18 @@ pub fn note_call(config_dir: &Path, chat: &str, facts: &CallFacts<'_>, now_ms: u
     let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let mut m = load(config_dir);
     m.note(chat, facts, now_ms);
+    m.schema = SESSION_METRICS_SCHEMA;
+    let _ = write_json(&metrics_path(config_dir), &m);
+}
+
+/// Fold one local tool call into the file. Never fails the call.
+pub fn note_local_tool(config_dir: &Path, chat: &str, malformed: bool, now_ms: u64) {
+    if chat.is_empty() || (cfg!(test) && !crate::perm::config_pinned()) {
+        return;
+    }
+    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut m = load(config_dir);
+    m.note_local_tool(chat, malformed, now_ms);
     m.schema = SESSION_METRICS_SCHEMA;
     let _ = write_json(&metrics_path(config_dir), &m);
 }
@@ -291,8 +345,26 @@ mod tests {
                 escalations: 2,
                 escalation_pct: 50.0,
                 precision_pct: 50.0,
+                tool_calls: 0,
+                malformed_pct: 0.0,
             }
         );
+    }
+
+    #[test]
+    fn malformed_local_calls_are_a_rate() {
+        let mut m = SessionMetrics::default();
+        m.note_local_tool("chat-m", false, 1);
+        m.note_local_tool("chat-m", true, 2);
+        m.note_local_tool("chat-m", false, 3);
+        m.note_local_tool("chat-m", true, 4);
+        assert_eq!(
+            (m.chats["chat-m"].tool_calls, m.chats["chat-m"].malformed),
+            (4, 2)
+        );
+        assert_eq!(summary(&m).malformed_pct, 50.0);
+        assert_eq!(malformed_rate(4, 1).as_deref(), Some("25.0% (1/4)"));
+        assert_eq!(malformed_rate(0, 0), None);
     }
 
     #[test]

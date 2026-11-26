@@ -1354,7 +1354,7 @@ fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
         T0,
         &held,
     );
-    assert_eq!(secret.goal, "Log in with [redacted] and [redacted]");
+    assert!((secret.goal) == ("Log in with [redacted] and [redacted]"));
     let shape = StepShape {
         goal_step: "Go".into(),
         tool: "click".into(),

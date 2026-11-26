@@ -10,6 +10,17 @@
 //! one wider span is a flag's own quoted value made only of value
 //! characters and spaces (`--password "correct horse"`): with no operator
 //! or newline in it, it can only hold arguments, never a command.
+//!
+//! A `--flag`'s value is hidden only when the flag is named for its secret
+//! (its last part is a secret word: `--password`, `--auth-token`) and its
+//! first part doesn't make it a switch: one that asks for the secret or
+//! turns one on (`--ask-password`, `--always-auth`, `--exit-code`) takes
+//! no value, and nor does one with a secret word inside its name
+//! (`--keep-session-cookies`, `--password-stdin`), so the word after it,
+//! often the file a hook writes or the download it runs, stays on the
+//! page. A word after a secret flag that is shaped like a flag (`--verbose`,
+//! `-o`, `-O/home/user/.bashrc`) is the next flag; any other word is the
+//! value, even one that starts with `-`, as a base64url token can.
 
 const HIDDEN: &str = "[redacted]";
 
@@ -133,11 +144,51 @@ fn hide_after_colon(text: &str) -> Option<String> {
     Some(format!("{}{shown}{}", &text[..pass], &text[pass + used..]))
 }
 
+fn secret_part(part: &str) -> bool {
+    SECRET_PARTS.contains(&part) || SECRET_ENDS.iter().any(|end| part.ends_with(end))
+}
+
 pub(crate) fn secret_name(name: &str) -> bool {
     let name = name.trim_start_matches('-').to_ascii_lowercase();
-    name.split(['_', '-']).any(|part| {
-        SECRET_PARTS.contains(&part) || SECRET_ENDS.iter().any(|end| part.ends_with(end))
-    })
+    name.split(['_', '-']).any(secret_part)
+}
+
+/// First parts of a switch's name that say it takes no value: it asks for
+/// the secret, says when one is sent, or turns one on, off or out
+/// (`--ask-password`, `--always-auth`, `--exit-code`, `--show-token`).
+const SWITCH_LEADS: &[&str] = &[
+    "allow", "always", "ask", "disable", "enable", "exit", "forget", "junk", "keep", "never", "no",
+    "print", "prompt", "remember", "require", "save", "show", "skip", "store", "with", "without",
+];
+
+/// A `--flag` named for the secret it takes: its last part is a secret word
+/// (`--api-key`, `--oauth2-bearer`), not just one of its parts
+/// (`--keep-session-cookies`, `--cookie-jar`, `--password-stdin`), and its
+/// first part isn't one that makes it a switch (`--ask-password`).
+fn secret_flag_name(name: &str) -> bool {
+    let name = name.trim_start_matches('-').to_ascii_lowercase();
+    let first = name.split(['_', '-']).next().unwrap_or_default();
+    let last = name.rsplit(['_', '-']).next().unwrap_or_default();
+    let switch = name.contains(['_', '-']) && SWITCH_LEADS.contains(&first);
+    secret_part(last) && !switch
+}
+
+/// A word after a secret flag that is the next flag, not the secret:
+/// `--name`, `-x`, or `-x` with a path joined to it (`-O/home/user/.bashrc`,
+/// `-o../out`). A secret can start with `-` (base64url), so any other word
+/// that does, like `-AbC123`, is still the value.
+fn next_flag(word: &str) -> bool {
+    let mut chars = word.chars();
+    if chars.next() != Some('-') {
+        return false;
+    }
+    match chars.next() {
+        Some('-') => chars.next().is_none_or(|c| c.is_ascii_alphabetic()),
+        Some(c) if c.is_ascii_alphabetic() => chars
+            .next()
+            .is_none_or(|c| matches!(c, '/' | '.' | '~' | '\\')),
+        _ => false,
+    }
 }
 
 /// The words of a command line as byte ranges: runs of non-space text, with
@@ -210,7 +261,7 @@ fn secret_flag(name: &str, program: &str) -> Option<Secret> {
         "-u" | "--user" | "--proxy-user" => Some(Secret::AfterColon),
         "-p" if PASSWORD_P.contains(&program) => Some(Secret::Value),
         "-a" if program == "redis-cli" => Some(Secret::Value),
-        _ if name.starts_with("--") && secret_name(name) => Some(Secret::Value),
+        _ if name.starts_with("--") && secret_flag_name(name) => Some(Secret::Value),
         _ => None,
     }
 }
@@ -270,8 +321,11 @@ fn hide_flags(command: &str) -> String {
         out.push_str(&command[last..s]);
         let word = &command[s..e];
         let shown = match pending.take() {
-            Some(secret) => hide_flag_value(secret, word).unwrap_or_else(|| word.to_string()),
-            None => {
+            // `--token -o out.txt`: `-o` is the next flag, not the value.
+            Some(secret) if !next_flag(word) => {
+                hide_flag_value(secret, word).unwrap_or_else(|| word.to_string())
+            }
+            _ => {
                 let (shown, next) = flag_word(word, &program);
                 pending = next;
                 shown
