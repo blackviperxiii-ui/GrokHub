@@ -22,6 +22,7 @@ mod diet;
 pub mod dream_gate;
 mod dream_model;
 mod drive;
+pub mod edit_verify;
 pub mod elevate;
 pub mod episode;
 mod eval;
