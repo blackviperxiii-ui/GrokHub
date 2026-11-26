@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BattlenetPage,
+  ChatArtifact,
   ChatEvent,
   ImagineKind,
   ImagineMade,
@@ -27,6 +28,9 @@ const api = vi.hoisted(() => ({
   chatPicture: vi.fn<(path: string) => Promise<string>>(),
   chatMedia: vi.fn<(path: string) => Promise<string>>(),
   saveChatMediaToLibrary: vi.fn<(path: string, prompt: string) => Promise<ImagineTile>>(),
+  listChatArtifacts: vi.fn<() => Promise<ChatArtifact[]>>(),
+  openChatArtifact: vi.fn<(path: string) => Promise<void>>(),
+  revealChatArtifact: vi.fn<(path: string) => Promise<void>>(),
   getImagine: vi.fn<() => Promise<ImaginePage>>(),
   imagineGenerate:
     vi.fn<(prompt: string, aspect: string, count: number, kind: ImagineKind) => Promise<ImagineMade>>(),
@@ -53,6 +57,9 @@ vi.mock("./api", async () => {
     chatPicture: api.chatPicture,
     chatMedia: api.chatMedia,
     saveChatMediaToLibrary: api.saveChatMediaToLibrary,
+    listChatArtifacts: api.listChatArtifacts,
+    openChatArtifact: api.openChatArtifact,
+    revealChatArtifact: api.revealChatArtifact,
     getImagine: api.getImagine,
     imagineGenerate: api.imagineGenerate,
     imagineCancel: api.imagineCancel,
@@ -85,7 +92,28 @@ vi.mock("./api", async () => {
 });
 
 import { Chat, IMAGINE_PROMPT_HINT, makingLine } from "./Chat";
-import { CREATIONS_EMPTY, Library, paintingLine, WALL_RETRY, wallLine } from "./Library";
+import {
+  ARTIFACTS_EMPTY,
+  CREATIONS_EMPTY,
+  filterArtifacts,
+  Library,
+  paintingLine,
+  WALL_RETRY,
+  wallLine,
+} from "./Library";
+
+function artifact(over: Partial<ChatArtifact> = {}): ChatArtifact {
+  return {
+    id: "shell-1:cabin.png",
+    kind: "image",
+    name: "cabin.png",
+    path: "/home/user/.config/app/sessions/shell-1/media/cabin.png",
+    chatId: "shell-1",
+    chatTitle: "make a cabin",
+    created: 2,
+    ...over,
+  };
+}
 
 function tile(over: Partial<ImagineTile> = {}): ImagineTile {
   return {
@@ -153,6 +181,9 @@ describe("Chat media generation and Library Creations", () => {
     api.getBattlenet.mockResolvedValue({ found: false, games: [] });
     api.getMission.mockResolvedValue({ mission: null, xp: EMPTY_XP });
     api.libraryCover.mockResolvedValue(null);
+    api.listChatArtifacts.mockResolvedValue([]);
+    api.openChatArtifact.mockResolvedValue();
+    api.revealChatArtifact.mockResolvedValue();
   });
 
   function wallNews(unlisten: () => void = () => {}) {
@@ -335,5 +366,91 @@ describe("Chat media generation and Library Creations", () => {
 
     unmount();
     await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
+  });
+
+  it("Library Artifacts lists chat media with Open chat, search, Open, Download and Copy", async () => {
+    const openChat = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const imgPath = "/home/user/.config/app/sessions/shell-1/media/cabin.png";
+    const vidPath = "/home/user/.config/app/sessions/shell-1/media/waves.mp4";
+    api.listChatArtifacts.mockResolvedValue([
+      artifact({ id: "shell-1:cabin.png", name: "cabin.png", path: imgPath }),
+      artifact({
+        id: "shell-1:waves.mp4",
+        kind: "video",
+        name: "waves.mp4",
+        path: vidPath,
+        chatTitle: "ocean clip",
+      }),
+      artifact({
+        id: "shell-1:link:0",
+        kind: "link",
+        name: "example.com/docs",
+        path: "https://example.com/docs",
+        chatTitle: "docs",
+      }),
+    ]);
+    api.chatPicture.mockResolvedValue("data:image/png;base64,CABIN");
+    api.chatMedia.mockResolvedValue("data:video/mp4;base64,AAAA");
+
+    const listed = [
+      artifact({ id: "shell-1:cabin.png", name: "cabin.png", path: imgPath }),
+      artifact({
+        id: "shell-1:waves.mp4",
+        kind: "video",
+        name: "waves.mp4",
+        path: vidPath,
+        chatTitle: "ocean clip",
+      }),
+      artifact({
+        id: "shell-1:link:0",
+        kind: "link",
+        name: "example.com/docs",
+        path: "https://example.com/docs",
+        chatTitle: "docs",
+      }),
+    ];
+    expect(filterArtifacts(listed, "cabin").map((a) => a.name)).toEqual(["cabin.png"]);
+    expect(filterArtifacts(listed, "ocean").map((a) => a.name)).toEqual(["waves.mp4"]);
+
+    render(<Library onOpenChat={openChat} />);
+    await userEvent.click(screen.getByRole("button", { name: "Artifacts" }));
+    expect(await screen.findByLabelText("Artifacts")).toBeVisible();
+    expect(screen.getByText("cabin.png")).toBeVisible();
+    expect(screen.getByText("waves.mp4")).toBeVisible();
+    expect(screen.getByText("example.com/docs")).toBeVisible();
+
+    await userEvent.type(screen.getByLabelText("Search artifacts"), "cabin");
+    expect(screen.getByText("cabin.png")).toBeVisible();
+    expect(screen.queryByText("waves.mp4")).toBeNull();
+    expect(screen.queryByText("example.com/docs")).toBeNull();
+
+    await userEvent.clear(screen.getByLabelText("Search artifacts"));
+    const chatButtons = screen.getAllByRole("button", { name: "Open chat" });
+    await userEvent.click(chatButtons[0]);
+    expect(openChat).toHaveBeenCalledWith("shell-1");
+
+    await userEvent.click(screen.getByRole("button", { name: "Open cabin.png" }));
+    const box = await screen.findByRole("dialog", { name: "Image" });
+    expect(box.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,CABIN");
+    expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute("download", "cabin.png");
+    await userEvent.click(within(box).getByRole("button", { name: "Close" }));
+
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    await userEvent.click(copyButtons[0]);
+    expect(writeText).toHaveBeenCalledWith(imgPath);
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied.");
+  });
+
+  it("Library Artifacts empty state is distinct from Creations", async () => {
+    api.listChatArtifacts.mockResolvedValue([]);
+    render(<Library />);
+    await userEvent.click(screen.getByRole("button", { name: "Artifacts" }));
+    expect(await screen.findByText(ARTIFACTS_EMPTY)).toBeVisible();
+    expect(screen.queryByText(CREATIONS_EMPTY)).toBeNull();
   });
 });

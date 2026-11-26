@@ -7,6 +7,7 @@ pub mod agent;
 pub mod ai_models;
 #[cfg(desktop)]
 mod app_guard;
+pub mod artifacts;
 pub mod attach;
 pub mod audio_check;
 pub mod auto_fixes;
@@ -6980,6 +6981,29 @@ async fn save_chat_media_to_library(
     off_main(move || imagine::save_to_library(&dir, &path, &prompt, grokhub_core::now_ms())).await?
 }
 
+/// Library → Artifacts: images, videos, files and links from every shell chat.
+#[tauri::command]
+async fn list_chat_artifacts(
+    state: State<'_, ShellState>,
+) -> Result<Vec<artifacts::Artifact>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || artifacts::list(&dir)).await
+}
+
+/// Open a listed artifact (file in its app, or link in the browser).
+#[tauri::command]
+async fn open_chat_artifact(state: State<'_, ShellState>, path: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || artifacts::open(&dir, &path)).await?
+}
+
+/// Show a listed file in the file manager. Links are refused.
+#[tauri::command]
+async fn reveal_chat_artifact(state: State<'_, ShellState>, path: String) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || artifacts::reveal(&dir, &path)).await?
+}
+
 #[tauri::command]
 async fn get_ai_models(state: State<'_, ShellState>) -> Result<ai_models::AiModelsView, String> {
     capabilities::needs(capabilities::current().local_ai, "AI models")?;
@@ -8495,6 +8519,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 &|chat| chat.is_some_and(|id| web.owns(id)),
             )?)
         }
+        "list_chat_artifacts" => out(artifacts::list_with(&state.config_dir, &|id| web.owns(id))),
         "get_skills" => out(block_on(get_skills(state))?),
         "nyx_look" => out(nyx_look(
             state,
@@ -9894,6 +9919,9 @@ pub fn run() {
             chat_picture,
             chat_media,
             save_chat_media_to_library,
+            list_chat_artifacts,
+            open_chat_artifact,
+            reveal_chat_artifact,
             imagine_sign_in_start,
             imagine_sign_in_poll,
             imagine_sign_out,

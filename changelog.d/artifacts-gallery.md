@@ -1,0 +1,1 @@
+- Library → Artifacts lists images, videos, files and links from every chat, with Open chat, Open, Download, Show in folder and Copy, plus search by name.

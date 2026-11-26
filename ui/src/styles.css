@@ -5430,6 +5430,18 @@ a.feed-title:focus-visible {
   white-space: nowrap;
 }
 
+.artifact-tile .card-status {
+  font-size: var(--font-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-tile .card-media-actions {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .lightbox video {
   max-width: 100%;
   max-height: calc(100% - 64px);
