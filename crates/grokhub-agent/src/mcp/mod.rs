@@ -30,7 +30,7 @@ pub(crate) use elicit::with_elicit;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::SystemTime;
 
 use serde_json::{json, Value};
@@ -202,11 +202,12 @@ pub struct LentTool {
     pub read_only: bool,
 }
 
-/// Every connected MCP tool with its input schema, for a companion to lend.
+/// Every connected MCP tool a model may call, with its input schema, for a
+/// companion to lend (app-only tools stay with their own app).
 /// Another companion's relay (`/node/v1/mcp/`) is never lent on: that
 /// companion's person allowed this computer, not whoever it lends to.
 pub fn lent_tools() -> Vec<LentTool> {
-    let tools = current_tools();
+    let tools = model_tools();
     let (slots, _) = load_slots();
     let relays: Vec<&String> = slots
         .iter()
@@ -252,7 +253,10 @@ struct SlotInner {
     connecting: bool,
     /// Bumped per connect, so one that a restart or sign-out overtook is dropped.
     attempt: u64,
-    conn: Option<Conn>,
+    /// The connection has its own lock, held for the length of a call, so a
+    /// slow or hung call never holds the slot that every chat's tool list,
+    /// permission check and Settings row reads.
+    conn: Option<SharedConn>,
     /// When `raw` was last listed, for the server's `ttlMs`.
     listed_at: Option<std::time::Instant>,
 }
@@ -273,14 +277,39 @@ impl SlotInner {
         }
     }
 
-    /// The server's `ttlMs` ran out since its tools were listed.
+    /// The server's `ttlMs` ran out since its tools were listed. Not while
+    /// a call is running on the connection: the re-list waits for a free one.
     fn list_expired(&self, now: std::time::Instant) -> bool {
         let (Some(conn), Some(at)) = (&self.conn, self.listed_at) else {
+            return false;
+        };
+        let Ok(conn) = conn.try_lock() else {
             return false;
         };
         conn.list_ttl()
             .is_some_and(|ttl| now.saturating_duration_since(at) >= ttl)
     }
+
+    /// Drop `conn` with `err` as the server's error, unless a restart has
+    /// replaced it since. `sign_in_again`: the next use reconnects.
+    fn forget_conn(&mut self, conn: &SharedConn, err: &str, sign_in_again: bool) {
+        if !self.conn.as_ref().is_some_and(|now| Arc::ptr_eq(now, conn)) {
+            return;
+        }
+        self.conn = None;
+        self.last_error = Some(clip_err(err));
+        if sign_in_again {
+            self.tried = false;
+        }
+    }
+}
+
+type SharedConn = Arc<Mutex<Conn>>;
+
+/// Lock order: a connection may be locked first and its slot after, never the
+/// other way round except with `try_lock`.
+fn lock_conn(conn: &Mutex<Conn>) -> MutexGuard<'_, Conn> {
+    conn.lock().unwrap_or_else(|err| err.into_inner())
 }
 
 enum Conn {
@@ -353,15 +382,31 @@ const RELIST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 fn relist_expired(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
     let now = std::time::Instant::now();
     for slot in slots.values() {
-        let mut inner = lock_slot(slot);
-        if !inner.list_expired(now) {
-            continue;
-        }
-        let wait = inner.def.startup_timeout.min(RELIST_WAIT);
-        let Some(conn) = inner.conn.as_mut() else {
+        let (conn, wait) = {
+            let inner = lock_slot(slot);
+            if !inner.list_expired(now) {
+                continue;
+            }
+            let Some(conn) = inner.conn.clone() else {
+                continue;
+            };
+            (conn, inner.def.startup_timeout.min(RELIST_WAIT))
+        };
+        // The slot stays free while the server answers.
+        let Ok(mut held) = conn.try_lock() else {
             continue;
         };
-        if let Ok(raw) = conn.relist(wait) {
+        let listed = held.relist(wait);
+        drop(held);
+        let mut inner = lock_slot(slot);
+        if !inner
+            .conn
+            .as_ref()
+            .is_some_and(|now| Arc::ptr_eq(now, &conn))
+        {
+            continue;
+        }
+        if let Ok(raw) = listed {
             inner.raw = raw;
         }
         inner.listed_at = Some(std::time::Instant::now());
@@ -437,10 +482,11 @@ pub(crate) fn cancel_open_tasks(session: &str) {
         let Some(slot) = slots.get(&server) else {
             continue;
         };
-        let Ok(mut inner) = slot.try_lock() else {
-            continue;
-        };
-        if let Some(conn) = inner.conn.as_mut() {
+        let shared = lock_slot(slot).conn.clone();
+        if let Some(shared) = shared {
+            let Ok(mut conn) = shared.try_lock() else {
+                continue;
+            };
             for id in &ids {
                 let _ = conn.raw_rpc(
                     "tasks/cancel",
@@ -449,7 +495,6 @@ pub(crate) fn cancel_open_tasks(session: &str) {
                 );
             }
         }
-        drop(inner);
         for id in ids {
             tasks::finish_id(&id);
         }
@@ -514,10 +559,17 @@ pub fn doctor() -> Vec<DoctorRow> {
             continue;
         }
         let ping_for = std::time::Duration::from_secs(5).min(inner.def.tool_timeout);
-        if let Some(conn) = inner.conn.as_mut() {
-            if let Err(err) = conn.ping(ping_for) {
-                inner.last_error = Some(clip_err(&err));
-                inner.conn.take();
+        // A connection busy with a call is up; one that is free is pinged
+        // with the slot unlocked.
+        if let Some(conn) = inner.conn.clone() {
+            if let Ok(mut held) = conn.try_lock() {
+                drop(inner);
+                let pinged = held.ping(ping_for);
+                drop(held);
+                inner = lock_slot(&slot);
+                if let Err(err) = pinged {
+                    inner.forget_conn(&conn, &err, false);
+                }
             }
         }
         let status = if inner.conn.is_some() && inner.last_error.is_none() {
@@ -817,10 +869,7 @@ pub fn save_key(name: &str, key: &str) -> Result<String, String> {
 /// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
 /// behind `search_tool` and `use_tool`.
 pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
-    let tools: Vec<ToolRec> = current_tools()
-        .into_iter()
-        .filter(|tool| apps::model_visible(tool.ui.as_ref()))
-        .collect();
+    let tools = model_tools();
     if tools.len() + native > DEFER_AFTER {
         return vec![search_schema(), use_schema()];
     }
@@ -945,7 +994,7 @@ pub(crate) fn try_dispatch(
     if name != "use_tool" && !name.contains("__") {
         return None;
     }
-    let tools = current_tools();
+    let tools = model_tools();
     if name == "use_tool" {
         return Some(use_output(&tools, args, stop));
     }
@@ -964,7 +1013,7 @@ pub(crate) fn search_output(args: &Value) -> ToolOutput {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    let tools = current_tools();
+    let tools = model_tools();
     let mut lines = Vec::new();
     for tool in &tools {
         let about = model_description(tool, usize::MAX);
@@ -1093,7 +1142,7 @@ fn resolve(name: &str, arguments: &str) -> Option<Resolved> {
     if name != "use_tool" && !name.contains("__") {
         return None;
     }
-    let tools = current_tools();
+    let tools = model_tools();
     if name == "use_tool" {
         let target = arg_name(arguments);
         if target.is_empty() {
@@ -1171,14 +1220,22 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     let Some(slot) = slots.get(&rec.server).cloned() else {
         return ToolOutput::err(format!("MCP server `{}` stopped", rec.server));
     };
-    let mut inner = lock_slot(&slot);
-    let timeout = inner.def.tool_timeout;
-    let Some(conn) = inner.conn.as_mut() else {
-        return match inner.last_error.as_deref() {
-            Some(err) => fenced_error(err),
-            None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
+    let (shared, timeout, playwright) = {
+        let inner = lock_slot(&slot);
+        let Some(shared) = inner.conn.clone() else {
+            return match inner.last_error.as_deref() {
+                Some(err) => fenced_error(err),
+                None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
+            };
         };
+        let playwright = matches!(
+            &inner.def.transport,
+            TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
+        );
+        (shared, inner.def.tool_timeout, playwright)
     };
+    // Only this connection waits on the call; the slot stays free.
+    let mut conn = lock_conn(&shared);
     // Item 24: a call that can change things carries an idempotency key,
     // the same one when it is resent after an answer that never came.
     let keyed = idem::needs_key(&rec.hints).then(|| idem::fingerprint(&rec.server, &rec.raw, args));
@@ -1202,19 +1259,14 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
         Err(err) => browser::launch_died(err).then(|| err.clone()),
         Ok(_) => None,
     };
-    let playwright = matches!(
-        &inner.def.transport,
-        TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
-    );
     if let Some(text) = died.filter(|_| playwright) {
         eprintln!("grokhub mcp `{}` browser launch died: {text}", rec.server);
         // The dead launch's text passes the same page check as any answer,
         // here and when the next call shows it as the server's error.
         let text = browser::page_refusal(&rec.server, &rec.raw, args, &text, true)
             .map_or_else(|why| why, rpc::clip);
-        inner.conn.take();
-        inner.last_error = Some(clip_err(&text));
-        drop(inner);
+        drop(conn);
+        lock_slot(&slot).forget_conn(&shared, &text, false);
         if browser::isolate(&rec.server) && restart(&rec.server).is_ok() {
             return call_qualified(rec, args, stop);
         }
@@ -1239,12 +1291,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
             let mut out = ToolOutput::ok(fence::fence("mcp", &text));
             if let Some(ui) = &rec.ui {
                 let wait = timeout.min(std::time::Duration::from_secs(15));
-                if let Ok(resource) = inner
-                    .conn
-                    .as_mut()
-                    .ok_or_else(|| "stopped".to_string())
-                    .and_then(|conn| conn.read_resource(&ui.resource_uri, wait))
-                {
+                if let Ok(resource) = conn.read_resource(&ui.resource_uri, wait) {
                     if let Ok((html, prefers_border)) =
                         apps::decode_resource(&ui.resource_uri, &resource)
                     {
@@ -1263,13 +1310,10 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
             out
         }
         Err(err) => {
-            inner.conn.take();
-            inner.last_error = Some(clip_err(&err));
+            drop(conn);
             // An expired sign-in: the next use reconnects, refreshing the token.
             // Checked on the raw text, before it is fenced.
-            if http::is_unauthorized(&err) {
-                inner.tried = false;
-            }
+            lock_slot(&slot).forget_conn(&shared, &err, http::is_unauthorized(&err));
             let mut out = fenced_error(&err);
             if keyed.is_some() && idem::maybe_ran(&err) {
                 out.text.push_str(idem::MAYBE_RAN);
@@ -1286,20 +1330,22 @@ pub fn app_call_tool(server: &str, name: &str, args: &Value) -> Result<Value, St
     let Some(slot) = slots.get(server).cloned() else {
         return Err(format!("MCP server `{server}` is not connected"));
     };
-    let mut inner = lock_slot(&slot);
-    let ui = inner
-        .raw
-        .iter()
-        .find(|tool| tool.name == name)
-        .and_then(|tool| tool.ui.as_ref());
-    if !apps::app_visible(ui) {
-        return Err(format!("Tool {name} is not available to apps"));
-    }
-    let timeout = inner.def.tool_timeout;
-    let Some(conn) = inner.conn.as_mut() else {
-        return Err(format!("MCP server `{server}` stopped"));
+    let (shared, timeout) = {
+        let inner = lock_slot(&slot);
+        let ui = inner
+            .raw
+            .iter()
+            .find(|tool| tool.name == name)
+            .and_then(|tool| tool.ui.as_ref());
+        if !apps::app_visible(ui) {
+            return Err(format!("Tool {name} is not available to apps"));
+        }
+        let Some(shared) = inner.conn.clone() else {
+            return Err(format!("MCP server `{server}` stopped"));
+        };
+        (shared, inner.def.tool_timeout)
     };
-    let (_, failed, raw) = conn.call(name, args, None, timeout, &|| false, true)?;
+    let (_, failed, raw) = lock_conn(&shared).call(name, args, None, timeout, &|| false, true)?;
     if failed {
         return Err(raw
             .get("content")
@@ -1443,6 +1489,16 @@ fn current_tools() -> Vec<ToolRec> {
     flatten(&slots)
 }
 
+/// The tools a model may find and call: [`current_tools`] without the ones
+/// a server marks app-only (`_meta.ui.visibility: ["app"]`), which only its
+/// own MCP App iframe calls, through [`app_call_tool`].
+fn model_tools() -> Vec<ToolRec> {
+    current_tools()
+        .into_iter()
+        .filter(|tool| apps::model_visible(tool.ui.as_ref()))
+        .collect()
+}
+
 fn slots_now() -> BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>> {
     let (slots, _) = load_slots();
     slots
@@ -1529,7 +1585,7 @@ fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
     match opened {
         Ok((conn, raw)) => {
             inner.raw = raw;
-            inner.conn = Some(conn);
+            inner.conn = Some(Arc::new(Mutex::new(conn)));
             inner.listed_at = Some(std::time::Instant::now());
             inner.last_error = None;
         }
@@ -2568,6 +2624,49 @@ mod tests {
     }
 
     #[test]
+    fn app_only_mcp_tools_are_not_found_or_run_by_the_model() {
+        let _guard = install_test_listing(
+            "box",
+            &json!({
+                "tools": [
+                    {
+                        "name": "restock",
+                        "description": "Restock",
+                        "inputSchema": {"type": "object"},
+                        "_meta": {"ui": {"resourceUri": "ui://demo/app", "visibility": ["app"]}}
+                    },
+                    {"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}
+                ]
+            }),
+        );
+        let found = search_output(&json!({"query": ""})).text;
+        assert_eq!(found, "box__echo — Echo");
+        let stop = || false;
+        let via_use = try_dispatch(
+            "use_tool",
+            &json!({"name": "box__restock", "arguments": {}}),
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(
+            (via_use.text.as_str(), via_use.failed),
+            ("unknown tool `box__restock`", true)
+        );
+        assert!(try_dispatch("box__restock", &json!({}), &stop).is_none());
+        let gate = gate(PermMode::Always, false, true);
+        assert_eq!(
+            super::permission(&gate, "use_tool", r#"{"name":"box__restock"}"#, false, None),
+            Some(Decision::Refuse("unknown tool `box__restock`".into()))
+        );
+        assert_eq!(
+            try_dispatch("use_tool", &json!({"name": "box__echo"}), &stop)
+                .unwrap()
+                .text,
+            "test-call box__echo"
+        );
+    }
+
+    #[test]
     fn a_chats_mcp_tools_hold_for_the_turn_and_new_ones_join_at_the_end() {
         let names = |tools: &[serde_json::Value]| -> Vec<String> {
             tools
@@ -2996,6 +3095,162 @@ mod tests {
         assert!(restart("linear")
             .unwrap_err()
             .ends_with("Sign in on its row under Native MCP"));
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Two HTTP MCP servers on one port, `/slow` with a `hang` tool that
+    /// answers after [`HANG`] and `/fast` with `echo`. Each request gets its
+    /// own thread, so one hung call never stalls the other server.
+    struct HangMcp {
+        port: u16,
+        hanging: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    const HANG: std::time::Duration = std::time::Duration::from_secs(5);
+
+    impl HangMcp {
+        fn start() -> Self {
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let hanging = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (hanging2, stop2) = (hanging.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop2.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((sock, _)) => {
+                            let hanging = hanging2.clone();
+                            std::thread::spawn(move || Self::serve(sock, &hanging));
+                        }
+                        Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    }
+                }
+            });
+            Self {
+                port,
+                hanging,
+                stop,
+            }
+        }
+
+        fn url(&self, server: &str) -> String {
+            format!("http://mcp.example.test:{}/{server}", self.port)
+        }
+
+        fn serve(mut sock: std::net::TcpStream, hanging: &std::sync::atomic::AtomicBool) {
+            use std::io::{BufRead, Read, Write};
+            let _ = sock.set_nonblocking(false);
+            let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+            let mut reader = std::io::BufReader::new(sock.try_clone().unwrap());
+            let mut first = String::new();
+            if reader.read_line(&mut first).unwrap_or(0) == 0 {
+                return;
+            }
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let line = line.trim_end().to_ascii_lowercase();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; len];
+            let _ = reader.read_exact(&mut body);
+            let msg: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
+            let tool = if path == "/slow" { "hang" } else { "echo" };
+            let result = match msg["method"].as_str().unwrap_or("") {
+                "initialize" => json!({"protocolVersion": super::rpc::LATEST, "capabilities": {}, "serverInfo": {"name": "hang", "version": "0"}}),
+                "tools/list" => json!({"tools": [{"name": tool, "description": tool, "inputSchema": {"type": "object"}}]}),
+                "tools/call" => {
+                    if tool == "hang" {
+                        hanging.store(true, std::sync::atomic::Ordering::SeqCst);
+                        std::thread::sleep(HANG);
+                    }
+                    json!({"content": [{"type": "text", "text": format!("{tool} done")}]})
+                }
+                _ => json!({}),
+            };
+            let id = msg.get("id").cloned().unwrap_or_default();
+            let (status, out) = if id.is_null() {
+                ("202 Accepted", String::new())
+            } else {
+                ("200 OK", json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string())
+            };
+            let _ = write!(
+                sock,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
+                out.len()
+            );
+        }
+    }
+
+    impl Drop for HangMcp {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_hung_call_on_one_server_leaves_other_chats_tools_free() {
+        use super::{invalidate, shutdown_all};
+        use std::time::{Duration, Instant};
+        let dir = crate::harness::test_dir("mcp-hung-call");
+        let _guard = ConfigGuard::set(&dir);
+        let server = HangMcp::start();
+        let doc = json!({"mcpServers": {
+            "slow": {"url": server.url("slow"), "type": "http"},
+            "fast": {"url": server.url("fast"), "type": "http"}
+        }});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        invalidate();
+        let names = || -> Vec<String> {
+            schema_tools(0)
+                .into_iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                .collect()
+        };
+        assert_eq!(names(), ["fast__echo", "slow__hang"]);
+
+        let pin = dir.clone();
+        let started = Instant::now();
+        let caller = std::thread::spawn(move || {
+            let _guard = ConfigGuard::set(&pin);
+            try_dispatch("slow__hang", &json!({}), &|| false).unwrap()
+        });
+        while !server.hanging.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(started.elapsed() < Duration::from_secs(10), "hang never arrived");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Another chat, while `slow__hang` waits on its server.
+        let other = Instant::now();
+        assert_eq!(names(), ["fast__echo", "slow__hang"]);
+        let gate = gate(PermMode::Always, false, true);
+        assert_eq!(
+            super::permission(&gate, "fast__echo", "{}", false, None),
+            Some(Decision::Run)
+        );
+        let fast = try_dispatch("fast__echo", &json!({}), &|| false).unwrap();
+        assert!(fast.text.contains("echo done"), "{}", fast.text);
+        let waited = other.elapsed();
+        assert!(
+            waited < Duration::from_secs(2),
+            "the other chat waited {waited:?} on the hung call"
+        );
+
+        let slow = caller.join().unwrap();
+        assert!(slow.text.contains("hang done"), "{}", slow.text);
+        assert!(started.elapsed() >= HANG);
         shutdown_all();
         let _ = std::fs::remove_dir_all(dir);
     }

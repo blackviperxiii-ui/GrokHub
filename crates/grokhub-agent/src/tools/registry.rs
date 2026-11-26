@@ -127,14 +127,35 @@ fn current_session() -> Option<String> {
     SESSION.with(|cell| cell.borrow().clone())
 }
 
+/// The deferred index each chat was last offered. Keyed by chat, not by
+/// thread: a batched `tool_search` runs on a worker thread and must search
+/// the index its own chat's gate built (plan mode, desktop off), not a
+/// rebuilt one. A call with no chat bound keeps the thread's own index.
+fn indexes_by_session() -> std::sync::MutexGuard<'static, crate::lru_map::LruMap<String>> {
+    static MAP: Mutex<crate::lru_map::LruMap<String>> =
+        Mutex::new(crate::lru_map::LruMap::new(256));
+    MAP.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn remember_index(index: &str) {
-    LAST_INDEX.with(|cell| {
-        *cell.borrow_mut() = index.to_string();
-    });
+    match current_session().filter(|s| !s.is_empty()) {
+        Some(session) => {
+            indexes_by_session().insert(&session, index.to_string());
+        }
+        None => LAST_INDEX.with(|cell| {
+            *cell.borrow_mut() = index.to_string();
+        }),
+    }
 }
 
 fn current_index() -> String {
-    LAST_INDEX.with(|cell| cell.borrow().clone())
+    match current_session().filter(|s| !s.is_empty()) {
+        Some(session) => indexes_by_session()
+            .get(&session)
+            .cloned()
+            .unwrap_or_default(),
+        None => LAST_INDEX.with(|cell| cell.borrow().clone()),
+    }
 }
 
 fn loaded_names(session: &str) -> Vec<String> {
@@ -268,7 +289,13 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
                 .iter()
                 .find(|r| !r.read && r.name == *name)
                 .map(|r| r.schema.clone())
-                .or_else(|| crate::self_manage::work::schema(name))
+                // A read-only chat keeps the `work_*` reads it loaded; the
+                // gate refuses every write there, so none is offered.
+                .or_else(|| {
+                    (!gate.readonly_session || crate::self_manage::is_read(name))
+                        .then(|| crate::self_manage::work::schema(name))
+                        .flatten()
+                })
         })
         .collect();
     if !gate.readonly_session {
@@ -892,6 +919,47 @@ mod tests {
         assert!(volatile_schemas(&gate, ON)
             .iter()
             .any(|t| t["name"] == "image_generate"));
+    }
+
+    #[test]
+    fn a_batched_tool_search_searches_its_own_chats_index() {
+        let gate = profile(PermMode::Ask, true, true);
+        begin_turn("conv-plan-batched");
+        let index = index_of(&stable_schemas(&gate, ON));
+        // The batch runs tool_search on a worker thread bound to the chat.
+        let dir = crate::harness::test_dir("registry-batched-search");
+        let found = std::thread::spawn(move || {
+            let _config = crate::perm::ConfigGuard::set(&dir);
+            bind_session("conv-plan-batched");
+            ["desktop", "click", "scheduler_create"]
+                .map(|query| run_tool_search(&json!({"query": query})).text)
+        })
+        .join()
+        .unwrap();
+        for (query, text) in ["desktop", "click", "scheduler_create"]
+            .iter()
+            .zip(&found)
+        {
+            assert!(
+                text.starts_with(&format!("No deferred tools matched `{query}`")),
+                "{query}: {text}\nindex:\n{index}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_mode_does_not_offer_a_loaded_work_write_tool() {
+        let plan = profile(PermMode::Ask, true, true);
+        begin_turn("conv-plan-work");
+        let _ = schemas_for_settings(&plan, ON);
+        assert!(!run_load_tool_schema(&json!({"name": "work_add"})).failed);
+        assert!(!run_load_tool_schema(&json!({"name": "work_list"})).failed);
+        assert_eq!(names(&volatile_schemas(&plan, ON)), ["work_list"]);
+        let chat = profile(PermMode::Ask, false, true);
+        assert_eq!(
+            names(&volatile_schemas(&chat, ON)),
+            ["work_add", "work_list"]
+        );
     }
 
     #[test]
