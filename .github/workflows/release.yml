@@ -41,8 +41,8 @@ jobs:
   # v<VERSION>-beta.N for the tagged commit. Beta pre-releases come from a
   # push to beta, the nightly or a manual run on beta; the nightly skips when
   # vX.Y.Z-beta.N already exists (no new beta commits since the last one).
-  # Manual runs on other branches skip. Every job after plan checks out the
-  # planned SHA, so a beta push mid-run can't change what ships.
+  # Manual runs on other branches skip. Later jobs check out github.sha, the
+  # commit that started the run, so a beta push mid-run can't change what ships.
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -50,7 +50,6 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.plan.outputs.build }}
-      sha: ${{ steps.plan.outputs.sha }}
       # true for beta pushes, the nightly, manual beta runs and vX.Y.Z-beta.N tags.
       beta: ${{ github.ref_type != 'tag' || contains(github.ref_name, '-beta.') }}
       # Shell bundle OSes. A beta push skips macOS (10x runner minutes for an
@@ -67,7 +66,6 @@ jobs:
           NIGHTLY: ${{ inputs.nightly }}
           REF: ${{ github.ref }}
         run: |
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             # Before any build or signing: the tag must be this commit's VERSION.
             bash scripts/release-tag-check.sh "$GITHUB_REF_NAME" || exit 1
@@ -106,8 +104,10 @@ jobs:
         # Full history + tags: src-tauri/build.rs counts beta commits since
         # vX.Y.Z, so the shell's version matches the release tag its
         # self-updater compares against (LU-06).
+        # github.sha is the triggering commit. A job output whose name matches
+        # head/sha/commit is what CodeQL treats as a pull-request head.
         with:
-          ref: ${{ needs.plan.outputs.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           # Build scripts run here; keep the job token out of .git/config.
           persist-credentials: false
@@ -115,21 +115,14 @@ jobs:
         if: needs.plan.outputs.beta == 'true'
         shell: bash
         run: git switch -C beta
+      # No npm or Rust cache. This job builds the files the publish job signs,
+      # and a restore on beta can fall back to the default branch cache.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # Same rule as rust-cache: only beta runs use a cache. Tags can reach
-          # main's cache scope, so they never read or write one.
-          cache: ${{ github.ref == 'refs/heads/beta' && 'npm' || '' }}
-          cache-dependency-path: ui/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        if: github.ref == 'refs/heads/beta'
-        with:
-          workspaces: src-tauri
-          shared-key: shell-${{ matrix.os }}
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: |
@@ -166,7 +159,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # Full history + tags: build.rs and the beta tag count commits since vX.Y.Z.
         with:
-          ref: ${{ needs.plan.outputs.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -267,7 +260,7 @@ jobs:
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ steps.name.outputs.tag }}
-          target_commitish: ${{ needs.plan.outputs.sha }}
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ steps.name.outputs.prerelease }}
           make_latest: ${{ steps.name.outputs.prerelease == 'false' }}
           files: dist-release/*
