@@ -1298,9 +1298,10 @@ pub fn field_asks_for_secret(name: &str, title: &str, prop: &Value) -> bool {
         return true;
     }
     let blob = format!("{name} {title}").to_ascii_lowercase();
-    [
+    if [
         "password",
         "passwd",
+        "passphrase",
         "secret",
         "token",
         "api_key",
@@ -1309,6 +1310,37 @@ pub fn field_asks_for_secret(name: &str, title: &str, prop: &Value) -> bool {
     ]
     .iter()
     .any(|k| blob.contains(k))
+    {
+        return true;
+    }
+    // `key` and `pin` only as whole words (`api-key`, `accessKey`, `PIN`),
+    // so `keyboard`, `monkey` or `spinner` don't count.
+    field_words(&format!("{name} {title}"))
+        .iter()
+        .any(|word| matches!(word.as_str(), "key" | "pin"))
+}
+
+/// Lowercase words of a field's name and title, split at anything that is
+/// not a letter or digit and where a lowercase letter meets a capital.
+fn field_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in text.chars() {
+        if !c.is_alphanumeric() || (prev_lower && c.is_uppercase()) {
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+        }
+        if c.is_alphanumeric() {
+            cur.extend(c.to_lowercase());
+        }
+        prev_lower = c.is_lowercase();
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
 }
 
 pub fn parse_elicit_complete(params: &Value) -> (String, String) {
@@ -2367,6 +2399,39 @@ mod tests {
             "Email",
             &json!({ "type": "string" })
         ));
+    }
+
+    #[test]
+    fn common_key_fields_are_marked_secret() {
+        let plain = json!({ "type": "string" });
+        for (name, title) in [
+            ("key", "Key"),
+            ("api-key", "API key"),
+            ("apiKey", "API"),
+            ("access_key", "Access key"),
+            ("private_key", "Private key"),
+            ("passphrase", "Passphrase"),
+            ("pin", "PIN"),
+            ("code", "Card PIN"),
+        ] {
+            assert!(
+                field_asks_for_secret(name, title, &plain),
+                "{name} / {title}"
+            );
+        }
+        for (name, title) in [
+            ("keyboard", "Keyboard layout"),
+            ("monkey", "Monkey"),
+            ("spinner", "Spinner style"),
+            ("pinned", "Pinned"),
+            ("email", "Email"),
+            ("keywords", "Keywords"),
+        ] {
+            assert!(
+                !field_asks_for_secret(name, title, &plain),
+                "{name} / {title}"
+            );
+        }
     }
 
     #[test]

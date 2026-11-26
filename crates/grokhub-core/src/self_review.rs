@@ -637,27 +637,46 @@ pub fn redact_for_issue(text: &str, home: Option<&str>) -> String {
     {
         out = out.replace(home, "~");
     }
-    for root in ["/home/", "/Users/", "\\Users\\"] {
-        out = strip_user_dirs(&out, root);
+    // Windows paths in any case, and as debug output prints them (`\\`).
+    for (root, any_case) in [
+        ("/home/", false),
+        ("/Users/", false),
+        ("\\\\users\\\\", true),
+        ("\\users\\", true),
+    ] {
+        out = strip_user_dirs(&out, root, any_case);
     }
     redact_emails(&out)
 }
 
-/// `/home/<name>` (and `C:\Users\<name>`) as `~`.
-fn strip_user_dirs(text: &str, root: &str) -> String {
+/// `/home/<name>` (and `C:\Users\<name>`) as `~`. `any_case` matches the
+/// root whatever its case (`root` is then lowercase).
+fn strip_user_dirs(text: &str, root: &str, any_case: bool) -> String {
     let mut out = String::new();
     let mut rest = text;
-    while let Some(at) = rest.find(root) {
+    let find = |hay: &str| {
+        if any_case {
+            // ASCII lowercase keeps every byte offset.
+            hay.to_ascii_lowercase().find(root)
+        } else {
+            hay.find(root)
+        }
+    };
+    while let Some(at) = find(rest) {
         let mut start = at;
         // A drive letter before `\Users\` goes too.
         let head = &rest[..at];
-        if root.starts_with('\\') && head.len() >= 2 && head.ends_with(':') {
+        if root.starts_with('\\')
+            && head.ends_with(':')
+            && head.len() >= 2
+            && head.as_bytes()[head.len() - 2].is_ascii_alphabetic()
+        {
             start = at - 2;
         }
         out.push_str(&rest[..start]);
         let after = &rest[at + root.len()..];
         let name_end = after
-            .find(|c: char| c == '/' || c == '\\' || c.is_whitespace())
+            .find(|c: char| matches!(c, '/' | '\\' | '"' | '\'') || c.is_whitespace())
             .unwrap_or(after.len());
         out.push('~');
         rest = &after[name_end..];
@@ -1478,6 +1497,17 @@ mod tests {
         );
         assert!(!out.contains("user"));
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
+    }
+
+    #[test]
+    fn an_issue_copy_drops_windows_user_names_in_debug_and_lowercase_paths() {
+        let text = r#"Evidence: path: "C:\\Users\\user\\AppData\\GrokHub", and c:\users\user\notes.txt failed"#;
+        let out = redact_for_issue(text, None);
+        assert_eq!(
+            out,
+            r#"Evidence: path: "~\\AppData\\GrokHub", and ~\notes.txt failed"#
+        );
+        assert!(!out.contains("user"), "{out}");
     }
 
     #[test]

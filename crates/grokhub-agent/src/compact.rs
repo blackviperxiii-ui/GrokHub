@@ -1858,10 +1858,10 @@ pub fn recent_tail(items: &[InputItem]) -> Vec<InputItem> {
         .iter()
         .rposition(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
         .expect("last_user_turn index");
+    // The ask stays whatever it costs (screenshots, a pasted log): without it
+    // the model answers a turn it can no longer read. Only the tool results
+    // after it share what is left of the budget.
     let user_cost = estimate_input_tokens(std::slice::from_ref(user));
-    if user_cost > RECENT_TAIL_TOKEN_BUDGET {
-        return Vec::new();
-    }
     let mut out = vec![user.clone()];
     let remain = RECENT_TAIL_TOKEN_BUDGET.saturating_sub(user_cost);
     out.extend(take_tool_suffix(&items[user_at + 1..], remain));
@@ -3036,6 +3036,43 @@ mod tests {
         assert!(!compacted
             .iter()
             .any(|item| message_text(item).contains("OLD_TOPIC")));
+    }
+
+    #[test]
+    fn an_ask_over_the_tail_budget_is_still_kept_verbatim() {
+        // Six screenshots and the question about them.
+        let mut content = vec![ContentPart::InputText(
+            "why does the dock flicker in these?".into(),
+        )];
+        content
+            .extend((0..6).map(|_| ContentPart::InputImage("data:image/png;base64,QQ==".into())));
+        let ask = InputItem::Message {
+            role: "user".into(),
+            content,
+        };
+        assert!(estimate_input_tokens(std::slice::from_ref(&ask)) > RECENT_TAIL_TOKEN_BUDGET);
+        let history = vec![
+            text_message("user", "OLD_TOPIC"),
+            text_message("assistant", "working"),
+            ask.clone(),
+            InputItem::FunctionCall {
+                call_id: "c1".into(),
+                name: "read_file".into(),
+                arguments: r#"{"path":"src/a.rs"}"#.into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: "c1".into(),
+                output: "fn main() {}".into(),
+            },
+        ];
+        let compacted = build_compacted_history(&history, "summary body", &[]);
+        assert_eq!(compacted.last(), Some(&ask));
+        assert_eq!(compacted.iter().filter(|item| **item == ask).count(), 1);
+        // No budget is left for the tool results after it.
+        assert!(!compacted.iter().any(|i| matches!(
+            i,
+            InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. }
+        )));
     }
 
     #[test]
