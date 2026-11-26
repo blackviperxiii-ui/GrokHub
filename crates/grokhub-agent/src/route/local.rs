@@ -814,6 +814,14 @@ pub trait LocalRuntime: Send + Sync {
         false
     }
 
+    /// The model this runtime will answer with is already in memory.
+    /// A real server reports true; the sidecar decides a cold start or a
+    /// model switch. A test runtime reports false until its first chat, and
+    /// again after it switches models, so the loading note shows once.
+    fn warmed(&self) -> bool {
+        true
+    }
+
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
     /// back to plain [`chat_stream`] and returns no tool calls.
     fn chat_tools(
@@ -854,18 +862,36 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     super::local_http::from_global_sidecar(busy)
 }
 
-/// [`runtime`], but only while the model is already loaded (a test fake, or a
-/// running sidecar). It never starts or restarts the sidecar, so it returns at
-/// once; a cold start could not answer a short call in time anyway.
+/// [`runtime`], but only while the model is already loaded (a warmed test
+/// fake, or a sidecar that will answer this turn without a start). It never
+/// starts or restarts the sidecar, so it returns at once; a cold start could
+/// not answer a short call in time anyway.
 pub fn warm_runtime() -> Option<Arc<dyn LocalRuntime>> {
     if !available() {
         return None;
     }
     if let Some(rt) = test_runtime() {
-        return Some(rt);
+        return rt.warmed().then_some(rt);
+    }
+    if !super::local_sidecar::answers_now() {
+        return None;
     }
     super::local_sidecar::global_endpoint()?;
     super::local_http::from_global_sidecar(super::local_sidecar::busy())
+}
+
+/// The chat should say [`LOCAL_LOADING_NOTE`]: this turn will cold-start the
+/// on-device server, or switch the model file it is serving. A server already
+/// serving that file stays up between turns and the note stays quiet. Idle
+/// unload still uses the timeout from Settings.
+pub(crate) fn needs_loading_note() -> bool {
+    if let Some(rt) = test_runtime() {
+        return !rt.warmed();
+    }
+    let Some(dir) = config_dir() else {
+        return true;
+    };
+    super::local_sidecar::will_start_or_switch(&dir)
 }
 
 /// Start the sidecar if needed; the guard marks this caller's request in
@@ -996,6 +1022,17 @@ pub fn serve_request(
     req: &crate::client::ResponsesRequest,
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
+    serve_request_noting(class, req, cancel, &mut || {})
+}
+
+/// [`serve_request`] that tells the chat, before the wait, when this turn
+/// will cold-start the server or switch its model file.
+pub(super) fn serve_request_noting(
+    class: &str,
+    req: &crate::client::ResponsesRequest,
+    cancel: &CancelToken,
+    on_load: &mut dyn FnMut(),
+) -> Result<TurnOutput, ClientError> {
     let (text, picture) = super::live::last_user_text(&req.input);
     let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
     // Only the app's own background work is text-only; every other class is a
@@ -1047,6 +1084,11 @@ pub fn serve_request(
             }
             Some(_) => {}
         }
+    }
+    // After the turn's model choice is set, so a switch is the same one the
+    // load is about to make. The note is sent before that load waits.
+    if needs_loading_note() {
+        on_load();
     }
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(no_runtime_msg()));

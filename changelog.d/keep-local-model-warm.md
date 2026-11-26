@@ -1,0 +1,1 @@
+- The on-device model stays loaded between chat turns. "Loading this computer's model first" shows on a cold start or a model switch, and the server unloads after the idle time set in Settings.

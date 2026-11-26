@@ -2126,12 +2126,13 @@ pub fn stream_routed(
                     super::local::LOCAL_FALLBACK_MSG.into(),
                 ));
             }
-            if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
-                sink(StreamEvent::ReasoningDelta(
-                    super::local_live::loading_note(Some(reason)),
-                ));
-            }
-            let step_out = super::local::serve_request(class, &sent, cancel);
+            let step_out = super::local::serve_request_noting(class, &sent, cancel, &mut || {
+                if !class.trim().starts_with("background:") {
+                    sink(StreamEvent::ReasoningDelta(
+                        super::local_live::loading_note(Some(reason)),
+                    ));
+                }
+            });
             if let Ok(turn) = &step_out {
                 if !turn.text.is_empty() {
                     super::adult::guard(
