@@ -1021,13 +1021,20 @@ fn run_turn(
         let sent_len = history.len();
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
-        let tools = match (
-            crate::subagent::fork_tools(input.conversation_id),
-            bound_job_tool_set(input.conversation_id),
-        ) {
-            (Some(parents), _) => parents,
-            (None, Some(set)) => tools::schemas_for_job(&gate, &set),
-            (None, None) => tools::schemas_for(&gate),
+        // Order 0.5: casual Hangout sends no tools unless this ask is an
+        // action or the Brief is a task. A missing Brief keeps today's list.
+        let chat_only = turn_is_chat_only(input.conversation_id, user_text);
+        let tools = if chat_only {
+            Vec::new()
+        } else {
+            match (
+                crate::subagent::fork_tools(input.conversation_id),
+                bound_job_tool_set(input.conversation_id),
+            ) {
+                (Some(parents), _) => parents,
+                (None, Some(set)) => tools::schemas_for_job(&gate, &set),
+                (None, None) => tools::schemas_for(&gate),
+            }
         };
         let mut req = ResponsesRequest {
             text_format: None,
@@ -1036,14 +1043,15 @@ fn run_turn(
             input: wire,
             conversation_id: input.conversation_id.to_string(),
             tools,
-            hosted_search: hosted_for_step(
-                &gate,
-                input.perms,
-                input.workspace,
-                history,
-                input.conversation_id,
-                &mut recalled,
-            ),
+            hosted_search: !chat_only
+                && hosted_for_step(
+                    &gate,
+                    input.perms,
+                    input.workspace,
+                    history,
+                    input.conversation_id,
+                    &mut recalled,
+                ),
             call_timeout: None,
         };
         // Each request should extend the last one; a rewrite logs its first changed segment.
@@ -1706,7 +1714,7 @@ fn run_turn(
                     }
                 }
             }
-            if let Some(output) = replay_image(input.conversation_id, call) {
+            if let Some(output) = replay_result(input.conversation_id, call) {
                 let id = tool_id(call);
                 let refused = output.failed;
                 emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
@@ -1738,6 +1746,26 @@ fn run_turn(
                 }
                 call_i += 1;
                 continue;
+            }
+            // Order 0.5: a casual Hangout turn never runs tools. One plain
+            // refusal, then the rest of the batch is abandoned (no retry).
+            if input.depth == 0 && turn_is_chat_only(input.conversation_id, user_text) {
+                let output = ToolOutput::err(tools::CANT_DO_HERE);
+                let id = tool_id(call);
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_refusal(history, input.conversation_id, call, output);
+                on_event(LoopEvent::Text(tools::CANT_DO_HERE.to_string()));
+                call_i += 1;
+                abandon_calls(
+                    &calls,
+                    call_i,
+                    tools::CANT_DO_HERE,
+                    history,
+                    input.conversation_id,
+                    on_event,
+                );
+                return finish(input, StopReason::EndTurn, usage, compacted_once, true);
             }
             if input.depth == 0
                 && grokhub_core::small_talk::is_greeting(user_text)
@@ -2081,9 +2109,11 @@ fn run_turn(
                     &call.arguments,
                     &output.text,
                 );
-            } else if !output.failed && call.name == "image_generate" {
-                crate::perm::remember_image(
+            } else if !output.failed && session_replay_tool(&call.name) {
+                // Order 0.5: an identical later lookup reuses this result.
+                crate::perm::remember_result(
                     input.conversation_id,
+                    &call.name,
                     &call.arguments,
                     &output.text,
                     output.image_data_url.as_deref(),
@@ -2501,17 +2531,31 @@ fn session_allows(conversation: &str, name: &str, arguments: &str) -> bool {
     crate::perm::session_covers(conversation, name, arguments)
 }
 
-fn replay_image(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> {
-    if call.name != "image_generate" {
+/// Tools whose successful results may stand in for an identical later call in
+/// the same session. Writes, shell, and reads stay out: the repeat and stall
+/// guards need those to run again.
+fn session_replay_tool(name: &str) -> bool {
+    matches!(name, "web_search" | "web_fetch" | "image_generate")
+}
+
+/// An identical successful lookup call in this session returns its earlier result.
+fn replay_result(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> {
+    if !session_replay_tool(&call.name) {
         return None;
     }
-    let held = crate::perm::earlier_image(conversation, &call.arguments)?;
+    let held = crate::perm::earlier_result(conversation, &call.name, &call.arguments)?;
     Some(ToolOutput {
         text: held.text,
         image_data_url: held.image,
         failed: false,
         mcp_app: None,
     })
+}
+
+/// Order 0.5: this Hangout turn is chat-only (no tools offered).
+fn turn_is_chat_only(conversation_id: &str, user_text: &str) -> bool {
+    crate::checkpoint::turn_brief(conversation_id)
+        .is_some_and(|brief| tools::hangout::chat_only(&brief, user_text))
 }
 
 /// A failure from a call the person already allowed. Hard classes and merges
@@ -8433,6 +8477,189 @@ linter (or run the changed file) before you finish: a re-read or git status does
         assert_eq!(outputs[0].1, outputs[1].1);
         assert!(
             outputs[1].1.contains("https://cdn.example/fox.png"),
+            "{}",
+            outputs[1].1
+        );
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Order 0.5: a casual Hangout turn offers no tools and never runs one.
+    #[test]
+    fn a_casual_hangout_turn_offers_no_tools_and_refuses_a_sneaky_search() {
+        let dir = workspace("hangout-chat-only");
+        let conv = "hangout-chat-only-05";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Chat, crate::brain::Care::Casual, &[]),
+        );
+        let fetch_calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fetch = std::sync::Arc::new(HitFetch {
+            body: r#"<a class="result-link" href="https://example.org/flirt">Flirt</a>"#.into(),
+            calls: fetch_calls.clone(),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            fetch: Some(fetch as std::sync::Arc<dyn crate::tools::PageFetch>),
+            ..Default::default()
+        });
+        // First turn: plain chat, no tool calls. Tools list must be empty.
+        struct RecordsTools {
+            tools: Mutex<Vec<usize>>,
+            inner: Script,
+        }
+        impl ModelClient for RecordsTools {
+            fn stream(
+                &self,
+                req: &ResponsesRequest,
+                cancel: &CancelToken,
+                sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<crate::TurnOutput, ClientError> {
+                self.tools.lock().unwrap().push(req.tools.len());
+                self.inner.stream(req, cancel, sink)
+            }
+        }
+        let plain = RecordsTools {
+            tools: Mutex::new(Vec::new()),
+            inner: said(&["hey, same — what's good?"]),
+        };
+        let (history, events) = {
+            let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+            let input = LoopIn {
+                client: &plain,
+                workspace: &dir,
+                model: "grok-4.7",
+                effort: None,
+                system: "",
+                conversation_id: conv,
+                max_turns: 2,
+                usage_base: Usage::default(),
+                cancel: &cancel,
+                steer: &steer,
+                halt: &NeverHalt,
+                gate: chat(gate::PermMode::Always, true, false),
+                desktop: None,
+                permits: &gate::ClosedPermits,
+                perms: None,
+                context_length: 0,
+                tasks: None,
+                depth: 0,
+                agent_id: None,
+                shared_client: None,
+                shared_permits: None,
+                shared_desktop: None,
+            };
+            let mut history = Vec::new();
+            let mut events = Vec::new();
+            run_loop(&input, &mut history, "hey how are you", None, &mut |ev| {
+                events.push(ev)
+            });
+            (history, events)
+        };
+        assert_eq!(plain.tools.lock().unwrap().as_slice(), &[0]);
+        assert!(
+            !history
+                .iter()
+                .any(|item| matches!(item, InputItem::FunctionCall { .. })),
+            "casual turn transcript must have zero tool calls: {history:?}"
+        );
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Text(t) if t.contains("hey, same")
+        )));
+
+        // A misbehaving model still cannot run web_search on a chat-only turn.
+        let sneaky = script_calls(vec![vec![
+            call(
+                "flirt-search",
+                "web_search",
+                r#"{"query":"how to flirt with a guy"}"#,
+            ),
+            call(
+                "flirt-again",
+                "web_search",
+                r#"{"query":"how to flirt with a guy"}"#,
+            ),
+        ]]);
+        let (out, history, events) = drive(
+            &sneaky,
+            &dir,
+            conv,
+            "lol same",
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &Answer {
+                answer: PermAnswer::Allow,
+                asks: AtomicUsize::new(0),
+            },
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(fetch_calls.load(Ordering::SeqCst), 0);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].1, tools::CANT_DO_HERE);
+        assert_eq!(outputs[1].1, tools::CANT_DO_HERE);
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Text(t) if t == tools::CANT_DO_HERE
+        )));
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Order 0.5: an identical web_search in the same session reuses the earlier result.
+    #[test]
+    fn an_identical_web_search_returns_the_earlier_result() {
+        let dir = workspace("search-again");
+        let conv = "search-again-05";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::checkpoint::set_turn_brief(
+            conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fetch = std::sync::Arc::new(HitFetch {
+            body: r#"<a class="result-link" href="https://example.org/rust">Rust</a>
+                <td class="result-snippet">A systems language.</td>"#
+                .into(),
+            calls: calls.clone(),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            fetch: Some(fetch as std::sync::Arc<dyn crate::tools::PageFetch>),
+            ..Default::default()
+        });
+        let args = r#"{"query":"rust release notes hangout-05"}"#;
+        let script = script_calls(vec![vec![
+            call("search-1", "web_search", args),
+            call("search-2", "web_search", args),
+        ]]);
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "search for rust release notes",
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &Answer {
+                answer: PermAnswer::Allow,
+                asks: AtomicUsize::new(0),
+            },
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "identical web_search must run once"
+        );
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "search-1");
+        assert_eq!(outputs[1].0, "search-2");
+        assert_eq!(outputs[0].1, outputs[1].1);
+        assert!(
+            outputs[1].1.contains("web_search") || outputs[1].1.contains("Rust"),
             "{}",
             outputs[1].1
         );
