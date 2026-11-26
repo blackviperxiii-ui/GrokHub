@@ -13,6 +13,7 @@ pub mod claude_plan;
 mod client;
 mod close_check;
 pub mod code_guard;
+pub mod code_panel;
 mod compact;
 mod config_file;
 mod denials;

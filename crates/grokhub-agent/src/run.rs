@@ -781,12 +781,23 @@ fn run_turn(
     // No token cap: a run goes on until the task is done. A run that stops
     // getting anywhere is caught by the stall check instead.
     let mut stall = crate::stall::Stall::default();
+    let code_panel_cfg = crate::code_panel::session_settings(input.conversation_id);
+    let code_panel_nonstop = code_panel_cfg
+        .as_ref()
+        .is_some_and(|(_, _, s)| s.local_only_nonstop);
+    let mut nonstop_guard = code_panel_cfg
+        .as_ref()
+        .filter(|(_, _, s)| s.local_only_nonstop)
+        .map(|(_, _, s)| crate::code_panel::NonstopGuard::new(s, grokhub_core::now_ms()));
+    let mut edited_files_in_turn: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
-    // "continue" (not a bare "ok") carries on the checklist an earlier run left open.
+    // "continue" (not a bare "ok") — or Code tab nonstop mode — carries on the
+    // checklist an earlier run left open without pausing between steps.
     let mut drive =
         (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty()).then(|| {
             let todos = crate::session_tools::todos_for(input.conversation_id);
-            if crate::brain::is_go_on(user_text) {
+            if code_panel_nonstop || crate::brain::is_go_on(user_text) {
                 crate::drive::Drive::resumed(&todos)
             } else {
                 crate::drive::Drive::new(&todos)
@@ -1287,6 +1298,13 @@ fn run_turn(
                     content: vec![ContentPart::InputText(text)],
                 });
             }
+        }
+        if let Some(reason) = nonstop_guard.as_ref().and_then(|g| {
+            g.check_repetition_cut(&turn.text, &current_nonstop_where(input.conversation_id))
+        }) {
+            on_event(LoopEvent::Findings(reason.status_card_body()));
+            stop_with_note(history, on_event, reason.summary_line());
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         if turn.truncated {
             if turn.out_of_budget() {
@@ -1928,6 +1946,13 @@ fn run_turn(
                     match waited {
                         Waited::Answer(PermAnswer::Allow) => {
                             permitted = true;
+                            prepare_code_panel_backup(
+                                input,
+                                call,
+                                always || gate.mode == gate::PermMode::Always,
+                                &mut edited_files_in_turn,
+                                on_event,
+                            );
                             note_tool(
                                 input,
                                 &mut gate,
@@ -1971,6 +1996,13 @@ fn run_turn(
                             // never stops the asking for what comes after.
                             always |= call.name != tools::control::MERGE_WORK;
                             permitted = true;
+                            prepare_code_panel_backup(
+                                input,
+                                call,
+                                always || gate.mode == gate::PermMode::Always,
+                                &mut edited_files_in_turn,
+                                on_event,
+                            );
                             note_tool(
                                 input,
                                 &mut gate,
@@ -2015,17 +2047,26 @@ fn run_turn(
                         }
                     }
                 }
-                Decision::Run => note_tool(
-                    input,
-                    &mut gate,
-                    base_readonly,
-                    plan_at_start,
-                    call,
-                    &id,
-                    on_event,
-                    &pre_context,
-                    &mut nested_agents,
-                ),
+                Decision::Run => {
+                    prepare_code_panel_backup(
+                        input,
+                        call,
+                        always || gate.mode == gate::PermMode::Always,
+                        &mut edited_files_in_turn,
+                        on_event,
+                    );
+                    note_tool(
+                        input,
+                        &mut gate,
+                        base_readonly,
+                        plan_at_start,
+                        call,
+                        &id,
+                        on_event,
+                        &pre_context,
+                        &mut nested_agents,
+                    )
+                }
             };
             if usage_pending(&extra_usage) {
                 usage.add(&extra_usage);
@@ -2033,8 +2074,10 @@ fn run_turn(
             }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
+            let mut did_for_nonstop = crate::stall::Did::Nothing;
             if !refused {
                 let did = crate::stall::Did::of(&call.name, &call.arguments, &output);
+                did_for_nonstop = did;
                 note_repeat(&mut repeats, input.workspace, call, &output, did);
                 stall.note(did, &output);
             }
@@ -2089,11 +2132,38 @@ fn run_turn(
                     output.image_data_url.as_deref(),
                 );
             }
+            let nonstop_stop = nonstop_guard.as_mut().and_then(|g| {
+                let step_label = format!("{} {}", call.name, card_action(input.conversation_id, call));
+                g.note_call(
+                    &key,
+                    &step_label,
+                    did_for_nonstop,
+                    output.failed,
+                    &output.text,
+                    grokhub_core::now_ms(),
+                )
+            });
             let stop = turn_should_stop(user_text, call, &output, &mut empty_searches);
             if refused {
                 push_refusal(history, input.conversation_id, call, output);
             } else {
                 push_output(history, input.conversation_id, call, output);
+            }
+            if let Some(ns_reason) = nonstop_stop {
+                if !cancelled && !halted {
+                    call_i += 1;
+                    abandon_calls(
+                        &calls,
+                        call_i,
+                        &ns_reason.summary_line(),
+                        history,
+                        input.conversation_id,
+                        on_event,
+                    );
+                    on_event(LoopEvent::Findings(ns_reason.status_card_body()));
+                    stop_with_note(history, on_event, ns_reason.summary_line());
+                    return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
+                }
             }
             if let Some(reason) = stop {
                 if !cancelled && !halted {
@@ -2882,6 +2952,86 @@ fn usage_pending(usage: &Usage) -> bool {
         || usage.output_tokens != 0
         || usage.reasoning_tokens != 0
         || usage.cost_in_usd_ticks != 0
+}
+
+/// Human-readable location for nonstop stop status cards (AC-4).
+fn current_nonstop_where(conversation_id: &str) -> String {
+    let todos = crate::session_tools::todos_for(conversation_id);
+    if let Some(active) = todos
+        .iter()
+        .find(|t| t.status == "in_progress")
+        .or_else(|| todos.iter().find(|t| t.status == "pending"))
+    {
+        return format!("task `{}` ({})", active.id, active.content);
+    }
+    "active coding step".to_string()
+}
+
+/// Before a tool call executes in a Code tab session, take a backup (AC-5) or
+/// pre-step work-branch checkpoint (AC-3) when the project's Code Settings
+/// toggles call for one.
+fn prepare_code_panel_backup(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    allow_always: bool,
+    edited_files: &mut std::collections::HashSet<String>,
+    on_event: &mut dyn FnMut(LoopEvent),
+) {
+    let Some((cfg_dir, workspace, settings)) =
+        crate::code_panel::session_settings(input.conversation_id)
+    else {
+        return;
+    };
+    let effective_ws = if input.workspace.as_os_str().is_empty() {
+        workspace.as_path()
+    } else {
+        input.workspace
+    };
+    if let Some(kind) = crate::code_panel::classify_risky_action(
+        &call.name,
+        &call.arguments,
+        effective_ws,
+        edited_files,
+    ) {
+        let label = crate::code_panel::action_label(kind, &call.name, &call.arguments);
+        if settings.backup_before_risky && allow_always {
+            if let Ok(entry) =
+                crate::code_panel::create_backup(&cfg_dir, effective_ws, kind, &label)
+            {
+                on_event(LoopEvent::Thought(format!(
+                    "Saved backup {} before {} ({}).",
+                    entry.id,
+                    kind.label(),
+                    entry.ref_value
+                )));
+            }
+        } else if settings.local_only_nonstop {
+            if let Ok(entry) = crate::code_panel::checkpoint_before_risky_step(
+                &cfg_dir,
+                effective_ws,
+                kind,
+                &label,
+            ) {
+                on_event(LoopEvent::Thought(format!(
+                    "Checkpointed {} before {} ({}).",
+                    entry.id,
+                    kind.label(),
+                    entry.ref_value
+                )));
+            }
+        }
+    }
+    if matches!(call.name.as_str(), "write" | "search_replace") {
+        if let Some(raw) = crate::compact::path_from_write_call(&call.name, &call.arguments) {
+            let p = std::path::PathBuf::from(&raw);
+            let full = if p.is_absolute() {
+                p
+            } else {
+                effective_ws.join(p)
+            };
+            edited_files.insert(full.to_string_lossy().replace('\\', "/"));
+        }
+    }
 }
 
 fn note_tool(

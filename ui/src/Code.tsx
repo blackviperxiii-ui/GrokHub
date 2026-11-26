@@ -12,6 +12,7 @@ import {
 import {
   codeBuiltins,
   codeDiff,
+  codePanelState,
   codeRepo,
   codeRunStop,
   codeSessionBind,
@@ -19,6 +20,7 @@ import {
   codeSessionLeft,
   codeSessionResume,
   type CodeLeftOff,
+  type CodePanelState,
   codeTestPlan,
   codeTestRun,
   onCodeRun,
@@ -30,6 +32,7 @@ import {
 import { Agents } from "./Agents";
 import { Chat, newConversationId, type Prefill } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";
+import { CodePanelSettings } from "./CodePanelSettings";
 import { CodeProjects, folderName } from "./CodeProjects";
 import type { View } from "./Palette";
 import { CodeShip } from "./CodeShip";
@@ -38,7 +41,7 @@ import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
 
 /** Right-column panes (former under-stack panels). */
-export type CodeSideTab = "projects" | "editor" | "tests" | "skills" | "helpers";
+export type CodeSideTab = "projects" | "editor" | "tests" | "skills" | "helpers" | "settings";
 
 export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
   { id: "projects", label: "Projects" },
@@ -46,6 +49,7 @@ export const CODE_SIDE_TABS: { id: CodeSideTab; label: string }[] = [
   { id: "tests", label: "Tests" },
   { id: "skills", label: "Skills" },
   { id: "helpers", label: "Helpers" },
+  { id: "settings", label: "Settings" },
 ];
 
 export const CODE_HELPERS = "Helpers";
@@ -173,6 +177,8 @@ export function Code({
   const [lead, setLead] = useState(false);
   const [left, setLeft] = useState<CodeLeftOff | null>(null);
   const [busy, setBusy] = useState(false);
+  /** True when the active project has "Local models only and nonstop coding" on. */
+  const [localOnlyRoute, setLocalOnlyRoute] = useState(false);
   /** Counts replies ended, so the Sessions list reads again. */
   const [ended, setEnded] = useState(0);
   const sessionNow = useRef<string>(undefined);
@@ -266,6 +272,24 @@ export function Code({
     if (!now) setEnded((n) => n + 1);
   }, []);
 
+  const onPanelState = useCallback((next: CodePanelState) => {
+    setLocalOnlyRoute(next.settings.localOnlyNonstop);
+  }, []);
+
+  // Refresh the active project's route chip whenever the project switches or a turn ends.
+  useEffect(() => {
+    let active = true;
+    codePanelState().then(
+      (next) => {
+        if (active) setLocalOnlyRoute(next.settings.localOnlyNonstop);
+      },
+      () => {},
+    );
+    return () => {
+      active = false;
+    };
+  }, [switches, folder]);
+
   // A finished turn writes a new checkpoint. Read it again for the session
   // still on screen.
   useEffect(() => {
@@ -348,6 +372,11 @@ export function Code({
       <aside className="code-agent" aria-label="Agent window">
         <header className="code-head">
           <h3>{AGENT_TITLE}</h3>
+          {localOnlyRoute && (
+            <span className="code-route-chip local" data-route="local" aria-label="Model route: Local">
+              Local
+            </span>
+          )}
           {folder && (
             <span className="note" title={folder}>
               {worksIn(folder)}
@@ -457,7 +486,15 @@ export function Code({
                 onShipped={() => setShipped((n) => n + 1)}
               />
             </div>
-            {sideTab !== "helpers" && sideTab !== "projects" && (
+            {sideTab === "settings" && (
+              <CodePanelSettings
+                key={switches}
+                refresh={ended}
+                onState={onPanelState}
+                onRestored={() => setShipped((n) => n + 1)}
+              />
+            )}
+            {sideTab !== "helpers" && sideTab !== "projects" && sideTab !== "settings" && (
               <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
             )}
           </div>
