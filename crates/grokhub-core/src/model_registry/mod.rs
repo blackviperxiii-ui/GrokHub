@@ -619,6 +619,19 @@ impl Registry {
         }
     }
 
+    /// An API-key model's rest ran out: it routes again and its next call
+    /// decides ([`health::start_trial`]). The state event, when it started.
+    pub fn start_trial(&mut self, id: &str, now_ms: u64) -> Option<RegistryEvent> {
+        let rec = self.models.get_mut(id.trim())?;
+        let from = rec.state;
+        health::start_trial(rec, now_ms).then(|| RegistryEvent::State {
+            id: rec.meta.id.clone(),
+            from,
+            to: rec.state,
+            reason: rec.reason.clone(),
+        })
+    }
+
     /// The half-open check's answer. The state event, when it changed.
     pub fn half_open_result(&mut self, id: &str, ok: bool, now_ms: u64) -> Option<RegistryEvent> {
         let rec = self.models.get_mut(id.trim())?;
