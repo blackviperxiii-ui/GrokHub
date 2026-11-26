@@ -367,6 +367,8 @@ const TASK_VERBS: &[&str] = &[
     "sort", "copy", "schedule", "edit", "change", "turn", "close", "start", "stop", "restart",
     "click",
 ];
+/// After a leading "do", these make the line a question.
+const DO_SUBJECTS: &[&str] = &["you", "u", "ya", "i", "we", "they", "yall", "y'all"];
 const QUESTION_WORDS: &[&str] = &[
     "what", "why", "how", "when", "where", "who", "which", "is", "are", "can", "could", "does",
     "do", "should", "will", "would", "explain",
@@ -1306,7 +1308,9 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         || (ws.len() <= 6 && any_word(&ws, BANTER_WORDS))
         // Talking games while hanging out is still hanging out.
         || (chatting && matches!(topic, "general" | "gaming") && ws.len() <= 8);
-    let task_verb = TASK_VERBS.contains(&first) && acted_on;
+    // "do the thing" is an order; "do you like games?" asks.
+    let do_order = first == "do" && !rest_words.get(1).is_some_and(|w| DO_SUBJECTS.contains(w));
+    let task_verb = (TASK_VERBS.contains(&first) || do_order) && acted_on;
     // "use X for Y", with X up to four words.
     let use_for = ws
         .iter()
@@ -2054,6 +2058,8 @@ mod tests {
             ("could you set a timer for ten minutes", Intent::Task),
             ("make me a playlist of chill songs", Intent::Task),
             ("start the backup now", Intent::Task),
+            ("do the thing", Intent::Task),
+            ("please do a backup of my documents", Intent::Task),
             ("can you explain how you work?", Intent::Question),
             ("what do you know about black holes?", Intent::Question),
         ] {
