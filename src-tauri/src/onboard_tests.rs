@@ -108,9 +108,7 @@ fn openclaw_without_a_workspace_says_so_and_keeps_the_drafts() {
     assert_eq!(r.drafts, Some(base));
     assert_eq!(
         r.note.as_deref(),
-        Some(
-            "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer."
-        )
+        Some("No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer.")
     );
 }
 
@@ -180,7 +178,17 @@ fn openclaw_notes_are_appended_for_review_and_nothing_is_written() {
         user: "# User\n\n- Call me: Sam\n".into(),
         ..Drafts::default()
     };
-    let r = act(&dir, Some(&home), "", Act::Openclaw { drafts: base, source: None }, NOW).unwrap();
+    let r = act(
+        &dir,
+        Some(&home),
+        "",
+        Act::Openclaw {
+            drafts: base,
+            source: None,
+        },
+        NOW,
+    )
+    .unwrap();
     assert!(r.openclaw);
     let d = r.drafts.expect("drafts");
     assert!(
@@ -264,7 +272,17 @@ fn import(dir: &Path, home: &Path) -> Reply {
     )
     .unwrap();
     let drafts = base.drafts.expect("drafts");
-    act(dir, Some(home), "nyx", Act::Openclaw { drafts, source: None }, NOW).unwrap()
+    act(
+        dir,
+        Some(home),
+        "nyx",
+        Act::Openclaw {
+            drafts,
+            source: None,
+        },
+        NOW,
+    )
+    .unwrap()
 }
 
 #[test]

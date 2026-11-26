@@ -30,7 +30,7 @@ vi.mock("./api", async (orig) => ({
 
 import { EMPTY_ANSWERS, OPEN_EVENT } from "./onboardApi";
 import { FirstRunV2, SANDBOX_NOTE, TITLE } from "./FirstRunV2";
-import { finishFirstRunV2, loadFirstRunV2, reopenFirstRunV2 } from "./firstRunV2";
+import { finishFirstRunV2, loadFirstRunV2, reopenFirstRunV2 } from "./firstRunV2Api";
 
 const DONE: OnboardReply = {
   pending: false,

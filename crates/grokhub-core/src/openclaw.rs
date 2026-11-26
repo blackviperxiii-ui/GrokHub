@@ -156,9 +156,7 @@ pub fn import_dest(name: &str) -> Option<&'static str> {
     }
     Some(if n.eq_ignore_ascii_case("SOUL.md") {
         "SOUL.md"
-    } else if n.eq_ignore_ascii_case("USER.md") {
-        "USER.md"
-    } else if n.eq_ignore_ascii_case("IDENTITY.md") {
+    } else if n.eq_ignore_ascii_case("USER.md") || n.eq_ignore_ascii_case("IDENTITY.md") {
         "USER.md"
     } else {
         // CLAUDE.md, AGENTS.md, MEMORY.md, instructions.md, and other notes.

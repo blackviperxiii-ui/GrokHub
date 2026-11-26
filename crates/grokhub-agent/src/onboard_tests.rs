@@ -555,10 +555,7 @@ fn claude_cursor_and_codex_notes_import_for_review() {
     }
     let sources = import_sources(&home);
     assert_eq!(
-        sources
-            .iter()
-            .map(|s| s.id.as_str())
-            .collect::<Vec<_>>(),
+        sources.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
         ["claude", "cursor", "codex"]
     );
     let base = draft(&dir, &Answers::default(), NOW);

@@ -11,7 +11,7 @@ import {
   reopenFirstRunV2,
   saveFirstRunV2,
   SUGGESTED_APPS,
-} from "./firstRunV2";
+} from "./firstRunV2Api";
 
 beforeEach(() => {
   localStorage.clear();

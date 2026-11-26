@@ -29,7 +29,7 @@ import {
   SUGGESTED_APPS,
   type FirstRunV2Progress,
   type FirstRunV2Step,
-} from "./firstRunV2";
+} from "./firstRunV2Api";
 import { OPEN_EVENT, onboard, type ImportSource } from "./onboardApi";
 import { StepTracker } from "./Progress";
 import { loadRailPrefs, saveRailPrefs, type RailMode } from "./railPrefs";
