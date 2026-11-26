@@ -320,7 +320,7 @@ pub use automation_preflight::{
 };
 pub use automation_wait::{
     append_stream_event, eval_condition, lifecycle_line, mark_automation_waiting, stream_path,
-    wait_line, wait_prompt, wait_step, AutoLifecycle, LifePhase, WaitStep, WaitTrigger,
+    wait_line, wait_prompt, wait_step, AutoLifecycle, Delivery, LifePhase, WaitStep, WaitTrigger,
     STREAMS_DIR, WAIT_POLL_MS,
 };
 pub use blueprint_catalog::{
