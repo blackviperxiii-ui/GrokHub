@@ -714,7 +714,7 @@ async function connectors(s, config) {
     mcpFile,
     JSON.stringify({ mcpServers: { box: { command: process.execPath, args: [script] } } }),
   );
-  await tab(s, "Connectors");
+  await tab(s, "MCPs & Connectors");
   await waitFor("the connector row", async () => {
     const t = await textOf(s, ".card.connector .card-status");
     return t === "Not checked" ? t : null;
