@@ -305,6 +305,8 @@ async function main() {
       const bar = document.querySelector(".rail").getBoundingClientRect();
       return [...document.querySelectorAll("nav.rail button")]
         .map((b) => b.getBoundingClientRect())
+        // A hidden button (the Simple/Advanced switch on a phone) has no box.
+        .filter((r) => r.width > 0 && r.height > 0)
         .filter((r) => r.top < bar.top - 1 || r.bottom > bar.bottom + 1).length;
     });
     check(spill === 0, `${spill} tab(s) spill out of the phone's views bar`);
