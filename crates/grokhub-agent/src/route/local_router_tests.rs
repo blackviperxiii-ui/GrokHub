@@ -548,7 +548,10 @@ fn coding_first_tries_local_then_escalates_to_frontier_with_reason_and_usage_log
         first.reason
     );
     let local_why = super::local_live::routing_reason(&first.rule_ids, None);
-    assert!(local_why.contains("local coding model first"), "{local_why}");
+    assert!(
+        local_why.contains("local coding model first"),
+        "{local_why}"
+    );
 
     // 2. After local verify exhausts, router escalates to Grok with the exact verify reason
     //    and emits an escalated Frontier event for the usage meter.
@@ -569,7 +572,9 @@ fn coding_first_tries_local_then_escalates_to_frontier_with_reason_and_usage_log
     assert!(
         second.reason.contains("local:small")
             && second.reason.contains("grok-4.7")
-            && second.reason.contains("verification failed after 3 attempts (cargo test)"),
+            && second
+                .reason
+                .contains("verification failed after 3 attempts (cargo test)"),
         "{}",
         second.reason
     );

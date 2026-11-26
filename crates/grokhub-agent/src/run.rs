@@ -1625,13 +1625,9 @@ fn run_turn(
                                          attempts — escalating to frontier model.",
                                         cmd.label
                                     )));
-                                    history.push(cabin_note(
-                                        &crate::edit_verify::escalation_note(
-                                            &command,
-                                            &output,
-                                            attempts,
-                                        ),
-                                    ));
+                                    history.push(cabin_note(&crate::edit_verify::escalation_note(
+                                        &command, &output, attempts,
+                                    )));
                                     continue;
                                 }
                                 on_event(LoopEvent::Thought(format!(

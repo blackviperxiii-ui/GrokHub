@@ -1059,11 +1059,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         light_chat: ask.as_ref().is_some_and(|a| a.light_chat()),
         local_coding_first: !code_local_only
             && super::local::warm_runtime().is_some()
-            && (crate::code_guard::is_set(call.session)
-                || matches!(
-                    lane.unwrap_or(call.class),
-                    "code:edit-small" | "code:multi-file" | "debug"
-                )),
+            && crate::code_guard::is_set(call.session),
         // Failover PR 6: the scorer's hard filters read the quota ledger
         // (PR 3) and the turn's explicitness, decided by the call site.
         quota: load_quota(config_dir),
