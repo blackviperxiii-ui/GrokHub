@@ -1403,6 +1403,15 @@ fn a_read_reaches_the_next_steps_head_and_tail_redacted_while_spans_keep_120() {
     let first = spans.iter().find(|s| s.tool == "read_file").unwrap();
     assert_eq!(first.result.chars().count(), STEP_RESULT_CAP);
     assert_eq!(STEP_RESULT_CAP, 120);
+    // Those 120 chars are redacted too, in the span and in the view line.
+    assert!(
+        first.result.contains("HEAD-MARK key [redacted]"),
+        "{}",
+        first.result
+    );
+    for text in std::iter::once(first.result.as_str()).chain(nows.iter().map(String::as_str)) {
+        assert!(!text.contains("sk-abcdefghij"), "{text}");
+    }
 }
 
 /// One batch is one slot: two reads and a click in one turn both reach
