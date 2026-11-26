@@ -212,7 +212,10 @@ pub fn valid_e164(number: &str) -> bool {
     };
     let len = digits.len();
     (8..=15).contains(&len)
-        && digits.as_bytes().first().is_some_and(|b| matches!(b, b'1'..=b'9'))
+        && digits
+            .as_bytes()
+            .first()
+            .is_some_and(|b| matches!(b, b'1'..=b'9'))
         && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
@@ -549,9 +552,8 @@ pub fn redact_transcript_text(text: &str) -> String {
     let card = RE_CARD.get_or_init(|| Regex::new(r"\b(?:\d[ -]?){13,19}\b").ok());
     let email = RE_EMAIL
         .get_or_init(|| Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").ok());
-    let phone = RE_PHONE.get_or_init(|| {
-        Regex::new(r"(?:\+[1-9]\d{7,14}\b|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)").ok()
-    });
+    let phone = RE_PHONE
+        .get_or_init(|| Regex::new(r"(?:\+[1-9]\d{7,14}\b|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b)").ok());
 
     let mut out = text.to_string();
     if let Some(re) = ssn {
@@ -653,7 +655,7 @@ pub fn list_transcripts(config_dir: &Path) -> Vec<CallTranscript> {
             serde_json::from_str::<CallTranscript>(&raw).ok()
         })
         .collect();
-    out.sort_by(|a, b| b.started_ms.cmp(&a.started_ms));
+    out.sort_by_key(|a| std::cmp::Reverse(a.started_ms));
     out
 }
 
@@ -761,19 +763,13 @@ mod tests {
     #[test]
     fn inbound_consent_blocks_unknown_callers_unless_allowed() {
         let mut cfg = enabled_cfg();
-        assert_eq!(
-            authorize_inbound(&cfg, "+14155550111"),
-            CallDecision::Allow
-        );
+        assert_eq!(authorize_inbound(&cfg, "+14155550111"), CallDecision::Allow);
         assert!(matches!(
             authorize_inbound(&cfg, "+14155550999"),
             CallDecision::Deny { .. }
         ));
         cfg.inbound.allow_unknown_callers = true;
-        assert_eq!(
-            authorize_inbound(&cfg, "+14155550999"),
-            CallDecision::Allow
-        );
+        assert_eq!(authorize_inbound(&cfg, "+14155550999"), CallDecision::Allow);
     }
 
     #[test]

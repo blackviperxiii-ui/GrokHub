@@ -347,7 +347,10 @@ mod tests {
         assert!(save_api_key(&store, "   ").is_err());
         save_api_key(&store, "vapi-secret").unwrap();
         save_webhook_secret(&store, "hook-secret").unwrap();
-        assert_eq!(load_api_key(&store).unwrap().as_deref(), Some("vapi-secret"));
+        assert_eq!(
+            load_api_key(&store).unwrap().as_deref(),
+            Some("vapi-secret")
+        );
         assert_eq!(
             load_webhook_secret(&store).unwrap().as_deref(),
             Some("hook-secret")
@@ -432,8 +435,7 @@ mod tests {
         assert!(matches!(denied, WebhookOutcome::Denied { .. }));
         assert!(telephony::list_transcripts(&dir).is_empty());
 
-        let accepted =
-            handle_inbound_webhook(&dir, &store, &cfg, "hook-123", body, 1_000).unwrap();
+        let accepted = handle_inbound_webhook(&dir, &store, &cfg, "hook-123", body, 1_000).unwrap();
         assert!(matches!(
             accepted,
             WebhookOutcome::Accepted {
