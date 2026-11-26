@@ -74,9 +74,55 @@ pub fn preferred_branch(dir: &Path, override_branch: Option<&str>) -> String {
     crate::ship::current_branch(dir).unwrap_or_else(|| "main".into())
 }
 
-/// `origin` URL when present; never rewritten with credentials.
+/// `origin`'s URL when present, without the credentials it may carry (set
+/// by hand, or added by an `insteadOf` rule), so it can be shown and saved.
 pub fn remote_url(dir: &Path) -> Option<String> {
-    crate::repo::origin_url(dir)
+    crate::repo::origin_url(dir).map(|url| sanitize_remote_url(&url))
+}
+
+/// The URL `origin` is set to in `dir`'s own config, as cloned (before any
+/// `insteadOf` rule rewrites it).
+fn configured_origin(dir: &Path) -> Option<String> {
+    let mut c = Command::new("git");
+    c.arg("-c")
+        .arg("core.fsmonitor=false")
+        .args(["config", "--get", "remote.origin.url"])
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    hide_windows_console(&mut c);
+    let out = c.output().ok().filter(|o| o.status.success())?;
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!url.is_empty()).then_some(url)
+}
+
+/// One repo's remote, whatever form names it: no scheme, credentials,
+/// `.git` or trailing slash, in lower case (`git@github.com:Org/App.git`
+/// and `https://github.com/org/app` are the same remote).
+fn remote_key(url: &str) -> String {
+    let u = sanitize_remote_url(url).to_ascii_lowercase();
+    let rest = match u.split_once("://") {
+        Some((_, rest)) => rest.to_string(),
+        // `git@host:path`
+        None => u.replacen(':', "/", 1),
+    };
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = if host == "www.github.com" {
+        "github.com"
+    } else {
+        host
+    };
+    let path = path.trim_end_matches('/');
+    let path = path
+        .strip_suffix(".git")
+        .unwrap_or(path)
+        .trim_end_matches('/');
+    format!("{host}{path}")
 }
 
 /// Clone `url` into `dest` (parent must exist). `github_token` is used only for
@@ -203,20 +249,21 @@ pub fn link_remote(
     }
     let name = repo_name_from_url(url)
         .ok_or_else(|| "Could not read a repo name from that URL.".to_string())?;
-    let dest = unique_dest(work_root, &name);
-    if dest.exists() {
-        // Reuse: never wipe. Refresh link metadata only.
-        let linked = link_local(&dest, override_branch);
-        return Ok(Linked {
-            remote_url: linked.remote_url.or_else(|| Some(url.to_string())),
-            note: Some(format!(
-                "Opened the existing folder {}. Local work was kept.",
-                dest.display()
-            ))
-            .or(linked.note),
-            ..linked
-        });
-    }
+    let dest = match clone_dest(work_root, &name, url) {
+        Dest::Reuse(dest) => {
+            // Reuse: never wipe. Refresh link metadata only.
+            let linked = link_local(&dest, override_branch);
+            return Ok(Linked {
+                remote_url: linked.remote_url.or_else(|| Some(sanitize_remote_url(url))),
+                note: Some(format!(
+                    "Opened the existing folder {}. Local work was kept.",
+                    dest.display()
+                )),
+                ..linked
+            });
+        }
+        Dest::Clone(dest) => dest,
+    };
     clone_remote(url, &dest, github_token)?;
     let mut linked = link_local(&dest, override_branch);
     if linked.remote_url.is_none() {
@@ -225,34 +272,88 @@ pub fn link_remote(
     Ok(linked)
 }
 
-fn unique_dest(work_root: &Path, name: &str) -> PathBuf {
-    let base = work_root.join(name);
-    if !base.exists() {
-        return base;
-    }
-    for i in 2..100 {
-        let cand = work_root.join(format!("{name}-{i}"));
-        if !cand.exists() {
-            return cand;
-        }
-    }
-    work_root.join(format!("{name}-{}", grokhub_core::now_ms()))
+/// Where [`link_remote`] puts a remote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Dest {
+    /// A folder that already holds a clone of this remote.
+    Reuse(PathBuf),
+    /// A folder that isn't there yet.
+    Clone(PathBuf),
 }
 
-/// Strip credentials from a URL before storing or showing.
+/// `name`, `name-2`, … under `work_root`: the first that already holds a
+/// clone of `url`, else the first that isn't there. A folder of that name
+/// holding anything else is never cloned into or opened as this remote.
+fn clone_dest(work_root: &Path, name: &str, url: &str) -> Dest {
+    let want = remote_key(url);
+    let mut free = None;
+    for i in 1..100 {
+        let cand = match i {
+            1 => work_root.join(name),
+            _ => work_root.join(format!("{name}-{i}")),
+        };
+        if !cand.exists() {
+            free.get_or_insert(cand);
+        } else if cand.join(".git").exists()
+            && configured_origin(&cand).is_some_and(|got| remote_key(&got) == want)
+        {
+            return Dest::Reuse(cand);
+        }
+    }
+    Dest::Clone(
+        free.unwrap_or_else(|| work_root.join(format!("{name}-{}", grokhub_core::now_ms()))),
+    )
+}
+
+/// Query names whose value is a credential (`?access_token=…`).
+const SECRET_QUERY: &[&str] = &["token", "key", "secret", "pass", "auth", "sig", "cred"];
+
+/// Strip credentials from a URL before storing or showing: an HTTP(S)
+/// URL's user and password, any other URL's password (an SSH user such as
+/// `git@` stays), and query values named for a credential.
 pub fn sanitize_remote_url(url: &str) -> String {
     let u = url.trim();
-    if let Some(rest) = u.strip_prefix("https://") {
-        if let Some(at) = rest.find('@') {
-            return format!("https://{}", &rest[at + 1..]);
+    let Some((scheme, rest)) = u.split_once("://") else {
+        return u.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let host = match authority.rsplit_once('@') {
+        Some((_, host))
+            if scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http") =>
+        {
+            host.to_string()
         }
-    }
-    if let Some(rest) = u.strip_prefix("http://") {
-        if let Some(at) = rest.find('@') {
-            return format!("http://{}", &rest[at + 1..]);
+        Some((user, host)) => {
+            let user = user.split_once(':').map_or(user, |(user, _)| user);
+            format!("{user}@{host}")
         }
+        None => authority.to_string(),
+    };
+    let (path, fragment) = tail
+        .split_once('#')
+        .map_or((tail, None), |(p, f)| (p, Some(f)));
+    let tail = match path.split_once('?') {
+        Some((path, query)) => {
+            let kept: Vec<&str> = query
+                .split('&')
+                .filter(|pair| {
+                    let name = pair.split('=').next().unwrap_or("").to_ascii_lowercase();
+                    !SECRET_QUERY.iter().any(|word| name.contains(word))
+                })
+                .collect();
+            if kept.is_empty() {
+                path.to_string()
+            } else {
+                format!("{path}?{}", kept.join("&"))
+            }
+        }
+        None => path.to_string(),
+    };
+    match fragment {
+        Some(fragment) => format!("{scheme}://{host}{tail}#{fragment}"),
+        None => format!("{scheme}://{host}{tail}"),
     }
-    u.to_string()
 }
 
 /// The URL a clone uses: no credentials, and `www.github.com` as
@@ -315,6 +416,154 @@ mod tests {
         let err = clone_remote("https://github.com/org/app.git", &dest, None).unwrap_err();
         assert_eq!(err, *grokhub_core::offline::OFFLINE_MSG);
         assert!(!tmp.exists());
+    }
+
+    fn sh_git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn folders(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A folder that already holds a clone of the same remote is opened as
+    /// it is: no clone, so no network, and its local work stays.
+    #[test]
+    fn linking_a_url_whose_clone_is_already_there_reuses_it() {
+        let _offline = grokhub_core::offline::force_for_thread(true);
+        let root = std::env::temp_dir().join(format!("link-reuse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let existing = root.join("app");
+        std::fs::create_dir_all(&existing).unwrap();
+        sh_git(&existing, &["init", "-q"]);
+        sh_git(
+            &existing,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://user:sk-abcdefghijklmnopqrstuv@github.com/Org/App/",
+            ],
+        );
+        std::fs::write(existing.join("work.txt"), "local work\n").unwrap();
+        let got = link_remote("https://github.com/org/app.git", &root, None, None);
+        let names = folders(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let linked = got.expect("the clone that is there is opened");
+        assert_eq!(linked.path, existing.display().to_string());
+        assert_eq!(
+            linked.remote_url.as_deref(),
+            Some("https://github.com/Org/App/")
+        );
+        assert_eq!(
+            linked.note,
+            Some(format!(
+                "Opened the existing folder {}. Local work was kept.",
+                existing.display()
+            ))
+        );
+        assert_eq!(names, vec!["app".to_string()]);
+    }
+
+    /// Linking the same URL twice opens the first clone again; a folder of
+    /// that name that holds another repo still gets a clone of its own.
+    #[cfg(unix)]
+    #[test]
+    fn linking_a_remote_twice_opens_the_first_clone_and_another_repo_gets_a_new_name() {
+        let _online = grokhub_core::offline::force_for_thread(false);
+        let root = std::env::temp_dir().join(format!("link-twice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let bare = root.join("src.git");
+        let seed = root.join("seed");
+        sh_git(
+            &root,
+            &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+        );
+        sh_git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                bare.to_str().unwrap(),
+                seed.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(seed.join("a.txt"), "x\n").unwrap();
+        sh_git(&seed, &["add", "a.txt"]);
+        sh_git(&seed, &["commit", "-qm", "x"]);
+        sh_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+        // The GitHub URLs below are cloned from local bare repos.
+        let other = root.join("other.git");
+        sh_git(
+            &root,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                other.to_str().unwrap(),
+            ],
+        );
+        sh_git(&seed, &["push", "-q", other.to_str().unwrap(), "HEAD:main"]);
+        let gitconfig = root.join("gitconfig");
+        std::fs::write(
+            &gitconfig,
+            format!(
+                "[url \"{}\"]\n\tinsteadOf = https://github.com/org/app.git\n[url \"{}\"]\n\tinsteadOf = https://github.com/other/app.git\n[protocol \"file\"]\n\tallow = always\n",
+                bare.display(),
+                other.display()
+            ),
+        )
+        .unwrap();
+        let old = std::env::var_os("GIT_CONFIG_GLOBAL");
+        // SAFETY: tests run one at a time in this process, so nothing else
+        // reads the environment while git's global config points here.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+        let work = root.join("work");
+        let first = link_remote("https://github.com/org/app.git", &work, None, None);
+        if let Ok(first) = &first {
+            std::fs::write(Path::new(&first.path).join("local-work.txt"), "mine\n").unwrap();
+        }
+        let second = link_remote("https://github.com/org/app.git", &work, None, None);
+        let third = link_remote("https://github.com/other/app.git", &work, None, None);
+        match old {
+            Some(old) => unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", old) },
+            None => unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") },
+        }
+        let names = folders(&work);
+        let kept = work.join("app").join("local-work.txt").exists();
+        let _ = std::fs::remove_dir_all(&root);
+        let (first, second, third) = (first.unwrap(), second.unwrap(), third.unwrap());
+        let app = work.join("app").display().to_string();
+        assert_eq!(first.path, app);
+        assert_eq!(first.note, None);
+        assert_eq!(second.path, app);
+        assert_eq!(
+            second.note,
+            Some(format!(
+                "Opened the existing folder {app}. Local work was kept."
+            ))
+        );
+        assert!(kept, "the first clone's local work stays");
+        assert_eq!(third.path, work.join("app-2").display().to_string());
+        assert_eq!(names, vec!["app".to_string(), "app-2".to_string()]);
     }
 
     #[test]

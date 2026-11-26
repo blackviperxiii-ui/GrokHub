@@ -156,6 +156,36 @@ fn agents_message_their_list_and_their_lead_but_not_sideways() {
 }
 
 #[test]
+fn a_paired_computer_reaches_only_an_agent_shared_with_it() {
+    let mut file = household();
+    file.agents[2].share = true;
+    file.agents[2].share_with = vec!["laptop".into()];
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "front-desk", &[]),
+        Ok(())
+    );
+    let unknown = Err(Refusal::UnknownAgent("front-desk".into()));
+    assert_eq!(
+        file.may_message(Sender::Peer("desk-pc"), "front-desk", &[]),
+        unknown
+    );
+    file.agents[2].share = false;
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "front-desk", &[]),
+        unknown
+    );
+    // An agent that isn't shared answers like one that doesn't exist.
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "planner", &[]),
+        Err(Refusal::UnknownAgent("planner".into()))
+    );
+    assert_eq!(
+        file.may_message(Sender::Peer("laptop"), "ghost", &[]),
+        Err(Refusal::UnknownAgent("ghost".into()))
+    );
+}
+
+#[test]
 fn a_customer_agent_only_answers() {
     let file = household();
     assert_eq!(
@@ -292,6 +322,18 @@ fn every_rule_names_what_broke() {
             "`planner` lists `researcher` twice in talks_to.",
         ),
         (
+            Box::new(|f| f.agents[2].share_with = vec!["laptop".into(), "laptop".into()]),
+            "`front-desk` lists computer `laptop` twice in share_with.",
+        ),
+        (
+            Box::new(|f| f.agents[2].share_with = vec![" ".into()]),
+            "`front-desk` lists a computer id that is empty or longer than 128 characters.",
+        ),
+        (
+            Box::new(|f| f.agents[2].share_with = (0..17).map(|n| format!("pc-{n}")).collect()),
+            "`front-desk` is shared with more than 16 computers.",
+        ),
+        (
             Box::new(|f| f.agents[0].tools = vec!["rm -rf".into()]),
             "`planner` lists a tool name `rm -rf` the app can't have.",
         ),
@@ -344,4 +386,91 @@ fn a_model_tier_must_be_one_model_profiles_uses() {
         err.contains("fast") && err.contains("frontier") && err.contains("free"),
         "{err}"
     );
+}
+
+#[test]
+fn removing_an_agent_drops_every_mention_of_it() {
+    let mut file = household();
+    file.remove_agent("researcher");
+    assert_eq!(
+        file.agent("planner").unwrap().talks_to,
+        Vec::<String>::new()
+    );
+    assert_eq!(file.agents.len(), 3);
+    file.check().unwrap();
+
+    file.remove_agent("planner");
+    assert_eq!(file.teams, Vec::new());
+    let teams: Vec<&str> = file.agents.iter().map(|a| a.team.as_str()).collect();
+    assert_eq!(teams, ["", ""]);
+    file.check().unwrap();
+}
+
+#[test]
+fn put_agent_adds_or_replaces_but_never_adds_over_an_id() {
+    let mut file = household();
+    let mut kid = Profile::new(Kind::Family, "kid", "Kiddo");
+    assert_eq!(
+        file.put_agent(kid.clone(), true),
+        Err("An agent already uses the id `kid`.".into())
+    );
+    kid.team = "home".into();
+    file.put_agent(kid, false).unwrap();
+    assert_eq!(file.agent("kid").unwrap().name, "Kiddo");
+    assert_eq!(
+        file.put_agent(Profile::new(Kind::Staff, "chef", "Chef"), false),
+        Err("`chef` isn't an agent.".into())
+    );
+    file.put_agent(Profile::new(Kind::Staff, "chef", "Chef"), true)
+        .unwrap();
+    assert_eq!(file.agents.last().unwrap().id, "chef");
+    file.check().unwrap();
+}
+
+#[test]
+fn put_team_puts_its_lead_on_it_and_remove_team_frees_the_members() {
+    let mut file = household();
+    let work = Team {
+        id: "work".into(),
+        name: "Work".into(),
+        lead: "researcher".into(),
+    };
+    file.put_team(work.clone(), true).unwrap();
+    assert_eq!(file.agent("researcher").unwrap().team, "work");
+    assert_eq!(
+        file.put_team(work.clone(), true),
+        Err("A team already uses the id `work`.".into())
+    );
+    let taken = Team {
+        id: "chores".into(),
+        name: "Chores".into(),
+        lead: "planner".into(),
+    };
+    assert_eq!(
+        file.put_team(taken, true),
+        Err("`planner` already leads `home`. Pick another lead, or remove that team first.".into())
+    );
+    assert_eq!(file.agent("planner").unwrap().team, "home");
+    let ghost = Team {
+        lead: "ghost".into(),
+        ..work.clone()
+    };
+    assert_eq!(
+        file.put_team(ghost, false),
+        Err("Team `work`'s lead `ghost` isn't an agent.".into())
+    );
+    let renamed = Team {
+        name: "Day job".into(),
+        ..work
+    };
+    file.put_team(renamed, false).unwrap();
+    assert_eq!(file.team("work").unwrap().name, "Day job");
+    file.check().unwrap();
+
+    file.remove_team("home");
+    assert_eq!(file.team("home"), None);
+    for id in ["planner", "kid", "front-desk"] {
+        assert_eq!(file.agent(id).unwrap().team, "", "{id}");
+    }
+    file.check().unwrap();
 }

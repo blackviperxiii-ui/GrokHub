@@ -253,13 +253,13 @@ mod tests {
             .save_account(XAI_OAUTH_ACCOUNT, &stored("at-old", 1))
             .unwrap();
         assert_eq!(bearer(&store), Err(IMAGINE_SIGN_IN_AGAIN.to_string()));
-        assert_eq!(
-            store
+        assert!(
+            (store
                 .load_account(XAI_OAUTH_ACCOUNT)
                 .unwrap()
                 .unwrap()
-                .access_token,
-            "at-old"
+                .access_token)
+                == ("at-old")
         );
     }
 

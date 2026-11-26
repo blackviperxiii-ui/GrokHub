@@ -183,6 +183,7 @@ pub mod storage;
 mod stt_stream;
 pub mod suggested;
 mod task_feed;
+mod team;
 mod turns;
 pub mod unattended;
 #[cfg(desktop)]
@@ -240,9 +241,6 @@ struct ShellState {
     /// A Pulse card's report, by its chat, for that chat's next message to
     /// carry unseen.
     card_carry: Mutex<HashMap<String, String>>,
-    /// Messages the window sends back for the app, with what of them the
-    /// person typed.
-    send_back: turns::SendBack,
     /// The folder each Code tab session works in.
     code_sessions: code_sessions::Folders,
     /// Focus help: the app the user was just in (chip + one context line).
@@ -1103,6 +1101,7 @@ fn maybe_handle_bench_turn_to_disk(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn send_chat(
     app: AppHandle,
     state: State<'_, ShellState>,
@@ -1111,6 +1110,7 @@ async fn send_chat(
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
     clock: Option<automations::Clock>,
+    untyped: Option<Vec<String>>,
 ) -> Result<String, String> {
     set_last_chat(&state, &conversation_id);
     // A message you send ends a Halt's hold on the background passes.
@@ -1129,8 +1129,12 @@ async fn send_chat(
         );
     });
     // Only the words the window sent can hold the person's typing; what is
-    // put before them below can't.
-    let typed = state.send_back.typed(&conversation_id, &text);
+    // put before them below can't. What the window put in its box for the
+    // app, a card or a model (`untyped`) isn't typed, and the same message
+    // sent again in this chat (`/retry`, after a restart) keeps the typed
+    // words it had.
+    let untyped = untyped.unwrap_or_default();
+    let typed = turns::typed_of(&state.config_dir, &conversation_id, &text, &untyped);
     // A chat opened from a Pulse card: its first message carries the card.
     let carry = state
         .card_carry
@@ -1217,6 +1221,9 @@ async fn chat_turn(
         attachments,
         clock,
     } = turn;
+    // Kept with the chat when some of the message isn't the person's, so it
+    // reads no more than this when it is sent again.
+    turns::note_sent(&state.config_dir, &conversation_id, &text, &typed)?;
     let files = state.trays.take(&conversation_id, &attachments)?;
     let own_folder = state.code_sessions.of(&conversation_id);
     if files.is_empty() {
@@ -1251,7 +1258,6 @@ async fn chat_turn(
         }
     }
     let asked = text.clone();
-    let asked_typed = typed.clone();
     // A card's chat shows Stop on its card while this turn runs.
     card_chat::turn_began(&conversation_id);
     let (ended_dir, ended_chat) = (state.config_dir.clone(), conversation_id.clone());
@@ -1368,13 +1374,10 @@ async fn chat_turn(
     // A card's run settles on its card, however the turn ended.
     let card = card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
     // No model in your plan answered: the chat waits and sends again on its
-    // own. A card's chat does not: its card settled already.
-    // The window sends the ask back as it was, and only what the person
-    // typed in it counts as typed again.
+    // own. A card's chat does not: its card settled already. The window
+    // sends the ask back as it was, so its note above keeps its typed words.
     if let (Err(err), false) = (&stop, card) {
-        if model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms()) {
-            state.send_back.expect(&ended_chat, &asked, asked_typed);
-        }
+        model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms());
     }
     if coding {
         let why = match &stop {
@@ -3741,21 +3744,22 @@ fn code_session_resume(
     state: State<'_, ShellState>,
     conversation_id: String,
 ) -> Result<String, String> {
-    code_resume_noted(&state.send_back, &state.config_dir, &conversation_id)
+    code_resume_noted(&state.config_dir, &conversation_id)
 }
 
-/// The Code tab's resume prompt for `conversation_id`, noted for
-/// `send_chat` as typed by no one: it is built from the session's plan and
-/// to-dos, which the model wrote.
-fn code_resume_noted(
-    back: &turns::SendBack,
-    config_dir: &Path,
-    conversation_id: &str,
-) -> Result<String, String> {
+/// The Code tab's resume prompt for `conversation_id`, noted with the chat
+/// as typed by no one: it is built from the session's plan and to-dos,
+/// which the model wrote.
+fn code_resume_noted(config_dir: &Path, conversation_id: &str) -> Result<String, String> {
     let left = code_keep::read(config_dir, conversation_id)
         .ok_or("This session has no checkpoint to resume.")?;
     let prompt = code_keep::resume_prompt(&left);
-    back.expect(conversation_id, &prompt, grokhub_core::Typed::nothing());
+    turns::note_sent(
+        config_dir,
+        conversation_id,
+        &prompt,
+        &grokhub_core::Typed::nothing(),
+    )?;
     Ok(prompt)
 }
 
@@ -4272,6 +4276,94 @@ async fn vstack_sync_now(
 }
 
 #[tauri::command]
+async fn get_team(state: State<'_, ShellState>) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn team_save_agent(
+    app: tauri::AppHandle,
+    state: State<'_, ShellState>,
+    agent: grokhub_core::agent_team::Profile,
+    add: bool,
+) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let page = team::save_agent(&dir, agent, add)?;
+        recheck_door(&app);
+        Ok(page)
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn team_remove_agent(
+    app: tauri::AppHandle,
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        let page = team::remove_agent(&dir, &id)?;
+        recheck_door(&app);
+        Ok(page)
+    })
+    .await?
+}
+
+/// After an agent is saved or removed, a paired computer it is no longer
+/// shared with loses its running turns. Only an agent's own fields decide
+/// what a computer reaches, so team edits need no recheck.
+fn recheck_door(app: &tauri::AppHandle) {
+    #[cfg(desktop)]
+    if let Some(share) = app.try_state::<Arc<hub_share::HubShare>>() {
+        share.recheck();
+    }
+    #[cfg(not(desktop))]
+    let _ = app;
+}
+
+/// The computers paired with this one, for the Team page's share list. No
+/// pairing code, and memory only. Desktop only, like the hub.
+#[cfg(desktop)]
+#[tauri::command]
+fn team_computers(share: State<'_, Arc<hub_share::HubShare>>) -> Vec<hub_share::PeerView> {
+    share.computers()
+}
+
+#[tauri::command]
+async fn team_save_team(
+    state: State<'_, ShellState>,
+    team: grokhub_core::agent_team::Team,
+    add: bool,
+) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::save_team(&dir, team, add)).await?
+}
+
+#[tauri::command]
+async fn team_remove_team(state: State<'_, ShellState>, id: String) -> Result<team::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || team::remove_team(&dir, &id)).await?
+}
+
+/// The agent task log, newest first.
+#[tauri::command]
+async fn get_agent_tasks(
+    state: State<'_, ShellState>,
+) -> Result<Vec<grokhub_core::agent_tasks::TaskRecord>, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || grokhub_core::agent_tasks::recent(&dir, 200)).await
+}
+
+#[tauri::command]
+async fn clear_agent_tasks(state: State<'_, ShellState>) -> Result<(), String> {
+    let dir = state.config_dir.clone();
+    off_main(move || grokhub_core::agent_tasks::clear(&dir)).await?
+}
+
+#[tauri::command]
 async fn get_journal(state: State<'_, ShellState>) -> Result<journal::Page, String> {
     let dir = state.config_dir.clone();
     off_main(move || journal::load(&dir)).await?
@@ -4425,21 +4517,25 @@ async fn workboard_resume(
         })
     })
     .await??;
-    Ok(noted_resume(&state.send_back, resumed))
+    noted_resume(&state.config_dir, resumed)
 }
 
-/// A resume the page sends at once in its chat, noted for `send_chat` as
+/// A resume the page sends at once in its chat, noted with the chat as
 /// typed by no one: its block is the card's checkpoint and steps, which the
 /// model wrote.
-fn noted_resume(back: &turns::SendBack, resumed: workboard::Resume) -> workboard::Resume {
+fn noted_resume(
+    config_dir: &Path,
+    resumed: workboard::Resume,
+) -> Result<workboard::Resume, String> {
     if !resumed.background {
-        back.expect(
+        turns::note_sent(
+            config_dir,
             &resumed.conversation_id,
             &resumed.prompt,
-            grokhub_core::Typed::nothing(),
-        );
+            &grokhub_core::Typed::nothing(),
+        )?;
     }
-    resumed
+    Ok(resumed)
 }
 
 /// Start an unattended resume of card `id`: the card goes to Doing now, and
@@ -4525,11 +4621,17 @@ async fn workboard_say(
     let typed = text.clone();
     let said =
         off_main(move || card_chat::say(&dir, &id, text.as_str(), &conversation_id)).await??;
-    // The message holds the card's work prompt and notes: of it, the person
-    // typed only `text`.
-    state
-        .send_back
-        .expect(&said.conversation_id, &said.message, typed);
+    noted_say(&state.config_dir, said, &typed)
+}
+
+/// A card chat's message, noted with its chat: it holds the card's work
+/// prompt and notes, and of it the person typed only `typed`.
+fn noted_say(
+    config_dir: &Path,
+    said: card_chat::Say,
+    typed: &grokhub_core::Typed,
+) -> Result<card_chat::Say, String> {
+    turns::note_sent(config_dir, &said.conversation_id, &said.message, typed)?;
     Ok(said)
 }
 
@@ -8048,9 +8150,10 @@ fn web_send(
     let conversation_id: String = arg(args, "conversationId")?;
     web_may_take(web, config_dir, open_here, &conversation_id)?;
     let text: grokhub_core::Typed = arg(args, "text")?;
+    let untyped = arg::<Option<Vec<String>>>(args, "untyped")?.unwrap_or_default();
     let turn = Turn {
         text: text.as_str().to_string(),
-        typed: turns::typed_words(&text),
+        typed: turns::typed_of(config_dir, &conversation_id, &text, &untyped),
         mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
         attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
         clock: arg::<Option<automations::Clock>>(args, "clock")?,
@@ -8506,6 +8609,42 @@ fn scheduled_route(config_dir: &Path) -> Result<scheduler::Route, String> {
     let (model, _) = grokhub_agent::route::host::chat_start();
     let gate = run_gate(&route);
     Ok((route.client, model, route.workspace, gate))
+}
+
+/// A paired computer's message to a shared agent, answered with the
+/// person's own sign-in and router as a scheduled run would be, read at each
+/// message. With no model to answer, the task log says why and the computer
+/// hears only that the agent couldn't answer.
+#[cfg(desktop)]
+struct AppTurns {
+    config: PathBuf,
+}
+
+#[cfg(desktop)]
+impl grokhub_hub::PeerTurns for AppTurns {
+    fn run(&self, ask: grokhub_hub::PeerAsk) -> grokhub_core::a2a::Outcome {
+        peer_turn(&self.config, scheduled_route(&self.config), ask)
+    }
+}
+
+#[cfg(desktop)]
+fn peer_turn(
+    config: &Path,
+    route: Result<scheduler::Route, String>,
+    ask: grokhub_hub::PeerAsk,
+) -> grokhub_core::a2a::Outcome {
+    match route {
+        Ok((client, model, _, _)) => grokhub_agent::answer_peer(grokhub_agent::PeerTurn {
+            config: config.to_path_buf(),
+            peer: ask.peer,
+            agent: ask.agent,
+            text: ask.text,
+            client,
+            model,
+            cancel: ask.cancel,
+        }),
+        Err(why) => grokhub_agent::peer_unanswered(config, &ask.peer, &ask.agent, &ask.text, &why),
+    }
 }
 
 /// Scheduled automations fire from here while the cabin is closed.
@@ -9150,7 +9289,6 @@ pub fn run() {
                 notified: os_extras::Pending::default(),
                 auto: Mutex::default(),
                 card_carry: Mutex::default(),
-                send_back: turns::SendBack::default(),
                 code_sessions,
                 #[cfg(desktop)]
                 focus_help: Mutex::new(focus_help::FocusHelp::default()),
@@ -9169,9 +9307,18 @@ pub fn run() {
                     .store(global, std::sync::atomic::Ordering::SeqCst);
             }
             #[cfg(desktop)]
-            app.manage(Arc::new(hub_share::HubShare::open(
-                &app.state::<ShellState>().config_dir,
-            )));
+            {
+                let config = app.state::<ShellState>().config_dir.clone();
+                let door = Arc::new(grokhub_hub::A2aDoor::new(
+                    config.clone(),
+                    Arc::new(AppTurns {
+                        config: config.clone(),
+                    }),
+                    remote::lan_ip,
+                    &shell_update::version(),
+                ));
+                app.manage(Arc::new(hub_share::HubShare::open(&config, door)));
+            }
             #[cfg(desktop)]
             hub_join::start(
                 app.state::<ShellState>().config_dir.clone(),
@@ -9598,6 +9745,13 @@ pub fn run() {
             vstack_sync_status,
             vstack_sync_now,
             get_journal,
+            get_team,
+            team_save_agent,
+            team_remove_agent,
+            team_save_team,
+            team_remove_team,
+            get_agent_tasks,
+            clear_agent_tasks,
             get_meetings,
             meetings_act,
             get_wake_word,
@@ -9751,6 +9905,8 @@ pub fn run() {
             stop_share,
             #[cfg(desktop)]
             new_share_code,
+            #[cfg(desktop)]
+            team_computers,
             #[cfg(desktop)]
             fleet_machines,
             #[cfg(desktop)]
@@ -10086,6 +10242,90 @@ mod command_tests {
         code.split_whitespace().collect()
     }
 
+    /// Every turn (the window's, a browser's, a queued card's) keeps its
+    /// message's typed mark before it runs, and the window's and a
+    /// browser's sends look the mark up, so a message sent again reads no
+    /// more than it did. A source check: the commands need the running app.
+    #[test]
+    fn every_turn_keeps_its_typed_mark_and_every_send_reads_it() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let turn = item_after(&src, "async fn chat_turn(");
+        let noted = turn
+            .find(&squeeze(
+                "turns::note_sent(&state.config_dir, &conversation_id, &text, &typed)?;",
+            ))
+            .expect("chat_turn notes the message");
+        let runs = turn.find("session.prompt_typed(").expect("the turn runs");
+        assert!(noted < runs, "{turn}");
+        let send = item_after(&src, "async fn send_chat(");
+        assert!(
+            send.contains(&squeeze(
+                "let typed = turns::typed_of(&state.config_dir, &conversation_id, &text, &untyped);"
+            )),
+            "{send}"
+        );
+        let web = item_after(&src, "fn web_send(");
+        assert!(
+            web.contains(&squeeze(
+                "typed: turns::typed_of(config_dir, &conversation_id, &text, &untyped),"
+            )),
+            "{web}"
+        );
+    }
+
+    #[test]
+    fn saving_or_removing_an_agent_rechecks_the_agent_door() {
+        // A turn for a computer the agent is no longer shared with stops now,
+        // not when that computer next calls.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for name in ["team_save_agent", "team_remove_agent"] {
+            let body = item_after(&src, &format!("async fn {name}("));
+            assert!(
+                body.contains("off_main(move||{") && body.contains("recheck_door(&app);"),
+                "{name} rechecks the door off the main thread: {body}"
+            );
+        }
+        let recheck = item_after(&src, "fn recheck_door(");
+        assert!(
+            recheck.contains("app.try_state::<Arc<hub_share::HubShare>>()")
+                && recheck.contains("share.recheck();"),
+            "{recheck}"
+        );
+        // The hub the app shares is built with the door.
+        assert!(squeeze(&src)
+            .contains("app.manage(Arc::new(hub_share::HubShare::open(&config,door)));"));
+    }
+
+    #[cfg(desktop)]
+    #[test]
+    fn a_peer_message_with_no_model_is_logged_and_the_computer_hears_a_fixed_line() {
+        let dir = std::env::temp_dir().join(format!("peer-turn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ask = grokhub_hub::PeerAsk {
+            peer: "laptop-1".into(),
+            agent: "front-desk".into(),
+            text: "When are you open?".into(),
+            cancel: grokhub_agent::CancelToken::new(),
+        };
+        assert_eq!(
+            super::peer_turn(
+                &dir,
+                Err("Sign in with Grok or add an API key.".into()),
+                ask
+            ),
+            grokhub_core::a2a::Outcome::Failed("the agent couldn't answer".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&dir, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(
+            log[0].from,
+            grokhub_core::agent_tasks::Origin::Peer("laptop-1".into())
+        );
+        assert_eq!(log[0].reply, "Sign in with Grok or add an API key.");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_tray_lists_nyx_on_desktop_after_show() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
@@ -10221,7 +10461,9 @@ mod command_tests {
     fn the_capability_file_claims_a_manifest_only_if_the_build_has_one() {
         // With no app manifest in build.rs, Tauri allows every app command
         // from the app's own page. The capability file must not say otherwise.
-        let has = include_str!("../build.rs").contains("app_manifest");
+        // The app manifest is `tauri_build::AppManifest`; the Windows
+        // manifest build.rs links is another thing.
+        let has = include_str!("../build.rs").contains("AppManifest");
         let says = include_str!("../capabilities/default.json").contains("build manifest");
         assert_eq!(says, has);
     }
@@ -10506,6 +10748,31 @@ mod web_command_tests {
         }
     }
 
+    /// A browser's box says what in a message it put there for the app, a
+    /// card or a model, as the desktop window's does: that text and the
+    /// references it names aren't typed, and the person's words after it
+    /// are.
+    #[test]
+    fn a_browser_send_keeps_what_its_box_put_there_untyped() {
+        use serde_json::json;
+        let web = crate::remote::WebAccess::default();
+        let dir = temp_dir("untyped");
+        let fix = "Fix the config: read @file:/home/user/private-notes.txt";
+        let args = json!({
+            "conversationId": "a3",
+            "text": format!("{fix} and @file:mine.txt"),
+            "untyped": [fix],
+        });
+        let (_, turn) = super::web_send(&web, &dir, |_| false, &args).expect("a message sends");
+        let typed: grokhub_core::Typed =
+            serde_json::from_value(json!("and @file:mine.txt")).expect("typed");
+        assert_eq!(turn.text, format!("{fix} and @file:mine.txt"));
+        assert_eq!(turn.typed, typed);
+        // The send only reads the chat's typed marks; the turn notes its own
+        // when it runs.
+        assert!(!dir.join("typed-marks").exists());
+    }
+
     /// A send that is refused takes no chat: the browser's chats grow only
     /// by sends that go on to run.
     #[test]
@@ -10633,7 +10900,6 @@ mod web_command_tests {
             notified: crate::os_extras::Pending::default(),
             auto: Mutex::default(),
             card_carry: Mutex::default(),
-            send_back: crate::turns::SendBack::default(),
             code_sessions: crate::code_sessions::Folders::open(dir.to_path_buf()),
             #[cfg(desktop)]
             focus_help: Mutex::new(crate::focus_help::FocusHelp::default()),

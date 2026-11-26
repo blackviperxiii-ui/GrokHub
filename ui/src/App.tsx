@@ -101,6 +101,7 @@ const loaders = {
   mods: () => import("./Mods").then((m) => ({ default: m.Mods })),
   objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
+  team: () => import("./Team").then((m) => ({ default: m.Team })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
   updates: () => import("./UpdatesDrivers").then((m) => ({ default: m.UpdatesDrivers })),
@@ -122,6 +123,7 @@ const Mods = lazy(loaders.mods);
 const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
+const Team = lazy(loaders.team);
 const Settings = lazy(loaders.settings);
 const Workboard = lazy(loaders.workboard);
 const UpdatesDrivers = lazy(loaders.updates);
@@ -887,6 +889,12 @@ export function App() {
             />
           </Page>
         ) : null;
+      case "team":
+        return opened.has("team") && !caps.remote ? (
+          <Page key="team" shown={shown}>
+            <Team shown={shown} />
+          </Page>
+        ) : null;
       case "meetings":
         return opened.has("meetings") && !caps.remote ? (
           <Page key="meetings" shown={shown}>
@@ -1137,6 +1145,7 @@ export function App() {
                 {pageNode("devices", view === "devices")}
                 {pageNode("fleet", view === "fleet")}
                 {pageNode("agents", view === "agents")}
+                {pageNode("team", view === "team")}
               </div>
               <div hidden={!isDockable(view)}>
                 <Dock
@@ -1171,6 +1180,7 @@ export function App() {
               {pageNode("fleet", view === "fleet")}
               {pageNode("imagine", view === "imagine")}
               {pageNode("agents", view === "agents")}
+              {pageNode("team", view === "team")}
             </>
           )}
         </main>

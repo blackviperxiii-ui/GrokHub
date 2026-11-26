@@ -916,6 +916,9 @@ fn thought_chunk_is_attach_noise(chunk: &str) -> bool {
     .any(|n| t.contains(n))
 }
 
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
 fn split_thought(content: &str) -> (String, String) {
     let t = content.trim_start();
     if let Some(rest) = t.strip_prefix("THINKING:") {
@@ -925,20 +928,129 @@ fn split_thought(content: &str) -> (String, String) {
         }
         return (rest.trim().to_string(), String::new());
     }
-    if let Some(start) = t.find("<think>") {
-        if let Some(rel_end) = t[start + 7..].find("</think>") {
-            let end = start + 7 + rel_end;
-            let thought = t[start + 7..end].trim().to_string();
+    if let Some(start) = t.find(THINK_OPEN) {
+        let after_open = start + THINK_OPEN.len();
+        if let Some(rel_end) = t[after_open..].find(THINK_CLOSE) {
+            let end = after_open + rel_end;
+            let thought = t[after_open..end].trim().to_string();
             let mut body = t[..start].trim().to_string();
-            let after = t[end + 8..].trim_start();
+            let after = t[end + THINK_CLOSE.len()..].trim_start();
             if !body.is_empty() && !after.is_empty() {
                 body.push('\n');
             }
             body.push_str(after);
             return (thought, body);
         }
+        // Hermes (and similar) often hit the token budget before `</think>`.
+        // Keep the open block in the Thought panel, never in the reply body.
+        let thought = t[after_open..].trim().to_string();
+        let body = t[..start].trim().to_string();
+        return (thought, body);
     }
     (String::new(), content.to_string())
+}
+
+/// Pieces of a streamed reply after `<think>` tags are folded out.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ThinkTagOut {
+    /// Text that belongs in the Thought process panel.
+    pub thought: String,
+    /// Text that belongs in the reply bubble.
+    pub body: String,
+}
+
+/// Folds Hermes-style `<think>…</think>` blocks out of a streaming content
+/// path. Tags may arrive split across chunks; an unclosed block at
+/// [`Self::finish`] stays in `thought` and never in `body`.
+#[derive(Debug, Default, Clone)]
+pub struct ThinkTagFold {
+    hold: String,
+    in_think: bool,
+}
+
+impl ThinkTagFold {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fold the next content delta. Incomplete tag prefixes stay held until
+    /// the next push or [`Self::finish`].
+    pub fn push(&mut self, delta: &str) -> ThinkTagOut {
+        if delta.is_empty() {
+            return ThinkTagOut::default();
+        }
+        self.hold.push_str(delta);
+        self.drain(false)
+    }
+
+    /// End of the stream: emit everything still held. An open think block
+    /// with no close tag goes entirely to `thought`.
+    pub fn finish(&mut self) -> ThinkTagOut {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, finish: bool) -> ThinkTagOut {
+        let mut out = ThinkTagOut::default();
+        loop {
+            if self.in_think {
+                if let Some(i) = self.hold.find(THINK_CLOSE) {
+                    out.thought.push_str(&self.hold[..i]);
+                    self.hold.drain(..i + THINK_CLOSE.len());
+                    // Match batch `split_thought`: drop the blank line Hermes
+                    // puts between `</think>` and the reply.
+                    let skip = self.hold.len() - self.hold.trim_start().len();
+                    if skip > 0 {
+                        self.hold.drain(..skip);
+                    }
+                    self.in_think = false;
+                    continue;
+                }
+                if finish {
+                    out.thought.push_str(&self.hold);
+                    self.hold.clear();
+                    self.in_think = false;
+                    break;
+                }
+                let keep = tag_prefix_hold(&self.hold, THINK_CLOSE);
+                let emit = self.hold.len() - keep;
+                if emit > 0 {
+                    out.thought.push_str(&self.hold[..emit]);
+                    self.hold.drain(..emit);
+                }
+                break;
+            }
+            if let Some(i) = self.hold.find(THINK_OPEN) {
+                out.body.push_str(&self.hold[..i]);
+                self.hold.drain(..i + THINK_OPEN.len());
+                self.in_think = true;
+                continue;
+            }
+            if finish {
+                out.body.push_str(&self.hold);
+                self.hold.clear();
+                break;
+            }
+            let keep = tag_prefix_hold(&self.hold, THINK_OPEN);
+            let emit = self.hold.len() - keep;
+            if emit > 0 {
+                out.body.push_str(&self.hold[..emit]);
+                self.hold.drain(..emit);
+            }
+            break;
+        }
+        out
+    }
+}
+
+/// How many trailing bytes of `s` are a non-empty proper prefix of `tag`.
+fn tag_prefix_hold(s: &str, tag: &str) -> usize {
+    let max = s.len().min(tag.len().saturating_sub(1));
+    for n in (1..=max).rev() {
+        if tag.as_bytes().starts_with(&s.as_bytes()[s.len() - n..]) {
+            return n;
+        }
+    }
+    0
 }
 
 /// Quote a visible message into the composer so Reply can continue the thread.
@@ -1649,6 +1761,53 @@ mod tests {
         assert_eq!(kinds(&v), vec![ChatKind::Thought, ChatKind::Assistant]);
         assert!(v[0].body.contains("plan the night"));
         assert_eq!(v[1].body, "Hello.");
+    }
+
+    /// Hermes 4 streams `<think>` in content; tags often split across chunks.
+    #[test]
+    fn hermes_think_tags_split_across_chunks() {
+        let mut fold = ThinkTagFold::new();
+        let mut thought = String::new();
+        let mut body = String::new();
+        for chunk in ["<thi", "nk>\nplan the fix\n", "</th", "ink>\nDone."] {
+            let out = fold.push(chunk);
+            thought.push_str(&out.thought);
+            body.push_str(&out.body);
+        }
+        let out = fold.finish();
+        thought.push_str(&out.thought);
+        body.push_str(&out.body);
+        assert_eq!(thought, "\nplan the fix\n");
+        assert_eq!(body, "Done.");
+        assert!(
+            !body.contains("<think>") && !body.contains("</think>"),
+            "tags must never land in the reply body"
+        );
+    }
+
+    /// Hermes often hits the budget before `</think>`; that text stays in the
+    /// Thought process panel and never in the body.
+    #[test]
+    fn hermes_unclosed_think_block_stays_out_of_body() {
+        let mut fold = ThinkTagFold::new();
+        let mid = fold.push("<think>\nStill reasoning about Hermes 4.\n");
+        let end = fold.finish();
+        assert_eq!(mid.body, "");
+        assert_eq!(end.body, "");
+        assert_eq!(
+            format!("{}{}", mid.thought, end.thought),
+            "\nStill reasoning about Hermes 4.\n"
+        );
+
+        let tagged = "<think>\nStill reasoning about Hermes 4.\n";
+        assert_eq!(strip_thinking(tagged), "");
+        let v = visible_chat(&[("assistant".into(), tagged.into())]);
+        assert_eq!(kinds(&v), vec![ChatKind::Thought]);
+        assert_eq!(v[0].body, "Still reasoning about Hermes 4.");
+        assert!(
+            v.iter().all(|row| row.kind != ChatKind::Assistant),
+            "unclosed Hermes think must not paint a reply bubble"
+        );
     }
 
     #[test]

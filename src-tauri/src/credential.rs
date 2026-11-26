@@ -113,9 +113,8 @@ mod tests {
         let store = Mem::default();
         let secret: String = "K".repeat(PLATFORM_UTF16_LIMIT + 64);
         keyring_blob::set(&store, ACCOUNT, &secret).unwrap();
-        assert_eq!(
-            keyring_blob::get(&store, ACCOUNT).unwrap().as_deref(),
-            Some(secret.as_str())
+        assert!(
+            (keyring_blob::get(&store, ACCOUNT).unwrap().as_deref()) == (Some(secret.as_str()))
         );
         keyring_blob::delete(&store, ACCOUNT).unwrap();
         assert!(keyring_blob::get(&store, ACCOUNT).unwrap().is_none());

@@ -1020,6 +1020,19 @@ export function Chat({
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
+  /** Texts the window put in the box for the app, a card or a model (a fix
+   * button's prompt, a Pulse card's offer, a resume block Stop put back).
+   * Sent from the box they aren't typed, so their `@` references stay text
+   * (`send_chat`'s `untyped`). A stale one only keeps a reference to the
+   * same thing unread. */
+  const boxUntyped = useRef<string[]>([]);
+  /** The same, by message, once a message leaves the box: to wait in the
+   * queue, as a side question, as a slash line's text. */
+  const untypedOf = useRef(new Map<string, string[]>());
+  /** What of a queued line the person didn't give the window (a resume
+   * block that came while a reply ran, a told side answer), by line, for
+   * when Stop puts it back in the box. */
+  const backUntyped = useRef(new Map<string, string[]>());
   const deskChat = useRef(Symbol("chat"));
   const voice = useVoiceMode();
   const voiceSession = voice.session;
@@ -1207,12 +1220,28 @@ export function Chat({
     setQueue(next);
   }
 
+  /** Notes `untyped`, what the window put in message `text` for the app, a
+   * card or a model, as `text` leaves the box. A text with no `@` holds no
+   * reference, so only those with one go with the message. */
+  function noteUntyped(text: string, untyped: readonly string[]) {
+    const kept = untyped.filter((piece) => piece.includes("@"));
+    if (kept.length > 0) untypedOf.current.set(text, kept);
+  }
+
+  /** Queued `lines` go back in the box: what the window put in them stays
+   * untyped there. */
+  function untypedBack(lines: readonly string[]) {
+    const back = lines.flatMap((line) => untypedOf.current.get(line) ?? backUntyped.current.get(line) ?? []);
+    boxUntyped.current = [...boxUntyped.current, ...back];
+  }
+
   /** Messages lined up in the chat being left go back in the box, never
    * into the next chat by themselves. */
   function queueBackToBox() {
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
+      untypedBack(waiting);
       setDraft((now) => withQueued(now, waiting));
     }
   }
@@ -1377,8 +1406,10 @@ export function Chat({
     }
     if (next.send && next.text) {
       touched.current = true;
-      if (busyRef.current) changeQueue([...queueRef.current, next.text]);
-      else {
+      if (busyRef.current) {
+        backUntyped.current.set(next.text, [next.text]);
+        changeQueue([...queueRef.current, next.text]);
+      } else {
         // The Command page's line shows as typed, as `/sh` does.
         const shown = shownText(next.text);
         setNextUp((now) => ({
@@ -1390,7 +1421,10 @@ export function Chat({
       }
       return;
     }
-    // Opening the chat that is already open brings no text: keep what is typed.
+    // Opening the chat that is already open brings no text: keep what is
+    // typed. Text a page puts in the box (a Pulse card's offer, a card's
+    // work prompt) isn't the person's.
+    if (switched || next.text) boxUntyped.current = next.text ? [next.text] : [];
     setDraft((now) => (switched || next.text ? next.text : now));
   });
   useEffect(() => {
@@ -1598,7 +1632,10 @@ export function Chat({
     const said = [shown ?? text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
     if (!again) setItems((now) => [...now, shown ? { kind: "user", text: said, sent: text } : { kind: "user", text: said }]);
     if (fromDraft) {
-      if (fromDraft === true) setDraft("");
+      if (fromDraft === true) {
+        setDraft("");
+        boxUntyped.current = [];
+      }
       attach.clear();
     }
     setError(null);
@@ -1614,7 +1651,12 @@ export function Chat({
     let stop = "";
     try {
       const paths = files.map((f) => f.path);
-      stop = await (paths.length ? sendChat(conversationId, text, runs, paths) : sendChat(conversationId, text, runs));
+      const untyped = untypedOf.current.get(text) ?? [];
+      stop = await (untyped.length
+        ? sendChat(conversationId, text, runs, paths, untyped)
+        : paths.length
+          ? sendChat(conversationId, text, runs, paths)
+          : sendChat(conversationId, text, runs));
     } catch (err) {
       setError(String(err));
     }
@@ -1642,6 +1684,7 @@ export function Chat({
       setNextUp((now) => ({ text: waiting[0], n: (now?.n ?? 0) + 1 }));
     } else {
       changeQueue([]);
+      untypedBack(waiting);
       setDraft((now) => withQueued(now, waiting));
     }
   }
@@ -1711,6 +1754,7 @@ export function Chat({
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
+      untypedBack(waiting);
       setDraft((now) => withQueued(now, waiting));
     }
     void cancelChat(conversationId);
@@ -1721,6 +1765,7 @@ export function Chat({
     const text = queueRef.current[index];
     if (text === undefined) return;
     changeQueue(queueRef.current.filter((_, i) => i !== index));
+    untypedBack([text]);
     setDraft((now) => (now.trim() ? now : text));
   }
 
@@ -1806,8 +1851,12 @@ export function Chat({
     const soFar = reply?.kind === "assistant" ? reply.text : "";
     setSides((now) => withSide(now, { id, question, answer: "", live: true, failed: false }));
     let failed = false;
+    const untyped = untypedOf.current.get(question) ?? [];
+    const asked = ask?.kind === "user" ? ask.text : "";
     try {
-      await sideChat(conversationId, id, question, ask?.kind === "user" ? ask.text : "", soFar);
+      await (untyped.length
+        ? sideChat(conversationId, id, question, asked, soFar, untyped)
+        : sideChat(conversationId, id, question, asked, soFar));
     } catch {
       failed = true;
     }
@@ -1828,8 +1877,13 @@ export function Chat({
     dismissSide(side);
     try {
       const told = await tellMain(conversationId, side.question, side.answer);
+      // The answer is a model's: back in the box, it stays untyped.
+      const untyped = [...(untypedOf.current.get(side.question) ?? []), side.answer];
       if (told.steered) setItems((now) => [...now, { kind: "user", text: told.text }]);
-      else if (busyRef.current) changeQueue([...queueRef.current, told.text]);
+      else if (busyRef.current) {
+        backUntyped.current.set(told.text, untyped);
+        changeQueue([...queueRef.current, told.text]);
+      }
       else void deliver(told.text, [], false, "chat");
     } catch (err) {
       setError(String(err));
@@ -1840,6 +1894,7 @@ export function Chat({
    * question, a correction for the work, stop, or a new job that waits. */
   async function routeRunning(typed: string, read: TurnRead) {
     const text = read.text.trim() || typed;
+    noteUntyped(text, untypedOf.current.get(typed) ?? []);
     setAck(read.ack || null);
     switch (read.route) {
       case "side":
@@ -1940,6 +1995,12 @@ export function Chat({
     // Only the line that was sent leaves the box: words typed while it ran stay.
     setDraft((now) => (now.trim() === box.trim() ? "" : now));
     const command = line.split(/\s+/)[0];
+    // A line's text keeps what the window put in the box for the app.
+    const untyped = untypedOf.current.get(line) ?? untypedOf.current.get(box.trim()) ?? [];
+    if ((effect.kind === "mode" || effect.kind === "queue") && effect.text) {
+      noteUntyped(effect.text, untyped);
+      noteUntyped(effect.text.trim(), untyped);
+    }
     switch (effect.kind) {
       case "newChat":
         startOver();
@@ -2123,6 +2184,7 @@ export function Chat({
       return;
     }
     if (!run || !hit.runOnPick) {
+      boxUntyped.current = [];
       setDraft(hit.insert);
       return;
     }
@@ -2141,6 +2203,7 @@ export function Chat({
     event?.preventDefault();
     const text = draft.trim();
     const files = attach.files;
+    noteUntyped(text, boxUntyped.current);
     // While a reply runs, the app reads what the message is for (files wait
     // in the box). A typed /btw or /side asks on the side.
     if (busy) {
@@ -2154,6 +2217,7 @@ export function Chat({
         return;
       }
       setDraft("");
+      boxUntyped.current = [];
       // The web app lines messages up behind the reply, as before. In a chat
       // opened while another chat's reply ends, the message waits for it.
       if (remote || !busyHere) {
@@ -2203,6 +2267,7 @@ export function Chat({
     }
     const as = chip.mode === "plan" ? "plan" : undefined;
     if (draft.trim()) {
+      boxUntyped.current = [...boxUntyped.current, chip.value];
       setDraft(appendDraft(draft, chip.value));
       return;
     }
@@ -2242,6 +2307,8 @@ export function Chat({
       }
     } else if (event.key === "Tab" && !event.shiftKey && ghost) {
       event.preventDefault();
+      // A model wrote the suggestion: taken with Tab, it isn't typed.
+      boxUntyped.current = [...boxUntyped.current, ghost];
       setDraft(acceptSuggestion(draft, ghost));
       setGhostFor(null);
       ghostGen.current += 1;
@@ -2409,7 +2476,11 @@ export function Chat({
               editable={embedded && lead}
               onConfirm={settleConfirm}
               onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
-              onFix={(text) => setDraft(text)}
+              onFix={(text) => {
+                // A model wrote the fix's prompt: in the box, it isn't typed.
+                boxUntyped.current = [text];
+                setDraft(text);
+              }}
               onPanelAction={panelAction}
               onPanelDismiss={() => dismissPanel(i)}
               onChipPick={(key) => {
@@ -2476,7 +2547,10 @@ export function Chat({
         busy={busy}
         onAttached={(outcome, prompt) => {
           attach.adopt([outcome]);
-          if (outcome.staged) setDraft((now) => (now.trim() ? now : prompt));
+          if (outcome.staged) {
+            boxUntyped.current = [...boxUntyped.current, prompt];
+            setDraft((now) => (now.trim() ? now : prompt));
+          }
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
@@ -2512,6 +2586,7 @@ export function Chat({
             aria-controls={slashOpen ? "slash-menu" : undefined}
             aria-activedescendant={slashOpen ? `slash-row-${slashPick}` : undefined}
             onChange={(e) => {
+              if (!e.target.value.trim()) boxUntyped.current = [];
               setDraft(e.target.value);
               setSlashAt(0);
               ghostGen.current += 1;

@@ -1060,6 +1060,8 @@ fn a_tick_reads_the_chat_metrics_as_an_input() {
             escalations: 2,
             escalation_pct: 50.0,
             precision_pct: 50.0,
+            tool_calls: 0,
+            malformed_pct: 0.0,
         }
     );
     let _ = std::fs::remove_dir_all(dir);

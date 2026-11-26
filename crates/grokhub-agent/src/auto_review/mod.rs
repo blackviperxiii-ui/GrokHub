@@ -521,8 +521,9 @@ fn clean_reason(raw: &str) -> String {
 }
 
 /// The head and tail of a long text, with a marker where the middle was left
-/// out, so a payload at the end of a long call still reaches the judge.
-fn clip_middle(text: &str, max: usize) -> String {
+/// out, so a payload at the end of a long call still reaches the judge (and a
+/// command's exit line still reaches the episode worker).
+pub(crate) fn clip_middle(text: &str, max: usize) -> String {
     let total = text.chars().count();
     if total <= max {
         return text.to_string();
@@ -1754,10 +1755,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// What an unattended run says when the push guard's ship class refuses
+    /// a shell command.
+    const HARD_SHIP_AWAY: &str = "Tool `run_terminal_command` was not executed: \
+        hard-class ship needs you, and nobody is here to approve it";
+
     /// `--upload-pack` names the program git runs for the other side of a
-    /// fetch; a judge that blocks it is asked, and the program never runs.
+    /// fetch. The push guard reads it as a command that could ship, so an
+    /// unattended run refuses it before the judge, and the program never runs.
     #[test]
-    fn unattended_auto_loop_sends_upload_pack_to_the_judge() {
+    fn unattended_auto_loop_refuses_upload_pack_before_the_judge() {
         let dir = workspace("upload-pack");
         assert!(std::process::Command::new("git")
             .args(["init", "-q"])
@@ -1792,13 +1799,13 @@ mod tests {
         let (_, history, _) = drive(&fake, &dir, false, None, &permits);
         let ran = marker.exists();
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(judge_calls(&fake), 1);
+        assert_eq!(judge_calls(&fake), 0);
         assert_eq!(permits.asks.load(Ordering::SeqCst), 0);
         assert!(!ran, "the --upload-pack program ran");
         assert!(history.iter().any(|item| matches!(
             item,
             InputItem::FunctionCallOutput { output, .. }
-                if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                if output.contains(HARD_SHIP_AWAY)
         )));
     }
 
@@ -1853,11 +1860,11 @@ mod tests {
     }
 
     /// `pull`'s `-j`/`--jobs` value is optional and must be stuck to it, so
-    /// the word after a bare `-j` is an option of its own. The fast path
-    /// reads every word on its own, and each spelling here goes to the judge,
-    /// which blocks it: the program never runs.
+    /// the word after a bare `-j` is an option of its own. The push guard
+    /// reads each spelling here as a command that could ship, so an
+    /// unattended run refuses it before the judge: the program never runs.
     #[test]
-    fn unattended_auto_loop_sends_a_jobs_upload_pack_pull_to_the_judge() {
+    fn unattended_auto_loop_refuses_a_jobs_upload_pack_pull_before_the_judge() {
         for (tag, spelling) in [
             ("j", "git pull -j --upload-pack='touch {}' 4 ."),
             ("jobs", "git pull --jobs --upload-pack='touch {}' 4 ."),
@@ -1901,14 +1908,14 @@ mod tests {
             let (_, history, _) = drive(&fake, &dir, false, None, &permits);
             let ran = marker.exists();
             let _ = std::fs::remove_dir_all(&dir);
-            assert_eq!(judge_calls(&fake), 1, "{cmd}");
+            assert_eq!(judge_calls(&fake), 0, "{cmd}");
             assert_eq!(permits.asks.load(Ordering::SeqCst), 0, "{cmd}");
             assert!(!ran, "the --upload-pack program ran: {cmd}");
             assert!(
                 history.iter().any(|item| matches!(
                     item,
                     InputItem::FunctionCallOutput { output, .. }
-                        if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                        if output.contains(HARD_SHIP_AWAY)
                 )),
                 "{cmd}"
             );
@@ -2073,8 +2080,11 @@ mod tests {
         }
     }
 
+    /// `--upload-pack` names a program a fetch runs, so the push guard reads
+    /// the command as one that could ship: it keeps its card, attended or
+    /// away, and the judge never sees it.
     #[test]
-    fn upload_pack_fetch_and_pull_go_to_the_judge() {
+    fn upload_pack_fetch_and_pull_keep_their_card() {
         let client = scripted(
             r#"{"verdict":"block","reason":"runs a program"}"#,
             Usage::default(),
@@ -2087,6 +2097,15 @@ mod tests {
         .to_string();
         let reviewed = |attended: bool| {
             let gate = auto_gate(attended);
+            let base = gate::decide_with(
+                &gate,
+                "run_terminal_command",
+                &arguments,
+                false,
+                None,
+                &repo,
+                None,
+            );
             review(&ReviewIn {
                 client: &client,
                 cancel: &CancelToken::new(),
@@ -2100,7 +2119,7 @@ mod tests {
                 desk: None,
                 history: &[],
                 conversation_id: "conv",
-                base: Decision::Ask,
+                base,
                 timeout: JUDGE_TIMEOUT,
             })
         };
@@ -2108,13 +2127,23 @@ mod tests {
         let away = reviewed(false);
         let judged = client.seen.lock().unwrap().len();
         let _ = std::fs::remove_dir_all(&repo);
+        assert_eq!(
+            crate::harness::classify("run_terminal_command", &arguments),
+            crate::harness::HardHit::Class(crate::harness::HardClass::Ship)
+        );
         assert_eq!(attended.decision, Decision::Ask);
-        assert_eq!(attended.ask_reason, "runs a program");
+        assert_eq!(attended.ask_reason, "");
+        assert!(attended.judge_usage.is_none());
         assert_eq!(
             away.decision,
-            Decision::Refuse("Auto mode blocked `run_terminal_command`: runs a program".into())
+            Decision::Refuse(
+                "Tool `run_terminal_command` was not executed: hard-class ship needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
         );
-        assert_eq!(judged, 2);
+        assert!(away.judge_usage.is_none());
+        assert_eq!(judged, 0);
         for cmd in [
             "git fetch --upload-pack='touch PWNED' .",
             "git pull --upload-pack='touch PWNED' .",

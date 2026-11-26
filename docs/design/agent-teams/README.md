@@ -71,6 +71,17 @@ the hard floor and the sandbox). A customer profile can't be saved with
 - A customer agent never starts a message.
 - A chain of messages stops at 3 hops, and an agent already in the chain
   can't be asked again (no loops).
+- A paired computer may message only an agent marked `share` whose
+  `share_with` lists its device id. To that computer, any other agent looks
+  missing. Its turn runs read only and unattended, with only `read_file`,
+  `list_dir`, `grep` and `glob`, under the automation origin, and the
+  message is fenced as outside text (`grokhub_agent::answer_peer`). The
+  turn is a scratch session, so it never reads the person's memory and
+  writes none. Its system prompt leaves out the person's own `AGENTS.md` and
+  `CLAUDE.md` layers, environment facts, skills and plugins. The computer
+  gets the agent's last words, secrets redacted and clipped to 8000
+  characters, or a fixed line when the message is turned down or the turn
+  fails; the task log keeps the reason.
 
 ## A2A shapes
 
@@ -90,7 +101,48 @@ the hard floor and the sandbox). A customer profile can't be saved with
 
 `TaskBook` keeps tasks in memory and enforces the lifecycle: a terminal task
 (completed, failed, canceled, rejected) takes no more messages, and only a
-task that hasn't ended can be canceled.
+task that hasn't ended can be canceled. `ListTasks` pages newest first by
+`pageToken` (the last task id of the page before), filters by `contextId`
+and `status`, gives `pageSize` and `totalSize`, and leaves out artifacts
+unless `includeArtifacts` is set.
+
+## The hub's agent door
+
+`grokhub_hub::A2aDoor` serves `/a2a/v1` on the app's hub, behind the hub's
+pairing token, while sharing is on, never to a web page (`Origin` header).
+`GET /a2a/v1` lists the agents shared with the calling computer, `GET
+/a2a/v1/<id>` gives one's card, and `POST /a2a/v1/<id>` takes JSON-RPC. An
+agent not shared with that computer gets the hub's plain 404. Card URLs use
+the address the computer called (`Host`), else the LAN address.
+
+- Each computer, by device id and token, has its own task book per agent,
+  so it sees only its own tasks, and pairing again starts fresh.
+- 2 turns at once per computer and 4 in all, 20 messages an hour per
+  computer, a request body of at most 96 KiB.
+- Who may reach the agent is checked again after the body is read, just
+  before the turn starts, and before the answer goes out.
+  `A2aDoor::recheck` cancels the turns of computers that may no longer
+  reach the agent; the hub runs it after a pairing and on every `/a2a`
+  request, and the app after it stops sharing and after the Team page saves
+  or removes an agent. Only an agent's own fields decide who reaches it, so
+  a team edit needs no recheck. The app has no way to unpair one computer
+  yet; pairing again is the hub's own recheck.
+- A blocking `SendMessage` waits for the turn to end, up to the turn's time
+  limit, and then answers with an error, never a task still working.
+- A turn that panics still ends its task, as failed, and frees its place.
+
+In the app, `HubShare` builds the hub with the door, and each message runs
+`answer_peer` with the person's own sign-in and router, read at that message
+as for a scheduled run. With no model to answer (no sign-in, no Local AI, no
+added provider), the task log keeps why and the computer gets the fixed
+line. On the Team page, an agent's form lists the paired computers from
+Devices, under Share, each with when it last called, and the end of its id
+when two have one name. Ticking one adds it to `share_with` and turns
+`share` on, and unticking the last turns it off. A computer that is no
+longer paired stays ticked, as "A computer that's no longer paired" with
+the end of its id, until the person clears it, so a failed read never
+drops a share. A file with `share` off and computers listed shows as
+sharing paused; a tick then shares with the computers ticked.
 
 ## What it builds on
 

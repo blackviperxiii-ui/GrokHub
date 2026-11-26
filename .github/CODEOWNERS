@@ -17,7 +17,6 @@
 /crates/grokhub-agent/src/harness/audit.rs @blackviperxiii-ui
 /crates/grokhub-agent/src/harness/canary.rs @blackviperxiii-ui
 /crates/grokhub-agent/src/harness/park.rs @blackviperxiii-ui
-/crates/grokhub-agent/src/harness/path_d.rs @blackviperxiii-ui
 
 # Host rails + app gate adapters
 /crates/grokhub-core/src/host_safety.rs @blackviperxiii-ui

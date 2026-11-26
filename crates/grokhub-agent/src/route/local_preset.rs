@@ -233,6 +233,8 @@ pub fn llama_router_args(
         port.to_string(),
         "--reasoning-format".into(),
         "deepseek".into(),
+        // Same tool-call grammar as a single-model start (`base_args`).
+        "--jinja".into(),
     ]
 }
 
@@ -386,6 +388,7 @@ mod tests {
         assert_eq!(after("--host").as_deref(), Some("127.0.0.1"));
         assert_eq!(after("--port").as_deref(), Some("8089"));
         assert_eq!(after("--reasoning-format").as_deref(), Some("deepseek"));
+        assert!(args.iter().any(|a| a == "--jinja"));
     }
 
     #[test]

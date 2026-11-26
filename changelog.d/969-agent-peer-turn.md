@@ -1,0 +1,1 @@
+- A job's tool list now also limits the tools the agent loop runs itself: helpers, messages to agents, plan mode and the todo list. Before, a model could still call those by name in an automation whose `TOOLS:` line left them out.

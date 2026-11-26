@@ -1,0 +1,1 @@
+- CI: a skipped bot pull_request_review no longer cancels the auto-merge ready_for_review run (concurrency is on the job, not the workflow).

@@ -45,6 +45,9 @@ impl Row {
 
 /// What a model is for, in plain words.
 pub fn good_for(m: &LocalModel) -> String {
+    if ls::use_case(m.id) == ls::UseCase::VideoGen {
+        return "Makes short videos on this PC.".into();
+    }
     match m.kind {
         ModelKind::Drafter => match m.pairs_with.and_then(ls::model_by_id) {
             Some(pair) => format!("Makes {} reply faster.", pair.name),
@@ -69,7 +72,7 @@ pub fn good_for(m: &LocalModel) -> String {
     }
 }
 
-/// The row's one line: name, size, fit, licence and the uncensored badge.
+/// The row's one line: name, size, fit, job, licence and the uncensored badge.
 pub fn row_line(r: &Row) -> String {
     let mut line = format!(
         "{} · {} · {}",
@@ -77,6 +80,8 @@ pub fn row_line(r: &Row) -> String {
         ls::size_label(r.model.download_mb),
         r.fit.label()
     );
+    line.push_str(" · ");
+    line.push_str(ls::use_case(r.model.id).label());
     if r.model.abliterated.is_some() {
         line.push_str(" · Uncensored");
     }
@@ -331,8 +336,13 @@ mod tests {
         // The picture models and their guard share the Image tab.
         assert_eq!(
             rows.iter().filter(|r| r.tab() == ModelTab::Image).count(),
-            3
+            4
         );
+        let video = by_id(&rows, "wan2.2-ti2v-5b-q4_k_m");
+        assert_eq!(video.tab(), ModelTab::Image);
+        assert_eq!(good_for(video.model), "Makes short videos on this PC.");
+        assert!(row_line(video).contains(" · Video gen"));
+        assert!(row_line(by_id(&rows, "qwen2.5-coder-7b-heretic-q4_k_m")).contains(" · Coding"));
         assert!(empty_tab_line(ModelTab::Image).starts_with("No image models yet"));
     }
 

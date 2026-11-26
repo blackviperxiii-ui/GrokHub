@@ -130,6 +130,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // Words in lists, not spawns.
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),
     ("crates/grokhub-agent/src/auto_review/routine_git.rs", 2, "routine git verbs list"),
+    ("crates/grokhub-agent/src/harness/git_words.rs", 11, "push guard's git verb and transport-option lists"),
+    ("crates/grokhub-code/src/chat_push.rs", 2, "chat push guard's match on the fetch and pull verbs"),
     ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
     ("crates/grokhub-agent/src/routine_draft.rs", 1, "saved-step tool label list (web_fetch is \"fetch\")"),
     ("src-tauri/src/sessions_board.rs", 1, "Sessions board PR link parser: the /pull/ segment of a github.com URL in transcript text"),

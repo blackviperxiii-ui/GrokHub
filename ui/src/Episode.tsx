@@ -65,7 +65,7 @@ export const ENDED_WORDS: Record<string, string> = {
   halt: "Halted. Nothing more ran.",
   stop: "Stopped. Nothing more ran.",
   idle: "Ended after sitting idle.",
-  unconfirmed: "Ended: the check couldn't confirm it.",
+  unconfirmed: "Ended: it couldn't be confirmed done.",
 };
 
 export function endedLine(ended: string): string {

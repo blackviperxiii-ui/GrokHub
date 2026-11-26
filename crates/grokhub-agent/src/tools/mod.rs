@@ -22,6 +22,7 @@ mod read_file;
 pub(crate) mod registry;
 pub(crate) mod run_routine;
 pub(crate) mod save_routine;
+mod schema_check;
 mod search_replace;
 mod session_search;
 pub(crate) mod set;
@@ -35,9 +36,14 @@ pub(crate) mod workspace_tools;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
+#[cfg(test)]
+pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
+pub(crate) use schema_check::{schema_message, schema_miss};
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
 pub(crate) use web_fetch::{dial_host, parse_public_url};
+#[cfg(test)]
+pub(crate) use web_fetch::{FetchResp, PageFetch};
 pub use web_search::{
     brave_key_present, seal_brave_key, searxng_url_problem, Backend as WebSearchBackend,
     Settings as WebSearchSettings, BACKENDS as WEB_SEARCH_BACKENDS,
@@ -420,6 +426,26 @@ pub fn args_parse(arguments: &str) -> bool {
     parse_args(arguments).is_ok()
 }
 
+/// File and shell tools. A chat with no folder cannot run them.
+pub fn needs_workspace(name: &str) -> bool {
+    matches!(
+        name,
+        "read_file"
+            | "list_dir"
+            | "grep"
+            | "glob"
+            | "write"
+            | "search_replace"
+            | "run_terminal_command"
+            | "run_tool_script"
+    )
+}
+
+/// No folder was picked, or the path is not a directory on disk.
+pub fn workspace_missing(path: &Path) -> bool {
+    path.as_os_str().is_empty() || !path.is_dir()
+}
+
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.
 pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let root_c = root
@@ -444,7 +470,14 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
             .unwrap_or(Path::new(""))
             .to_path_buf()
     } else if path.is_absolute() {
-        return Err("path escapes the workspace".into());
+        // One folder has many spellings: `C:\x` and `\\?\C:\x` or an 8.3
+        // short name on Windows, `/var` for `/private/var` on macOS, a link
+        // anywhere. Compare where the part of the path that exists really is.
+        canonical_prefix(path)
+            .as_deref()
+            .and_then(|real| real.strip_prefix(&root_c).ok())
+            .ok_or("path escapes the workspace")?
+            .to_path_buf()
     } else {
         path.to_path_buf()
     };
@@ -478,6 +511,20 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
         return Err("path escapes the workspace".into());
     }
     Ok(acc)
+}
+
+/// `path` with its longest existing ancestor canonicalized and the rest as
+/// written. `None` when no ancestor exists.
+fn canonical_prefix(path: &Path) -> Option<PathBuf> {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = at.canonicalize() {
+            return Some(rest.iter().rev().fold(real, |acc, name| acc.join(name)));
+        }
+        rest.push(at.file_name()?);
+        at = at.parent()?;
+    }
 }
 
 /// The consent ledger or the routine consent store, which only the
@@ -789,6 +836,26 @@ mod tests {
                     .starts_with(dir.canonicalize().unwrap())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_absolute_path_into_the_workspace_by_another_spelling_is_inside() {
+        // A link to the workspace stands in for Windows' `\\?\` and 8.3
+        // spellings and macOS's `/private/var`.
+        let base = std::env::temp_dir().join(format!("gh-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("notes.txt"), "alpha").unwrap();
+        std::fs::write(base.join("outside.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(&ws, base.join("alias")).unwrap();
+        let real = ws.canonicalize().unwrap();
+        let at = |rel: &str| confine(&ws, &base.join(rel).to_string_lossy());
+        assert_eq!(at("alias/notes.txt"), Ok(real.join("notes.txt")));
+        assert_eq!(at("alias/new/file.txt"), Ok(real.join("new/file.txt")));
+        assert_eq!(at("outside.txt"), Err("path escapes the workspace".into()));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[cfg(unix)]

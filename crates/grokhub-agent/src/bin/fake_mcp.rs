@@ -12,11 +12,21 @@
 //! characters of echoed code ahead of it.
 //! FAKE_MCP_ARGV_LOG=<path> appends one JSON line of argv on start (for
 //! proving Playwright attach flags after a restart).
+//! FAKE_MCP_TASK is `complete`, `input`, `fail`, `cancel`, or `ttl` and
+//! requires FAKE_MCP_STATELESS=1. FAKE_MCP_TASK_ID sets the task id.
+//! FAKE_MCP_RPC_LOG=<path> appends one line per `tools/call` and `tasks/*`.
+//! `--http` listens on 127.0.0.1:0 and writes the port to FAKE_MCP_HTTP_PORT_FILE.
 
 use serde_json::{json, Value};
-use std::io::{BufRead, Write};
+use std::cell::RefCell;
+use std::io::{BufRead, Read, Write};
+use std::sync::Mutex;
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--http") {
+        serve_http();
+        return;
+    }
     if std::env::args().any(|arg| arg == "--sleep") {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
@@ -131,7 +141,28 @@ fn stateless(id: &Value, method: &str, msg: &Value) {
             page["cacheScope"] = json!("private");
             page
         }
+        "tools/call" if task_mode().is_some() => {
+            if !declared_tasks(&meta) {
+                return fail(id, -32602, "missing tasks extension");
+            }
+            log_rpc(method, "");
+            task_create()
+        }
         "tools/call" => stateless_call(msg.get("params")),
+        "tasks/get" | "tasks/update" | "tasks/cancel" => {
+            if !declared_tasks(&meta) {
+                return fail(id, -32602, "missing tasks extension");
+            }
+            let task = msg
+                .pointer("/params/taskId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            log_rpc(method, task);
+            match task_rpc(method, msg.get("params")) {
+                Ok(result) => result,
+                Err((code, message)) => return fail(id, code, message),
+            }
+        }
         "resources/read" => read_resource(msg.get("params")),
         _ => return fail(id, -32601, "Method not found"),
     };
@@ -475,9 +506,271 @@ fn respond(id: &Value, result: Value) {
     send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
 }
 
+thread_local! {
+    static CAPTURE: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    static HEADER_NAME: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
 fn send(msg: &Value) {
+    let bytes = serde_json::to_vec(msg).unwrap_or_default();
+    let captured = CAPTURE.with(|slot| {
+        let mut held = slot.borrow_mut();
+        if let Some(buf) = held.as_mut() {
+            buf.clear();
+            buf.extend_from_slice(&bytes);
+            true
+        } else {
+            false
+        }
+    });
+    if captured {
+        return;
+    }
     let mut out = std::io::stdout().lock();
-    let _ = serde_json::to_writer(&mut out, msg);
+    let _ = out.write_all(&bytes);
     let _ = out.write_all(b"\n");
     let _ = out.flush();
+}
+
+struct TaskSim {
+    gets: u32,
+    cancelled: bool,
+    response: Option<Value>,
+}
+
+fn task_sim() -> &'static Mutex<TaskSim> {
+    static SIM: std::sync::OnceLock<Mutex<TaskSim>> = std::sync::OnceLock::new();
+    SIM.get_or_init(|| {
+        Mutex::new(TaskSim {
+            gets: 0,
+            cancelled: false,
+            response: None,
+        })
+    })
+}
+
+fn task_mode() -> Option<String> {
+    let value = std::env::var("FAKE_MCP_TASK").ok()?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn task_id() -> String {
+    std::env::var("FAKE_MCP_TASK_ID").unwrap_or_else(|_| "task-1".into())
+}
+
+fn declared_tasks(meta: &Value) -> bool {
+    meta.get("io.modelcontextprotocol/clientCapabilities")
+        .and_then(|caps| caps.get("extensions"))
+        .and_then(|ext| ext.get("io.modelcontextprotocol/tasks"))
+        .is_some()
+}
+
+fn log_rpc(method: &str, task: &str) {
+    let Ok(path) = std::env::var("FAKE_MCP_RPC_LOG") else {
+        return;
+    };
+    let header = HEADER_NAME.with(|slot| slot.borrow().clone());
+    let line = if header.is_empty() {
+        format!("{method} {task}\n")
+    } else {
+        format!("{method} {task} name={header}\n")
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+fn task_stamp() -> (&'static str, i64) {
+    if task_mode().as_deref() == Some("ttl") {
+        ("2020-01-01T00:00:00.000Z", 1000)
+    } else {
+        ("2099-01-01T00:00:00.000Z", 60_000)
+    }
+}
+
+fn task_fields(status: &str) -> Value {
+    let (created, ttl) = task_stamp();
+    json!({
+        "taskId": task_id(),
+        "status": status,
+        "createdAt": created,
+        "lastUpdatedAt": created,
+        "ttlMs": ttl,
+        "pollIntervalMs": 50
+    })
+}
+
+fn task_create() -> Value {
+    let mut body = task_fields("working");
+    body["resultType"] = json!("task");
+    body
+}
+
+fn task_rpc(method: &str, params: Option<&Value>) -> Result<Value, (i64, &'static str)> {
+    let asked = params
+        .and_then(|item| item.get("taskId"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if method == "tasks/cancel" {
+        if asked == task_id() {
+            task_sim().lock().unwrap().cancelled = true;
+            return Ok(json!({"resultType": "complete"}));
+        }
+        return Err((-32602, "unknown task"));
+    }
+    if method == "tasks/update" {
+        if asked != task_id() {
+            return Err((-32602, "unknown task"));
+        }
+        if let Some(note) = params.and_then(|item| item.pointer("/inputResponses/note")) {
+            task_sim().lock().unwrap().response = Some(note.clone());
+        }
+        return Ok(json!({"resultType": "complete"}));
+    }
+    if asked != task_id() {
+        return Err((-32602, "unknown task"));
+    }
+    let mut sim = task_sim().lock().unwrap();
+    sim.gets += 1;
+    let mode = task_mode().unwrap_or_default();
+    let mut body = match mode.as_str() {
+        "complete" if sim.gets >= 2 => {
+            let mut body = task_fields("completed");
+            body["result"] = text_result("task-done");
+            body
+        }
+        "input" => {
+            if let Some(note) = sim.response.clone() {
+                let action = note.get("action").and_then(Value::as_str).unwrap_or("none");
+                let content = note.get("content").cloned().unwrap_or(Value::Null);
+                let mut body = task_fields("completed");
+                body["result"] = text_result(&format!("action={action} content={content}"));
+                body
+            } else {
+                let mut body = task_fields("input_required");
+                body["inputRequests"] = json!({
+                    "note": {
+                        "method": "elicitation/create",
+                        "params": {
+                            "mode": "form",
+                            "message": "Need a value",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {"note": {"type": "string", "title": "Note"}},
+                                "required": ["note"]
+                            }
+                        }
+                    }
+                });
+                body
+            }
+        }
+        "fail" => {
+            let mut body = task_fields("failed");
+            body["error"] = json!({"code": -32000, "message": "task failed"});
+            body
+        }
+        "cancel" if sim.cancelled => task_fields("cancelled"),
+        "ttl" => task_fields("working"),
+        _ => task_fields("working"),
+    };
+    body["resultType"] = json!("complete");
+    Ok(body)
+}
+
+fn serve_http() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    if let Ok(path) = std::env::var("FAKE_MCP_HTTP_PORT_FILE") {
+        std::fs::write(&path, port.to_string()).unwrap_or_else(|err| panic!("port file: {err}"));
+    }
+    for conn in listener.incoming() {
+        let Ok(mut sock) = conn else {
+            continue;
+        };
+        let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(8)));
+        let Some((name, msg)) = read_http_message(&mut sock) else {
+            continue;
+        };
+        HEADER_NAME.with(|slot| *slot.borrow_mut() = name);
+        let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+        let id = msg.get("id").cloned().unwrap_or(Value::Null);
+        let body = CAPTURE.with(|slot| {
+            *slot.borrow_mut() = Some(Vec::new());
+            if method.starts_with("notifications/") || method.is_empty() {
+                Vec::new()
+            } else {
+                stateless(&id, method, &msg);
+                slot.borrow_mut().take().unwrap_or_default()
+            }
+        });
+        HEADER_NAME.with(|slot| slot.borrow_mut().clear());
+        if body.is_empty() {
+            let _ = sock.write_all(
+                b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        } else {
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(header.as_bytes());
+            let _ = sock.write_all(&body);
+        }
+    }
+}
+
+fn read_http_message(sock: &mut std::net::TcpStream) -> Option<(String, Value)> {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 2048];
+    let header_end;
+    loop {
+        let n = sock.read(&mut tmp).ok()?;
+        if n == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            header_end = pos + 4;
+            break;
+        }
+        if buf.len() > 1024 * 1024 {
+            return None;
+        }
+    }
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let mut len = 0usize;
+    let mut mcp_name = String::new();
+    for line in head.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if let Some(value) = lower.strip_prefix("content-length:") {
+            len = value.trim().parse().unwrap_or(0);
+        }
+        if lower.starts_with("mcp-name:") {
+            mcp_name = line
+                .split_once(':')
+                .map(|(_, v)| v.trim().to_string())
+                .unwrap_or_default();
+        }
+    }
+    while buf.len() < header_end + len {
+        let n = sock.read(&mut tmp).ok()?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
+    if buf.len() < header_end + len {
+        return None;
+    }
+    let msg = serde_json::from_slice(&buf[header_end..header_end + len]).ok()?;
+    Some((mcp_name, msg))
 }

@@ -252,6 +252,8 @@ fn pass_hat_k_needs_every_try() {
         round: 0,
         effort_range: ("low", "medium"),
         picks: Vec::new(),
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let tries = vec![
         a("x", true),
@@ -958,6 +960,8 @@ fn the_report_sums_each_probe() {
         round: 0,
         effort_range: ("low", "medium"),
         picks: Vec::new(),
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let tries = vec![
         a(true, SafetyScore::default()),
@@ -1034,6 +1038,8 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         round: 0,
         effort_range: ("low", "medium"),
         picks: Vec::new(),
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let report = |ab: &str, attempts: Vec<Attempt>| LiveReport {
         model: "m".into(),
@@ -1050,6 +1056,7 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         planned: 0,
         retries: 0,
         done: true,
+        suite: EvalSuite::Default,
     };
     let tasks = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"];
     let better: Vec<Attempt> = tasks
@@ -1316,8 +1323,47 @@ fn no_try_starts_after_the_deadline() {
 }
 
 #[test]
+fn a_coding_task_fails_when_its_own_tests_fail_and_the_results_name_the_model() {
+    let client: Arc<dyn ModelClient + Send + Sync> = Arc::new(Fixed {
+        answers: vec![],
+        cost: 1,
+    });
+    let opts = LiveOpts {
+        k: 1,
+        only: Some("code-chat-preview".into()),
+        suite: EvalSuite::Coding,
+        ..LiveOpts::new("local-a")
+    };
+    let report = run_live(client, &opts, parse_budget("1").unwrap());
+    assert_eq!(report.suite, EvalSuite::Coding);
+    assert_eq!(report.attempts.len(), 1);
+    assert_eq!(report.attempts[0].task, "code-chat-preview");
+    assert!(!report.attempts[0].pass);
+    let err = report.attempts[0].error.as_deref().unwrap_or("");
+    assert!(
+        err.contains("tests failed"),
+        "the task's tests decide the try, got {err}"
+    );
+    let md = render_live(&report);
+    assert!(md.contains("| local-a | grok | 0% (0/1) |"), "{md}");
+    let dir = std::env::temp_dir().join(format!("gh-coding-results-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = write_coding_results(&report, &dir.join("coding.md")).unwrap();
+    let json = std::fs::read_to_string(&path).unwrap();
+    assert!(json.contains("\"suite\": \"coding-v1\""), "{json}");
+    assert!(json.contains("\"model\": \"local-a\""), "{json}");
+    assert!(json.contains("\"pass_rate\": \"0% (0/1)\""), "{json}");
+    assert!(json.contains("\"escalations\": 0"), "{json}");
+    assert!(json.contains("\"task_set\": 30"), "{json}");
+    assert!(json.contains("\"tokens\":"), "{json}");
+    assert!(json.contains("\"wall_ms\":"), "{json}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn every_task_has_an_effort_range_on_the_ladder() {
-    for t in tasks() {
+    for t in tasks().into_iter().chain(coding_tasks()) {
         let (lo, hi) = t.effort;
         let lo = crate::route::ladder::rung(lo).unwrap_or_else(|| panic!("{}: {lo}", t.id));
         let hi = crate::route::ladder::rung(hi).unwrap_or_else(|| panic!("{}: {hi}", t.id));
@@ -1384,6 +1430,8 @@ fn the_routing_score_counts_in_under_over_and_prices_the_flagship() {
         round: 0,
         effort_range: ("low", "medium"),
         picks,
+        tool_calls: 0,
+        malformed_calls: 0,
     };
     let tries = vec![
         attempt(true, vec![pick(Some("low")), pick(Some("medium"))]),
@@ -1410,4 +1458,53 @@ fn the_routing_score_counts_in_under_over_and_prices_the_flagship() {
     );
     assert_eq!(s.flagship_ticks, 5 * one);
     assert!(s.reasoning_est < s.reasoning_high_est);
+}
+
+#[test]
+fn the_report_prints_the_malformed_tool_call_rate() {
+    let one = Attempt {
+        task: "edit-fps-cap",
+        set: TaskSet::Capability,
+        recall: false,
+        pass: true,
+        usage: Usage::default(),
+        wall_ms: 1,
+        error: None,
+        arm: None,
+        asks: 0,
+        compactions: 0,
+        calls: 2,
+        safety: None,
+        round: 0,
+        effort_range: ("low", "medium"),
+        picks: Vec::new(),
+        tool_calls: 4,
+        malformed_calls: 1,
+    };
+    let mut report = LiveReport {
+        suite: EvalSuite::Default,
+        model: "local".into(),
+        provider: Provider::Local,
+        ab: None,
+        mde: 0.1,
+        k: 1,
+        attempts: vec![one],
+        spent_ticks: 0,
+        budget_ticks: 1,
+        billed_errors: 0,
+        stopped_by_budget: false,
+        stopped: None,
+        planned: 1,
+        retries: 0,
+        done: true,
+    };
+    let md = render_live(&report);
+    assert!(
+        md.contains("| malformed tool calls | 25.0% (1/4) |"),
+        "{md}"
+    );
+    report.attempts[0].tool_calls = 0;
+    report.attempts[0].malformed_calls = 0;
+    let md = render_live(&report);
+    assert!(md.contains("| malformed tool calls | n/a |"), "{md}");
 }

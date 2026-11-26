@@ -1558,7 +1558,7 @@ mod tests {
             .unwrap();
         let req = waiter.join().unwrap().expect("slot parks as credentials");
         assert_eq!(req.class, "credentials");
-        assert_eq!(text_of(&out), *CUA_NO_PASSWORD_MSG);
+        assert!((text_of(&out)) == (*CUA_NO_PASSWORD_MSG));
         assert_eq!(sent_tools(&fake), vec!["press_key"]);
         // Floor and manifest refusals never reach the child either.
         let out = p
