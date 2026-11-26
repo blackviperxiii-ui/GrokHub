@@ -49,6 +49,7 @@ pub fn slash_effect(s: &Slash) -> SlashEffect {
         | Slash::Board
         | Slash::Journal
         | Slash::LearnReflect
+        | Slash::LearnSkill(_)
         | Slash::Learned(_)
         | Slash::Help
         | Slash::New
@@ -123,6 +124,7 @@ pub const SLASH_SAMPLES: &[&str] = &[
     "/compact",
     "/skill tidy",
     "/learn",
+    "/learn chat",
     "/learned",
     "/update",
     "/help",

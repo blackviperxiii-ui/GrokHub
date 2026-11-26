@@ -237,6 +237,14 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
             let id = cx.conversation_id.filter(|id| !id.is_empty());
             notice(crate::memory::reflect(cx.config_dir, id)?.status)
         }
+        Op::LearnSkill(rest) => {
+            let _config = ConfigGuard::set(cx.config_dir);
+            let id = cx.conversation_id.filter(|id| !id.is_empty());
+            Ok(Applied {
+                effect: crate::learn_skill::run(cx.config_dir, &work, id, &rest)?,
+                workspace: None,
+            })
+        }
         Op::Skill(name) => {
             let _config = ConfigGuard::set(cx.config_dir);
             let home = grokhub_core::user_home();
@@ -1009,6 +1017,52 @@ mod tests {
         let h = home("learn");
         assert_eq!(text(go(&h, "/learn")), "Reflect: nothing new");
         assert_eq!(text(go(&h, "/learn reflect")), "Reflect: nothing new");
+    }
+
+    #[test]
+    fn learn_folder_asks_to_save_then_writes_through_scanner() {
+        let h = home("learn-skill");
+        let docs = h.ws.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(
+            docs.join("setup.md"),
+            "# Setup\n\n1. Open Connectors\n2. Paste the config\n3. Save and restart chat\n",
+        )
+        .unwrap();
+        let asked = go(&h, "/learn docs").expect("confirm");
+        let Effect::Confirm { prompt, yes } = asked else {
+            panic!("expected confirm, got {asked:?}");
+        };
+        assert!(prompt.contains("Save these steps as the skill"), "{prompt}");
+        assert!(yes.starts_with("/learn --save "), "{yes}");
+        assert!(
+            !h.config.join("skills").exists()
+                || std::fs::read_dir(h.config.join("skills"))
+                    .map(|d| d.count() == 0)
+                    .unwrap_or(true),
+            "nothing saved before yes"
+        );
+        let saved = text(go(&h, &yes));
+        assert!(saved.starts_with("Saved the skill /"), "{saved}");
+        let skill = h.config.join("skills/docs/SKILL.md");
+        assert!(skill.is_file(), "{}", skill.display());
+        let body = std::fs::read_to_string(&skill).unwrap();
+        assert!(body.contains("origin: learn-folder"), "{body}");
+        assert!(body.contains("## Steps"), "{body}");
+        assert!(body.contains("Open Connectors"), "{body}");
+        let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
+    }
+
+    #[test]
+    fn learn_path_outside_workspace_is_refused() {
+        let h = home("learn-escape");
+        let err = go(&h, "/learn /etc").expect_err("escape");
+        assert!(
+            err.to_ascii_lowercase().contains("workspace")
+                || err.to_ascii_lowercase().contains("escape"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
     }
 
     #[test]

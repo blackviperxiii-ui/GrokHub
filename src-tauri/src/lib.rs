@@ -128,6 +128,7 @@ mod focus_help;
 pub mod github;
 pub mod home_assistant;
 pub mod hook_command;
+pub mod learn_skill;
 pub mod onboard;
 pub mod opener;
 pub mod openrouter_sign_in;

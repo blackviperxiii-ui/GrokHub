@@ -220,7 +220,8 @@ pub use tools::home_assistant::{
 };
 pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
-    brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
+    brave_key_present, confine as confine_workspace, deferred_tools_enabled,
+    deferred_tools_settings, dispatch_for_job, execute, fetch_public_markdown,
     generative_ui_enabled, imagine_client, is_readonly, public_only_resolve, run_media_tool,
     schemas_for, schemas_for_job, seal_brave_key, searxng_url_problem, tool_schemas,
     tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi,
