@@ -315,7 +315,7 @@ fn with_id_hint(err: String) -> String {
 
 /// The ids an output read waits on: `task_id` split at commas, or every
 /// entry of a `task_ids` list.
-fn task_ids(args: &Value) -> Vec<String> {
+pub(crate) fn task_ids(args: &Value) -> Vec<String> {
     let listed: Vec<String> = match text_field(args, "task_id") {
         Some(id) => id.split(',').map(String::from).collect(),
         None => args

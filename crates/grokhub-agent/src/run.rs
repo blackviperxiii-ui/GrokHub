@@ -2,7 +2,7 @@
 //! checklist has nothing open ([`crate::drive`]), or at the caller's turn cap
 //! (`max_turns` 0 means none).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -112,8 +112,14 @@ fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
 }
 
 /// How many times the same call (name and arguments) may run before the next
-/// one is refused. Refused calls don't count, and a successful edit starts the
-/// count over, so "edit, test, edit, test, edit, test" keeps going.
+/// one is refused. Refused calls and waits on a task still running don't
+/// count. A change not made before (a write, a shell command that writes
+/// files, a screen action, a helper started or merged) starts every count
+/// over, so "edit, test, edit, test, edit, test" keeps going. A change made
+/// before counts like any call and starts only the other calls' counts over,
+/// so the same change made three times is refused on the third, and so are
+/// two changes that undo each other in turn. A steer starts every count over
+/// too.
 const REPEAT_LIMIT: u32 = 2;
 /// The refusal when the model tries to add an automation on a turn that
 /// was only a greeting ("good morning", "hey"): a hello is not a job.
@@ -316,6 +322,21 @@ pub struct LoopOut {
     pub compacted: bool,
     /// After a compaction, what became of this turn's own items.
     pub turn: Option<TurnKept>,
+    /// What the run's own calls did, for a helper's result.
+    pub(crate) kept: Kept,
+}
+
+/// What a run's own calls did, kept past every way the run ends.
+#[derive(Debug, Default)]
+pub(crate) struct Kept {
+    /// Files `write` and `search_replace` changed, first changed first.
+    pub(crate) modified_paths: Vec<String>,
+    /// The changes no check has covered yet.
+    pub(crate) fresh: crate::checkpoint::Fresh,
+    /// The run's tool calls with how each ended, refused ones too.
+    pub(crate) ran: Vec<crate::post_check::Ran>,
+    /// The unchecked changes a helper was already sent back to check.
+    pub(crate) noted: Vec<String>,
 }
 
 /// What compactions did to a turn's own items, which no earlier saved turn
@@ -348,6 +369,7 @@ fn finish(
         usage,
         compacted: compacted.is_some(),
         turn: compacted,
+        kept: Kept::default(),
     }
 }
 
@@ -565,6 +587,23 @@ pub fn run_loop(
     image: Option<&str>,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
+    let kept = Kept {
+        fresh: crate::checkpoint::Fresh::for_conversation(input.conversation_id),
+        ..Kept::default()
+    };
+    run_loop_from(input, history, user_text, image, kept, on_event)
+}
+
+/// [`run_loop`], going on from `kept`, what an earlier run of the same
+/// conversation did: this run's calls check that record's changes or add to it.
+pub(crate) fn run_loop_from(
+    input: &LoopIn<'_>,
+    history: &mut Vec<InputItem>,
+    user_text: &str,
+    image: Option<&str>,
+    mut kept: Kept,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> LoopOut {
     // Every way out of a turn (Stop, Halt, a denied step, an error) can leave
     // calls of the last batch unanswered. Pair them on the way in, for chats
     // saved like that, and on the way out, so no provider ever sees a call
@@ -581,7 +620,8 @@ pub fn run_loop(
     }
     // Failover PR 7: a new run starts with a clean hand-off chain.
     crate::route::handoff::begin(input.conversation_id);
-    let out = run_turn(input, history, user_text, image, on_event);
+    let mut out = run_turn(input, history, user_text, image, &mut kept, on_event);
+    out.kept = kept;
     crate::client::pair_orphan_calls(history);
     out
 }
@@ -591,8 +631,15 @@ fn run_turn(
     history: &mut Vec<InputItem>,
     user_text: &str,
     image: Option<&str>,
+    kept: &mut Kept,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
+    let Kept {
+        modified_paths,
+        fresh,
+        ran,
+        noted,
+    } = kept;
     let first_turn = history.is_empty();
     // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
     let style = (input.depth == 0)
@@ -721,9 +768,8 @@ fn run_turn(
     let mut last_tools: Vec<serde_json::Value> = Vec::new();
     let mut turns_since_compact = 0u32;
     let mut overflow_compacted = false;
-    let mut modified_paths: Vec<String> = Vec::new();
     let mut nested_agents = crate::prompt::NestedAgents::new(input.workspace);
-    let mut repeats: HashMap<String, u32> = HashMap::new();
+    let mut repeats = Repeats::default();
     let mut empty_searches = 0u32;
     let mut breaker = crate::denials::Breaker::default();
     let mut stop_hook_active = false;
@@ -747,8 +793,6 @@ fn run_turn(
             }
         });
     let mut evidence = 0usize;
-    // This run's tool calls, for the checks before the turn ends.
-    let mut ran: Vec<crate::post_check::Ran> = Vec::new();
     // The chat's last turn came up empty, and whether this run's reply was
     // already sent back for taking thanks anyway.
     let after_empty = input.depth == 0 && crate::voice_session::after_empty(input.conversation_id);
@@ -774,7 +818,6 @@ fn run_turn(
     let brief = drive
         .as_ref()
         .and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
-    let mut fresh = crate::checkpoint::Fresh::for_conversation(input.conversation_id);
     let (mut checkpoint_at, mut checkpoint_due) = (0usize, Vec::<String>::new());
     // Brain 5: a long run in a progress style gets a note at each phase boundary.
     let mut progress = drive
@@ -889,7 +932,7 @@ fn run_turn(
                     input,
                     history,
                     compacted_once.map_or(ask_at, |kept| kept.from),
-                    &modified_paths,
+                    modified_paths,
                     &last_tools,
                     &mut usage,
                     on_event,
@@ -903,6 +946,7 @@ fn run_turn(
                             from: turn_from,
                             folded: compacted_once.map_or(0, |kept| kept.folded) + folded,
                         });
+                        stall.forget_seen();
                         turns_since_compact = 0;
                         prompt_mark = None;
                         let now = crate::compact::trigger_tokens(history, None);
@@ -1114,7 +1158,7 @@ fn run_turn(
                     input,
                     history,
                     compacted_once.map_or(ask_at, |kept| kept.from),
-                    &modified_paths,
+                    modified_paths,
                     &last_tools,
                     &mut usage,
                     on_event,
@@ -1126,6 +1170,7 @@ fn run_turn(
                             from: turn_from,
                             folded: compacted_once.map_or(0, |kept| kept.folded) + folded,
                         });
+                        stall.forget_seen();
                         turns_since_compact = 0;
                         overflow_compacted = true;
                         continue;
@@ -1320,7 +1365,7 @@ fn run_turn(
                 crate::voice_session::note_reply(
                     input.conversation_id,
                     &last_assistant,
-                    crate::post_check::came_up_empty(&last_assistant, &ran),
+                    crate::post_check::came_up_empty(&last_assistant, ran),
                 );
             }
             let notes = input.steer.drain();
@@ -1337,9 +1382,7 @@ fn run_turn(
             }
             if notes.is_empty() && !written_handled {
                 written_handled = true;
-                if let Some(note) =
-                    handle_written_calls(&last_assistant, &mut fresh, &mut *on_event)
-                {
+                if let Some(note) = handle_written_calls(&last_assistant, fresh, &mut *on_event) {
                     history.push(cabin_note(&note));
                     continue;
                 }
@@ -1354,19 +1397,19 @@ fn run_turn(
                     && post_mark.as_ref() != Some(&mark)
                 {
                     post_mark = Some(mark);
-                    let mut findings = crate::post_check::check(&last_assistant, &ran);
+                    let mut findings = crate::post_check::check(&last_assistant, ran);
                     // A turn that asked about the online models carried the
                     // router's live check; any other word on them needs one.
                     findings.extend(crate::post_check::connections(
                         &last_assistant,
-                        &ran,
+                        ran,
                         crate::route::check::connection_question(user_text),
                     ));
                     // LO-51: links in a chat reply are pages this run opened.
                     if input.depth == 0 {
                         findings.extend(crate::post_check::sources(
                             &last_assistant,
-                            &ran,
+                            ran,
                             &cited,
                             user_text,
                         ));
@@ -1378,14 +1421,33 @@ fn run_turn(
                         continue;
                     }
                 }
+                // A helper hands back no checklist, so an unchecked change
+                // gets the check note here, once per change, before its
+                // result goes back. The check and the reply after it need two
+                // steps; with fewer left, its result names the change as
+                // unchecked instead.
+                let steps_left = input.max_turns == 0 || turns + 1 < input.max_turns;
+                let new_to_note = fresh
+                    .unchecked()
+                    .iter()
+                    .any(|(what, _)| !noted.contains(what));
+                if input.depth > 0 && steps_left && new_to_note {
+                    noted.extend(fresh.unchecked().iter().map(|(what, _)| what.clone()));
+                    let gaps = crate::checkpoint::Gaps {
+                        unchecked: fresh.unchecked().to_vec(),
+                        ..Default::default()
+                    };
+                    crate::route::ladder::note_low_check();
+                    history.push(cabin_note(&gaps.note()));
+                    continue;
+                }
                 let mut drive_blocked = false;
                 if let Some(drive) = drive
                     .as_mut()
                     .filter(|_| !crate::session_tools::plan_on(input.conversation_id))
                 {
                     let todos = crate::session_tools::todos_for(input.conversation_id);
-                    let gaps =
-                        crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
+                    let gaps = crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, fresh);
                     match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
                             // A push that only lists open todos is the checklist, not a
@@ -1470,8 +1532,8 @@ fn run_turn(
                             cancel: input.cancel,
                             drive: drive.as_ref(),
                             last_assistant: &last_assistant,
-                            ran: &ran,
-                            written: &modified_paths,
+                            ran,
+                            written: modified_paths,
                             usage: &mut usage,
                         };
                         crate::close_check::before_end(&mut close_in)
@@ -1514,6 +1576,8 @@ fn run_turn(
             }
             for note in notes {
                 note_steer(input, &note);
+                // The person's word may change what a call finds.
+                repeats.clear();
                 history.push(user_message(&note, None));
             }
             continue;
@@ -1601,16 +1665,14 @@ fn run_turn(
                         &calls[call_i..call_i + run_len],
                         input,
                         &mut gate,
-                        base_readonly,
-                        plan_at_start,
                         &mut always,
-                        &mut batch_failed,
                         &mut repeats,
+                        &mut stall,
                         &mut nested_agents,
                         &mut evidence,
-                        &mut ran,
-                        &mut fresh,
-                        &mut modified_paths,
+                        ran,
+                        fresh,
+                        modified_paths,
                         history,
                         &mut usage,
                         on_event,
@@ -1702,7 +1764,7 @@ fn run_turn(
                 continue;
             }
             let key = repeat_key(call);
-            if repeats.get(&key).copied().unwrap_or(0) >= REPEAT_LIMIT {
+            if repeats.count(&key) >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
                 let id = tool_id(call);
                 // Shown in the chat too, so a stalled step isn't silent.
@@ -1972,9 +2034,18 @@ fn run_turn(
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
             if !refused {
-                note_repeat(&mut repeats, input.workspace, call, &output);
+                let did = crate::stall::Did::of(&call.name, &call.arguments, &output);
+                note_repeat(&mut repeats, input.workspace, call, &output, did);
+                stall.note(did, &output);
             }
-            crate::post_check::note_ran(&mut ran, call, &output);
+            crate::post_check::note_ran(ran, call, &output);
+            if output.failed
+                && ran
+                    .last()
+                    .is_some_and(|r| r.name == "run_terminal_command" && failed_check_ran(r))
+            {
+                fresh.note_failed_run(&serde_json::from_str(&call.arguments).unwrap_or_default());
+            }
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
                 fresh.note(
@@ -2084,7 +2155,7 @@ fn run_turn(
         if let Some(note) = turn_budget.after_steps(calls_ran) {
             history.push(cabin_note(&note));
         }
-        match stall.after_step(evidence) {
+        match stall.after_step(turn.calls.len()) {
             crate::stall::Verdict::Go => {}
             crate::stall::Verdict::Redirect(note) => history.push(cabin_note(note)),
             crate::stall::Verdict::Stop => {
@@ -2105,6 +2176,7 @@ fn run_turn(
         }
         for note in input.steer.drain() {
             note_steer(input, &note);
+            repeats.clear();
             history.push(user_message(&note, None));
         }
     }
@@ -2502,28 +2574,91 @@ fn abandon_calls(
     }
 }
 
-/// Count a call that ran. A successful edit clears every count: the next test
-/// run checks new code, so it isn't a repeat. An edit refused because its
-/// file changed on disk drops the counts of that file's reads: the read it
-/// asks for sees new text.
+/// How often each call ran, by [`repeat_key`], for [`REPEAT_LIMIT`].
+#[derive(Debug, Default)]
+struct Repeats {
+    counts: HashMap<String, u32>,
+    /// The changes made so far.
+    changes: HashSet<String>,
+}
+
+impl Repeats {
+    fn count(&self, key: &str) -> u32 {
+        self.counts.get(key).copied().unwrap_or(0)
+    }
+
+    fn clear(&mut self) {
+        self.counts.clear();
+        self.changes.clear();
+    }
+}
+
+/// Count a call that ran and did `did`. A read of a task still running never
+/// counts: it reads what is new, and the next one may bring the result. A
+/// change not made before clears every count, so the next test run of new
+/// code isn't a repeat. A change made before counts itself and clears only
+/// the counts of calls that are not changes, so the same change made three
+/// times is refused like any repeat. An edit refused because its file changed
+/// on disk drops the counts of that file's reads: the read it asks for sees
+/// new text.
 fn note_repeat(
-    repeats: &mut HashMap<String, u32>,
+    repeats: &mut Repeats,
     workspace: &Path,
     call: &FunctionCall,
     output: &ToolOutput,
+    did: crate::stall::Did,
 ) {
-    let edited = crate::compact::path_from_write_call(&call.name, &call.arguments);
-    if !output.failed && edited.is_some() {
-        repeats.clear();
+    if call.name == crate::stall::TASK_READ
+        && crate::stall::still_running(&call.arguments, &output.text)
+    {
         return;
     }
-    if let Some(raw) = edited.filter(|_| tools::seen::is_refusal(&output.text)) {
+    let key = repeat_key(call);
+    match did {
+        crate::stall::Did::Waited => return,
+        crate::stall::Did::Changed => {
+            let Repeats { counts, changes } = repeats;
+            if changes.insert(key.clone()) {
+                counts.clear();
+            } else {
+                counts.retain(|k, _| changes.contains(k));
+            }
+        }
+        crate::stall::Did::Nothing | crate::stall::Did::Looked | crate::stall::Did::Worked => {}
+    }
+    if let Some(raw) = crate::compact::path_from_write_call(&call.name, &call.arguments)
+        .filter(|_| tools::seen::is_refusal(&output.text))
+    {
         if let Ok(file) = tools::confine(workspace, &raw) {
-            repeats.retain(|key, _| !reads_file(key, workspace, &file));
+            repeats
+                .counts
+                .retain(|key, _| !reads_file(key, workspace, &file));
         }
     }
-    let seen = repeats.entry(repeat_key(call)).or_insert(0);
+    let seen = repeats.counts.entry(key).or_insert(0);
     *seen = seen.saturating_add(1);
+}
+
+/// Programs a shell reports it could not find or read, by their output.
+const NOT_RUN_SIGNS: &[&str] = &[
+    "command not found",
+    "is not recognized as",
+    "CommandNotFoundException",
+    "ParserError",
+];
+
+/// A shell command that failed, yet ran its check to the end: one command
+/// alone (another before it, such as a `cd`, may be the one that failed),
+/// ended by its own exit code, and found and read by the shell (not exit 126,
+/// 127 or 9009). When unsure, it did not.
+fn failed_check_ran(ran: &crate::post_check::Ran) -> bool {
+    let code = ran
+        .ended()
+        .strip_prefix("exit ")
+        .and_then(|code| code.trim().parse::<i64>().ok());
+    code.is_some_and(|code| !matches!(code, 0 | 126 | 127 | 9009))
+        && !NOT_RUN_SIGNS.iter().any(|sign| ran.output.contains(sign))
+        && crate::file_checkpoint::one_command(&ran.command)
 }
 
 /// Whether repeat key `key` is a `read_file` of `file`.
@@ -2886,11 +3021,9 @@ fn run_readonly_tool_batch(
     calls: &[FunctionCall],
     input: &LoopIn<'_>,
     gate: &mut Gate,
-    _base_readonly: bool,
-    _plan_at_start: bool,
     always: &mut bool,
-    _batch_failed: &mut bool,
-    repeats: &mut HashMap<String, u32>,
+    repeats: &mut Repeats,
+    stall: &mut crate::stall::Stall,
     nested_agents: &mut crate::prompt::NestedAgents,
     evidence: &mut usize,
     ran: &mut Vec<crate::post_check::Ran>,
@@ -2907,7 +3040,7 @@ fn run_readonly_tool_batch(
             .iter()
             .filter(|(c, _, _): &&(&FunctionCall, String, _)| repeat_key(c) == key)
             .count() as u32;
-        if repeats.get(&key).copied().unwrap_or(0) + queued >= REPEAT_LIMIT {
+        if repeats.count(&key) + queued >= REPEAT_LIMIT {
             // One at a time, so the refusal shows like any other.
             return ReadonlyBatchOutcome::Fallback;
         }
@@ -3052,7 +3185,9 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
-        note_repeat(repeats, input.workspace, call, &output);
+        let did = crate::stall::Did::of(&call.name, &call.arguments, &output);
+        note_repeat(repeats, input.workspace, call, &output, did);
+        stall.note(did, &output);
         push_output(history, input.conversation_id, call, output);
     }
 
@@ -5088,6 +5223,1034 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The ids of calls the repeat guard refused, in order.
+    fn repeat_refused(history: &[InputItem]) -> Vec<String> {
+        history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output }
+                    if output.contains(REPEAT_REPLAN) =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A [`Script`] of one call per step, then "done".
+    fn one_call_steps(calls: Vec<FunctionCall>, steer: Option<SteerQueue>) -> Script {
+        let mut turns: Vec<ScriptTurn> = calls
+            .into_iter()
+            .map(|c| ScriptTurn::calls(vec![c], Usage::default()))
+            .collect();
+        turns.push(ScriptTurn::text("done"));
+        Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer,
+        }
+    }
+
+    /// `script` run in chat `conv` with every tool allowed and `tasks` as
+    /// its background tasks.
+    fn run_allowed(
+        script: &dyn ModelClient,
+        dir: &std::path::Path,
+        conv: &str,
+        tasks: Option<Arc<TaskHub>>,
+    ) -> (LoopOut, Vec<InputItem>) {
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let input = LoopIn {
+            client: script,
+            workspace: dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 20,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &permits,
+            perms: None,
+            context_length: 0,
+            tasks,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        (out, history)
+    }
+
+    fn shell_call(id: &str, command: &str) -> FunctionCall {
+        call(
+            id,
+            "run_terminal_command",
+            &serde_json::json!({ "command": command }).to_string(),
+        )
+    }
+
+    #[test]
+    fn a_shell_edit_lets_the_same_check_run_again_like_a_write_does() {
+        let dir = workspace("repeat-shell-edit");
+        let read = |id: &str| call(id, "read_file", r#"{"target_file":"note.txt"}"#);
+        let mut calls = Vec::new();
+        for n in 0..3 {
+            calls.push(shell_call(&format!("e{n}"), &format!("echo v{n} > a.txt")));
+            calls.push(read(&format!("r{n}")));
+        }
+        for n in 3..6 {
+            calls.push(read(&format!("r{n}")));
+        }
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-shell-edit", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(dir.join("a.txt").exists(), "the echoes ran");
+        // Each echo writes a.txt, so the read after it checks something new.
+        assert_eq!(repeat_refused(&history), ["r4", "r5"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_same_change_three_times_is_still_a_repeat() {
+        let dir = workspace("repeat-same-change");
+        let calls = (0..3)
+            .map(|n| shell_call(&format!("e{n}"), "echo v > a.txt"))
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-same-change", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), ["e2"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_test_and_a_build_that_alternate_are_each_refused_on_the_third() {
+        // `2>&1` writes no file, so neither command is a change that starts
+        // the other's count over. Whether cargo or tail exist here doesn't
+        // matter: a call that ran and failed counts too.
+        let dir = workspace("repeat-test-build");
+        let mut calls = Vec::new();
+        for n in 0..3 {
+            calls.push(shell_call(&format!("t{n}"), "cargo test 2>&1 | tail -5"));
+            calls.push(shell_call(&format!("b{n}"), "cargo build 2>&1 | tail -5"));
+        }
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-test-build", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), ["t2", "b2"]);
+        let ran = history
+            .iter()
+            .filter(|item| {
+                matches!(item, InputItem::FunctionCallOutput { output, .. }
+                if output.starts_with("exit "))
+            })
+            .count();
+        assert_eq!(ran, 4, "t0, b0, t1 and b1 ran");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_steer_lets_the_same_check_run_again() {
+        let dir = workspace("repeat-steer");
+        let steer = SteerQueue::new();
+        let calls = (0..4)
+            .map(|n| {
+                call(
+                    &format!("r{n}"),
+                    "read_file",
+                    r#"{"target_file":"note.txt"}"#,
+                )
+            })
+            .collect();
+        // The person says "please look again" while r0 is being written.
+        let script = one_call_steps(calls, Some(steer.clone()));
+        let (out, history, _) = run(&script, &dir, 10, &CancelToken::new(), &steer, &NeverHalt);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), ["r3"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn waiting_on_a_running_helper_is_never_a_repeat() {
+        let dir = workspace("repeat-wait-running");
+        let sid = format!("repeat-wait-running-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        let id = hub.register_agent(None, "t", Arc::new(|| {}), "m").unwrap();
+        let wait = format!(r#"{{"task_id":"{id}","timeout_ms":1}}"#);
+        let calls = (0..3)
+            .map(|n| call(&format!("w{n}"), "get_command_or_subagent_output", &wait))
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, &sid, Some(hub));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, ["status: running"; 3]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_wait_on_a_task_that_ended_is_refused_on_the_third() {
+        let dir = workspace("repeat-wait-ended");
+        let sid = format!("repeat-wait-ended-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        let id = hub.register_agent(None, "t", Arc::new(|| {}), "m").unwrap();
+        hub.finish_agent(&id, "found it");
+        let wait = format!(r#"{{"task_id":"{id}"}}"#);
+        let calls = (0..3)
+            .map(|n| call(&format!("w{n}"), "get_command_or_subagent_output", &wait))
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, &sid, Some(hub));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), ["w2"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_joined_wait_on_running_helpers_is_never_a_repeat_or_a_stall() {
+        let dir = workspace("repeat-wait-joined");
+        let sid = format!("repeat-wait-joined-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        let s1 = hub
+            .register_agent(None, "t1", Arc::new(|| {}), "m")
+            .unwrap();
+        let s2 = hub
+            .register_agent(None, "t2", Arc::new(|| {}), "m")
+            .unwrap();
+        let wait = |n: usize, ms: usize| {
+            call(
+                &format!("w{n}"),
+                "get_command_or_subagent_output",
+                &format!(r#"{{"task_id":"{s1},{s2}","timeout_ms":{ms}}}"#),
+            )
+        };
+        // Three identical waits of a second each, then eleven that differ
+        // only in how long they wait: enough steps to stop a run that counted
+        // them as idle.
+        let calls = (0..14)
+            .map(|n| wait(n, 1000 + n.saturating_sub(2)))
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, &sid, Some(hub));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let both = format!("{s1}:\nstatus: running\n\n{s2}:\nstatus: running");
+        assert_eq!(outputs_of(&history), vec![both.as_str(); 14]);
+        assert_eq!(repeat_refused(&history), Vec::<String>::new());
+        assert_eq!(redirects_after(&history), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nineteen polls with `extra` arguments of a helper that never ends.
+    fn polls_of_a_task_that_never_ends(tag: &str, extra: &str) {
+        let dir = workspace(tag);
+        let sid = format!("{tag}-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        let id = hub.register_agent(None, "t", Arc::new(|| {}), "m").unwrap();
+        let wait = format!(r#"{{"task_id":"{id}"{extra}}}"#);
+        let calls = (0..19)
+            .map(|n| call(&format!("w{n}"), "get_command_or_subagent_output", &wait))
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, &sid, Some(hub));
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        // A read that waited no real time and found nothing new is a look:
+        // the first is new, the rest are not, and the twelfth step in a row
+        // with nothing new stops the run. A read of a task still running is
+        // never refused as a repeat: the next one may bring its result.
+        assert_eq!(repeat_refused(&history), Vec::<String>::new());
+        assert_eq!(outputs_of(&history), vec!["status: running"; 13]);
+        assert_eq!(redirects_after(&history), ["w6"]);
+        assert!(matches!(
+            history.last(),
+            Some(InputItem::Message { content, .. })
+                if matches!(content.as_slice(),
+                    [ContentPart::InputText(t)] if t == crate::stall::STOP_NOTE)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bare_polls_of_a_task_that_never_ends_stop_the_run() {
+        polls_of_a_task_that_never_ends("stall-bare-polls", "");
+    }
+
+    #[test]
+    fn quick_waits_on_a_task_that_never_ends_stop_the_run() {
+        polls_of_a_task_that_never_ends("stall-quick-waits", r#","timeout_ms":1"#);
+    }
+
+    /// [`Script`], with helper `id` of `hub` finished with `result` just
+    /// before request `at`.
+    struct FinishesAt {
+        script: Script,
+        at: usize,
+        hub: Arc<TaskHub>,
+        id: String,
+        result: &'static str,
+    }
+
+    impl ModelClient for FinishesAt {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            if self.script.seen.lock().unwrap().len() == self.at {
+                self.hub.finish_agent(&self.id, self.result);
+            }
+            self.script.stream(req, cancel, sink)
+        }
+    }
+
+    #[test]
+    fn the_read_that_brings_a_finished_helpers_result_is_never_a_repeat() {
+        let dir = workspace("repeat-read-result");
+        let sid = format!("repeat-read-result-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        let id = hub.register_agent(None, "t", Arc::new(|| {}), "m").unwrap();
+        let wait = format!(r#"{{"task_id":"{id}"}}"#);
+        let calls = (0..3)
+            .map(|n| call(&format!("w{n}"), "get_command_or_subagent_output", &wait))
+            .collect();
+        // Two reads while it runs; it ends before the third.
+        let client = FinishesAt {
+            script: one_call_steps(calls, None),
+            at: 2,
+            hub: Arc::clone(&hub),
+            id: id.clone(),
+            result: "found it",
+        };
+        let (out, history) = run_allowed(&client, &dir, &sid, Some(hub));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), Vec::<String>::new());
+        let outputs = outputs_of(&history);
+        assert_eq!(outputs[..2], ["status: running"; 2]);
+        assert!(
+            outputs[2].starts_with("status: exited\nexit_code: 0\noutput:\n"),
+            "{}",
+            outputs[2]
+        );
+        assert!(outputs[2].contains("found it"), "{}", outputs[2]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn three_identical_writes_are_refused_on_the_third() {
+        let dir = workspace("repeat-write-three");
+        let calls = (0..3)
+            .map(|n| {
+                call(
+                    &format!("w{n}"),
+                    "write",
+                    r#"{"path":"a.txt","content":"v"}"#,
+                )
+            })
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-write-three", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), ["w2"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_shell_changes_that_alternate_are_refused_like_any_repeat() {
+        let dir = workspace("repeat-tee-flip");
+        let mut calls = Vec::new();
+        for n in 0..3 {
+            calls.push(shell_call(&format!("t{n}"), "echo t 2>&1 | tee t.log"));
+            calls.push(shell_call(&format!("b{n}"), "echo b 2>&1 | tee b.log"));
+        }
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-tee-flip", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        // t0 and b0 are new changes and start every count over; from t1 on
+        // each has been made before, so it counts like any call and the
+        // third b is refused.
+        assert_eq!(repeat_refused(&history), ["b2"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_and_its_undo_that_alternate_are_refused_like_any_repeat() {
+        let dir = workspace("repeat-sed-flip");
+        std::fs::write(dir.join("x.txt"), "a\n").unwrap();
+        let mut calls = Vec::new();
+        for n in 0..3 {
+            calls.push(shell_call(&format!("ab{n}"), "sed -i s/a/b/ x.txt"));
+            calls.push(shell_call(&format!("ba{n}"), "sed -i s/b/a/ x.txt"));
+        }
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-sed-flip", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), ["ba2"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_screen_actions_that_alternate_are_refused_and_then_stop_the_run() {
+        let dir = workspace("repeat-desk-flip");
+        let mut calls = Vec::new();
+        for n in 0..20 {
+            calls.push(call(&format!("c{n}"), "click", r#"{"x":40,"y":12}"#));
+            calls.push(call(&format!("k{n}"), "key", r#"{"key":"Escape"}"#));
+        }
+        let script = one_call_steps(calls, None);
+        let spy = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
+        let allow = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = once_for(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, true),
+            Some(&spy),
+            &allow,
+            0,
+        );
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        // c0, k0, c1, k1 and c2 ran. From k2 on each is refused, the sixth
+        // refusal in a row gets the redirect and the twelfth stops the run.
+        assert_eq!(spy.calls.load(Ordering::SeqCst), 5);
+        assert_eq!(
+            repeat_refused(&history),
+            ["k2", "c3", "k3", "c4", "k4", "c5", "k5", "c6", "k6", "c7", "k7", "c8"]
+        );
+        assert_eq!(redirects_after(&history), ["c5"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_change_made_again_after_each_new_edit_still_runs() {
+        // A formatter or `git add` after every edit is the same change each
+        // time; a new edit before it starts its count over.
+        let dir = workspace("repeat-change-after-edit");
+        let mut calls = Vec::new();
+        for n in 0..3 {
+            calls.push(call(
+                &format!("w{n}"),
+                "write",
+                &format!(r#"{{"path":"a.txt","content":"v{n}"}}"#),
+            ));
+            calls.push(shell_call(&format!("s{n}"), "echo s > stamp.txt"));
+        }
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-change-after-edit", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(repeat_refused(&history), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_folder_lets_the_same_listing_run_again() {
+        let dir = workspace("repeat-mkdir");
+        let calls = vec![
+            shell_call("l0", "ls"),
+            shell_call("m1", "mkdir d1"),
+            shell_call("l1", "ls"),
+            shell_call("m2", "mkdir d2"),
+            shell_call("l2", "ls"),
+        ];
+        let script = one_call_steps(calls, None);
+        let (out, history) = run_allowed(&script, &dir, "repeat-mkdir", None);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(dir.join("d2").is_dir());
+        assert_eq!(repeat_refused(&history), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_that_bring_back_nothing_new_stop_like_failures_do() {
+        // Every listing is of a folder that exists and is empty: each call
+        // succeeds, but only the first brings back anything new.
+        let dir = workspace("stall-empty");
+        for n in 0..30 {
+            std::fs::create_dir_all(dir.join(format!("p{n}"))).unwrap();
+        }
+        let client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
+        let (out, history, events) = run_with(
+            &client,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        assert_eq!(
+            client.calls.load(Ordering::SeqCst),
+            1 + crate::stall::STOP_AFTER as usize
+        );
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains(crate::stall::STOP_NOTE))));
+        // One listing brought back "(empty)"; the 6th idle step after it is c6.
+        assert_eq!(redirects_after(&history), ["c6"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn distinct_searches_that_all_miss_redirect_after_six_idle_steps_and_stop_after_twelve() {
+        // The absence-audit trade-off: grep says "(no matches)" for every
+        // miss, so after the first, a different search that also misses is
+        // no new work.
+        let dir = workspace("stall-greps");
+        let calls = (0..20)
+            .map(|n| {
+                call(
+                    &format!("g{n}"),
+                    "grep",
+                    &format!(r#"{{"pattern":"absent_{n}_xyz"}}"#),
+                )
+            })
+            .collect();
+        let script = one_call_steps(calls, None);
+        let (out, history, events) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::MaxTurns);
+        let outputs: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        // The first miss, then twelve idle steps.
+        assert_eq!(outputs, ["(no matches)"; 13]);
+        // The redirect lands after the 6th idle step (the 7th grep), the
+        // stop after the 12th (the 13th grep).
+        assert_eq!(redirects_after(&history), ["g6"]);
+        assert_eq!(script.seen.lock().unwrap().len(), 13);
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains(crate::stall::STOP_NOTE))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compaction_makes_every_look_new_again() {
+        // A listing seen before the compaction, and six after it that bring
+        // back the same "(empty)": only the first after it is new, so five
+        // idle steps and no redirect. Without the reset all six are idle and
+        // the sixth is redirected.
+        let dir = workspace("stall-compact");
+        for n in 0..7 {
+            std::fs::create_dir_all(dir.join(format!("p{n}"))).unwrap();
+        }
+        let ls = |n: usize| {
+            call(
+                &format!("l{n}"),
+                "list_dir",
+                &format!(r#"{{"path":"p{n}"}}"#),
+            )
+        };
+        let mut turns = vec![
+            ScriptTurn::calls(vec![ls(0)], Usage::default()),
+            // This request's prompt was 90% of the window, so the next one
+            // compacts first.
+            ScriptTurn::calls(
+                vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
+                Usage {
+                    input_tokens: 9_000,
+                    ..Usage::default()
+                },
+            ),
+            // The summary the compaction asks for.
+            ScriptTurn::text("Listed p0 and read note.txt."),
+        ];
+        turns.extend((1..7).map(|n| ScriptTurn::calls(vec![ls(n)], Usage::default())));
+        turns.push(ScriptTurn::text("done"));
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let conv = "stall-compact/a1";
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 10_000,
+            tasks: None,
+            depth: 1,
+            agent_id: Some("a1"),
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |ev| events.push(ev));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let compactions = events
+            .iter()
+            .filter(|ev| {
+                matches!(
+                    ev,
+                    LoopEvent::Compact {
+                        started: false,
+                        error: None,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(compactions, 1);
+        let listed: Vec<&str> = outputs_of(&history)
+            .into_iter()
+            .filter(|o| *o == "(empty)")
+            .collect();
+        // p0's listing is the turn's own, so the compaction kept it.
+        assert_eq!(listed, ["(empty)"; 7]);
+        assert_eq!(redirects_after(&history), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// For each stall redirect note in `history`, the call whose output it follows.
+    fn redirects_after(history: &[InputItem]) -> Vec<String> {
+        history
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [InputItem::FunctionCallOutput { call_id, .. }, InputItem::Message { content, .. }]
+                    if content.iter().any(|part| {
+                        matches!(part,
+                        ContentPart::InputText(text) if text.contains("did no new work"))
+                    }) =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `turns` run as helper `a1` (depth 1) or as a root run (depth 0) in a
+    /// chat with no Brief, every tool allowed.
+    fn helper_run(
+        tag: &str,
+        depth: u32,
+        turns: Vec<ScriptTurn>,
+    ) -> (LoopOut, Vec<InputItem>, usize, std::path::PathBuf) {
+        let dir = workspace(tag);
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let conv = if depth > 0 {
+            format!("{tag}/a1")
+        } else {
+            tag.to_string()
+        };
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: &conv,
+            max_turns: 10,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth,
+            agent_id: (depth > 0).then_some("a1"),
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        let requests = script.seen.lock().unwrap().len();
+        (out, history, requests, dir)
+    }
+
+    /// How many messages in `history` hold `text`.
+    fn notes_with(history: &[InputItem], text: &str) -> usize {
+        history
+            .iter()
+            .filter(|item| {
+                matches!(item, InputItem::Message { content, .. }
+                    if content.iter().any(|part| matches!(part,
+                        ContentPart::InputText(t) if t.contains(text))))
+            })
+            .count()
+    }
+
+    const CHECK_IT: &str = "Not verified since your last change to a.txt. Check it (run the \
+tests or build, re-read the file, look at the result) before you finish.";
+
+    #[test]
+    fn a_helper_checks_its_change_once_before_it_hands_back() {
+        let write = call("w", "write", r#"{"path":"a.txt","content":"v1"}"#);
+        let (out, history, requests, dir) = helper_run(
+            "helper-check",
+            1,
+            vec![
+                ScriptTurn::calls(vec![write], Usage::default()),
+                ScriptTurn::text("done"),
+                ScriptTurn::text("done"),
+            ],
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        // The write, the first "done" that got the note, and the second.
+        assert_eq!(requests, 3);
+        assert_eq!(notes_with(&history, CHECK_IT), 1);
+        assert_eq!(out.kept.modified_paths, ["a.txt"]);
+        assert_eq!(
+            out.kept.fresh.unchecked(),
+            [("a.txt".to_string(), crate::checkpoint::Needs::Reread)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_helpers_code_change_is_sent_to_run_the_tests() {
+        let write = call("w", "write", r#"{"path":"a.rs","content":"fn main() {}"}"#);
+        let (out, history, requests, dir) = helper_run(
+            "helper-check-code",
+            1,
+            vec![
+                ScriptTurn::calls(vec![write], Usage::default()),
+                ScriptTurn::text("done"),
+                ScriptTurn::text("done"),
+            ],
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(requests, 3);
+        assert_eq!(
+            notes_with(
+                &history,
+                "Not verified since your last change to a.rs. Run the tests, a build or a \
+linter (or run the changed file) before you finish: a re-read or git status doesn't check code."
+            ),
+            1
+        );
+        assert_eq!(
+            out.kept.fresh.unchecked(),
+            [("a.rs".to_string(), crate::checkpoint::Needs::Run)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_helper_that_checked_its_change_hands_back_at_once() {
+        let (out, history, requests, dir) = helper_run(
+            "helper-checked",
+            1,
+            vec![
+                ScriptTurn::calls(
+                    vec![call("w", "write", r#"{"path":"a.txt","content":"v1"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::calls(
+                    vec![call("r", "read_file", r#"{"target_file":"a.txt"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+            ],
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(requests, 3);
+        assert_eq!(notes_with(&history, CHECK_IT), 0);
+        assert!(out.kept.fresh.unchecked().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_helper_that_changes_on_its_last_step_hands_back_without_the_note() {
+        // helper_run allows ten steps: eight echoes, the write, and "done".
+        let mut turns: Vec<ScriptTurn> = (0..8)
+            .map(|n| {
+                ScriptTurn::calls(
+                    vec![shell_call(&format!("e{n}"), &format!("echo {n}"))],
+                    Usage::default(),
+                )
+            })
+            .collect();
+        turns.push(ScriptTurn::calls(
+            vec![call("w", "write", r#"{"path":"a.txt","content":"v1"}"#)],
+            Usage::default(),
+        ));
+        turns.push(ScriptTurn::text("done"));
+        turns.push(ScriptTurn::text("done"));
+        let (out, history, requests, dir) = helper_run("helper-last-step", 1, turns);
+        // No step is left for a check, so the helper ends as finished and
+        // its result names the change as unchecked.
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(requests, 10);
+        assert_eq!(notes_with(&history, CHECK_IT), 0);
+        assert_eq!(
+            out.kept.fresh.unchecked(),
+            [("a.txt".to_string(), crate::checkpoint::Needs::Reread)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const FAILING_CRATE: &str = r#"{"path":"Cargo.toml","content":"[package]\nname = \"check-fails\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n"}"#;
+    const FAILING_CODE: &str =
+        r#"{"path":"src/lib.rs","content":"pub fn two() -> u32 {\n    \"two\"\n}\n"}"#;
+
+    /// A helper writes a crate that doesn't build, runs `command`, then says
+    /// "done" twice. `cargo check` builds without linking, so it runs in any
+    /// test shell.
+    fn failing_crate_then(tag: &str, command: &str) -> (LoopOut, Vec<InputItem>, usize) {
+        let (out, history, requests, dir) = helper_run(
+            tag,
+            1,
+            vec![
+                ScriptTurn::calls(
+                    vec![
+                        call("w1", "write", FAILING_CRATE),
+                        call("w2", "write", FAILING_CODE),
+                    ],
+                    Usage::default(),
+                ),
+                ScriptTurn::calls(vec![shell_call("t", command)], Usage::default()),
+                ScriptTurn::text("done"),
+                ScriptTurn::text("done"),
+            ],
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        (out, history, requests)
+    }
+
+    #[test]
+    fn a_helper_whose_check_failed_hands_back_without_the_note() {
+        let (out, history, requests) = failing_crate_then(
+            "helper-check-failed",
+            "cargo check --offline --target-dir target",
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        // The build ran and failed; its result says so, and it was the check.
+        assert_eq!(requests, 3);
+        assert_eq!(notes_with(&history, "Not verified"), 0);
+        assert!(out.kept.fresh.unchecked().is_empty());
+        let ended: Vec<(&str, String)> = out
+            .kept
+            .ran
+            .iter()
+            .filter(|r| r.name == "run_terminal_command")
+            .map(|r| (r.command.as_str(), r.ended()))
+            .collect();
+        assert_eq!(
+            ended,
+            [(
+                "cargo check --offline --target-dir target",
+                "exit 101".to_string()
+            )]
+        );
+        assert!(
+            out.kept
+                .ran
+                .iter()
+                .any(|r| r.output.contains("error[E0308]: mismatched types")),
+            "the build itself ran"
+        );
+    }
+
+    #[test]
+    fn a_line_that_failed_before_its_check_ran_is_not_the_check() {
+        for command in [
+            "nosuchtool_zz_xyz",
+            "cd missing_zz_dir && cargo check --offline --target-dir target",
+        ] {
+            let (out, history, requests) = failing_crate_then("helper-check-never-ran", command);
+            assert_eq!(out.stop, StopReason::EndTurn, "{command}");
+            assert_eq!(requests, 4, "{command}");
+            assert_eq!(notes_with(&history, "Not verified"), 1, "{command}");
+            assert_eq!(
+                out.kept.fresh.unchecked(),
+                [
+                    ("Cargo.toml".to_string(), crate::checkpoint::Needs::Reread),
+                    ("src/lib.rs".to_string(), crate::checkpoint::Needs::Run)
+                ],
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_helper_with_one_step_left_after_its_change_hands_back_without_the_note() {
+        // Ten steps: seven echoes, the write, "done", and a check that would
+        // take the last step and leave none for the reply.
+        let mut turns: Vec<ScriptTurn> = (0..7)
+            .map(|n| {
+                ScriptTurn::calls(
+                    vec![shell_call(&format!("e{n}"), &format!("echo {n}"))],
+                    Usage::default(),
+                )
+            })
+            .collect();
+        turns.push(ScriptTurn::calls(
+            vec![call("w", "write", r#"{"path":"a.txt","content":"v1"}"#)],
+            Usage::default(),
+        ));
+        turns.push(ScriptTurn::text("done"));
+        turns.push(ScriptTurn::calls(
+            vec![call("r", "read_file", r#"{"target_file":"a.txt"}"#)],
+            Usage::default(),
+        ));
+        turns.push(ScriptTurn::text("done after the check"));
+        let (out, history, requests, dir) = helper_run("helper-one-step-left", 1, turns);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(requests, 9);
+        assert_eq!(notes_with(&history, CHECK_IT), 0);
+        assert_eq!(
+            out.kept.fresh.unchecked(),
+            [("a.txt".to_string(), crate::checkpoint::Needs::Reread)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shell_change_that_failed_is_not_taken_as_made() {
+        let (out, history, requests, dir) = helper_run(
+            "helper-change-failed",
+            1,
+            vec![
+                ScriptTurn::calls(vec![shell_call("r", "rm missing.txt")], Usage::default()),
+                ScriptTurn::text("done"),
+                ScriptTurn::text("done"),
+            ],
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(requests, 2);
+        assert_eq!(notes_with(&history, "Not verified"), 0);
+        assert!(out.kept.fresh.unchecked().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_helper_that_only_searched_hands_back_at_once() {
+        for (n, search) in [
+            r#"grep -rn -i "hello" ."#,
+            "grep -n -e hello -e start note.txt",
+            r#"grep -rn "native" ."#,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (out, history, requests, dir) = helper_run(
+                &format!("helper-search-{n}"),
+                1,
+                vec![
+                    ScriptTurn::calls(vec![shell_call("g", search)], Usage::default()),
+                    ScriptTurn::text("found it"),
+                    ScriptTurn::text("found it"),
+                ],
+            );
+            assert_eq!(out.stop, StopReason::EndTurn, "{search}");
+            assert_eq!(requests, 2, "{search}");
+            assert_eq!(notes_with(&history, "Not verified"), 0, "{search}");
+            assert!(out.kept.fresh.unchecked().is_empty(), "{search}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_root_run_with_no_brief_ends_after_its_change_as_before() {
+        let (out, history, requests, dir) = helper_run(
+            "root-no-brief",
+            0,
+            vec![
+                ScriptTurn::calls(
+                    vec![call("w", "write", r#"{"path":"a.txt","content":"v1"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+            ],
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(requests, 2);
+        assert_eq!(notes_with(&history, CHECK_IT), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_keeps_each_command_and_how_it_ended() {
+        let (out, _, _, dir) = helper_run(
+            "helper-commands",
+            1,
+            vec![
+                ScriptTurn::calls(vec![shell_call("s1", "echo ok")], Usage::default()),
+                ScriptTurn::calls(vec![shell_call("s2", "exit 3")], Usage::default()),
+                ScriptTurn::text("done"),
+            ],
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let ran: Vec<(&str, String)> = out
+            .kept
+            .ran
+            .iter()
+            .map(|r| (r.command.as_str(), r.ended()))
+            .collect();
+        assert_eq!(
+            ran,
+            [
+                ("echo ok", "exit 0".to_string()),
+                ("exit 3", "exit 3".to_string())
+            ]
+        );
+        assert!(out.kept.modified_paths.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// [`Script`], with a file changed on disk just before request `at`.
     struct ChangesFileAt {
         script: Script,
@@ -5250,10 +6413,11 @@ mod tests {
     #[test]
     fn no_turn_cap_runs_past_fifty_tool_turns_to_the_reply() {
         let dir = workspace("nocap");
-        // Each step lists a folder that exists, so every step does new work
-        // and the stall check never trips.
+        // Each step lists a folder that holds its own file, so every step
+        // brings back something new and the stall check never trips.
         for n in 0..80 {
             std::fs::create_dir_all(dir.join(format!("p{n}"))).unwrap();
+            std::fs::write(dir.join(format!("p{n}/f{n}.txt")), "x").unwrap();
         }
         let mut turns: Vec<ScriptTurn> = (0..80)
             .map(|n| ScriptTurn {
