@@ -72,6 +72,7 @@ fn test_registry() -> Registry {
                 vec![crate::route::local::tier_meta("local:small")],
             ),
         ],
+        &[],
         1_000,
     );
     reg
