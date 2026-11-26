@@ -145,7 +145,7 @@ impl UseCase {
 
 /// The most standard (chat) models the catalog lists. Specialty kinds don't
 /// count.
-pub const STANDARD_MODEL_CAP: usize = 25;
+pub const STANDARD_MODEL_CAP: usize = 26;
 
 /// Who removed the model's refusals, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -529,7 +529,7 @@ impl LocalModel {
         self.remote_file.unwrap_or(self.file)
     }
 
-    /// A model you chat with: the picker, the router and the 25 cap list
+    /// A model you chat with: the picker, the router and the chat-cap list
     /// only these, never a drafter, voice, image or other specialty row.
     pub fn is_chat(&self) -> bool {
         self.kind == ModelKind::Chat
@@ -542,12 +542,12 @@ pub fn model_by_id(id: &str) -> Option<&'static LocalModel> {
     local_models().iter().find(|m| m.id == id)
 }
 
-/// The standard models: what you chat with, the ones the 25 cap counts.
+/// The standard models: what you chat with, the ones the chat cap counts.
 pub fn standard_models() -> impl Iterator<Item = &'static LocalModel> {
     local_models().iter().filter(|m| counts_toward_cap(m))
 }
 
-/// Only chat models use up the 25; drafters, projectors, image, voice and
+/// Only chat models use up the cap; drafters, projectors, image, voice and
 /// the rest don't.
 pub fn counts_toward_cap(m: &LocalModel) -> bool {
     m.is_chat()
@@ -772,7 +772,7 @@ mod tests {
     #[test]
     fn the_catalog_stays_inside_25_uncensored_chat_models() {
         let all = local_models();
-        assert_eq!(all.len(), 45, "catalog parsed");
+        assert_eq!(all.len(), 47, "catalog parsed");
         let chat: Vec<_> = standard_models().map(|m| m.id).collect();
         assert_eq!(
             chat.len(),
@@ -890,12 +890,36 @@ mod tests {
         );
         assert_eq!(
             model_by_id("devstral-small2-24b-abliterated-q4_k_m")
-                .map(|m| { (m.tier, m.sha256, use_case(m.id)) }),
+                .map(|m| { (m.tier, m.sha256, m.ctx_default, use_case(m.id)) }),
             Some((
                 "T3",
                 "de276bac9b034db8695c802537aa6aa5bc35c133db83764d7a2217e66ce443c4",
+                12_288,
                 UseCase::Coding,
             ))
+        );
+        assert_eq!(
+            model_by_id("qwen3-coder-30b-a3b-heretic-q4_k_m").map(|m| m.ctx_default),
+            Some(32_768)
+        );
+        let fit = model_by_id("qwen3.6-35b-a3b-abliterated-q2_k").unwrap();
+        assert_eq!(fit.ctx_default, 65_536);
+        assert_eq!(fit.run_mb, 14_513);
+        assert!(fit.run_mb <= 16_384, "the 16 GB build must fit in 16 GB");
+        assert_eq!(
+            fit.sha256,
+            "85f446fff19406aa81bd8333433fa11921038ba1b80523c2432d82623b73fb73"
+        );
+        assert_eq!(use_case(fit.id), UseCase::Coding);
+        let heads = model_by_id("qwen3.6-35b-a3b-mtp").unwrap();
+        assert_eq!(heads.kind, ModelKind::Drafter);
+        assert_eq!(
+            heads.sha256,
+            "623351aeccfb9a26991ea6a7f0d24ef993a975fb2a508e4d95d3be1f72bf58da"
+        );
+        assert_eq!(
+            model_by_id("qwen3.6-35b-a3b-heretic-q4_k_m").and_then(|m| m.drafter),
+            Some(heads.id)
         );
         assert_eq!(
             model_by_id("qwen2.5-coder-7b-heretic-q4_k_m")

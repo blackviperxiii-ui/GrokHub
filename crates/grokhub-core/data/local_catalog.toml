@@ -37,7 +37,7 @@
 
 # `kind` says what a row is for: chat (the default), drafter,
 # vision-projector, image, image-guard, speech-to-text, text-to-speech, embed,
-# rerank, ocr or guard. Only chat rows count toward the 25 standard models
+# rerank, ocr or guard. Only chat rows count toward the 26 standard models
 # (`local_setup::STANDARD_MODEL_CAP`). A drafter or projector names its chat
 # model in `pairs_with`.
 #
@@ -65,7 +65,7 @@
 # tier's reference GPU, where it fits), `gaming_safe` (light and capable
 # enough to run beside a game) and `estimate` (fields nobody has measured;
 # list one in `measured` once it is). CI fails when they are stale.
-version = 6
+version = 7
 
 [[model]]
 id = "nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m"
@@ -118,6 +118,10 @@ active_b = 3
 ctx_max = 262_144
 run_mb = 22071   # 20771 weights + 700 KV (10 full-attn layers x 2 KV x hd256 (~20 KiB/tok) + DeltaNet state; approx) + 600
 needs_avx2 = true
+# Split MTP heads for this model. When the GGUF header already has nextn
+# layers, the launcher drafts with those and skips this file. The speed
+# test leaves drafting on only when it is faster.
+drafter = "qwen3.6-35b-a3b-mtp"
 min_budget = { gpu = 8192, unified = 22528, cpu = 22528 }
 tok_s = { gpu = 50, unified = 35, cpu = 20 }
 tok_s_tier = { T4 = 200 }
@@ -155,6 +159,34 @@ tok_s_tier = { T4 = 32 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 [[model]]
+id = "qwen3-coder-30b-a3b-heretic-q4_k_m"
+name = "Qwen3-Coder 30B-A3B"
+repo = "mradermacher/Qwen3-Coder-30B-A3B-Instruct-Heretic-GGUF"
+file = "Qwen3-Coder-30B-A3B-Instruct-Heretic.Q4_K_M.gguf"
+sha256 = "02badbb766b2999da480c2ef9dd60b7124b7426985129b95b74319bdc1de0149"
+download_mb = 17697
+quant = "Q4_K_M"
+license = "Apache-2.0"
+kind = "chat"
+use_case = "coding"
+optional = true
+abliterated = { by = "dpankros", method = "heretic" }
+badges = ["tools", "moe"]
+skills = { quality = 80, chat = 58, code = 90, reason = 74, write = 52, long = 70, adult = 60 }
+tier = "T4"
+route = "local:small"
+ctx_default = 32768
+params_b = 30.5
+active_b = 3.3
+ctx_max = 262_144
+run_mb = 19697   # 17697 weights + 1400 KV (same ~43 KiB/tok budget as at 16384, doubled for 32768) + 600
+needs_avx2 = true
+min_budget = { gpu = 8192, unified = 19456, cpu = 19456 }
+tok_s = { gpu = 48, unified = 32, cpu = 18 }
+tok_s_tier = { T4 = 201 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+[[model]]
 id = "zai-glm4.7-flash-30b-a3b-heretic-q4_k_m"
 name = "Zhipu GLM-4.7-Flash 30B-A3B"
 repo = "Olafangensan/GLM-4.7-Flash-heretic-GGUF"
@@ -180,34 +212,6 @@ needs_avx2 = true
 min_budget = { gpu = 8192, unified = 19968, cpu = 19968 }
 tok_s = { gpu = 40, unified = 28, cpu = 16 }
 tok_s_tier = { T4 = 217 }
-gaming_safe = false
-estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
-[[model]]
-id = "qwen3-coder-30b-a3b-heretic-q4_k_m"
-name = "Qwen3-Coder 30B-A3B"
-repo = "mradermacher/Qwen3-Coder-30B-A3B-Instruct-Heretic-GGUF"
-file = "Qwen3-Coder-30B-A3B-Instruct-Heretic.Q4_K_M.gguf"
-sha256 = "02badbb766b2999da480c2ef9dd60b7124b7426985129b95b74319bdc1de0149"
-download_mb = 17697
-quant = "Q4_K_M"
-license = "Apache-2.0"
-kind = "chat"
-use_case = "coding"
-optional = true
-abliterated = { by = "dpankros", method = "heretic" }
-badges = ["tools", "moe"]
-skills = { quality = 80, chat = 58, code = 90, reason = 74, write = 52, long = 70, adult = 60 }
-tier = "T4"
-route = "local:small"
-ctx_default = 16384
-params_b = 30.5
-active_b = 3.3
-ctx_max = 262_144
-run_mb = 18997   # 17697 weights + 700 KV (Qwen3-Coder MoE, same budget as Qwen3.6 35B-A3B) + 600
-needs_avx2 = true
-min_budget = { gpu = 8192, unified = 19456, cpu = 19456 }
-tok_s = { gpu = 48, unified = 32, cpu = 18 }
-tok_s_tier = { T4 = 201 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 [[model]]
@@ -316,15 +320,43 @@ badges = ["tools"]
 skills = { quality = 76, chat = 52, code = 88, reason = 68, write = 48, long = 64, adult = 58 }
 tier = "T3"
 route = "local:small"
-ctx_default = 8192
+ctx_default = 12288
 params_b = 24
 active_b = 24
 ctx_max = 262_144
-run_mb = 15550   # 13670 weights + 1280 KV (Mistral 24B arch, ctx 8192) + 600
+run_mb = 16190   # 13670 weights + 1920 KV (40 layers x 8 KV x hd128 = 160 KiB/tok; 16384 would be 16830 and past 16 GB) + 600
 needs_avx2 = true
 min_budget = { gpu = 16384, unified = 16384 }
 tok_s = { gpu = 32, unified = 14, cpu = 4 }
 tok_s_tier = { T4 = 41 }
+gaming_safe = false
+estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+[[model]]
+id = "qwen3.6-35b-a3b-abliterated-q2_k"
+name = "Qwen3.6 35B-A3B (16 GB)"
+repo = "huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF"
+file = "Huihui-Qwen3.6-35B-A3B-abliterated-ggml-model-Q2_K.gguf"
+sha256 = "85f446fff19406aa81bd8333433fa11921038ba1b80523c2432d82623b73fb73"
+download_mb = 12633
+quant = "Q2_K"
+license = "Apache-2.0"
+kind = "chat"
+use_case = "coding"
+optional = true
+abliterated = { by = "huihui-ai", method = "abliteration" }
+badges = ["tools", "moe", "reasoning"]
+skills = { quality = 74, chat = 72, code = 82, reason = 78, write = 68, long = 80, adult = 70 }
+tier = "T3"
+route = "local:small"
+ctx_default = 65536
+params_b = 35
+active_b = 3
+ctx_max = 262_144
+run_mb = 14513   # 12633 weights (13.2 GB) + 1280 KV (~20 KiB/tok at 65536) + 600; the repo Q3_K is 17.2 GB and does not fit
+needs_avx2 = true
+min_budget = { gpu = 16384, unified = 16384, cpu = 16384 }
+tok_s = { gpu = 55, unified = 40, cpu = 22 }
+tok_s_tier = { T3 = 210, T4 = 328 }
 gaming_safe = false
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
 [[model]]
@@ -791,6 +823,27 @@ tok_s = { gpu = 130, unified = 55, cpu = 28 }
 tok_s_tier = { T1 = 51, T2 = 79, T3 = 168, T4 = 263 }
 gaming_safe = true
 estimate = ["params_b", "active_b", "ctx_max", "tok_s_tier"]
+[[model]]
+id = "qwen3.6-35b-a3b-mtp"
+name = "Qwen3.6 35B-A3B MTP heads"
+repo = "IsValorum/Qwen3.6-35B-A3B-MTP-APEX-I-MiniPlus-V2.1-Abliterated-GGUF"
+file = "mtp-Qwen3.6-35B-A3B-Q4_0.gguf"
+sha256 = "623351aeccfb9a26991ea6a7f0d24ef993a975fb2a508e4d95d3be1f72bf58da"
+download_mb = 1135
+quant = "Q4_0"
+license = "Apache-2.0"
+kind = "drafter"
+use_case = "reasoning"
+pairs_with = "qwen3.6-35b-a3b-heretic-q4_k_m"
+abliterated = { by = "IsValorum", method = "abliteration" }
+badges = []
+tier = "T4"
+route = "local:small"
+ctx_default = 32768
+run_mb = 1391
+needs_avx2 = true
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }
 [[model]]
 id = "gemma-4-31b-it-abliterated-mtp"
 name = "Gemma 4 31B draft model"
