@@ -169,11 +169,9 @@ pub fn before_write(path: &Path) {
     let Some(active) = ACTIVE.with(|slot| slot.borrow().clone()) else {
         return;
     };
-    let home = grokhub_core::user_home()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_default();
+    let homes = home_keys();
     let key = path_key(path);
-    if key.is_empty() || grokhub_core::rewind_sensitive(&key, &home) {
+    if key.is_empty() || sensitive(&key, &homes) || sensitive(&canonical_key(path), &homes) {
         return;
     }
     let step_dir = step_dir(&active.conversation, active.step);
@@ -690,7 +688,7 @@ fn snapshot_root_ok(key: &str, home: &str) -> bool {
         .strip_prefix("//?/")
         .unwrap_or(key)
         .trim_end_matches('/');
-    let home = home.trim_end_matches('/');
+    let home = home.strip_prefix("//?/").unwrap_or(home).trim_end_matches('/');
     let drive_root = plain.len() <= 2 && plain.ends_with(':');
     !(plain.is_empty()
         || drive_root
@@ -734,11 +732,9 @@ fn walk_files(root: &Path, limit: usize) -> (Vec<(PathBuf, String)>, bool) {
 }
 
 fn take_snapshot(conv: &str, root: &Path, command: &str) -> Option<Snapshot> {
-    let home = grokhub_core::user_home()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_default();
+    let homes = home_keys();
     let root_key = path_key(root);
-    if !snapshot_root_ok(&root_key, &home) {
+    if !homes.iter().all(|h| snapshot_root_ok(&root_key, h)) {
         return None;
     }
     let objects = conv_dir(conv).join("objects");
@@ -755,7 +751,7 @@ fn take_snapshot(conv: &str, root: &Path, command: &str) -> Option<Snapshot> {
         let key = path_key(&path);
         let meta = fs::metadata(&path).ok();
         let len = meta.as_ref().map(|m| m.len());
-        if grokhub_core::rewind_sensitive(&key, &home)
+        if sensitive(&key, &homes)
             || len.is_none_or(|n| n > SNAPSHOT_MAX_FILE_BYTES)
         {
             left_out.push(rel);
@@ -827,14 +823,14 @@ fn restore_snapshot(
     conv: &str,
     snap: &Snapshot,
     stash: &Path,
-    home: &str,
+    homes: &[String],
 ) -> Result<(usize, usize), String> {
     let root = PathBuf::from(snap.root.replace('/', std::path::MAIN_SEPARATOR_STR));
     let objects = conv_dir(conv).join("objects");
     let mut written = 0usize;
     for f in &snap.files {
         let path = root.join(f.path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        if grokhub_core::rewind_sensitive(&path_key(&path), home) {
+        if sensitive(&path_key(&path), homes) {
             continue;
         }
         let bytes = fs::read(objects.join(&f.object))
@@ -861,7 +857,7 @@ fn restore_snapshot(
     let (now, _) = walk_files(&root, SNAPSHOT_MAX_FILES.saturating_mul(2));
     for (path, rel) in now {
         let key = path_key(&path);
-        if known.contains(rel.as_str()) || grokhub_core::rewind_sensitive(&key, home) {
+        if known.contains(rel.as_str()) || sensitive(&key, homes) {
             continue;
         }
         // A big new file stays where it is: the undo snapshot can't hold it.
@@ -1028,20 +1024,18 @@ pub fn restore_step(conversation_id: &str, step: u64) -> Result<String, String> 
     }
     ACTIVE.with(|slot| *slot.borrow_mut() = None);
 
-    let home = grokhub_core::user_home()
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_default();
+    let homes = home_keys();
     let mut restored = 0usize;
     let mut removed = 0usize;
     // The snapshot is the state before the step's first shell command; a
     // file's own copy, taken before any edit, is older still, so it goes last.
     if let Some(snap) = &manifest.snapshot {
-        let (written, moved) = restore_snapshot(&conv, snap, &src_dir.join("removed"), &home)?;
+        let (written, moved) = restore_snapshot(&conv, snap, &src_dir.join("removed"), &homes)?;
         restored += written;
         removed += moved;
     }
     for entry in &manifest.files {
-        if grokhub_core::rewind_sensitive(&entry.path, &home) {
+        if sensitive(&entry.path, &homes) {
             continue;
         }
         let path = PathBuf::from(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -1162,6 +1156,27 @@ fn sanitize_id(raw: &str) -> String {
 
 fn path_key(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// Every spelling of the user's home a path key may start with: as set, and
+/// canonical (a Windows short name like `RUNNER~1`, a verbatim prefix, a link).
+fn home_keys() -> Vec<String> {
+    let Some(home) = grokhub_core::user_home() else {
+        return vec![String::new()];
+    };
+    let mut keys = vec![path_key(&home)];
+    if let Ok(full) = home.canonicalize() {
+        let full = path_key(&full);
+        if !keys.contains(&full) {
+            keys.push(full);
+        }
+    }
+    keys
+}
+
+/// `key` is a sensitive `$HOME` leaf under any spelling of home.
+fn sensitive(key: &str, homes: &[String]) -> bool {
+    homes.iter().any(|h| grokhub_core::rewind_sensitive(key, h))
 }
 
 /// `path` spelled the way a snapshot's canonical root is, so a short or
@@ -1331,6 +1346,35 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// Home set as one spelling (here a link; on Windows a short name like
+    /// `RUNNER~1`) and the key written through another is still left out.
+    #[cfg(unix)]
+    #[test]
+    fn a_sensitive_path_under_another_spelling_of_home_is_never_copied() {
+        let (base, _ws, _guard) = scratch("sens-link");
+        let real_home = base.join("home");
+        let ssh = real_home.join(".ssh").join("id_test_checkpoint");
+        fs::create_dir_all(ssh.parent().unwrap()).unwrap();
+        fs::write(&ssh, b"secret-key-material").unwrap();
+        let link = base.join("home-link");
+        std::os::unix::fs::symlink(&real_home, &link).unwrap();
+
+        let prev_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &link) };
+        assert_eq!(begin_step("conv-l"), Some(1));
+        before_write(&ssh);
+        let m = load_manifest(&step_dir("conv-l", 1));
+        match prev_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        assert!(
+            m.as_ref().map(|m| m.files.is_empty()).unwrap_or(true),
+            "sensitive must not be copied: {m:?}"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn sensitive_paths_are_never_copied() {
         let (base, _ws, _guard) = scratch("sens");
@@ -1339,8 +1383,11 @@ mod tests {
         fs::create_dir_all(ssh.parent().unwrap()).unwrap();
         fs::write(&ssh, b"secret-key-material").unwrap();
 
+        // Windows reads home from USERPROFILE first.
         let prev_home = std::env::var_os("HOME");
+        let prev_profile = std::env::var_os("USERPROFILE");
         unsafe { std::env::set_var("HOME", &fake_home) };
+        unsafe { std::env::set_var("USERPROFILE", &fake_home) };
 
         assert_eq!(begin_step("conv-c"), Some(1));
         before_write(&ssh);
@@ -1351,9 +1398,11 @@ mod tests {
             "sensitive must not be copied: {m:?}"
         );
 
-        match prev_home {
-            Some(v) => unsafe { std::env::set_var("HOME", v) },
-            None => unsafe { std::env::remove_var("HOME") },
+        for (name, prev) in [("HOME", prev_home), ("USERPROFILE", prev_profile)] {
+            match prev {
+                Some(v) => unsafe { std::env::set_var(name, v) },
+                None => unsafe { std::env::remove_var(name) },
+            }
         }
         let _ = fs::remove_dir_all(&base);
     }
@@ -1729,6 +1778,8 @@ mod tests {
         assert!(!snapshot_root_ok("C:", "C:/Users/v"));
         assert!(!snapshot_root_ok("//?/C:/Users/V", "C:/Users/v"));
         assert!(!snapshot_root_ok("/home/v/.ssh", "/home/v"));
+        assert!(!snapshot_root_ok("//?/C:/Users/V", "//?/C:/Users/v"));
+        assert!(!snapshot_root_ok("//?/C:/Users/V/.ssh", "C:/Users/v"));
         assert!(snapshot_root_ok("/home/v/code/app", "/home/v"));
         assert!(snapshot_root_ok("//?/C:/Users/v/code", "C:/Users/v"));
     }
