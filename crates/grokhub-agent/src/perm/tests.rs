@@ -669,6 +669,28 @@ fn claude_symlink_settings_are_ignored() {
 }
 
 #[test]
+fn a_grant_that_cannot_be_stored_returns_the_error() {
+    let root = ws_file("grant-store-fail");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let blocked = root.join("not-a-dir");
+    std::fs::write(&blocked, "x").unwrap();
+    let _guard = ConfigGuard::set(&blocked);
+    let err =
+        remember_allow_always(&project, "run_terminal_command", &shell("echo stick")).unwrap_err();
+    assert!(!err.is_empty(), "{err}");
+    assert!(!session_may_stick(
+        "run_terminal_command",
+        &shell("rm -rf /")
+    ));
+    assert!(session_may_stick(
+        "run_terminal_command",
+        &shell("echo stick")
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn grants_persist_and_reload_and_skip_dangerous() {
     let root = ws_file("grants");
     let project = root.join("proj");
