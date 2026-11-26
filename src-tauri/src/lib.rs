@@ -5768,6 +5768,53 @@ fn take_skill_install_offer() -> Option<grokhub_core::SkillInstallPreview> {
 }
 
 #[tauri::command]
+async fn archive_skill(state: State<'_, ShellState>, name: String) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::archive(&dir, &workspace, home.as_deref(), &name)).await?
+}
+
+#[tauri::command]
+async fn restore_skill(state: State<'_, ShellState>, name: String) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::restore(&dir, &workspace, home.as_deref(), &name)).await?
+}
+
+#[tauri::command]
+async fn set_skill_pinned(
+    state: State<'_, ShellState>,
+    name: String,
+    pinned: bool,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::set_pinned(&dir, &workspace, home.as_deref(), &name, pinned)).await?
+}
+
+#[tauri::command]
+async fn set_skill_locked(
+    state: State<'_, ShellState>,
+    name: String,
+    locked: bool,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::set_locked(&dir, &workspace, home.as_deref(), &name, locked)).await?
+}
+
+#[tauri::command]
+async fn set_skill_curator_enabled(
+    state: State<'_, ShellState>,
+    enabled: bool,
+) -> Result<skills::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::set_curator_enabled(&dir, &workspace, home.as_deref(), enabled))
+        .await?
+}
+
+#[tauri::command]
 async fn get_library() -> Result<library::Page, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
     off_main(|| library::page(grokhub_core::steam::detect_root().as_deref())).await
@@ -9988,6 +10035,11 @@ pub fn run() {
             create_skill,
             get_skill_detail,
             edit_skill,
+            archive_skill,
+            restore_skill,
+            set_skill_pinned,
+            set_skill_locked,
+            set_skill_curator_enabled,
             search_skills_hub,
             install_skills_hub,
             get_skill_library,

@@ -79,6 +79,7 @@ mod session;
 mod session_tools;
 mod shell_redirect;
 pub mod ship_tree;
+pub mod skill_curator;
 pub mod skill_write;
 mod skills;
 mod sse;

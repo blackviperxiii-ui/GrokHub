@@ -223,6 +223,7 @@ pub mod shortcuts;
 pub mod situation;
 pub mod skill;
 pub mod skill_bundles;
+pub mod skill_curator;
 pub mod skill_install_link;
 pub mod skill_pack;
 pub mod skills_hub;
@@ -713,6 +714,14 @@ pub use skill::{
 pub use skill_bundles::{
     builtin_bundles, bundle_by_slug, bundle_load_prompt, list_bundles, parse_bundle_yaml,
     skill_bundles_dir, write_bundle_yaml, SkillBundle,
+};
+pub use skill_curator::{
+    archived_dir, build_report, build_row, curator_report_due, is_self_made, lifecycle, load_store,
+    note_view, save_store, set_locked, set_pinned, should_archive, CuratorReport, CuratorRow,
+    CuratorSkillEntry, CuratorSkillInput, CuratorStore, SkillCuratorSettings, SkillLifecycle,
+    CARD_SOURCE_PREFIX as SKILL_CURATOR_CARD_PREFIX, CARD_TITLE as SKILL_CURATOR_CARD_TITLE,
+    CURATOR_FILE, DAY_MS as SKILL_CURATOR_DAY_MS, DEFAULT_STALE_DAYS, LIBRARY_ORIGIN,
+    SETTINGS_KEY as SKILL_CURATOR_SETTINGS_KEY,
 };
 pub use skill_install_link::{
     bundles_dir, is_skill_install_url, parse_skill_install_url, preview_skill_install,

@@ -4122,6 +4122,19 @@ export interface SkillRow {
   category?: string;
   tags?: string[];
   pack?: string;
+  /** Curator: Skills-page views. */
+  views?: number;
+  /** Curator: runtime uses. */
+  uses?: number;
+  /** Curator: create/modify ledger lines. */
+  patches?: number;
+  lastUsedMs?: number;
+  pinned?: boolean;
+  locked?: boolean;
+  archived?: boolean;
+  /** `active` / `stale` / `archived`. */
+  lifecycle?: string;
+  curatorEnabled?: boolean;
 }
 
 export interface SkillLibraryPack {
@@ -4169,6 +4182,29 @@ export function getSkills(): Promise<SkillPage> {
 /** Switch a skill on or off for chat. Desktop only; returns the new page. */
 export function setSkillOn(name: string, on: boolean): Promise<SkillPage> {
   return invoke<SkillPage>("set_skill_on", { name, on });
+}
+
+/** Archive a cabin skill (never deletes). Desktop only. */
+export function archiveSkill(name: string): Promise<SkillPage> {
+  return invoke<SkillPage>("archive_skill", { name });
+}
+
+/** Restore an archived cabin skill in one click. Desktop only. */
+export function restoreSkill(name: string): Promise<SkillPage> {
+  return invoke<SkillPage>("restore_skill", { name });
+}
+
+export function setSkillPinned(name: string, pinned: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_pinned", { name, pinned });
+}
+
+export function setSkillLocked(name: string, locked: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_locked", { name, locked });
+}
+
+/** Curator master switch in app.json; applies without restart. */
+export function setSkillCuratorEnabled(enabled: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_curator_enabled", { enabled });
 }
 
 /** The shell finds the folder from the source and name itself. */

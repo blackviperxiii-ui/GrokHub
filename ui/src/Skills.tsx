@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  archiveSkill,
   createSkill,
   editSkill,
   getSkillDetail,
@@ -9,8 +10,12 @@ import {
   installLibrarySkill,
   installSkillsHub,
   openSkillFolder,
+  restoreSkill,
   searchSkillsHub,
+  setSkillCuratorEnabled,
+  setSkillLocked,
   setSkillOn,
+  setSkillPinned,
   type SkillDetail,
   type SkillLibraryItem,
   type SkillLibraryPage,
@@ -38,6 +43,17 @@ export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
 export const SKILLS_EMPTY = "No skills found yet.";
 export const SKILLS_NONE_MATCHED = "No skills match that search.";
 export const SKILL_OFF_NOTE = "Off, chat won't use it.";
+export const SKILL_CURATOR_NOTE =
+  "The skill curator tracks views, uses and patches for self-made skills. Unused skills go stale, then archive — never delete. Pin or lock to keep one active.";
+
+/** Stats line for curator-tracked cabin skills. */
+export function skillCuratorStats(row: SkillRow): string {
+  const views = row.views ?? 0;
+  const uses = row.uses ?? 0;
+  const patches = row.patches ?? 0;
+  const life = row.lifecycle ? ` · ${row.lifecycle}` : "";
+  return `${views} views · ${uses} uses · ${patches} patches${life}`;
+}
 
 /** Rows whose name, description, trigger, category or tags hold `query`, ignoring case. */
 export function filterSkills(rows: SkillRow[], query: string): SkillRow[] {
@@ -182,6 +198,51 @@ export function Skills({
     }
   }
 
+  async function archiveRow(row: SkillRow) {
+    try {
+      setRows((await archiveSkill(row.name)).rows);
+      ok(`Archived ${row.name}. Restore anytime — the files stay.`);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function restoreRow(row: SkillRow) {
+    try {
+      setRows((await restoreSkill(row.name)).rows);
+      ok(`Restored ${row.name}.`);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function pinRow(row: SkillRow, pinned: boolean) {
+    try {
+      setRows((await setSkillPinned(row.name, pinned)).rows);
+      clear();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function lockRow(row: SkillRow, locked: boolean) {
+    try {
+      setRows((await setSkillLocked(row.name, locked)).rows);
+      clear();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  async function flipCurator(enabled: boolean) {
+    try {
+      setRows((await setSkillCuratorEnabled(enabled)).rows);
+      ok(enabled ? "Skill curator on." : "Skill curator off.");
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function saveNew(event: FormEvent) {
     event.preventDefault();
     try {
@@ -286,6 +347,10 @@ export function Skills({
   const libraryItems = library
     ? filterLibrarySkills(library.items, libCategory, libQuery)
     : [];
+  const curatorOn =
+    rows?.some((r) => r.source === "cabin" && r.curatorEnabled) ?? true;
+  const archivedShown = shown.filter((r) => r.source === "cabin" && r.archived);
+  const activeShown = shown.filter((r) => !(r.source === "cabin" && r.archived));
 
   return (
     <section className="skills" aria-label="Skills">
@@ -316,6 +381,15 @@ export function Skills({
         using it. Make a new one with New skill, or Edit one of this app's own
         to change it.
       </p>
+      {!remote && (
+        <div className="skill-group" aria-label="Skill curator">
+          <h3>Skill curator</h3>
+          <p className="note">{SKILL_CURATOR_NOTE}</p>
+          <Toggle checked={curatorOn} onChange={(on) => void flipCurator(on)}>
+            Curator on
+          </Toggle>
+        </div>
+      )}
       {!remote && library && library.items.length > 0 && (
         <section className="skill-group" aria-label="Skills Library">
           <h3>Skills Library</h3>
@@ -526,7 +600,7 @@ export function Skills({
         <p className="empty">{SKILLS_NONE_MATCHED}</p>
       )}
       {SKILL_GROUPS.map(({ source, label }) => {
-        const group = shown.filter((row) => row.source === source);
+        const group = activeShown.filter((row) => row.source === source);
         if (group.length === 0) return null;
         return (
           <div key={source} className="skill-group">
@@ -548,16 +622,35 @@ export function Skills({
                     <div className="card-status">{row.description}</div>
                   )}
                   <div className="card-detail-line">{row.trigger}</div>
+                  {row.source === "cabin" && (
+                    <div className="card-status">{skillCuratorStats(row)}</div>
+                  )}
                   {!row.on && (
                     <div className="card-status">{SKILL_OFF_NOTE}</div>
                   )}
-                  {!remote && (
+                  {!remote && !row.archived && (
                     <Toggle
                       checked={row.on}
                       onChange={(on) => void switchSkill(row, on)}
                     >
                       Chat can use it
                     </Toggle>
+                  )}
+                  {!remote && row.source === "cabin" && (
+                    <>
+                      <Toggle
+                        checked={!!row.pinned}
+                        onChange={(on) => void pinRow(row, on)}
+                      >
+                        Pin
+                      </Toggle>
+                      <Toggle
+                        checked={!!row.locked}
+                        onChange={(on) => void lockRow(row, on)}
+                      >
+                        Lock
+                      </Toggle>
+                    </>
                   )}
                   <div className="card-buttons">
                     {row.on && (
@@ -572,6 +665,15 @@ export function Skills({
                         onClick={() => void startEdit(row)}
                       >
                         Edit
+                      </button>
+                    )}
+                    {!remote && row.source === "cabin" && (
+                      <button
+                        type="button"
+                        className="quiet"
+                        onClick={() => void archiveRow(row)}
+                      >
+                        Archive
                       </button>
                     )}
                     {!remote && row.folder && (
@@ -635,6 +737,31 @@ export function Skills({
           </div>
         );
       })}
+      {!remote && archivedShown.length > 0 && (
+        <div className="skill-group" aria-label="Archived skills">
+          <h3>Archived</h3>
+          <ul className="rows" aria-label="Archived skills">
+            {archivedShown.map((row) => (
+              <li
+                key={`archived:${row.name}`}
+                className="card skill"
+                aria-label={row.name}
+              >
+                <div className="card-title">{row.name}</div>
+                {row.description && (
+                  <div className="card-status">{row.description}</div>
+                )}
+                <div className="card-status">{skillCuratorStats(row)}</div>
+                <div className="card-buttons">
+                  <button type="button" onClick={() => void restoreRow(row)}>
+                    Restore
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }

@@ -61,6 +61,29 @@ pub struct Row {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pack: String,
+    /// Curator: page views of this self-made skill.
+    #[serde(default)]
+    pub views: u32,
+    /// Curator: runtime uses from skill_metrics.
+    #[serde(default)]
+    pub uses: u32,
+    /// Curator: create/modify lines in the skill ChangeLedger.
+    #[serde(default)]
+    pub patches: u32,
+    #[serde(default)]
+    pub last_used_ms: u64,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub archived: bool,
+    /// `active` / `stale` / `archived`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lifecycle: String,
+    /// Master curator switch from `app.json` (applies without restart).
+    #[serde(default)]
+    pub curator_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -83,38 +106,63 @@ fn read_capped(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-/// `{config}/skills/*/SKILL.md`, as the cabin lists them. One that can't be
-/// read, holds a secret-looking line or names nothing is skipped.
-fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
-    let Ok(dirs) = fs::read_dir(config_dir.join("skills")) else {
-        return Vec::new();
+fn cabin_row_from_dir(
+    skills_dir: &Path,
+    dir: &Path,
+    archived: bool,
+    curator: Option<&grokhub_core::CuratorRow>,
+    curator_enabled: bool,
+) -> Option<(Row, PathBuf)> {
+    let raw = read_capped(&dir.join("SKILL.md"))?;
+    if !grokhub_core::skill_safe(&raw) {
+        return None;
+    }
+    let skill = grokhub_core::parse_skill_md(&raw);
+    let meta = grokhub_core::parse_skill_meta(&raw);
+    let name = skill.name.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let trigger = match skill.trigger.trim() {
+        "" => by_name(&name),
+        slash if slash.starts_with('/') => by_name(&name),
+        phrase => phrase.to_string(),
     };
-    let mut out = Vec::new();
-    for dir in dirs.flatten() {
-        let dir = dir.path();
-        let Some(raw) = read_capped(&dir.join("SKILL.md")) else {
-            continue;
-        };
-        if !grokhub_core::skill_safe(&raw) {
-            continue;
-        }
-        let skill = grokhub_core::parse_skill_md(&raw);
-        let meta = grokhub_core::parse_skill_meta(&raw);
-        let name = skill.name.trim().to_string();
-        if name.is_empty() {
-            continue;
-        }
-        // A slash line never reaches the model in the shell's chat, so a
-        // cabin `/command` trigger is asked for by name instead.
-        let trigger = match skill.trigger.trim() {
-            "" => by_name(&name),
-            slash if slash.starts_with('/') => by_name(&name),
-            phrase => phrase.to_string(),
-        };
-        let skills_dir = config_dir.join("skills");
-        let quarantined = grokhub_core::verify_and_record_skill(&skills_dir, &name, &raw).summary();
-        let row = Row {
-            on: quarantined.is_none() && !grokhub_agent::skill_is_off_in(&skills_dir, &name),
+    let quarantined = if archived {
+        None
+    } else {
+        grokhub_core::verify_and_record_skill(skills_dir, &name, &raw).summary()
+    };
+    let (views, uses, patches, last_used_ms, pinned, locked, lifecycle) = if let Some(c) = curator {
+        (
+            c.views,
+            c.uses,
+            c.patches,
+            c.last_used_ms,
+            c.pinned,
+            c.locked,
+            c.lifecycle.as_str().to_string(),
+        )
+    } else {
+        (
+            0,
+            0,
+            0,
+            meta.last_used_at,
+            false,
+            false,
+            if archived {
+                "archived".into()
+            } else {
+                String::new()
+            },
+        )
+    };
+    Some((
+        Row {
+            on: !archived
+                && quarantined.is_none()
+                && !grokhub_agent::skill_is_off_in(skills_dir, &name),
             quarantined,
             category: meta.category,
             tags: meta.tags,
@@ -124,8 +172,65 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
             source: Source::Cabin,
             folder: dir.display().to_string(),
             name,
-        };
-        out.push((row, dir));
+            views,
+            uses,
+            patches,
+            last_used_ms,
+            pinned,
+            locked,
+            archived,
+            lifecycle,
+            curator_enabled,
+        },
+        dir.to_path_buf(),
+    ))
+}
+
+/// `{config}/skills/*/SKILL.md`, as the cabin lists them. One that can't be
+/// read, holds a secret-looking line or names nothing is skipped. Archived
+/// skills under `skills/.archived/` are listed too for one-click restore.
+fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
+    let skills_dir = config_dir.join("skills");
+    let now = grokhub_core::now_ms();
+    let curator_enabled = grokhub_agent::skill_curator::settings(config_dir).enabled;
+    let curator_rows = grokhub_agent::skill_curator::rows(config_dir, now);
+    let by_id: std::collections::BTreeMap<String, grokhub_core::CuratorRow> = curator_rows
+        .into_iter()
+        .map(|r| (r.skill_id.clone(), r))
+        .collect();
+    let mut out = Vec::new();
+    if let Ok(dirs) = fs::read_dir(&skills_dir) {
+        for dir in dirs.flatten() {
+            let dir = dir.path();
+            let name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+            if name.as_deref().is_some_and(|n| n.starts_with('.')) {
+                continue;
+            }
+            let key = name
+                .as_deref()
+                .map(grokhub_core::skill_dir_name)
+                .unwrap_or_default();
+            if let Some(row) =
+                cabin_row_from_dir(&skills_dir, &dir, false, by_id.get(&key), curator_enabled)
+            {
+                out.push(row);
+            }
+        }
+    }
+    let archived_root = grokhub_core::archived_dir(&skills_dir);
+    if let Ok(dirs) = fs::read_dir(&archived_root) {
+        for dir in dirs.flatten() {
+            let dir = dir.path();
+            let key = dir
+                .file_name()
+                .map(|n| grokhub_core::skill_dir_name(&n.to_string_lossy()))
+                .unwrap_or_default();
+            if let Some(row) =
+                cabin_row_from_dir(&skills_dir, &dir, true, by_id.get(&key), curator_enabled)
+            {
+                out.push(row);
+            }
+        }
     }
     out.sort_by(|a, b| a.0.name.cmp(&b.0.name));
     out
@@ -189,6 +294,15 @@ fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row,
                     .map(|d| d.display().to_string())
                     .unwrap_or_default(),
                 name: skill.name,
+                views: 0,
+                uses: 0,
+                patches: 0,
+                last_used_ms: meta.last_used_at,
+                pinned: false,
+                locked: false,
+                archived: meta.archived,
+                lifecycle: String::new(),
+                curator_enabled: false,
             },
             dir,
         ));
@@ -284,7 +398,7 @@ fn cabin_skill(
     Ok((skill, dir))
 }
 
-/// What Edit shows for the cabin skill `name`.
+/// What Edit shows for the cabin skill `name`. Counts as one curator view.
 pub fn detail(
     config_dir: &Path,
     workspace: &Path,
@@ -292,12 +406,88 @@ pub fn detail(
     name: &str,
 ) -> Result<Detail, String> {
     let (skill, _) = cabin_skill(config_dir, workspace, home, name)?;
+    let _ = grokhub_agent::skill_curator::record_view(config_dir, &skill.name);
     Ok(Detail {
         name: skill.name,
         description: skill.description,
         trigger: skill.trigger,
         instructions: skill.instructions,
     })
+}
+
+/// Archive a cabin skill (move to `.archived/`, never delete).
+pub fn archive(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+) -> Result<Page, String> {
+    let _ = load(config_dir, workspace, home);
+    grokhub_agent::skill_curator::archive_skill(
+        config_dir,
+        name,
+        grokhub_agent::harness::Origin::User,
+        "archived from the Skills page",
+        grokhub_core::now_ms(),
+    )?;
+    Ok(load(config_dir, workspace, home))
+}
+
+/// Restore an archived cabin skill in one click.
+pub fn restore(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+) -> Result<Page, String> {
+    grokhub_agent::skill_curator::restore_skill(
+        config_dir,
+        name,
+        grokhub_agent::harness::Origin::User,
+        "restored from the Skills page",
+    )?;
+    Ok(load(config_dir, workspace, home))
+}
+
+pub fn set_pinned(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+    pinned: bool,
+) -> Result<Page, String> {
+    grokhub_agent::skill_curator::pin(config_dir, name, pinned)?;
+    Ok(load(config_dir, workspace, home))
+}
+
+pub fn set_locked(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    name: &str,
+    locked: bool,
+) -> Result<Page, String> {
+    grokhub_agent::skill_curator::lock(config_dir, name, locked)?;
+    Ok(load(config_dir, workspace, home))
+}
+
+/// Flip the curator master switch in `app.json` (takes effect without restart).
+pub fn set_curator_enabled(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    enabled: bool,
+) -> Result<Page, String> {
+    let settings = grokhub_agent::skill_curator::settings(config_dir);
+    let value = serde_json::json!({
+        "enabled": enabled,
+        "staleDays": settings.stale_days,
+    });
+    grokhub_core::app_json::patch(
+        config_dir,
+        &[(grokhub_core::SKILL_CURATOR_SETTINGS_KEY, value)],
+    )?;
+    Ok(load(config_dir, workspace, home))
 }
 
 /// Make a cabin skill from a name and what it should do, then list again.

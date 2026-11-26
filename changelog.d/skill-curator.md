@@ -1,0 +1,1 @@
+- Skills: curator tracks views, uses and patches for self-made skills, archives stale ones (never deletes), pin/lock, and a weekly Pulse report with a clear off switch.
