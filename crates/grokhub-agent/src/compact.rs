@@ -3044,7 +3044,8 @@ mod tests {
         let mut content = vec![ContentPart::InputText(
             "why does the dock flicker in these?".into(),
         )];
-        content.extend((0..6).map(|_| ContentPart::InputImage("data:image/png;base64,QQ==".into())));
+        content
+            .extend((0..6).map(|_| ContentPart::InputImage("data:image/png;base64,QQ==".into())));
         let ask = InputItem::Message {
             role: "user".into(),
             content,
@@ -3068,9 +3069,10 @@ mod tests {
         assert_eq!(compacted.last(), Some(&ask));
         assert_eq!(compacted.iter().filter(|item| **item == ask).count(), 1);
         // No budget is left for the tool results after it.
-        assert!(!compacted
-            .iter()
-            .any(|i| matches!(i, InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. })));
+        assert!(!compacted.iter().any(|i| matches!(
+            i,
+            InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. }
+        )));
     }
 
     #[test]
