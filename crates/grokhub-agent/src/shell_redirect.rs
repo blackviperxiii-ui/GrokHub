@@ -10,7 +10,8 @@
 //! command, not a redirection, so it is not read here.
 //!
 //! Only the text is read: what a program writes on its own (`sed -i`, `cp`,
-//! a script) is the caller's to judge.
+//! a script) is the caller's to judge. [`code`] gives the same text with
+//! that data blanked, so a caller can read the commands themselves.
 
 /// One output redirection in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,8 +34,26 @@ const SINKS: &[&str] = &[
 
 /// Every output redirection in `cmd`, in text order.
 pub(crate) fn redirects(cmd: &str) -> Vec<Redirect> {
+    scan(cmd).0
+}
+
+/// `cmd` with its data blanked, byte for byte, so an offset in it is the
+/// same offset in `cmd`: quoted text becomes `_` (still one word), and a
+/// comment, a here-document (its `<<WORD` and its body), an output
+/// redirection (its operator and target) and a line continuation become
+/// spaces. What is left is the commands, their separators and their plain
+/// words: `git commit -m "fix test" && cargo test 2>&1 | tail` reads
+/// `git commit -m __________ && cargo test      | tail`.
+pub(crate) fn code(cmd: &str) -> String {
+    scan(cmd).1
+}
+
+/// The redirections in `cmd` and its [`code`].
+fn scan(cmd: &str) -> (Vec<Redirect>, String) {
     let chars: Vec<(usize, char)> = cmd.char_indices().collect();
     let at = |i: usize| chars.get(i).map(|&(_, c)| c);
+    let byte = |i: usize| chars.get(i).map_or(cmd.len(), |&(b, _)| b);
+    let mut code = cmd.as_bytes().to_vec();
     let mut out = Vec::new();
     // Here-documents opened on this line: their bodies start at its end.
     let mut heredocs: Vec<(String, bool)> = Vec::new();
@@ -43,26 +62,37 @@ pub(crate) fn redirects(cmd: &str) -> Vec<Redirect> {
     while let Some(c) = at(i) {
         match c {
             '\'' | '"' => {
-                i = past_quote(&chars, i);
+                let end = past_quote(&chars, i);
+                blank(&mut code, byte(i), byte(end), b'_');
+                i = end;
                 word_start = false;
             }
             '\\' => {
+                // `\` at a line end joins the next line to this command.
+                if at(i + 1) == Some('\n') {
+                    code[byte(i)..byte(i + 2)].fill(b' ');
+                }
                 i += 2;
                 word_start = false;
             }
             '#' if word_start => {
+                let from = i;
                 while at(i).is_some_and(|c| c != '\n') {
                     i += 1;
                 }
+                blank(&mut code, byte(from), byte(i), b' ');
             }
             '\n' => {
                 i += 1;
                 for (delim, tabs) in heredocs.drain(..) {
+                    let from = i;
                     i = past_heredoc(cmd, &chars, i, &delim, tabs);
+                    blank(&mut code, byte(from), byte(i), b' ');
                 }
                 word_start = true;
             }
             '<' => {
+                let from = i;
                 let run = (i..).take_while(|&k| at(k) == Some('<')).count();
                 i += run;
                 if run == 2 {
@@ -74,6 +104,7 @@ pub(crate) fn redirects(cmd: &str) -> Vec<Redirect> {
                     // `$((1<<2))` shifts; a here-document names a word.
                     if !delim.is_empty() && !delim.bytes().all(|b| b.is_ascii_digit()) {
                         heredocs.push((delim, tabs));
+                        blank(&mut code, byte(from), byte(end), b' ');
                     }
                     i = end;
                 }
@@ -96,6 +127,7 @@ pub(crate) fn redirects(cmd: &str) -> Vec<Redirect> {
                     j += 1;
                 }
                 let (target, end) = word(&chars, skip_blanks(&chars, j));
+                blank(&mut code, byte(start), byte(end), b' ');
                 i = end;
                 word_start = false;
                 if target.is_empty() {
@@ -118,7 +150,20 @@ pub(crate) fn redirects(cmd: &str) -> Vec<Redirect> {
             }
         }
     }
-    out
+    // Only whole characters were blanked, with ASCII, so this is still UTF-8.
+    let code = String::from_utf8(code).unwrap_or_default();
+    (out, code)
+}
+
+/// Sets `code[from..to]` to `fill`. A blank keeps line ends, so the lines
+/// stay apart; a quote's `_` doesn't, so a quoted line break stays inside
+/// its word.
+fn blank(code: &mut [u8], from: usize, to: usize, fill: u8) {
+    for b in &mut code[from..to] {
+        if fill == b'_' || *b != b'\n' {
+            *b = fill;
+        }
+    }
 }
 
 /// Where the redirection at the `>` at `i` starts: a descriptor written
@@ -284,6 +329,34 @@ mod tests {
         );
         // A redirect inside a process substitution still writes.
         assert_eq!(files("tee >(gzip > x.gz)"), [file("x.gz")]);
+    }
+
+    #[test]
+    fn the_code_view_blanks_data_and_keeps_every_offset() {
+        assert_eq!(
+            code(r#"git commit -m "fix test" && cargo test 2>&1 | tail"#),
+            "git commit -m __________ && cargo test      | tail"
+        );
+        let script = "cat > a.md <<'EOF'\nx > y\nEOF\nls";
+        assert_eq!(
+            code(script),
+            format!(
+                "cat{}\n{}\n{}\nls",
+                " ".repeat(15),
+                " ".repeat(5),
+                " ".repeat(3)
+            )
+        );
+        assert_eq!(code("ls # cargo test"), "ls             ");
+        assert_eq!(
+            code("cargo test \\\n  --workspace"),
+            "cargo test     --workspace"
+        );
+        // A quoted line break stays in its word; a multi-byte character keeps its bytes.
+        assert_eq!(code("echo 'a\nb'; ls"), "echo _____; ls");
+        let wide = r#"echo "héllo" > x"#;
+        assert_eq!(code(wide), "echo ________    ");
+        assert_eq!(code(wide).len(), wide.len());
     }
 
     #[test]

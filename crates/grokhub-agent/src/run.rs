@@ -7417,10 +7417,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Gap 3 in the real loop: a source edit is pushed back after a re-read,
-    /// and only a command that runs (here a test run) lets the turn end.
+    /// In the real loop: a source edit is pushed back after a re-read and
+    /// after an `echo` that only names a test, and only a command that runs
+    /// (here a build of the changed file) lets the turn end.
     #[test]
-    fn a_code_edit_is_pushed_back_until_a_test_runs_not_a_reread() {
+    fn a_code_edit_is_pushed_back_until_a_command_runs_it_not_a_reread() {
         let dir = workspace("verify-code");
         let conv = format!("verify-code-{}", std::process::id());
         crate::checkpoint::set_turn_brief(
@@ -7433,7 +7434,7 @@ mod tests {
                 vec![call(
                     "w1",
                     "write",
-                    r#"{"path":"src/handler.rs","content":"fn handler() {}"}"#,
+                    r#"{"path":"src/handler.rs","content":"pub fn handler() {}"}"#,
                 )],
             ),
             turn("Done.", Vec::new()),
@@ -7449,12 +7450,21 @@ mod tests {
             turn(
                 "",
                 vec![call(
-                    "s1",
+                    "e1",
                     "run_terminal_command",
                     r#"{"command":"echo test ok"}"#,
                 )],
             ),
-            turn("Done, and the test run passed.", Vec::new()),
+            turn("The tests are ok.", Vec::new()),
+            turn(
+                "",
+                vec![call(
+                    "s1",
+                    "run_terminal_command",
+                    r#"{"command":"rustc --crate-type lib src/handler.rs"}"#,
+                )],
+            ),
+            turn("Done, and it builds.", Vec::new()),
             turn("unused", Vec::new()),
         ]);
         let (out, history, _) = run_drive_in(
@@ -7464,12 +7474,13 @@ mod tests {
             chat(gate::PermMode::Always, true, false),
         );
         assert_eq!(out.stop, StopReason::EndTurn);
-        assert_eq!(script.seen.lock().unwrap().len(), 6);
+        assert_eq!(script.seen.lock().unwrap().len(), 8);
         let code_note = "Not verified since your last change to src/handler.rs. Run the tests, a build or a linter (or run the changed file) before you finish: a re-read or git status doesn't check code.";
         assert_eq!(
             user_texts(&history),
-            ["scan my computer", code_note, code_note]
+            ["scan my computer", code_note, code_note, code_note]
         );
+        assert!(dir.join("libhandler.rlib").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -7611,7 +7622,9 @@ mod tests {
                 vec![call(
                     "s1",
                     "run_terminal_command",
-                    r#"{"command":"echo test ok"}"#,
+                    // A test runner at the program position that passes with no
+                    // project (`echo test ok` only prints a word).
+                    r#"{"command":"cargo test --help"}"#,
                 )],
             ),
             turn("Done, and the test run passed.", Vec::new()),

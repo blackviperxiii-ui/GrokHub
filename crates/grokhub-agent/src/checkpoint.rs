@@ -6,8 +6,11 @@
 //! nor a change, such as running the changed file), any other file for a run
 //! or a re-read of that same path, a shell change for a run or a read-only
 //! look, and a desktop action for a run or a screenshot. A re-read, `git
-//! status`, `git diff` or `cat` never checks code. Every change waits on its
-//! own, by its full path. A careful or critical task, repair or research run
+//! status`, `git diff`, `cat` or `sed -n` never checks code. Each command of
+//! a shell line is read by its program and subcommand, with quoted text,
+//! comments and here-document bodies left out: a test word in a commit
+//! message or a grep pattern runs nothing. Every change waits on its own, by
+//! its full path. A careful or critical task, repair or research run
 //! must cover each item of its Brief's done list in the checklist, and a
 //! critical system change needs a backup. Only a run with a Brief (a chat or
 //! background turn) owes these. Nothing here caps steps; the drive's stall
@@ -45,13 +48,28 @@ const ITEM_CHARS: usize = 60;
 
 // Word lists are lowercase; commands are compared lowercased (PowerShell names too).
 
-/// Words in a shell command that make it a check run: tests, builds, linters.
+/// A command's program or one of its next two plain words that makes it a
+/// check run: tests, builds, linters (`cargo test`, `npm run lint`, `pytest`).
 const RUN_WORDS: &[&str] = &[
-    "test", "tests", "nextest", "pytest", "check", "build", "clippy", "lint", "eslint", "tsc",
-    "mypy", "ruff", "verify",
+    "test",
+    "tests",
+    "nextest",
+    "pytest",
+    "jest",
+    "vitest",
+    "check",
+    "build",
+    "clippy",
+    "lint",
+    "eslint",
+    "tsc",
+    "typecheck",
+    "mypy",
+    "ruff",
+    "verify",
 ];
-/// Words in a shell command that make it a read-only look: it checks a shell
-/// change, never code.
+/// A command's program, its subcommand or a `--version` that makes it a
+/// read-only look: it checks a shell change, never code.
 const LOOK_WORDS: &[&str] = &[
     "status",
     "is-active",
@@ -60,6 +78,190 @@ const LOOK_WORDS: &[&str] = &[
     "diff",
     "test-path",
     "get-service",
+];
+/// Programs that only show something (a file, a search, a listing, a
+/// value): a look, never a run, so they never check code. `sed`, `perl` and
+/// `ruby` with `-i` edit in place, and `find` with `-delete` or `-exec`
+/// acts; [`command_kind`] tells those apart. `command` is here for
+/// `command -v`, the only way it stays first.
+const VIEWERS: &[&str] = &[
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "nl",
+    "wc",
+    "sed",
+    "awk",
+    "gawk",
+    "mawk",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "ack",
+    "find",
+    "fd",
+    "tree",
+    "ls",
+    "dir",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "echo",
+    "printf",
+    "which",
+    "whereis",
+    "where",
+    "type",
+    "command",
+    "realpath",
+    "readlink",
+    "basename",
+    "dirname",
+    "pwd",
+    "whoami",
+    "id",
+    "uname",
+    "printenv",
+    "ps",
+    "uptime",
+    "free",
+    "jq",
+    "yq",
+    "bat",
+    "xxd",
+    "hexdump",
+    "od",
+    "strings",
+    "column",
+    "tac",
+    "rev",
+    "cut",
+    "tr",
+    "comm",
+    "cmp",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "journalctl",
+    "dmesg",
+    "get-content",
+    "gc",
+    "select-string",
+    "sls",
+    "findstr",
+    "get-childitem",
+    "gci",
+    "get-item",
+    "get-itemproperty",
+    "get-location",
+    "resolve-path",
+    "get-command",
+    "get-process",
+    "get-filehash",
+    "get-date",
+    "measure-object",
+    "select-object",
+    "where-object",
+    "sort-object",
+    "format-table",
+    "format-list",
+    "out-string",
+    "out-host",
+    "out-null",
+    "write-host",
+    "write-output",
+];
+/// Commands that set up the next one rather than run anything: a change of
+/// folder, a variable, a pause, shell syntax. They neither change nor check.
+const SETUP: &[&str] = &[
+    "cd",
+    "pushd",
+    "popd",
+    "chdir",
+    "set-location",
+    "export",
+    "set",
+    "unset",
+    "alias",
+    "source",
+    ".",
+    "true",
+    "false",
+    ":",
+    "sleep",
+    "start-sleep",
+    "clear",
+    "cls",
+    "exit",
+    "wait",
+    "}",
+    "fi",
+    "done",
+    "esac",
+    "for",
+    "case",
+    "local",
+    "declare",
+    "trap",
+    "ulimit",
+    "umask",
+];
+/// Words that run the command after them, with their flags that take a
+/// value: `sudo -u app cargo test` runs `cargo test`.
+const WRAPPERS: &[(&str, &[&str])] = &[
+    (
+        "sudo",
+        &["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"],
+    ),
+    ("doas", &["-u", "-C"]),
+    ("env", &["-u", "-C", "-S"]),
+    ("time", &[]),
+    ("nohup", &[]),
+    ("exec", &[]),
+    ("builtin", &[]),
+    ("command", &[]),
+    ("nice", &["-n"]),
+    ("ionice", &["-c", "-n", "-p"]),
+    ("timeout", &["-s", "-k"]),
+    ("stdbuf", &["-i", "-o", "-e"]),
+    ("xargs", &["-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"]),
+    ("npx", &["-p", "--package", "-c"]),
+    ("bunx", &["-p", "--package"]),
+    ("pnpx", &[]),
+    ("uvx", &["--from", "--with", "--python"]),
+    ("{", &[]),
+    ("!", &[]),
+    ("if", &[]),
+    ("then", &[]),
+    ("else", &[]),
+    ("elif", &[]),
+    ("do", &[]),
+    ("while", &[]),
+    ("until", &[]),
+];
+/// Two words that run the command after them: `uv run pytest`,
+/// `python -m pytest`.
+const RUNNERS: &[(&str, &str)] = &[
+    ("uv", "run"),
+    ("poetry", "run"),
+    ("pipenv", "run"),
+    ("pdm", "run"),
+    ("hatch", "run"),
+    ("rye", "run"),
+    ("bundle", "exec"),
+    ("npm", "exec"),
+    ("pnpm", "exec"),
+    ("pnpm", "dlx"),
+    ("yarn", "dlx"),
+    ("yarn", "exec"),
+    ("python", "-m"),
+    ("python3", "-m"),
+    ("py", "-m"),
 ];
 /// Source code extensions: an edit to one needs a command that runs. Shell
 /// scripts, docs and config files stay checkable by a re-read.
@@ -111,8 +313,10 @@ const SYSTEM_PATHS: &[&str] = &[
     "c:\\windows",
     "c:/windows",
 ];
-/// Words that make a command change files, packages, services or settings.
-/// A system word alone (`systemctl status`) is not a change.
+/// A command's program or subcommand that makes it change files, packages,
+/// services or settings (`rm`, `pip install`, `systemctl restart`). A system
+/// word alone (`systemctl status`) is not a change, and neither is one an
+/// argument names (`cargo test update`).
 const MUTATING_HEADS: &[&str] = &[
     "rm",
     "mv",
@@ -206,29 +410,10 @@ enum Step {
     Other,
 }
 
-/// Each word of `s` and the byte it starts at.
-fn words_at(s: &str) -> Vec<(usize, &str)> {
-    let mut out = Vec::new();
-    let mut start = None;
-    for (i, c) in s.char_indices() {
-        let split = c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '"' | '\'');
-        match (split, start) {
-            (true, Some(at)) => {
-                out.push((at, &s[at..i]));
-                start = None;
-            }
-            (false, None) => start = Some(i),
-            _ => {}
-        }
-    }
-    if let Some(at) = start {
-        out.push((at, &s[at..]));
-    }
-    out
-}
-
 fn words(s: &str) -> Vec<&str> {
-    words_at(s).into_iter().map(|(_, w)| w).collect()
+    s.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '"' | '\''))
+        .filter(|w| !w.is_empty())
+        .collect()
 }
 
 fn path_arg(args: &Value, keys: &[&str]) -> String {
@@ -293,75 +478,248 @@ fn classify(name: &str, args: &Value) -> Vec<Step> {
     }
 }
 
-/// A shell command, in order: a backup it takes, a check run before its
-/// change, the change it makes and a run or look after it; or, with no
-/// change, a check run, a read-only look or another command that ran.
+/// What one command of a shell line does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Sets up the next command (`cd`, `export`): neither changes nor checks.
+    Setup,
+    /// Only shows something.
+    Look,
+    Change,
+    /// A test, build or lint run.
+    Run,
+    /// Any other program that ran.
+    Exec,
+}
+
+/// A shell line, in order: a backup it takes, then each of its commands
+/// (split at `&&`, `||`, `;`, `|`, `&` and line ends) as the step it is, and a
+/// redirect that writes a file as a change where it starts. Quoted text, a
+/// comment and a here-document's body are data, so a word in them is never
+/// read as a command: `git commit -m "fix test"` runs no test.
 fn shell_steps(cmd: &str) -> Vec<Step> {
-    let lower = cmd.to_ascii_lowercase();
-    let ws = words_at(&lower);
+    let code = crate::shell_redirect::code(cmd);
+    let lower = code.to_ascii_lowercase();
+    let ws = words(&lower);
+    let writes: Vec<(usize, String)> = crate::shell_redirect::redirects(cmd)
+        .into_iter()
+        .filter_map(|r| r.file.map(|file| (r.at, file)))
+        .collect();
     let mut steps = Vec::new();
-    if ws.iter().any(|(_, w)| BACKUP_WORDS.contains(w))
-        || (ws.iter().any(|(_, w)| COPY_WORDS.contains(w))
-            && (lower.contains(".bak") || lower.contains(".orig")))
+    let original = cmd.to_ascii_lowercase();
+    if ws.iter().any(|w| BACKUP_WORDS.contains(w))
+        || (ws.iter().any(|w| COPY_WORDS.contains(w))
+            && (original.contains(".bak") || original.contains(".orig")))
     {
         steps.push(Step::Backup);
     }
     let system = ws
         .iter()
-        .any(|(_, w)| SYSTEM_WORDS.contains(w) || system_path(w));
-    // Only a command that clearly changes something owes a check (not a fetch
-    // or a query). A redirect counts only when it writes a file (`2>&1` and
-    // `> /dev/null` don't).
-    let changes = |w: &str| w == "-i" || MUTATING_HEADS.contains(&w);
-    let writes: Vec<usize> = crate::shell_redirect::redirects(cmd)
+        .any(|w| SYSTEM_WORDS.contains(w) || system_path(w))
+        || writes.iter().any(|(_, file)| system_path(file));
+    let mut kinds: Vec<(usize, Kind, String)> = commands(&code)
         .into_iter()
-        .filter(|r| r.file.is_some())
-        .map(|r| r.at)
+        .map(|at| {
+            let (kind, program) = command_kind(&cmd[at.clone()], &code[at.clone()]);
+            // `echo hi > out.txt` writes its output, so nobody sees it.
+            let unseen = kind == Kind::Look && writes.iter().any(|(w, _)| at.contains(w));
+            let kind = if unseen { Kind::Setup } else { kind };
+            (at.start, kind, program)
+        })
         .collect();
-    let first_change = ws
-        .iter()
-        .filter(|(_, w)| changes(w))
-        .map(|(at, _)| *at)
-        .chain(writes.iter().copied())
-        .min();
-    let at_word = |list: &[&str]| -> Vec<usize> {
-        ws.iter()
-            .filter(|(_, w)| list.contains(w))
-            .map(|(at, _)| *at)
-            .collect()
-    };
-    let (runs, looks) = (at_word(RUN_WORDS), at_word(LOOK_WORDS));
-    match first_change {
-        Some(c) => {
-            // `sudo cp /etc/fstab /etc/fstab.bak` is the backup, not a change to check.
-            let backup_only = !steps.is_empty()
-                && writes.is_empty()
-                && ws
-                    .iter()
-                    .all(|(_, w)| !changes(w) || COPY_WORDS.contains(w));
-            if !backup_only {
-                // `cargo test > test.log`: the tests ran before the log was written.
-                if runs.iter().any(|r| *r < c) {
-                    steps.push(Step::Run);
-                }
-                steps.push(Step::Change {
-                    what: short(cmd),
-                    system,
-                    needs: Needs::Look,
-                });
-                // `restart && is-active` checks itself; `edit && cargo test` checks everything.
-                if runs.iter().any(|r| *r > c) {
-                    steps.push(Step::Run);
-                } else if looks.iter().any(|l| *l > c) {
-                    steps.push(Step::Look);
-                }
-            }
+    // `sudo cp /etc/fstab /etc/fstab.bak` is the backup, not a change to check.
+    let backup_only = !steps.is_empty()
+        && writes.is_empty()
+        && kinds.iter().all(|(_, kind, program)| {
+            *kind != Kind::Change || COPY_WORDS.contains(&program.as_str())
+        });
+    kinds.extend(
+        writes
+            .iter()
+            .map(|(at, _)| (*at, Kind::Change, String::new())),
+    );
+    kinds.sort_by_key(|(at, _, _)| *at);
+    // In order, so `restart && is-active` checks itself, `edit && cargo test`
+    // checks everything and `make > build.log` ran before it wrote the log.
+    for (_, kind, _) in kinds {
+        match kind {
+            Kind::Change if !backup_only => steps.push(Step::Change {
+                what: short(cmd),
+                system,
+                needs: Needs::Look,
+            }),
+            Kind::Look => steps.push(Step::Look),
+            Kind::Run => steps.push(Step::Run),
+            Kind::Exec => steps.push(Step::Exec),
+            Kind::Change | Kind::Setup => {}
         }
-        None if !runs.is_empty() => steps.push(Step::Run),
-        None if !looks.is_empty() || crate::perm::shell_is_readonly(cmd) => steps.push(Step::Look),
-        None => steps.push(Step::Exec),
     }
     steps
+}
+
+/// The byte range of each command in a shell line's [`crate::shell_redirect::code`]:
+/// split at `&&`, `||`, `;`, `|`, `&`, a line end and a parenthesis (a
+/// subshell or `$(…)` runs its own commands).
+fn commands(code: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, c) in code.char_indices() {
+        if matches!(c, ';' | '|' | '&' | '\n' | '(' | ')') {
+            if !code[start..i].trim().is_empty() {
+                out.push(start..i);
+            }
+            start = i + 1;
+        }
+    }
+    if !code[start..].trim().is_empty() {
+        out.push(start..code.len());
+    }
+    out
+}
+
+/// What one command does, read by its program (after `sudo`, `env`, `npx`,
+/// `uv run`, `python -m` and the like) and its subcommand, never by a word
+/// further on; and its program. `text` is the command as written, `code` the
+/// same bytes with its data blanked.
+fn command_kind(text: &str, code: &str) -> (Kind, String) {
+    let all: Vec<&str> = code.split_whitespace().collect();
+    let w = peel(&all);
+    let Some(first) = w.first() else {
+        return (Kind::Setup, String::new());
+    };
+    let name = program(first);
+    let lower: Vec<String> = w.iter().map(|x| x.to_ascii_lowercase()).collect();
+    let mut plain = lower[1..]
+        .iter()
+        .map(String::as_str)
+        .filter(|x| !x.starts_with('-'));
+    let sub = plain.next();
+    let next = plain.next();
+    let kind = if SETUP.contains(&name.as_str()) || first.starts_with('-') || w.get(1) == Some(&"=")
+    {
+        // `-arg` alone is a continued line; `$x = 1` sets a variable.
+        Kind::Setup
+    } else if (matches!(name.as_str(), "sed" | "perl" | "ruby")
+        && w[1..].iter().any(|f| in_place(&name, f)))
+        || (name == "find" && lower.iter().any(|x| x == "-delete"))
+    {
+        Kind::Change
+    } else if name == "find"
+        && lower
+            .iter()
+            .any(|x| matches!(x.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+    {
+        Kind::Exec
+    } else if (!first.contains(['/', '\\']) && VIEWERS.contains(&name.as_str()))
+        || crate::perm::shell_is_readonly(text)
+        || LOOK_WORDS.contains(&name.as_str())
+        || sub.is_some_and(|s| LOOK_WORDS.contains(&s))
+        || lower.iter().any(|x| x == "--version")
+    {
+        Kind::Look
+    } else if MUTATING_HEADS.contains(&name.as_str())
+        || sub.is_some_and(|s| MUTATING_HEADS.contains(&s))
+    {
+        Kind::Change
+    } else if name == "git" {
+        // `git fetch` or `git stash` neither checks code nor is a change to check.
+        Kind::Setup
+    } else if [Some(name.as_str()), sub, next]
+        .into_iter()
+        .flatten()
+        .any(|x| RUN_WORDS.contains(&x))
+    {
+        Kind::Run
+    } else {
+        Kind::Exec
+    };
+    (kind, name)
+}
+
+/// `words` past the assignments, wrappers and runners that only start the
+/// command after them.
+fn peel<'a>(mut w: &'a [&'a str]) -> &'a [&'a str] {
+    loop {
+        while w.first().is_some_and(|x| assignment(x)) {
+            w = &w[1..];
+        }
+        let Some(first) = w.first() else {
+            return w;
+        };
+        let name = program(first);
+        if let Some((_, takes)) = WRAPPERS.iter().find(|(n, _)| *n == name) {
+            // `command -v cargo` looks a program up; it runs nothing.
+            if name == "command" && w.get(1).is_some_and(|f| *f == "-v" || *f == "-V") {
+                return w;
+            }
+            w = &w[1..];
+            while let Some(flag) = w.first().filter(|f| f.starts_with('-')) {
+                let n = if takes.contains(flag) { 2 } else { 1 };
+                w = &w[n.min(w.len())..];
+            }
+            if name == "timeout"
+                && w.first()
+                    .is_some_and(|d| d.starts_with(|c: char| c.is_ascii_digit()))
+            {
+                w = &w[1..];
+            }
+            continue;
+        }
+        let runner = w.get(1).is_some_and(|second| {
+            RUNNERS
+                .iter()
+                .any(|(a, b)| *a == name && second.eq_ignore_ascii_case(b))
+        });
+        if !runner {
+            return w;
+        }
+        w = &w[2..];
+        while w.first().is_some_and(|f| f.starts_with('-')) {
+            w = &w[1..];
+        }
+    }
+}
+
+/// `NAME=value` before a command (or PowerShell's `$env:NAME=value`).
+fn assignment(word: &str) -> bool {
+    match word.split_once('=') {
+        Some((name, _)) if name.starts_with('$') => true,
+        Some((name, _)) => {
+            name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        None => false,
+    }
+}
+
+/// A command word's program: its file name, lowercased, without `.exe`,
+/// `.cmd` or `.bat`.
+fn program(word: &str) -> String {
+    let base = word
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(word)
+        .to_ascii_lowercase();
+    [".exe", ".cmd", ".bat"]
+        .iter()
+        .find_map(|ext| base.strip_suffix(ext))
+        .map_or_else(|| base.clone(), str::to_string)
+}
+
+/// `flag` makes `sed`, `perl` or `ruby` edit its files in place: `-i`,
+/// `-i.bak`, `-pi`, `--in-place`. A short flag is matched as written, so
+/// `-I` (an include folder) and `-Mstrict` (a module) are not it.
+fn in_place(name: &str, flag: &str) -> bool {
+    if flag.starts_with("--in-place") {
+        return true;
+    }
+    let Some(short) = flag.strip_prefix('-').filter(|f| !f.starts_with('-')) else {
+        return false;
+    };
+    if name != "sed" && short.starts_with(['M', 'm', 'I']) {
+        return false;
+    }
+    short.split('.').next().is_some_and(|f| f.contains('i'))
 }
 
 const DESKTOP_WHAT: &str = "the screen";
@@ -1058,6 +1416,103 @@ mod tests {
         f.note("write", &json!({ "path": "C:\\ws\\docs\\Notes.md" }));
         f.note("read_file", &json!({ "target_file": "docs/notes.md" }));
         assert_eq!(names(&f), Vec::<&str>::new());
+    }
+
+    /// Each command after a fresh edit to `src/handler.rs`, and what is left
+    /// unchecked after it.
+    fn left_after_code_edit(cases: &[(&str, &[&str])]) {
+        for (cmd, left) in cases {
+            let mut f = Fresh::default();
+            f.note("search_replace", &json!({ "file_path": "src/handler.rs" }));
+            f.note("run_terminal_command", &shell(cmd));
+            assert_eq!(names(&f), *left, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_shell_line_is_read_by_the_program_of_each_command() {
+        let code: &[&str] = &["src/handler.rs"];
+        left_after_code_edit(&[
+            // A viewer only looks, however it is spelled or wherever it runs.
+            ("sed -n '1,60p' src/handler.rs", code),
+            ("Get-Content src\\handler.rs", code),
+            ("cd crates/app && cat src/lib.rs", code),
+            ("cd src && cat handler.rs", code),
+            ("find . -name '*.rs'", code),
+            ("echo hi", code),
+            ("awk 'NR<10' src/handler.rs", code),
+            ("nl src/handler.rs", code),
+            ("cat src/handler.rs", code),
+            ("command -v cargo", code),
+            ("git log --oneline -5", code),
+            // A check word in quotes, a here-document or an argument runs nothing.
+            (
+                "git add -A && git commit -m \"Fix the failing test\"",
+                &[
+                    "src/handler.rs",
+                    "git add -A && git commit -m \"Fix the failing test\"",
+                ],
+            ),
+            (
+                "git commit -m \"fix test\"",
+                &["src/handler.rs", "git commit -m \"fix test\""],
+            ),
+            ("grep -n \"test\" src/handler.rs", code),
+            ("grep -n test src/handler.rs", code),
+            ("ls tests", code),
+            (
+                "cat > notes.md <<'EOF2'\nRemove the old build step\nEOF2",
+                &["src/handler.rs", "cat > notes.md <<'EOF2'"],
+            ),
+            // A program that runs gets the credit, even when it writes a log.
+            ("make", &[]),
+            ("make > build.log 2>&1", &["make > build.log 2>&1"]),
+            (
+                "python3 tools/gen.py > out.json",
+                &["python3 tools/gen.py > out.json"],
+            ),
+            ("make 2>&1 | tee build.log", &["make 2>&1 | tee build.log"]),
+            (
+                "npx vitest run 2>&1 | tee vitest.log",
+                &["npx vitest run 2>&1 | tee vitest.log"],
+            ),
+            ("npm install && npm run typecheck", &[]),
+            (
+                "npm install && node src/handler.js",
+                &["npm install && node src/handler.js"],
+            ),
+            ("RUST_LOG=debug sudo -u app timeout 60 cargo test", &[]),
+            ("uv run --frozen pytest -q", &[]),
+            ("python -m pytest tests/", &[]),
+            ("cargo test \\\n  --workspace", &[]),
+            // A change is a program or subcommand, never an argument or a grep flag.
+            ("cargo test 2>&1 | grep -i fail", &[]),
+            ("cargo test 2>&1 | grep -i error", &[]),
+            ("cargo test 2>&1 | rg -i error", &[]),
+            ("cargo test update", &[]),
+            ("pytest -k \"add or remove\"", &[]),
+            (
+                "sed -i.bak 's/a/b/' src/handler.rs",
+                &["src/handler.rs", "sed -i.bak 's/a/b/' src/handler.rs"],
+            ),
+            (
+                "perl -pi -e 's/a/b/' x.txt",
+                &["src/handler.rs", "perl -pi -e 's/a/b/' x.txt"],
+            ),
+            ("perl -Mstrict -e 'print 1'", &[]),
+            (
+                "find . -name '*.orig' -delete",
+                &["src/handler.rs", "find . -name '*.orig' -delete"],
+            ),
+        ]);
+        // A .py edit is the same: the generator ran, and only its output file is left.
+        let mut f = Fresh::default();
+        f.note("write", &json!({ "path": "tools/gen.py" }));
+        f.note(
+            "run_terminal_command",
+            &shell("python3 tools/gen.py > out.json"),
+        );
+        assert_eq!(names(&f), ["python3 tools/gen.py > out.json"]);
     }
 
     #[test]
