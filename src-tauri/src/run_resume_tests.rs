@@ -94,7 +94,7 @@ fn an_automation_card_continues_its_session_with_the_block_and_keeps_ask() {
     seed(&dir, vec![c]);
 
     let p = prepare(&dir, "a-1", "grok-4.7", ALWAYS, false, &intact_s1, 0, NOW).expect("prepared");
-    assert!((p.session_id.as_str(), p.resume) == ("s-1", true));
+    assert!(((p.session_id.as_str(), p.resume)) == (("s-1", true)));
     // Started in Ask: the resume stays in Ask though Approvals is Always now.
     assert_eq!(p.gate.mode, PermMode::Ask);
     assert_eq!(

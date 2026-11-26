@@ -7519,7 +7519,7 @@ button.primary:not(.quick-chip) {
 .local-library-job {
   display: inline-block;
   margin-right: 8px;
-  padding: 0 8px;
+  padding: 0 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: var(--font-caption);
