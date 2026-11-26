@@ -521,3 +521,140 @@ fn a_premium_model_over_the_ceiling_asks_for_an_ok_instead_of_going_local() {
         r.rule_ids
     );
 }
+
+#[test]
+fn coding_first_tries_local_then_escalates_to_frontier_with_reason_and_usage_log() {
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(false);
+
+    // 1. Coding turn with local_coding_first picks the local model first.
+    let reg_grok = fleet();
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let mut coding = ask("code:edit-small", online());
+    coding.local_warm = true;
+    coding.local_coding_first = true;
+    let first = Router::choose(&coding, &reg_grok, &profiles, &table, 10);
+    assert_eq!(first.model, "local:small", "{:?}", first.rule_ids);
+    assert_eq!(first.provider, local::PROVIDER_LOCAL);
+    assert!(
+        first.rule_ids.contains(&"local:coding_first".into()),
+        "{:?}",
+        first.rule_ids
+    );
+    assert!(
+        first.reason.contains("local coding model first"),
+        "{}",
+        first.reason
+    );
+    let local_why = super::local_live::routing_reason(&first.rule_ids, None);
+    assert!(
+        local_why.contains("local coding model first"),
+        "{local_why}"
+    );
+
+    // 2. After local verify exhausts, router escalates to Grok with the exact verify reason
+    //    and emits an escalated Frontier event for the usage meter.
+    local::note_local_verify_failed_with_reason(
+        "verification failed after 3 attempts (cargo test)",
+    );
+    let mut esc_grok = ask("code:edit-small", online());
+    esc_grok.local_warm = true;
+    esc_grok.local_coding_first = true;
+    esc_grok.local.local_verify_failed = true;
+    let second = Router::choose(&esc_grok, &reg_grok, &profiles, &table, 10);
+    assert_eq!(second.model, "grok-4.7", "{:?}", second.rule_ids);
+    assert!(
+        second.rule_ids.contains(&"local:escalate_verify".into()),
+        "{:?}",
+        second.rule_ids
+    );
+    assert!(
+        second.reason.contains("local:small")
+            && second.reason.contains("grok-4.7")
+            && second
+                .reason
+                .contains("verification failed after 3 attempts (cargo test)"),
+        "{}",
+        second.reason
+    );
+    assert!(!local::local_verify_failed());
+    assert!(local::local_verify_reason().is_none());
+
+    let rec = super::log::RouteRecord {
+        class: "code:edit-small".into(),
+        chosen: super::log::Chosen {
+            provider: second.provider.clone(),
+            model: second.model.clone(),
+            effort: None,
+        },
+        used: super::log::Chosen {
+            provider: second.provider.clone(),
+            model: second.model.clone(),
+            effort: None,
+        },
+        rule_ids: second.rule_ids.clone(),
+        reason: second.reason.clone(),
+        outcome: Some(super::log::RouteOutcome {
+            ok: true,
+            tokens: super::log::RouteTokens {
+                input: 1_200,
+                cached: 0,
+                out: 240,
+                reasoning: 0,
+            },
+            cost_usd: 0.004,
+            ..super::log::RouteOutcome::default()
+        }),
+        ..super::log::RouteRecord::default()
+    };
+    let ev = super::frontier_usage::event_from(&rec, "proj", 1_795_651_200_000, 0.004);
+    assert_eq!(ev.lane, super::frontier_usage::Lane::Frontier);
+    assert!(ev.escalated);
+    assert_eq!(ev.reason, second.reason);
+    assert!(ev.rules.contains(&"local:escalate_verify".to_string()));
+
+    // 3. When only a configured Claude (Anthropic) frontier provider is available,
+    //    failed verify escalates cleanly to Claude with the verify failure reason.
+    const CLAUDE: &str = "anthropic/claude-sonnet-4-5";
+    let mut reg_claude = Registry::default();
+    reg_claude.entitlement.credential = Credential::None;
+    reg_claude.apply_refresh(
+        &[
+            Listing::new(
+                SourceKind::Local,
+                local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
+            ),
+            Listing::new(SourceKind::Anthropic, vec![meta(CLAUDE)]),
+        ],
+        &[],
+        2,
+    );
+    local::note_local_verify_failed_with_reason("verification failed after 3 attempts (npm test)");
+    let mut esc_claude = ask("code:edit-small", online());
+    esc_claude.local_warm = true;
+    esc_claude.local_coding_first = true;
+    esc_claude.local.local_verify_failed = true;
+    esc_claude.spend = Spend {
+        providers: vec!["anthropic".into()],
+        ..Spend::default()
+    };
+    let claude_pick = Router::choose(&esc_claude, &reg_claude, &profiles, &table, 10);
+    assert_eq!(claude_pick.model, CLAUDE, "{:?}", claude_pick.rule_ids);
+    assert!(
+        claude_pick
+            .rule_ids
+            .contains(&"local:escalate_verify".into()),
+        "{:?}",
+        claude_pick.rule_ids
+    );
+    assert!(
+        claude_pick.reason.contains(CLAUDE)
+            && claude_pick
+                .reason
+                .contains("verification failed after 3 attempts (npm test)"),
+        "{}",
+        claude_pick.reason
+    );
+    local::note_local_verify_failed(false);
+}

@@ -178,6 +178,7 @@ pub mod sessions_board;
 pub mod settings;
 pub mod shell_update;
 pub mod ship_gate;
+pub mod skill_install;
 pub mod skills;
 pub mod slash;
 pub mod slash_ops;
@@ -5734,6 +5735,38 @@ async fn install_library_pack(
         .await?
 }
 
+/// Preview a `loadout://skill/install?identifier=` target (source + destination).
+#[tauri::command]
+async fn preview_skill_install(
+    state: State<'_, ShellState>,
+    identifier: String,
+) -> Result<grokhub_core::SkillInstallPreview, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || skills::preview_install(&dir, &identifier)).await?
+}
+
+/// Install after the confirm dialog. Runs the skill safety scanner.
+#[tauri::command]
+async fn confirm_skill_install(
+    state: State<'_, ShellState>,
+    identifier: String,
+) -> Result<skills::LinkInstall, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || {
+        let done = skills::confirm_install(&dir, &workspace, home.as_deref(), &identifier)?;
+        skill_install::set_pending(None);
+        Ok(done)
+    })
+    .await?
+}
+
+/// Pending deep-link offer (cold start may land before the UI listens).
+#[tauri::command]
+fn take_skill_install_offer() -> Option<grokhub_core::SkillInstallPreview> {
+    skill_install::take_pending()
+}
+
 #[tauri::command]
 async fn get_library() -> Result<library::Page, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
@@ -9444,6 +9477,8 @@ pub fn run() {
                 game_session: Mutex::default(),
                 chat_pick: Mutex::default(),
             });
+            #[cfg(desktop)]
+            skill_install::setup_from_env(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 if text_size != 100 {
                     zoom(&window, text_size);
@@ -9958,6 +9993,9 @@ pub fn run() {
             get_skill_library,
             install_library_skill,
             install_library_pack,
+            preview_skill_install,
+            confirm_skill_install,
+            take_skill_install_offer,
             get_learned,
             learned_act,
             learned_say,

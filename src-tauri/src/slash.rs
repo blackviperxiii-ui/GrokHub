@@ -211,6 +211,11 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         )
     },
     row("/skill", "Run a skill…", "/skill "),
+    row(
+        "/backend-dev",
+        "Load tdd, land-it, and follow-through together",
+        "/backend-dev ",
+    ),
     row("/skills", "Open Skills", "/skills"),
     row(
         "/skills changes",
@@ -516,6 +521,11 @@ pub enum Op {
     /// `/learn <url|path|chat|--save N>`: draft or save a skill from a source.
     LearnSkill(String),
     Skill(String),
+    /// A skill bundle slash such as `/backend-dev …` (loads several skills).
+    SkillBundle {
+        slug: String,
+        args: String,
+    },
     SkillChanges,
     SkillUndo(String),
     SkillRestore(String),
@@ -656,6 +666,20 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         };
     }
     let Some(cmd) = find(&word) else {
+        // Skill bundle slash (e.g. /backend-dev): load several skills at once.
+        // Hyphenated slugs only, so typos like /hepl stay "Unknown command".
+        let slug = word.trim_start_matches('/');
+        let bundleish = slug.contains('-')
+            && slug
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && grokhub_core::parse_slash(line).is_none();
+        if bundleish {
+            return Ok(Action::Op(Op::SkillBundle {
+                slug: slug.to_string(),
+                args: rest.to_string(),
+            }));
+        }
         if grokhub_core::parse_slash(line).is_some()
             || !grokhub_core::filter_slash_hits(&word, &[]).is_empty()
         {
@@ -783,6 +807,10 @@ fn more(line: &str, word: &str, rest: &str, remote: bool) -> Option<Result<Actio
         "/learned" => mine(Op::Learned(rest.to_string())),
         "/skill" if rest.is_empty() => Some(Err("Type the skill's name after /skill.".into())),
         "/skill" => mine(Op::Skill(rest.to_string())),
+        "/backend-dev" => mine(Op::SkillBundle {
+            slug: "backend-dev".into(),
+            args: rest.to_string(),
+        }),
         "/skills" if rest.is_empty() => None,
         "/skills" => match grokhub_core::parse_slash(line) {
             Some(Slash::SkillChanges) => mine(Op::SkillChanges),
@@ -1481,6 +1509,13 @@ mod tests {
         assert_eq!(op_of("/dream"), Op::Dream);
         assert_eq!(op_of("/learned forget n1"), Op::Learned("forget n1".into()));
         assert_eq!(op_of("/skill tidy"), Op::Skill("tidy".into()));
+        assert_eq!(
+            op_of("/backend-dev refactor the auth middleware"),
+            Op::SkillBundle {
+                slug: "backend-dev".into(),
+                args: "refactor the auth middleware".into(),
+            }
+        );
         assert_eq!(effect_of("/skills"), Effect::Open { view: "skills" });
         assert_eq!(op_of("/skills changes"), Op::SkillChanges);
         assert_eq!(op_of("/skills undo tidy"), Op::SkillUndo("tidy".into()));

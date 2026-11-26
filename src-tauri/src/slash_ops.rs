@@ -266,8 +266,32 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
                     workspace: None,
                 }),
                 Some(r) => Err(format!("{} is switched off. Turn it on in Skills.", r.name)),
-                None => Err(format!("No skill {}", name.trim())),
+                None => {
+                    if let Some(bundle) = grokhub_core::bundle_by_slug(cx.config_dir, want) {
+                        Ok(Applied {
+                            effect: Effect::Mode {
+                                mode: "chat",
+                                text: Some(grokhub_core::bundle_load_prompt(&bundle, "")),
+                            },
+                            workspace: None,
+                        })
+                    } else {
+                        Err(format!("No skill {}", name.trim()))
+                    }
+                }
             }
+        }
+        Op::SkillBundle { slug, args } => {
+            let _config = ConfigGuard::set(cx.config_dir);
+            let bundle = grokhub_core::bundle_by_slug(cx.config_dir, &slug)
+                .ok_or_else(|| format!("No skill bundle /{slug}"))?;
+            Ok(Applied {
+                effect: Effect::Mode {
+                    mode: "chat",
+                    text: Some(grokhub_core::bundle_load_prompt(&bundle, &args)),
+                },
+                workspace: None,
+            })
         }
         Op::SkillChanges => notice(crate::changes::report(
             cx.config_dir,
@@ -849,6 +873,25 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(go(&h, "/skill nope"), Err("No skill nope".to_string()));
+    }
+
+    #[test]
+    fn backend_dev_bundle_loads_its_three_skills_at_once() {
+        let h = home("backend-dev-bundle");
+        match go(&h, "/backend-dev refactor the auth middleware") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("bundle prompt");
+                assert!(body.contains("1. tdd"), "{body}");
+                assert!(body.contains("2. land-it"), "{body}");
+                assert!(body.contains("3. follow-through"), "{body}");
+                assert!(
+                    body.contains("User request: refactor the auth middleware"),
+                    "{body}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

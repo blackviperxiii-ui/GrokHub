@@ -1,0 +1,1 @@
+- Skill install links (`loadout://skill/install?identifier=`) open a confirm dialog and install through the scanner; `/backend-dev` loads tdd, land-it, and follow-through as a skill bundle.

@@ -613,6 +613,8 @@ pub struct RouteInput<'a> {
     pub voice_reply: Option<voice_route::ReplyPref>,
     /// Code tab "Local models only and nonstop coding" is enabled for this project.
     pub code_local_only: bool,
+    /// Warm coding turns try local first and escalate to frontier if verification fails.
+    pub local_coding_first: bool,
     /// User-benched models/providers to exclude from routing.
     pub user_bench: user_bench::UserBench,
 }
@@ -1358,6 +1360,11 @@ impl Router {
             && calm
             && local::fits_by_trimming(input.class)
             && sizing::warm_local_default(input.size.map(|s| s.size), throttled);
+        let coding_first = input.local_coding_first
+            && !input.local.local_verify_failed
+            && input.episode_model.is_none()
+            && calm
+            && (!input.needs_image || input.local.sees_pictures);
         let warm_gate = local::LocalGate {
             offline: true,
             ..input.local.clone()
@@ -1372,6 +1379,7 @@ impl Router {
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
                     || ((warm_chat || input.adult)
                         && local::admits(&warm_gate, id, input.class, input.ctx_tokens))
+                    || (coding_first && local::admits_coding(&warm_gate, id, input.ctx_tokens))
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
@@ -1613,6 +1621,12 @@ impl Router {
         } else {
             None
         };
+        let coding_local = if coding_first && ids.iter().any(|id| !local::is_local(id)) {
+            ids.iter().find(|id| local::is_local(id)).copied()
+        } else {
+            None
+        };
+        let mut verify_reason: Option<String> = None;
         // Failover PR 6: an explicit (18+) call's only candidate is the
         // device — the hard filter at the pick itself, ahead of the
         // warm-local default and every cloud branch.
@@ -1714,6 +1728,7 @@ impl Router {
         } else if local::escalate_after_verify(&input.local) {
             // PR E: on-device answer failed verify — pick cloud and name both models.
             let local_tier = input.local.tier.clone();
+            verify_reason = local::local_verify_reason();
             let mut pick = Self::pick_model(
                 input, reg, profiles, &cloud_ids, table, e2, stronger, now_ms, &mut rules,
             );
@@ -1782,6 +1797,13 @@ impl Router {
                         }
                     }
                 },
+            }
+        } else if let Some(id) = coding_local {
+            rules.push("local:coding_first".into());
+            ModelPick {
+                model: id.to_string(),
+                no_route: false,
+                replaced: None,
             }
         } else if let Some(id) = warm_local {
             // The warm-local default (above): the loaded device model takes
@@ -2023,8 +2045,12 @@ impl Router {
                 )
             }
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_verify") => {
-                local::escalate_note(from, &model)
+                local::escalate_note_with_reason(from, &model, verify_reason.as_deref())
             }
+            _ if rules.iter().any(|r| r == "local:coding_first") => format!(
+                "{tier_word} · {}: trying local coding model first.",
+                effort_word(effort.as_deref())
+            ),
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_hard") => {
                 format!(
                     "{tier_word} · {}: {from} (local) is too small for this step.",
