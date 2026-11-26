@@ -251,7 +251,7 @@ fn cabin_skill(
     workspace: &Path,
     home: Option<&Path>,
     name: &str,
-) -> Result<grokhub_core::SkillMd, String> {
+) -> Result<(grokhub_core::SkillMd, PathBuf), String> {
     let (_, dir) = gather(config_dir, workspace, home)
         .into_iter()
         .find(|(row, _)| row.source == Source::Cabin && row.name == name)
@@ -264,7 +264,7 @@ fn cabin_skill(
     if skill.name.trim().is_empty() {
         return Err(format!("{name} couldn't be read back."));
     }
-    Ok(skill)
+    Ok((skill, dir))
 }
 
 /// What Edit shows for the cabin skill `name`.
@@ -274,7 +274,7 @@ pub fn detail(
     home: Option<&Path>,
     name: &str,
 ) -> Result<Detail, String> {
-    let skill = cabin_skill(config_dir, workspace, home, name)?;
+    let (skill, _) = cabin_skill(config_dir, workspace, home, name)?;
     Ok(Detail {
         name: skill.name,
         description: skill.description,
@@ -372,7 +372,8 @@ pub fn edit(
     trigger: &str,
     instructions: &str,
 ) -> Result<Page, String> {
-    let mut skill = cabin_skill(config_dir, workspace, home, name)?;
+    let (mut skill, dir) = cabin_skill(config_dir, workspace, home, name)?;
+    move_to_name_folder(config_dir, &dir, name, &skill.name)?;
     skill.description = description.trim().to_string();
     skill.trigger = trigger.trim().to_string();
     skill.instructions = instructions.trim().to_string();
@@ -383,6 +384,31 @@ pub fn edit(
         "edited on the Skills tab",
     )?;
     Ok(load(config_dir, workspace, home))
+}
+
+/// The skill writer saves under the folder its name maps to, so a cabin skill
+/// in a folder named by hand moves there first; otherwise Edit would write a
+/// second copy and leave the listed one as it was. A folder that already holds
+/// another skill is never touched.
+fn move_to_name_folder(
+    config_dir: &Path,
+    dir: &Path,
+    row_name: &str,
+    skill_name: &str,
+) -> Result<(), String> {
+    let want = grokhub_agent::skill_write::skill_folder(config_dir, skill_name);
+    if want.exists() {
+        // The same folder (a case-only difference on macOS or Windows) is fine.
+        if fs::canonicalize(&want).ok() == fs::canonicalize(dir).ok() {
+            return Ok(());
+        }
+        let folder = want.file_name().unwrap_or_default().to_string_lossy();
+        return Err(format!(
+            "{row_name} can't be edited here: the folder {folder} holds another skill."
+        ));
+    }
+    fs::rename(dir, &want)
+        .map_err(|err| format!("Couldn't move {row_name} to {}: {err}", want.display()))
 }
 
 /// Shows `dir` in the system file manager. `dir` comes from [`folder`].
@@ -724,6 +750,59 @@ mod tests {
         assert!(edit(&cfg, &ws, Some(&home), "lint-fix", "d", "t", "i").is_err());
         assert!(detail(&cfg, &ws, Some(&home), "lint-fix").is_err());
         assert!(edit(&cfg, &ws, Some(&home), "no-such-skill", "d", "t", "i").is_err());
+    }
+
+    #[test]
+    fn edit_of_a_skill_in_a_hand_named_folder_edits_that_skill() {
+        let root = scratch("edit-hand-folder");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        write(
+            &cfg.join("skills/my_notes/SKILL.md"),
+            skill("my_notes", "Keep notes").as_bytes(),
+        );
+
+        let page = edit(
+            &cfg,
+            &ws,
+            Some(&home),
+            "my_notes",
+            "Keep better notes",
+            "",
+            "1. Write",
+        )
+        .expect("edit");
+        let cabin: Vec<(&str, &str)> = page
+            .rows
+            .iter()
+            .filter(|r| r.source == Source::Cabin)
+            .map(|r| (r.name.as_str(), r.description.as_str()))
+            .collect();
+        assert_eq!(cabin, [("my_notes", "Keep better notes")]);
+        assert!(!cfg.join("skills/my_notes").exists());
+        let after = grokhub_core::parse_skill_md(
+            &fs::read_to_string(cfg.join("skills/my-notes/SKILL.md")).unwrap(),
+        );
+        assert_eq!(after.description, "Keep better notes");
+
+        // The folder its name maps to belongs to another skill: refused, and
+        // both stay as they were.
+        write(
+            &cfg.join("skills/team_notes/SKILL.md"),
+            skill("team notes", "Shared notes").as_bytes(),
+        );
+        write(
+            &cfg.join("skills/team-notes/SKILL.md"),
+            skill("team-board", "A board").as_bytes(),
+        );
+        assert_eq!(
+            edit(&cfg, &ws, Some(&home), "team notes", "d", "t", "i").unwrap_err(),
+            "team notes can't be edited here: the folder team-notes holds another skill."
+        );
+        assert_eq!(
+            fs::read_to_string(cfg.join("skills/team_notes/SKILL.md")).unwrap(),
+            skill("team notes", "Shared notes")
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

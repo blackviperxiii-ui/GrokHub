@@ -259,7 +259,7 @@ pub fn run(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     }
     let cwd = match ctx.workspace.canonicalize() {
         Ok(p) => p,
-        Err(e) => return ToolOutput::err(format!("workspace is not available: {e}")),
+        Err(e) => return ToolOutput::err(super::workspace_unavailable_error(ctx.workspace, &e)),
     };
     let timeout = timeout_from(args);
     let mut child = match spawn_sandboxed_python(&cwd) {

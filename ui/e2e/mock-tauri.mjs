@@ -948,6 +948,32 @@ export function initScript(theme = "ops-dark") {
           return fix.codeDeploy;
         case "code_deploy_save":
           return fix.codeDeploy;
+        case "code_panel_state":
+        case "code_panel_settings_save":
+          return {
+            workspace: "/work/demo",
+            isRepo: true,
+            branch: "beta",
+            settings: args?.settings ?? {
+              localOnlyNonstop: false,
+              backupBeforeRisky: false,
+              maxRepeatedFailures: 3,
+              stallTimeoutMins: 15,
+              backupRetentionWarn: 20,
+            },
+            backups: [],
+            retentionWarnLimit: 20,
+            retentionWarning: null,
+          };
+        case "code_panel_backups":
+          return {
+            workspace: "/work/demo",
+            backups: [],
+            retentionWarnLimit: 20,
+            retentionWarning: null,
+          };
+        case "code_panel_backup_restore":
+          return { id: args?.backupId ?? "", summary: "Restored.", restoredFiles: 0 };
         case "code_secret_list":
         case "code_secret_set":
         case "code_secret_delete":

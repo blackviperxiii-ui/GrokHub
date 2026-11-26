@@ -2325,6 +2325,28 @@ describe("Chat history", () => {
     expect(api.closeChat).toHaveBeenCalledTimes(1);
   });
 
+  it("open race: a slower earlier pick never replaces the chat picked after it", async () => {
+    const chat = (id: string, text: string): Transcript => ({
+      id,
+      title: id,
+      lines: [{ role: "user", text }],
+      earlier: 0,
+    });
+    let landB: (t: Transcript) => void = () => {};
+    api.loadChat.mockImplementation((id: string) =>
+      id === "shell-b"
+        ? new Promise<Transcript>((resolve) => (landB = resolve))
+        : Promise.resolve(chat("shell-c", "chat C line")),
+    );
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-b", n: 1 }} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-c", n: 2 }} />);
+    expect(await screen.findByText("chat C line")).toBeVisible();
+    await act(async () => landB(chat("shell-b", "chat B line")));
+    expect(screen.queryByText("chat B line")).toBeNull();
+    expect(screen.getByText("chat C line")).toBeVisible();
+  });
+
   it("opening a chat waits for a running reply", async () => {
     const finish = holdTurn();
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);

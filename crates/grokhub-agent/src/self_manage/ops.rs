@@ -191,10 +191,11 @@ fn automation_write(ctx: &SelfCtx<'_>, args: &Value, id: Option<&str>) -> Result
             .ok_or("an automation needs instructions")?;
     }
     let every = arg(args, "every");
-    let mins = match (every.is_empty(), &current) {
-        (true, Some(a)) => a.heartbeat_every_min.max(1),
-        (true, None) => return Err("an automation needs `every` (10m, 1h, 1d)".into()),
-        (false, _) => crate::tools::control::interval_minutes(&every)?,
+    // A modify with no `every` keeps the job's schedule.
+    let mins = if every.is_empty() {
+        None
+    } else {
+        Some(crate::tools::control::interval_minutes(&every)?)
     };
     crate::tools::control::write_automation(&instructions, mins, false, id, ctx.now_ms, ctx.session)
 }

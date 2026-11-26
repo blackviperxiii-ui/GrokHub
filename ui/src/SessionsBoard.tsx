@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from "react";
 import {
   getSessionsBoard,
   sessionsBoardPin,
@@ -8,6 +8,7 @@ import {
   type SessionsFilter,
   type SessionsTile,
 } from "./api";
+import { openExternal } from "./external";
 
 export const SESSIONS_EMPTY =
   "No conversations match this board yet. Chats from the last 72 hours land here by rules and pins.";
@@ -31,11 +32,13 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
   const [page, setPage] = useState<SessionsBoardPage | null>(null);
   const [filter, setFilter] = useState<SessionsFilter>("everyone");
   const [query, setQuery] = useState("");
+  // The query the board shows; typed text counts only once applied.
+  const [applied, setApplied] = useState("");
   const [agent, setAgent] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  function refresh(nextFilter = filter, nextQuery = query) {
+  function refresh(nextFilter = filter, nextQuery = applied) {
     return getSessionsBoard(nextFilter, nextQuery).then(
       (next) => {
         setPage(next);
@@ -46,7 +49,7 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
   }
 
   useEffect(() => {
-    getSessionsBoard(filter, query).then(
+    getSessionsBoard(filter, applied).then(
       (next) => setPage(next),
       (err) => setNote(String(err)),
     );
@@ -61,20 +64,20 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
       sessionsBoardStamp().then(
         (current) => {
           if (current !== stamp) {
-            getSessionsBoard(filter, query).then(setPage, () => {});
+            getSessionsBoard(filter, applied).then(setPage, () => {});
           }
         },
         () => {},
       );
     }, STAMP_EVERY_MS);
     return () => window.clearInterval(timer);
-  }, [stamp, filter, query]);
+  }, [stamp, filter, applied]);
 
   async function applyFilter(next: SessionsFilter) {
     setFilter(next);
     setBusy(true);
     try {
-      await refresh(next, query);
+      await refresh(next, applied);
     } finally {
       setBusy(false);
     }
@@ -82,6 +85,7 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
 
   async function applyQuery(event: FormEvent) {
     event.preventDefault();
+    setApplied(query);
     setBusy(true);
     try {
       await refresh(filter, query);
@@ -93,7 +97,7 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
   async function pin(tile: SessionsTile, columnId: string) {
     setBusy(true);
     try {
-      setPage(await sessionsBoardPin(tile.id, columnId, filter, query));
+      setPage(await sessionsBoardPin(tile.id, columnId, filter, applied));
       setNote(columnId ? `Pinned to ${columnId}.` : "Pin cleared.");
     } catch (err) {
       setNote(String(err));
@@ -107,7 +111,7 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
     if (!agent.trim() || busy) return;
     setBusy(true);
     try {
-      const result = await sessionsBoardReshape(agent, filter, query);
+      const result = await sessionsBoardReshape(agent, filter, applied);
       setPage(result.page);
       setNote(result.note);
       setAgent("");
@@ -116,6 +120,12 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
     } finally {
       setBusy(false);
     }
+  }
+
+  // Tauri ignores target="_blank"; open the PR in the system browser.
+  function openPr(event: MouseEvent<HTMLAnchorElement>, url: string) {
+    event.preventDefault();
+    void openExternal(url).catch((err) => setNote(String(err)));
   }
 
   function onAgentKey(event: KeyboardEvent<HTMLInputElement>) {
@@ -212,7 +222,12 @@ export function SessionsBoard({ onOpenChat }: { onOpenChat: (id: string) => void
                           <ul className="sessions-prs">
                             {tile.prs.map((pr) => (
                               <li key={pr.url}>
-                                <a href={pr.url} target="_blank" rel="noreferrer">
+                                <a
+                                  href={pr.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => openPr(e, pr.url)}
+                                >
                                   PR · {pr.state}
                                 </a>
                               </li>

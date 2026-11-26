@@ -1,6 +1,7 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
 pub(crate) mod batch;
+pub(crate) mod coding;
 pub(crate) mod connections;
 pub(crate) mod control;
 mod defs;
@@ -8,6 +9,7 @@ mod desktop;
 pub(crate) mod fence;
 mod glob;
 mod grep;
+pub(crate) mod hangout;
 pub(crate) mod home_assistant;
 mod html_md;
 mod list_dir;
@@ -37,6 +39,7 @@ pub(crate) mod web_search;
 pub(crate) mod workspace_tools;
 mod write;
 
+pub use hangout::CANT_DO_HERE;
 pub use registry::Settings as DeferredToolsSettings;
 #[cfg(test)]
 pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
@@ -269,6 +272,7 @@ pub fn dispatch_for_job(
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args, ctx.session),
         "scheduler_delete" => control::scheduler_delete(&args),
+        ptc::NAME => ptc::run(ctx, &args),
         run_routine::NAME => run_routine::run(ctx, &args),
         save_routine::NAME => save_routine::run(ctx, &args),
         "connection_delete" => connections::delete(&args),
@@ -338,6 +342,9 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
+    // Snapshot first, as a foreground command does, so `/rewind step` can
+    // undo what it does to the tree.
+    crate::file_checkpoint::before_shell(ctx.workspace, command);
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, ctx.workspace);
     match tasks.spawn_for(ctx.workspace, command, ctx.owner, plan) {
         Ok(id) => ToolOutput::ok(format!("task id: {id}\nstatus: running")),
@@ -448,11 +455,48 @@ pub fn workspace_missing(path: &Path) -> bool {
     path.as_os_str().is_empty() || !path.is_dir()
 }
 
+/// Clear, actionable error when the workspace folder is missing or unreadable.
+pub(crate) fn workspace_unavailable_error(workspace: &Path, err: &std::io::Error) -> String {
+    let raw = workspace.to_string_lossy();
+    let windows =
+        cfg!(windows) || raw.starts_with(r"\\?\") || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    let shown = grokhub_core::canonical_session_cwd(&raw, windows);
+    if shown.is_empty() {
+        format!(
+            "workspace is not available ({err}): no workspace folder is set. Pick a folder in Chat or Settings → Workspace, then try again."
+        )
+    } else {
+        format!(
+            "workspace is not available at `{shown}` ({err}). Create that folder or pick an existing folder in Chat or Settings → Workspace, then try again."
+        )
+    }
+}
+
+/// Clear, actionable message when a top-level chat tool call tries to reach
+/// outside the active workspace. Preserves the `"path escapes the workspace"`
+/// prefix while telling the user and model what to do.
+pub fn path_escape_guidance(workspace: &Path, requested: &str) -> String {
+    let raw = workspace.to_string_lossy();
+    let windows =
+        cfg!(windows) || raw.starts_with(r"\\?\") || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+    let ws = grokhub_core::canonical_session_cwd(&raw, windows);
+    let target = requested.trim();
+    if target.is_empty() {
+        format!(
+            "path escapes the workspace (`{ws}`). File tools can only access paths inside this workspace; use a relative path inside `{ws}`, or pick a different folder in Chat or Settings → Workspace."
+        )
+    } else {
+        format!(
+            "path escapes the workspace: `{target}` is outside `{ws}`. Use a path inside `{ws}`, or pick the folder containing `{target}` in Chat or Settings → Workspace."
+        )
+    }
+}
+
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.
 pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let root_c = root
         .canonicalize()
-        .map_err(|e| format!("workspace is not available: {e}"))?;
+        .map_err(|e| workspace_unavailable_error(root, &e))?;
     let raw = raw.trim();
     if raw.is_empty() || raw == "." {
         return Ok(root_c);
@@ -668,6 +712,100 @@ mod tests {
     use super::*;
     use std::net::IpAddr;
     use web_fetch::PageFetch;
+
+    /// Says yes to every step, so a script step that asks runs.
+    struct Yes;
+
+    impl crate::routine_run::Approve for Yes {
+        fn approve(&self, _: &str, _: &str, _: &str) -> bool {
+            true
+        }
+    }
+
+    /// A routine's script step runs its script end to end: `dispatch`
+    /// reaches the sandboxed runner instead of refusing it as read-only.
+    #[test]
+    fn a_routine_script_step_runs_end_to_end() {
+        use crate::routine_run::{run, Ended, RunSpec};
+        let dir = std::env::temp_dir().join(format!("tools-script-step-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("check.py"), "print('mount is', ARGS['mount'])\n").unwrap();
+        let routine = grokhub_core::routine::Routine::parse(
+            &json!({
+                "version": 1, "name": "script",
+                "inputs": { "mount": { "type": "string", "default": "/srv" } },
+                "steps": [{ "id": "check", "script": "check.py", "args": { "mount": "{{inputs.mount}}" } }],
+                "result": "{{check.stdout}}"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stop = || false;
+        let report = run(&RunSpec {
+            routine: &routine,
+            dir: &dir,
+            workspace: &dir,
+            inputs: serde_json::Map::new(),
+            dry_run: false,
+            approve: Some(&Yes),
+            desktop: None,
+            stop: &stop,
+            brain: None,
+            words: None,
+        });
+        assert_eq!(
+            (&report.ended, report.result.as_deref().map(str::trim)),
+            (&Ended::Finished, Some("mount is /srv")),
+            "{}",
+            report.text()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A command run in the background is snapshotted first, as a
+    /// foreground one is, so `/rewind step` puts back what it changed.
+    #[test]
+    fn a_background_command_can_be_rewound() {
+        use crate::file_checkpoint as fcp;
+        let base = std::env::temp_dir().join(format!("tools-bg-rewind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (cfg, ws) = (base.join("cfg"), base.join("ws"));
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::create_dir_all(&ws).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        fcp::clear_active_for_tests();
+        let notes = ws.join("notes.txt");
+        std::fs::write(&notes, "original").unwrap();
+        let step = fcp::begin_step("conv-bg").unwrap();
+        let stop = || false;
+        let ctx = ToolCtx {
+            workspace: &ws,
+            desktop: None,
+            stop: &stop,
+            tasks: Some(crate::tasks::TaskHub::new("tools-bg")),
+            owner: None,
+            session: None,
+        };
+        let out = dispatch(
+            &ctx,
+            "run_terminal_command",
+            r#"{"command":"rm -f notes.txt","is_background":true}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        for _ in 0..200 {
+            if !notes.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(!notes.exists(), "the background rm ran");
+        let restored = fcp::restore_step("conv-bg", step).unwrap();
+        assert!(restored.contains("1 file"), "{restored}");
+        assert_eq!(std::fs::read_to_string(&notes).unwrap(), "original");
+        fcp::clear_active_for_tests();
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn web_fetch_works_without_a_bearer_and_imagine_waits_for_one() {
@@ -1048,5 +1186,63 @@ mod tests {
         );
         assert_eq!(*desk.0.lock().unwrap(), vec!["click", "type"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_errors_and_default_workspace_read_write_are_clear() {
+        let root = std::env::temp_dir().join(format!("gh-ws-clear-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let home_str = root.to_string_lossy().into_owned();
+
+        // Missing workspace produces a clear actionable message naming the folder.
+        let missing = root.join("does-not-exist");
+        let err = confine(&missing, "a.txt").unwrap_err();
+        assert!(err.contains("workspace is not available"), "{err}");
+        assert!(err.contains("does-not-exist"), "{err}");
+        assert!(err.contains("Settings → Workspace"), "{err}");
+
+        // Path escape guidance preserves the prefix and names both target and workspace.
+        let guidance = path_escape_guidance(
+            Path::new(r"C:\Users\alice\GrokHub-Work"),
+            r"C:\Users\alice\Desktop\todo.txt",
+        );
+        assert!(
+            guidance.contains("path escapes the workspace"),
+            "{guidance}"
+        );
+        assert!(
+            guidance.contains(r"C:\Users\alice\Desktop\todo.txt"),
+            "{guidance}"
+        );
+        assert!(
+            guidance.contains(r"C:\Users\alice\GrokHub-Work"),
+            "{guidance}"
+        );
+        assert!(guidance.contains("Settings → Workspace"), "{guidance}");
+
+        // Default Chat/Hangout workspace is created on disk and supports write + read_file.
+        let ws = grokhub_core::paths::ensure_chat_workspace("", false, Some(&home_str), None);
+        assert!(ws.is_dir());
+        let stop = || false;
+        let ctx = ToolCtx {
+            workspace: &ws,
+            desktop: None,
+            stop: &stop,
+            tasks: None,
+            owner: None,
+            session: Some("chat-ws-test"),
+        };
+        let wrote = dispatch(
+            &ctx,
+            "write",
+            r#"{"path":"hello.txt","content":"hello from chat\n"}"#,
+        );
+        assert!(!wrote.failed, "{}", wrote.text);
+        let read = dispatch(&ctx, "read_file", r#"{"target_file":"hello.txt"}"#);
+        assert!(!read.failed, "{}", read.text);
+        assert!(read.text.contains("hello from chat"), "{}", read.text);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -309,11 +309,11 @@ fn passes_filter(fact: &SessionFact, filter: PersonalFilter, query: &str) -> boo
     if filter == PersonalFilter::InvolvingMe && !fact.involving_me {
         return false;
     }
-    let q = query.trim().to_ascii_lowercase();
+    let q = query.trim().to_lowercase();
     if q.is_empty() {
         return true;
     }
-    fact.title.to_ascii_lowercase().contains(&q) || fact.preview.to_ascii_lowercase().contains(&q)
+    fact.title.to_lowercase().contains(&q) || fact.preview.to_lowercase().contains(&q)
 }
 
 /// Build the page from a board spec and live session facts.
@@ -588,8 +588,15 @@ fn pr_state_near(hay: &str, url: &str, raw: &str) -> String {
     let lower = hay.to_ascii_lowercase();
     let key = url.to_ascii_lowercase();
     let around = if let Some(i) = lower.find(&key) {
-        let start = i.saturating_sub(16);
-        let end = (i + key.len() + 16).min(lower.len());
+        // 16 bytes either side, widened to whole characters.
+        let mut start = i.saturating_sub(16);
+        while !lower.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = (i + key.len() + 16).min(lower.len());
+        while !lower.is_char_boundary(end) {
+            end += 1;
+        }
         lower[start..end].to_string()
     } else {
         raw.to_ascii_lowercase()
@@ -799,6 +806,47 @@ mod tests {
         assert_eq!(prs[0].state, "draft");
         assert_eq!(prs[1].url, "https://github.com/o/r/pull/13");
         assert_eq!(prs[1].state, "merged");
+    }
+
+    #[test]
+    fn extract_prs_survives_non_ascii_next_to_the_link() {
+        // Each pad puts the 16-byte window edge somewhere else, including
+        // inside the 'é' before the link and the em dash after it.
+        for pad in 0..20 {
+            let x = "x".repeat(pad);
+            let before = format!("é{x} https://github.com/o/r/pull/9 closed");
+            let prs = extract_prs(&before);
+            assert_eq!(prs.len(), 1, "pad {pad}");
+            assert_eq!(prs[0].state, "closed", "pad {pad}");
+            let after = format!("https://github.com/o/r/pull/9 merged {x}\u{2014}");
+            let prs = extract_prs(&after);
+            assert_eq!(prs[0].url, "https://github.com/o/r/pull/9", "pad {pad}");
+            assert_eq!(prs[0].state, "merged", "pad {pad}");
+        }
+    }
+
+    #[test]
+    fn query_is_case_insensitive_for_non_ascii_titles() {
+        let spec = BoardSpec::default();
+        let facts = vec![SessionFact {
+            id: "shell-e".into(),
+            title: "Émile's notes".into(),
+            updated_ms: 1,
+            preview: "Ça va".into(),
+            run: RunStatus::Idle,
+            prs: vec![],
+            involving_me: true,
+        }];
+        let ids = |q: &str| -> Vec<String> {
+            build_page(&spec, &facts, PersonalFilter::Everyone, q, 0)
+                .columns
+                .iter()
+                .flat_map(|c| c.tiles.iter().map(|t| t.id.clone()))
+                .collect()
+        };
+        assert_eq!(ids("émile"), ["shell-e"]);
+        assert_eq!(ids("ÇA"), ["shell-e"]);
+        assert!(ids("zoë").is_empty());
     }
 
     #[test]

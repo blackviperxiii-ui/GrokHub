@@ -171,51 +171,68 @@ pub fn tick_as(
         let mut step = None;
         // id, new_cursor, context
         let mut wait_ready: Option<(String, String, String)> = None;
-        if let Some(pending) = automations::next_due(config_dir, now, &seen)? {
-            match wait_step(&pending.wait, config_dir) {
-                WaitStep::Wait => {
-                    automations::settle_wait(config_dir, &pending.id, now)?;
-                    seen.insert(pending.id);
-                    continue;
-                }
-                WaitStep::Ready {
-                    context,
-                    new_cursor,
-                } => {
-                    wait_ready = Some((pending.id.clone(), new_cursor, context));
-                }
-                WaitStep::None => {}
-            }
-            if let Some(cmd) = grokhub_core::night_check_command(&pending.check_command) {
-                let next = check_step(&pending.gate, &check(cmd));
-                if next.waits() {
-                    automations::settle_skip(config_dir, &pending.id, now)?;
-                    seen.insert(pending.id);
-                    continue;
-                }
-                step = Some((pending.id.clone(), next));
-            }
-            let script_only = matches!(
-                step.as_ref().map(|(_, s)| s),
-                Some(CheckStep::ScriptOnly { .. })
-            );
-            if let Some(why) = preflight(&pending, script_only) {
-                automations::settle_preflight(config_dir, &pending.id, &why, now)?;
-                seen.insert(pending.id.clone());
-                fired.push(Fired {
-                    id: pending.id,
-                    name: pending.name,
-                    result: RunResult {
-                        text: String::new(),
-                        error: why,
-                        stop: PREFLIGHT.into(),
-                    },
-                });
+        let Some(pending) = automations::next_due(config_dir, now, &seen)? else {
+            return Ok(fired);
+        };
+        // Due an hour early because the clock went back since its next
+        // run was set: it fires when its slot comes.
+        if grokhub_core::automation::due_before_its_slot(&pending, now) {
+            seen.insert(pending.id);
+            continue;
+        }
+        match wait_step(&pending.wait, config_dir) {
+            WaitStep::Wait => {
+                automations::settle_wait(config_dir, &pending.id, now)?;
+                seen.insert(pending.id);
                 continue;
             }
+            WaitStep::Ready {
+                context,
+                new_cursor,
+            } => {
+                wait_ready = Some((pending.id.clone(), new_cursor, context));
+            }
+            WaitStep::None => {}
         }
-        let Some(job) = automations::claim_due(config_dir, now, &seen)? else {
-            return Ok(fired);
+        if let Some(cmd) = grokhub_core::night_check_command(&pending.check_command) {
+            let next = check_step(&pending.gate, &check(cmd));
+            if next.waits() {
+                automations::settle_skip(config_dir, &pending.id, now)?;
+                seen.insert(pending.id);
+                continue;
+            }
+            step = Some((pending.id.clone(), next));
+        }
+        let script_only = matches!(
+            step.as_ref().map(|(_, s)| s),
+            Some(CheckStep::ScriptOnly { .. })
+        );
+        if let Some(why) = preflight(&pending, script_only) {
+            automations::settle_preflight(config_dir, &pending.id, &why, now)?;
+            seen.insert(pending.id.clone());
+            fired.push(Fired {
+                id: pending.id,
+                name: pending.name,
+                result: RunResult {
+                    text: String::new(),
+                    error: why,
+                    stop: PREFLIGHT.into(),
+                },
+            });
+            continue;
+        }
+        // Claim only the job whose wait and check just ran: a Run now that
+        // took it meanwhile must not hand the claim to another job, which
+        // would then run without its own check.
+        let others: HashSet<String> = automations::load(config_dir)?
+            .into_iter()
+            .map(|a| a.id)
+            .filter(|id| *id != pending.id)
+            .chain(seen.iter().cloned())
+            .collect();
+        let Some(job) = automations::claim_due(config_dir, now, &others)? else {
+            seen.insert(pending.id);
+            continue;
         };
         seen.insert(job.id.clone());
         let step = step.filter(|(id, _)| *id == job.id).map(|(_, s)| s);
@@ -1313,5 +1330,96 @@ mod tests {
             row.health
         );
         assert!(row.next_run.unwrap() > nine);
+    }
+
+    /// A Run now that takes one gated job while its check runs leaves the
+    /// other gated job to its own check: it never runs unchecked.
+    #[test]
+    fn a_run_now_during_a_check_leaves_the_other_job_to_its_own_check() {
+        let dir = temp_dir("race");
+        let nine = FRI_8AM + HOUR;
+        let row = |id: &str, cmd: &str| {
+            format!(
+                r#"{{"id":"{id}","name":"{id}","schedule":"daily","time":"09:00","instructions":"Report on {id}.","checkCommand":"{cmd}","enabled":true,"nextRun":{nine}}}"#
+            )
+        };
+        std::fs::write(
+            automations::path(&dir),
+            format!(
+                "[{},{}]",
+                row("race-a", "check-a"),
+                row("race-b", "check-b")
+            ),
+        )
+        .expect("seed");
+        let held = RefCell::new(None);
+        let checks = RefCell::new(Vec::new());
+        let mut asked = Vec::new();
+        let fired = tick_with_check(
+            &dir,
+            &at(nine),
+            PID,
+            &mut |job, words| {
+                asked.push((job.id.clone(), words.to_string()));
+                ok("done")
+            },
+            &mut |cmd| {
+                checks.borrow_mut().push(cmd.to_string());
+                if cmd == "check-a" {
+                    // A Run now of race-a starts while its check runs.
+                    *held.borrow_mut() = automations::Running::claim("race-a").ok();
+                }
+                format!("$ {cmd}\nexit 0 · 4ms\n{cmd} is fine\n")
+            },
+        )
+        .expect("tick");
+        assert_eq!(
+            checks.into_inner(),
+            vec!["check-a".to_string(), "check-b".to_string()]
+        );
+        assert_eq!(
+            fired.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
+            vec!["race-b"]
+        );
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, "race-b");
+        assert!(asked[0].1.contains("check-b is fine"), "{}", asked[0].1);
+        drop(held);
+    }
+
+    /// Sunday 7 November 2027, 02:00 UTC: Saturday 21:00 in US Central
+    /// daylight time (UTC-5). Clocks go back to UTC-6 at 02:00 local.
+    const SAT_9PM_CDT: u64 = 1_825_552_800_000;
+
+    #[test]
+    fn a_daily_9am_job_fires_at_9am_on_the_day_daylight_saving_ends() {
+        let dir = temp_dir("dst");
+        let list = automations::add(
+            &dir,
+            "every day at 9am summarize my inbox",
+            local_clock(SAT_9PM_CDT, -300),
+        )
+        .expect("added");
+        let nine_cdt = SAT_9PM_CDT + 12 * HOUR;
+        assert_eq!(list[0].next_run, Some(nine_cdt));
+        let mut asked = Vec::new();
+        let mut run = |_: &Automation, words: &str| {
+            asked.push(words.to_string());
+            ok("done")
+        };
+        // 14:00 UTC reads 08:00 on the window's clock once it is UTC-6.
+        let cst = |ms: u64| move || local_clock(ms, -360);
+        let early = tick(&dir, &cst(nine_cdt), PID, &mut run).expect("tick");
+        assert_eq!(early, Vec::new());
+        let half = tick(&dir, &cst(nine_cdt + HOUR / 2), PID, &mut run).expect("tick");
+        assert_eq!(half, Vec::new());
+        let nine = tick(&dir, &cst(nine_cdt + HOUR), PID, &mut run).expect("tick");
+        assert_eq!(nine.len(), 1);
+        assert_eq!(
+            asked,
+            vec!["every day at 9am summarize my inbox".to_string()]
+        );
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.next_run, Some(nine_cdt + HOUR + 24 * HOUR));
     }
 }

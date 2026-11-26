@@ -1,0 +1,8 @@
+- Sessions board: a chat with an accent, emoji or dash next to a PR link no longer breaks the board.
+- Sessions board: the title filter ignores case for any letter, so "émile" finds "Émile".
+- Sessions board: background refreshes keep the filter you applied, not text you are still typing.
+- Sessions board: PR links open in your browser from the desktop app.
+- Settings: turning desktop control on or off after Auto setup no longer turns old approvals back on.
+- Chat: switching chats quickly always shows the chat you picked last.
+- Wake word: it stays paused while voice mode has the mic, even when voice mode started first.
+- Personality: a custom personality can be deleted whatever its file is called, and a file holding several keeps the others.

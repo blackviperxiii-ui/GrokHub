@@ -331,7 +331,7 @@ pub fn rule_matches_text(rule: &Rule, text: &str, wide_prefix: bool) -> bool {
 
 /// `None` when `raw` leaves the workspace after `.` and `..` collapse, or starts with `~`.
 pub fn path_forms(workspace: &Path, raw: &str) -> Option<Vec<String>> {
-    let raw = raw.trim().replace('\\', "/");
+    let raw = strip_verbatim(&raw.trim().replace('\\', "/"));
     if raw.is_empty() || raw == "." {
         let abs = workspace_string(workspace);
         return Some(vec![abs, ".".into(), "./".into()]);
@@ -353,11 +353,31 @@ pub fn path_forms(workspace: &Path, raw: &str) -> Option<Vec<String>> {
     }
 }
 
+fn has_drive_prefix(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+fn strip_verbatim(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("//?/UNC/") {
+        format!("//{rest}")
+    } else if let Some(rest) = path.strip_prefix("//?/") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 fn forms_if_inside(ws_abs: &str, abs: &str) -> Option<Vec<String>> {
     let trimmed = ws_abs.trim_end_matches('/');
     let ws = if trimmed.is_empty() { "/" } else { trimmed };
+    let windows_drive = has_drive_prefix(ws) && has_drive_prefix(abs);
     let inside = if ws == "/" {
         abs.starts_with('/')
+    } else if windows_drive {
+        let ws_low = ws.to_ascii_lowercase();
+        let abs_low = abs.to_ascii_lowercase();
+        abs_low == ws_low || abs_low.starts_with(&format!("{ws_low}/"))
     } else {
         abs == ws || abs.starts_with(&format!("{ws}/"))
     };
@@ -366,6 +386,11 @@ fn forms_if_inside(ws_abs: &str, abs: &str) -> Option<Vec<String>> {
     }
     let rel = if ws == "/" {
         abs.trim_start_matches('/').to_string()
+    } else if windows_drive {
+        abs.get(ws.len()..)
+            .unwrap_or("")
+            .trim_start_matches('/')
+            .to_string()
     } else {
         abs.strip_prefix(ws)
             .unwrap_or("")
@@ -464,7 +489,7 @@ pub fn tool_reaches(rule_tool: Tool, kind: Tool) -> bool {
 }
 
 fn workspace_string(workspace: &Path) -> String {
-    workspace.to_string_lossy().replace('\\', "/")
+    strip_verbatim(&workspace.to_string_lossy().replace('\\', "/"))
 }
 
 fn is_absolute(path: &str) -> bool {
