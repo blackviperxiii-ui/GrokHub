@@ -602,8 +602,9 @@ pub use oauth::{
     XAI_OAUTH_DISCOVERY, XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };
 pub use openclaw::{
-    default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
-    preview_mcp_json, preview_skill_md, ImportedMcpPreview, ImportedSkillPreview,
+    default_ide_roots, default_openclaw_paths, import_memory_file, is_ide_importable,
+    is_openclaw_workspace, merge_imported_memory, preview_mcp_json, preview_skill_md,
+    ImportedMcpPreview, ImportedSkillPreview,
 };
 pub use organs::{
     cap_from_text, cap_label, daily_units_blocked, date_out_from, greet_from_last_job,

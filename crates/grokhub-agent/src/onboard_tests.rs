@@ -539,3 +539,35 @@ fn hermes_workspace_memories_skills_and_mcp_json_preview_import() {
         "secrets must never leak into preview"
     );
 }
+
+#[test]
+fn claude_cursor_and_codex_notes_import_for_review() {
+    let (dir, _guard) = temp_cfg("ide-import");
+    let home = dir.join("home");
+    for (folder, file, body) in [
+        (".claude", "CLAUDE.md", "Prefers short answers.\n"),
+        (".cursor", "AGENTS.md", "Pin the rail to Advanced.\n"),
+        (".codex", "instructions.md", "Ask before spending.\n"),
+    ] {
+        let root = home.join(folder);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(file), body).unwrap();
+    }
+    let sources = import_sources(&home);
+    assert_eq!(
+        sources
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        ["claude", "cursor", "codex"]
+    );
+    let base = draft(&dir, &Answers::default(), NOW);
+    let claude = import_by_id(&home, "claude", &base).expect("claude");
+    assert!(claude.drafts.memory.contains("From Claude Code CLAUDE.md"));
+    assert!(claude.drafts.memory.contains("Prefers short answers."));
+    let cursor = import_by_id(&home, "cursor", &claude.drafts).expect("cursor");
+    assert!(cursor.drafts.memory.contains("From Cursor AGENTS.md"));
+    let codex = import_by_id(&home, "codex", &cursor.drafts).expect("codex");
+    assert!(codex.drafts.memory.contains("From Codex instructions.md"));
+    assert!(codex.drafts.memory.contains("Ask before spending."));
+}

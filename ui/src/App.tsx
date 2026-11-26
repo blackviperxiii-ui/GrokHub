@@ -85,6 +85,7 @@ import {
   isDockable,
 } from "./Dock";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
+import { FirstRunV2 } from "./FirstRunV2";
 import { OnboardStage } from "./GetToKnowYou";
 import { WindowControls } from "./WindowControls";
 
@@ -1134,6 +1135,13 @@ export function App() {
           {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
           {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
           {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} onSaved={readProfile} />}
+          {caps.autoSetup && (
+            <FirstRunV2
+              after={auto.reply !== null && !auto.reply.firstRun}
+              onAsk={askNow}
+              onLayout={setRailMode}
+            />
+          )}
           {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
             <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
           )}

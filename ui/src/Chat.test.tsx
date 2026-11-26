@@ -1476,7 +1476,11 @@ describe("Chat", () => {
     window.addEventListener("onboard:open", opened);
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "/import{Enter}");
-    expect(await screen.findByText("No OpenClaw or Hermes workspace on this computer.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer.",
+      ),
+    ).toBeInTheDocument();
     expect(opened).not.toHaveBeenCalled();
     window.removeEventListener("onboard:open", opened);
     expect(api.sendChat).not.toHaveBeenCalled();

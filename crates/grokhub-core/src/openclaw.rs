@@ -25,6 +25,25 @@ pub fn default_openclaw_paths(home: &str) -> Vec<String> {
     ]
 }
 
+/// Coding-agent folders that may hold notes to import (Claude Code, Cursor, Codex).
+/// Each entry is `(stable id, label, path)`.
+pub fn default_ide_roots(home: &str) -> Vec<(&'static str, &'static str, String)> {
+    let h = home.trim_end_matches('/');
+    vec![
+        ("claude", "Claude Code", format!("{h}/.claude")),
+        ("cursor", "Cursor", format!("{h}/.cursor")),
+        ("codex", "Codex", format!("{h}/.codex")),
+    ]
+}
+
+/// Whether a folder listing looks like notes from Claude Code, Cursor or Codex.
+pub fn is_ide_importable(names: &[&str]) -> bool {
+    names.iter().any(|n| {
+        let base = n.rsplit('/').next().unwrap_or(n);
+        import_dest(base).is_some()
+    })
+}
+
 pub fn is_openclaw_workspace(names: &[&str]) -> bool {
     names.iter().any(|n| {
         let u = n.to_ascii_uppercase();
@@ -139,7 +158,10 @@ pub fn import_dest(name: &str) -> Option<&'static str> {
         "SOUL.md"
     } else if n.eq_ignore_ascii_case("USER.md") {
         "USER.md"
+    } else if n.eq_ignore_ascii_case("IDENTITY.md") {
+        "USER.md"
     } else {
+        // CLAUDE.md, AGENTS.md, MEMORY.md, instructions.md, and other notes.
         "MEMORY.md"
     })
 }
@@ -215,6 +237,22 @@ mod tests {
             Some(("MEMORY.md".to_string(), "Reads before bed.".to_string()))
         );
         assert_eq!(import_memory_file("export.log", "plain"), None);
+    }
+
+    #[test]
+    fn ide_roots_and_claude_md_import() {
+        let roots = default_ide_roots("/home/user");
+        assert_eq!(roots.len(), 3);
+        assert_eq!(roots[0].0, "claude");
+        assert!(roots[0].2.ends_with(".claude"));
+        assert!(roots[1].2.ends_with(".cursor"));
+        assert!(roots[2].2.ends_with(".codex"));
+        assert!(is_ide_importable(&["CLAUDE.md", "config.json"]));
+        assert!(is_ide_importable(&["AGENTS.md"]));
+        assert!(!is_ide_importable(&["config.json", "README"]));
+        assert_eq!(import_dest("CLAUDE.md"), Some("MEMORY.md"));
+        assert_eq!(import_dest("IDENTITY.md"), Some("USER.md"));
+        assert_eq!(import_dest("instructions.md"), Some("MEMORY.md"));
     }
 
     #[test]
