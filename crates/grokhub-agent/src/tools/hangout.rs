@@ -98,19 +98,23 @@ pub fn asks_for_action(text: &str) -> bool {
     has_file_verb && has_file_noun
 }
 
-/// True when this Hangout turn should send no tools: casual chat or a question
-/// with no action ask. A task, repair, research, background, or picture ask
-/// (or any action ask) keeps tools, and so does an unclear ask: a `default`
-/// Brief is a guess, not a read that the turn is small talk.
+/// True when this turn should send no tools: casual chat or creative play with
+/// no action ask. A question keeps tools, since it may be about a file or an
+/// earlier chat. So does a task, repair, research, background, or picture ask
+/// (or any action ask), and an unclear ask: a `default` Brief is a guess, not
+/// a read that the turn is small talk.
 pub fn chat_only(brief: &Brief, text: &str) -> bool {
     if brief.by == "default" || asks_for_action(text) {
         return false;
     }
     match brief.intent {
-        Intent::Chat | Intent::Creative | Intent::Question => true,
-        Intent::Task | Intent::Repair | Intent::Research | Intent::Background | Intent::Image => {
-            false
-        }
+        Intent::Chat | Intent::Creative => true,
+        Intent::Question
+        | Intent::Task
+        | Intent::Repair
+        | Intent::Research
+        | Intent::Background
+        | Intent::Image => false,
     }
 }
 
@@ -135,6 +139,15 @@ mod tests {
             ..Default::default()
         };
         assert!(!chat_only(&guess, "do the thing"));
+    }
+
+    #[test]
+    fn a_question_keeps_its_tools() {
+        assert!(!chat_only(&brief(Intent::Question), "what does a.txt say?"));
+        assert!(!chat_only(
+            &brief(Intent::Question),
+            "why is my fan so loud"
+        ));
     }
 
     #[test]
