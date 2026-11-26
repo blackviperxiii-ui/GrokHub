@@ -201,6 +201,8 @@ pub enum Route {
     Call(String),
     /// A file of the UI, by its path.
     Page(String),
+    /// The page an MCP App runs in.
+    AppFrame,
     Wrong(u16),
 }
 
@@ -220,6 +222,7 @@ pub fn route(method: &Method, url: &str) -> Route {
         };
     }
     match method {
+        Method::Get | Method::Head if path == crate::mcp_app_frame::PATH => Route::AppFrame,
         Method::Get | Method::Head => Route::Page(path.to_string()),
         _ => Route::Wrong(405),
     }
@@ -792,6 +795,13 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
             send_json(req, 200, &reply);
         }
         Route::Page(path) => page(req, &path, &job.assets),
+        Route::AppFrame => send(
+            req,
+            200,
+            crate::mcp_app_frame::HTML.as_bytes().to_vec(),
+            "text/html; charset=utf-8",
+            &[("Content-Security-Policy", crate::mcp_app_frame::CSP)],
+        ),
         Route::Wrong(status) => {
             send_json(req, status, &json!({ "ok": false, "error": "Not found." }))
         }
@@ -1844,6 +1854,29 @@ mod tests {
         }
     }
 
+    /// An MCP App's inline script runs only under a CSP that allows it, so
+    /// its frame is a page of its own: that CSP, a forced sandbox (an opaque
+    /// origin even when opened on its own), and no network.
+    #[test]
+    fn serves_the_mcp_app_frame_with_its_own_csp() {
+        let access = WebAccess::default();
+        let (port, _) = serve(&access);
+        let (status, head, body) = http(port, "GET", "/mcp-app-frame", None, "");
+        assert_eq!(status, 200, "{head}");
+        let csp = "Content-Security-Policy: sandbox allow-scripts; default-src 'none'; \
+                   script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; \
+                   img-src data: blob:; media-src data: blob:; font-src data:; \
+                   connect-src 'none'; frame-src 'none'; object-src 'none'; \
+                   base-uri 'none'; form-action 'none'";
+        assert!(head.contains(csp), "{head}");
+        assert!(!head.contains("X-Frame-Options"), "{head}");
+        assert!(
+            body.contains("ui/notifications/sandbox-proxy-ready"),
+            "{body}"
+        );
+        access.stop();
+    }
+
     #[test]
     fn serves_the_page_and_runs_only_paired_web_commands() {
         let access = WebAccess::default();
@@ -1873,6 +1906,12 @@ mod tests {
         let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
         assert!(shell.contains(expected_media), "{shell}");
         assert!(shell.contains("img-src 'self' data:;"), "{shell}");
+        // MCP App frames come from the shell's own mcp-app: scheme
+        // (http://mcp-app.localhost on Windows), and only frames do.
+        assert!(
+            shell.ends_with("; frame-src mcp-app: http://mcp-app.localhost"),
+            "{shell}"
+        );
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");
