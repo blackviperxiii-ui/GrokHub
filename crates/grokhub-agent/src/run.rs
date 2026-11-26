@@ -9011,7 +9011,8 @@ linter (or run the changed file) before you finish: a re-read or git status does
         let conv = "shell-img-cap-ac4";
         crate::perm::clear_conversation(conv);
         let _cfg = crate::perm::ConfigGuard::set(&dir);
-        let cmd_json = r#"{"command":"echo IMAGINE: out.png"}"#;
+        // Quoted: PowerShell's echo prints each bare word on its own line.
+        let cmd_json = r#"{"command":"echo 'IMAGINE: out.png'"}"#;
         let script = script_calls(vec![vec![
             call("sh-img-1", "run_terminal_command", cmd_json),
             call("sh-img-2", "run_terminal_command", cmd_json),
