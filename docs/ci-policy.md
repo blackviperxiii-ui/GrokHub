@@ -68,7 +68,7 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 |---|---|
 | `pii-guard.yml` (required `pii-guard`) | PR, Queue, push to `beta` and `main`. Superseded PR and beta runs are cancelled. |
 | `nightly.yml` | Schedule (08:00 UTC) and manual. Dispatches the `ci.yml` and `release.yml` nightly on `beta`. Builds nothing. |
-| `auto-merge.yml` | PR events into `beta`. Turns on squash auto-merge. Builds nothing. |
+| `auto-merge.yml` | PR events into `beta`. Turns on squash auto-merge (or squash-merges when the PR is already clean). Job-level concurrency so a skipped bot review does not cancel a ready_for_review run. Builds nothing. |
 | `retarget.yml` | PRs opened against `main`. Moves them to `beta`. Builds nothing. |
 | `cards-sync.yml`, `claude.yml` | Bot workflows: schedule, issue, review and manual triggers. They build nothing. |
 

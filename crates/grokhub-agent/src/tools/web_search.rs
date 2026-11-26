@@ -24,6 +24,9 @@ const QUERY_CAP: usize = 400;
 const OFFLINE_MSG: &str =
     "Web search is unavailable (no network or the search host did not answer). Continue without live sources, or try again when online.";
 
+/// DuckDuckGo answered with its bot challenge. Never reported as "No results".
+pub const DUCKDUCKGO_BLOCKED: &str = "DuckDuckGo blocked this search (anomaly page). Search is blocked. Switch to SearXNG or Brave in Settings.";
+
 /// Where the search settings live, named in the tool's errors.
 const SETTINGS_PATH: &str = "Settings → AI models → Web search";
 /// A non-http SearXNG URL is refused when saved.
@@ -348,7 +351,18 @@ fn search(
     stop: &dyn Fn() -> bool,
 ) -> Result<Vec<Hit>, String> {
     match settings.backend {
-        Backend::DuckDuckGo => search_duckduckgo(query, fetch, stop),
+        Backend::DuckDuckGo => match search_duckduckgo(query, fetch, stop) {
+            Err(err) if err == DUCKDUCKGO_BLOCKED => {
+                if !settings.searxng_url.trim().is_empty() {
+                    search_searxng(query, &settings.searxng_url, fetch, stop)
+                } else if brave_key(config_dir).ok().flatten().is_some() {
+                    search_brave(query, config_dir, fetch, stop)
+                } else {
+                    Err(err)
+                }
+            }
+            other => other,
+        },
         Backend::Searxng => search_searxng(query, &settings.searxng_url, fetch, stop),
         Backend::Brave => search_brave(query, config_dir, fetch, stop),
     }
@@ -422,6 +436,9 @@ fn search_duckduckgo(
 ) -> Result<Vec<Hit>, String> {
     let url = grokhub_core::pulse_sources::duckduckgo_lite_url(query);
     let html = get_text(&url, fetch, stop)?;
+    if grokhub_core::pulse_sources::duckduckgo_lite_blocked(&html) {
+        return Err(DUCKDUCKGO_BLOCKED.to_string());
+    }
     let hits = grokhub_core::pulse_sources::parse_duckduckgo_lite(&html, MAX_RESULTS);
     if hits.is_empty() {
         return Ok(Vec::new());
@@ -825,6 +842,26 @@ mod tests {
             "{}",
             out.text
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn duckduckgo_anomaly_page_is_an_error_not_no_results() {
+        let dir = crate::harness::test_dir("web-search-anomaly");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::fence::reset_run_nonce_for_tests();
+        let html = r#"<html><body><div class="anomaly">Unfortunately, bots use DuckDuckGo, too.</div>
+            <script src="/anomaly.js"></script></body></html>"#;
+        let fetch = FakeFetch {
+            body: html.into(),
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let out = run(&json!({"query": "rust release notes"}), &fetch, &|| false);
+        assert!(out.failed, "{}", out.text);
+        assert!(out.text.contains("anomaly page"), "{}", out.text);
+        assert!(out.text.contains("Search is blocked"), "{}", out.text);
+        assert!(out.text.contains("SearXNG or Brave"), "{}", out.text);
+        assert!(!out.text.contains("No results"), "{}", out.text);
         let _ = std::fs::remove_dir_all(dir);
     }
 
