@@ -859,12 +859,17 @@ export function initScript(theme = "ops-dark") {
             agents: [
               { id: "planner", name: "Planner", kind: "role", access: "ask", about: "Plans the week and hands out the work.", team: "home", desktop: false, talks_to: ["researcher"], share: false },
               { id: "researcher", name: "Researcher", kind: "role", access: "read_only", about: "Finds sources and sums them up.", desktop: false, share: false },
-              { id: "front-desk", name: "Front desk", kind: "customer", access: "read_only", about: "Answers questions about opening hours.", team: "home", desktop: false, share: false },
+              { id: "front-desk", name: "Front desk", kind: "customer", access: "read_only", about: "Answers questions about opening hours.", team: "home", desktop: false, share: true, share_with: ["laptop-1"] },
             ],
             teams: [{ id: "home", name: "Home", lead: "planner" }],
             problem: null,
             tiers: ["workhorse"],
           };
+        case "team_computers":
+          return [
+            { id: "laptop-1", name: "Laptop", lastSeen: Date.now() - 300_000 },
+            { id: "tablet-2", name: "Tablet", lastSeen: 0 },
+          ];
         case "get_agent_tasks":
           return [
             { id: "task-2", from: { agent: "planner" }, to: "researcher", state: "TASK_STATE_COMPLETED", asked: "Which router has the best range for a two-floor house?", reply: "A mesh kit with two units, one on each floor.", started_ms: Date.now() - 120_000, ended_ms: Date.now() - 90_000 },

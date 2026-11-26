@@ -93,6 +93,8 @@ function mockReply(callNumber, body) {
   // The Team page's agent answers the message the person's chat hands it;
   // the chat asks it once, then passes the answer on.
   if (body.includes(`You are ${TEAM_NAME}, one of the person's agents`)) return textReply(TEAM_ANSWER);
+  // The agent a paired computer messages through the hub.
+  if (body.includes(`You are ${PEER_AGENT}, one of the person's agents`)) return textReply(PEER_ANSWER);
   if (body.includes(TEAM_ASK)) {
     if (!body.includes("smoke-team-ask")) {
       return toolCall("smoke-team-ask", "message_agent", { agent: TEAM_ID, message: TEAM_QUESTION });
@@ -391,6 +393,12 @@ const TEAM_QUESTION = "Which router reaches the garden?";
 const TEAM_ANSWER = "The mesh kit, with one unit by the back door.";
 const TEAM_REPLY = "The researcher says the mesh kit reaches it";
 const WEB_REPLY = "Hello, browser";
+const PEER_AGENT = "Smoke front desk";
+const PEER_AGENT_ID = "smoke-front-desk";
+const PEER_PC = "smoke-laptop";
+const PEER_PC_NAME = "Smoke laptop";
+const PEER_QUESTION = "When does the garden shop open?";
+const PEER_ANSWER = "Nine to five, every day but Monday.";
 
 async function find(s, css) {
   const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
@@ -1056,6 +1064,104 @@ async function plan(s, workspace) {
     return null;
   });
   console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, no picker needed`);
+}
+
+// Agent door: start share on Devices, pair a computer over the hub, share a
+// new agent with it on the Team page, then that computer lists the agent and
+// messages it at /a2a/v1. The answer comes from the agent's own turn and the
+// task log names the computer. Stop share closes the door.
+async function peerDoor(s, config) {
+  const one = async (xpath) => (await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }))[0];
+  const press = async (what, xpath) => {
+    const el = await waitFor(what, () => one(xpath));
+    await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+  };
+  await tab(s, "Devices");
+  await press("Start share", "//div[@aria-label='Share']//button[normalize-space()='Start share']");
+  const code = await waitFor("the pairing code", async () =>
+    (await textOf(s, "div[aria-label='Share'] p[aria-label='Pairing code']")).trim(),
+  );
+  const status = await textOf(s, "div[aria-label='Share'] .card-status");
+  const port = Number(/port (\d+)/.exec(status)?.[1]);
+  if (!port) throw new Error(`the share card said ${JSON.stringify(status)}`);
+  const hub = `http://127.0.0.1:${port}`;
+  const paired = await fetch(`${hub}/v1/pair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, deviceId: PEER_PC, deviceName: PEER_PC_NAME }),
+  });
+  const { token } = await paired.json();
+  if (!paired.ok || !token) throw new Error(`pairing answered ${paired.status}`);
+  const auth = { Authorization: `Bearer ${token}` };
+  console.log(`paired ${PEER_PC} with the hub on port ${port}`);
+
+  await tab(s, "Team");
+  await press("New role", "//section[@aria-label='Team']//button[normalize-space()='New role']");
+  const form = "form[aria-label='New role']";
+  await typeInto(s, await waitFor("the agent form", () => find(s, `${form} input`)), PEER_AGENT);
+  await typeInto(s, await find(s, `${form} textarea`), "Answers when the garden shop is open.");
+  await press(
+    "the paired computer in the share list",
+    `//form[@aria-label='New role']//fieldset[legend[normalize-space()='Paired computers that can message it']]//label[starts-with(normalize-space(), '${PEER_PC_NAME} · ')]/input`,
+  );
+  await shot(s, "team-share-list");
+  await click(s, `${form} button[type='submit']`);
+  const made = await waitFor("the shared agent in agent-team.json", async () => {
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents?.find((a) => a.id === PEER_AGENT_ID) ?? null;
+  });
+  if (made.share !== true || JSON.stringify(made.share_with) !== JSON.stringify([PEER_PC])) {
+    throw new Error(`the agent was saved as ${JSON.stringify(made)}`);
+  }
+  const card = await waitFor("the agent's card", () => find(s, `section[aria-label='Team'] li[aria-label='${PEER_AGENT}']`));
+  const cardSays = await cardText(s, card, (t) => t.includes("shared with 1 computer"));
+  if (!cardSays.includes("Role · Ask first · shared with 1 computer")) throw new Error(`the card said ${JSON.stringify(cardSays)}`);
+
+  const list = await (await fetch(`${hub}/a2a/v1`, { headers: auth })).json();
+  const listed = list.agents?.find((a) => a.id === PEER_AGENT_ID);
+  if (listed?.url !== `${hub}/a2a/v1/${PEER_AGENT_ID}`) throw new Error(`the door listed ${JSON.stringify(list)}`);
+  const sent = await fetch(listed.url, {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "SendMessage",
+      params: { message: { messageId: "smoke-m-1", role: "ROLE_USER", parts: [{ text: PEER_QUESTION }] } },
+    }),
+  });
+  const reply = await sent.json();
+  const task = reply.result?.task;
+  if (task?.status?.state !== "TASK_STATE_COMPLETED" || task.artifacts?.[0]?.parts?.[0]?.text !== PEER_ANSWER) {
+    throw new Error(`the door answered ${JSON.stringify(reply)}`);
+  }
+  console.log(`the door answered ${JSON.stringify(task.artifacts[0].parts[0].text)} (${task.status.state})`);
+  const asked = mockSeen.find((c) => c.body.includes(`You are ${PEER_AGENT}, one of the person's agents`));
+  if (!asked?.body.includes(PEER_QUESTION)) throw new Error("the agent's turn never got the computer's message");
+  const logged = await waitFor("the computer's task in agent-tasks.jsonl", async () => {
+    const rows = readFileSync(join(config, "agent-tasks.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    return rows.find((r) => r.to === PEER_AGENT_ID) ?? null;
+  });
+  if (logged.from?.peer !== PEER_PC || logged.state !== "TASK_STATE_COMPLETED" || logged.reply !== PEER_ANSWER) {
+    throw new Error(`the task was logged as ${JSON.stringify(logged)}`);
+  }
+  console.log(`task log: ${JSON.stringify({ from: logged.from, to: logged.to, state: logged.state })}`);
+
+  await tab(s, "Devices");
+  await press("Stop share", "//div[@aria-label='Share']//button[normalize-space()='Stop share']");
+  const closed = await waitFor("the door to close", async () => {
+    const after = await fetch(`${hub}/a2a/v1`, { headers: auth });
+    return after.status === 200 ? null : after.status;
+  });
+  console.log(`after stop share the door answers ${closed}`);
+
+  await tab(s, "Team");
+  await press("Remove", `//li[@aria-label='${PEER_AGENT}']//button[normalize-space()='Remove']`);
+  await press("Remove to confirm", `//div[@aria-label='Remove ${PEER_AGENT}?']//button[normalize-space()='Remove']`);
+  await waitFor("the shared agent gone from agent-team.json", async () => {
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents.every((a) => a.id !== PEER_AGENT_ID) ? true : null;
+  });
 }
 
 // Team: make a role agent on the Team page, have the chat message it, see the
@@ -2213,6 +2319,7 @@ async function main() {
     await codeAgent(s, config, workspace);
     await codeShip(s, config, workspace);
     await team(s, config);
+    await peerDoor(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s, config);
     console.log("smoke ok");
   } catch (err) {
