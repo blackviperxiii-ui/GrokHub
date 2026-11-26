@@ -11,8 +11,8 @@ import { VIEW_LABELS, type View } from "./Palette";
  * shell.json (src-tauri/src/settings.rs); this module owns its rules.
  */
 
-/** The pages the dock holds: the cabin's six main pages, in cabin order. */
-export const DOCKABLE: View[] = ["chat", "imagine", "automations", "skills", "workboard", "pulse"];
+/** The pages the dock holds: the cabin's main pages, in cabin order. */
+export const DOCKABLE: View[] = ["chat", "automations", "skills", "workboard", "pulse"];
 
 export function isDockable(page: View): boolean {
   return DOCKABLE.includes(page);

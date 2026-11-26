@@ -238,3 +238,29 @@ fn a_picture_ask_sends_the_picture_tool_up_front_at_the_tail() {
         "{readonly:?}"
     );
 }
+
+#[test]
+fn hangout_picture_and_video_asks_offer_media_tools_up_front() {
+    let s = "talk-reg-hangout-media";
+    let before = turn(s, &chat(), ON);
+    assert!(!names(&before).iter().any(|n| n == "image_generate"));
+    assert!(!names(&before).iter().any(|n| n == "video_generate"));
+
+    ensure_media_tools(s, "Nyx send me a picture of yourself");
+    let after_img = turn(s, &chat(), ON);
+    let sent_img = names(&after_img);
+    assert!(
+        sent_img.iter().any(|n| n == "image_generate"),
+        "{sent_img:?}"
+    );
+    assert!(wire(&after_img).starts_with(wire(&before).trim_end_matches(']')));
+
+    ensure_media_tools(s, "make a short video of ocean waves");
+    let after_vid = turn(s, &chat(), ON);
+    let sent_vid = names(&after_vid);
+    assert!(
+        sent_vid.iter().any(|n| n == "video_generate"),
+        "{sent_vid:?}"
+    );
+    assert!(wire(&after_vid).starts_with(wire(&after_img).trim_end_matches(']')));
+}

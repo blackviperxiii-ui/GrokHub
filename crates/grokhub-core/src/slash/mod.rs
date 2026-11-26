@@ -403,7 +403,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/imagine",
-        hint: "Open Imagine",
+        hint: "Make an image in chat",
         insert: "/imagine ",
         run_on_pick: false,
     },
@@ -775,7 +775,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/imagine-video",
-        hint: "Open Imagine video",
+        hint: "Make a video in chat",
         insert: "/imagine-video ",
         run_on_pick: false,
     },
