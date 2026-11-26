@@ -328,6 +328,8 @@ pub fn routing_reason(rules: &[String], handoff_rule: Option<&str>) -> &'static 
         "voice replies are set to local only"
     } else if has("code:local_only") {
         "Code tab is set to local models only"
+    } else if has("local:coding_first") {
+        "trying local coding model first (escalates if verification fails)"
     } else if let Some(h) = handoff_rule {
         match h {
             "handoff:limit" => "cloud model hit its rate limit",

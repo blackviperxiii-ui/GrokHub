@@ -919,6 +919,7 @@ fn run_turn(
     let mut written_handled = false;
     // Order 24: automatic sandboxed test/build verification before a coding turn ends.
     let mut edit_verify = crate::edit_verify::EditVerifyState::default();
+    let mut verify_escalated = false;
     // Brain 2: the turn's Brief and the changes still waiting on a check.
     let brief = drive
         .as_ref()
@@ -1607,7 +1608,28 @@ fn run_turn(
                                     continue;
                                 }
                             }
-                            crate::edit_verify::VerifyOutcome::Exhausted { attempts, .. } => {
+                            crate::edit_verify::VerifyOutcome::Exhausted {
+                                command,
+                                output,
+                                attempts,
+                            } => {
+                                if on_local
+                                    && !verify_escalated
+                                    && !crate::code_panel::session_local_only(input.conversation_id)
+                                    && !grokhub_core::offline::enabled()
+                                {
+                                    verify_escalated = true;
+                                    edit_verify.reset_attempts_for_escalation();
+                                    on_event(LoopEvent::Thought(format!(
+                                        "Local verification (`{}`) failed after {attempts} \
+                                         attempts — escalating to frontier model.",
+                                        cmd.label
+                                    )));
+                                    history.push(cabin_note(&crate::edit_verify::escalation_note(
+                                        &command, &output, attempts,
+                                    )));
+                                    continue;
+                                }
                                 on_event(LoopEvent::Thought(format!(
                                     "Verification (`{}`) still failing after {attempts} attempts.",
                                     cmd.label
