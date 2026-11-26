@@ -334,7 +334,8 @@ mod tests {
         assert_eq!(preview.name, "Weekly Meal Plan");
         assert_eq!(preview.kind, "skill");
         assert!(
-            preview.destination.ends_with("skills/weekly-meal-plan"),
+            std::path::Path::new(&preview.destination)
+                .ends_with(std::path::Path::new("skills").join("weekly-meal-plan")),
             "{}",
             preview.destination
         );

@@ -28,6 +28,7 @@ pub fn offer_from_url(app: &AppHandle, url: &str) -> Result<(), String> {
     let preview = crate::skills::preview_install(&state.config_dir, &identifier)?;
     set_pending(Some(preview.clone()));
     let _ = app.emit(OFFER_EVENT, &preview);
+    #[cfg(desktop)]
     crate::show_main(app);
     Ok(())
 }

@@ -1380,7 +1380,8 @@ mod tests {
         let preview = preview_install(&cfg, "library/weekly-meal-plan").expect("preview");
         assert_eq!(preview.source, "Skills Library");
         assert!(
-            preview.destination.ends_with("skills/weekly-meal-plan"),
+            std::path::Path::new(&preview.destination)
+                .ends_with(std::path::Path::new("skills").join("weekly-meal-plan")),
             "{}",
             preview.destination
         );
