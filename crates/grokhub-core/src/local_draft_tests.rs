@@ -177,15 +177,32 @@ fn every_gemma_pairs_with_its_own_mtp_heads() {
         .map(|p| (p.target.id, p.drafter.id, p.kind))
         .collect();
     // The other makers' small same-tokenizer drafters are plain drafts.
+    // Qwen3.6 drafts with its own MTP heads file.
     let others: Vec<(&str, DraftKind)> = pairs()
         .iter()
         .filter(|p| !p.target.id.starts_with("gemma-4-"))
         .map(|p| (p.target.id, p.kind))
         .collect();
-    assert_eq!(others.len(), 5, "{others:?}");
-    assert!(
-        others.iter().all(|(_, k)| *k == DraftKind::Simple),
-        "{others:?}"
+    let simple: Vec<&str> = others
+        .iter()
+        .filter(|(_, k)| *k == DraftKind::Simple)
+        .map(|(id, _)| *id)
+        .collect();
+    let mtp: Vec<(&str, &str)> = pairs()
+        .iter()
+        .filter(|p| p.target.id.starts_with("qwen3.6-"))
+        .map(|p| (p.target.id, p.drafter.id))
+        .collect();
+    assert_eq!(others.len(), 6, "{others:?}");
+    assert_eq!(simple.len(), 5, "{others:?}");
+    assert_eq!(
+        mtp,
+        vec![("qwen3.6-35b-a3b-heretic-q4_k_m", "qwen3.6-35b-a3b-mtp")]
+    );
+    assert_eq!(
+        pair_for_file("Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-Q4_K_M.gguf")
+            .map(|p| p.kind),
+        Some(DraftKind::Mtp)
     );
     let want: Vec<(&str, &str, DraftKind)> = ["31b", "26b-a4b", "12b", "e4b", "e2b"]
         .iter()
@@ -408,6 +425,9 @@ fn a_pair_needs_the_model_and_its_drafter_when_it_launches_with_it() {
     // The shared Qwen 3.5 0.8B drafter adds its 953 MB.
     let qwen = m("qwen3.5-4b-heretic-q4_k_m");
     assert_eq!(pair_mb(qwen, true), 4_392);
+    // Qwen3.6's MTP heads add their 1391 MB.
+    let q36 = m("qwen3.6-35b-a3b-heretic-q4_k_m");
+    assert_eq!((pair_mb(q36, false), pair_mb(q36, true)), (22_071, 23_462));
     // No drafter in the catalog: the model alone either way.
     let solo = m("nvidia-nemotron3.5-lightning-30b-a3b-heretic-q4_k_m");
     assert_eq!(

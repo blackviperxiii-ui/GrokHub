@@ -458,7 +458,7 @@ fn budgets_from_2_gb_to_48_gb_map_to_one_default_and_tier() {
 #[test]
 fn the_catalog_is_huihui_ai_abliterated_gemma_4_all_pinned() {
     let all: Vec<&LocalModel> = crate::local_setup::standard_models().collect();
-    assert_eq!(all.len(), 25, "data/local_catalog.toml parses");
+    assert_eq!(all.len(), 26, "data/local_catalog.toml parses");
     // The other makers' rows: optional, uncensored, pinned, and never claiming
     // an engine newer than they need.
     for m in all.iter().filter(|m| m.optional) {
