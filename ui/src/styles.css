@@ -5306,7 +5306,7 @@ a.feed-title:focus-visible {
 }
 
 .artifact-tile .card-status {
-  font-size: var(--font-small, 0.85em);
+  font-size: var(--font-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
