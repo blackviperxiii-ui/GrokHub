@@ -75,7 +75,13 @@ fn offer(
         LearnSource::Path(p) => format!("learned from {}", p.display()),
         LearnSource::Reflect | LearnSource::Save(_) => "learned".into(),
     };
-    let preview = draft.skill.instructions.lines().take(8).collect::<Vec<_>>();
+    let preview: Vec<String> = draft
+        .skill
+        .instructions
+        .lines()
+        .take(8)
+        .map(str::to_string)
+        .collect();
     let n = keep(draft, reason);
     let mut prompt = format!("Save these steps as the skill {slash} ({name})?");
     if refs > 0 {
