@@ -15,17 +15,32 @@ pub struct RewindRecord {
 const SENSITIVE_HOME_LEAVES: &[&str] = &[".ssh", ".gnupg", ".aws", ".kube", ".config/GrokHub"];
 
 /// True when `root` is a sensitive `$HOME` leaf (`.ssh`, `.gnupg`, …) or under one.
-/// Paths may use `/` or `\`; comparison normalizes to `/`.
+/// Paths may use `/` or `\`, and a verbatim `\\?\` prefix. Case is ignored:
+/// Windows and macOS file systems ignore it, and a stray match only leaves a
+/// file out of a snapshot.
 pub fn rewind_sensitive(root: &str, home: &str) -> bool {
-    let r = normalize(root);
-    let h = normalize(home);
+    let r = sensitive_form(root);
+    let h = sensitive_form(home);
     if h.is_empty() {
         return false;
     }
     SENSITIVE_HOME_LEAVES.iter().any(|leaf| {
-        let p = format!("{h}/{leaf}");
+        let p = format!("{h}/{}", leaf.to_ascii_lowercase());
         r == p || r.starts_with(&format!("{p}/"))
     })
+}
+
+/// `p` normalized and lowercased, without a verbatim `//?/` (or `//?/UNC/`)
+/// prefix.
+fn sensitive_form(p: &str) -> String {
+    let n = normalize(p).to_ascii_lowercase();
+    if let Some(rest) = n.strip_prefix("//?/unc/") {
+        format!("//{rest}")
+    } else if let Some(rest) = n.strip_prefix("//?/") {
+        rest.to_string()
+    } else {
+        n
+    }
 }
 
 pub fn rewind_allowed(root: &str, home: &str) -> bool {
@@ -158,6 +173,27 @@ fn normalize(p: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_windows_spelling_of_a_sensitive_leaf_is_still_sensitive() {
+        let home = "C:\\Users\\Owner";
+        assert!(rewind_sensitive("//?/C:/Users/Owner/.ssh/id_ed25519", home));
+        assert!(rewind_sensitive("c:/users/owner/.SSH/id_ed25519", home));
+        assert!(rewind_sensitive(
+            "\\\\?\\C:\\Users\\Owner\\.config\\grokhub",
+            home
+        ));
+        assert!(rewind_sensitive(
+            "//?/UNC/srv/share/v/.aws",
+            "//srv/share/V"
+        ));
+        assert!(!rewind_sensitive(
+            "//?/C:/Users/Owner/code/.ssh-notes",
+            home
+        ));
+        assert!(rewind_sensitive("/Users/v/.SSH", "/Users/v"));
+        assert!(rewind_sensitive("/home/v/.ssh/id", "/home/v"));
+    }
 
     #[test]
     fn refuse_home_and_keep_five() {

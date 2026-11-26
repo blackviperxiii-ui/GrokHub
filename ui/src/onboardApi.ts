@@ -50,24 +50,33 @@ export interface OnboardReply {
   drafts: Drafts | null;
   amr: boolean;
   openclaw: boolean;
+  /** OpenClaw, Hermes, Claude Code, Cursor and Codex folders found here. */
+  importSources: ImportSource[];
   saved: Saved | null;
   note: string | null;
+}
+
+export interface ImportSource {
+  id: string;
+  label: string;
 }
 
 export type OnboardAct =
   | { act: "view" }
   | { act: "keep"; step: Step; answers: Answers }
   | { act: "draft"; answers: Answers }
-  | { act: "openclaw"; drafts: Drafts }
+  | { act: "openclaw"; drafts: Drafts; source?: string }
   | { act: "save"; drafts: Drafts }
   | { act: "skip" }
   | { act: "reopen" };
 
 /** Settings → Personal sends this so the stage opens again. With
- * `detail: { import: true }` it is /import: Review only, see `openImport`. */
+ * `detail: { import: true }` it is /import: Review only, see `openImport`.
+ * With `detail: { firstRunV2: true }` it reopens the first-run v2 steps. */
 export const OPEN_EVENT = "onboard:open";
 
-export const NO_WORKSPACE = "No OpenClaw or Hermes workspace on this computer.";
+export const NO_WORKSPACE =
+  "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer.";
 
 export const EMPTY_ANSWERS: Answers = {
   name: "",

@@ -10,9 +10,9 @@ use grokhub_core::onboard_identity::{
     self as oi, Answers, Drafts, Existing, Progress, Stage, Step,
 };
 use grokhub_core::openclaw::{
-    default_openclaw_paths, import_dest, import_memory_file, is_core, is_openclaw_workspace,
-    merge_imported_memory, preview_mcp_json, preview_skill_md, ImportedMcpPreview,
-    ImportedSkillPreview,
+    default_ide_roots, default_openclaw_paths, import_dest, import_memory_file, is_core,
+    is_ide_importable, is_openclaw_workspace, merge_imported_memory, preview_mcp_json,
+    preview_skill_md, ImportedMcpPreview, ImportedSkillPreview,
 };
 use serde::Serialize;
 
@@ -333,19 +333,31 @@ pub fn reopen(config_dir: &Path) -> Result<Progress, String> {
     Ok(p)
 }
 
+/// One place notes can be imported from (OpenClaw, Hermes, Claude Code, Cursor, Codex).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSource {
+    pub id: String,
+    pub label: String,
+}
+
+fn dir_names(path: &Path) -> Vec<String> {
+    std::fs::read_dir(path)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The first OpenClaw or Hermes workspace under `home`, if there is one.
 pub fn openclaw_workspace(home: &Path) -> Option<PathBuf> {
     default_openclaw_paths(&home.to_string_lossy())
         .into_iter()
         .map(PathBuf::from)
         .find(|p| {
-            let names: Vec<String> = std::fs::read_dir(p)
-                .map(|rd| {
-                    rd.flatten()
-                        .map(|e| e.file_name().to_string_lossy().into_owned())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let names = dir_names(p);
             let refs: Vec<&str> = names.iter().map(String::as_str).collect();
             if is_openclaw_workspace(&refs) {
                 return true;
@@ -358,6 +370,61 @@ pub fn openclaw_workspace(home: &Path) -> Option<PathBuf> {
             }
             false
         })
+}
+
+fn ide_root_ready(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let names = dir_names(path);
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    if is_ide_importable(&refs) {
+        return true;
+    }
+    // Nested project notes (Claude Code stores projects under ~/.claude/projects).
+    path.join("projects").is_dir()
+        && std::fs::read_dir(path.join("projects"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| {
+                let child = e.path();
+                if !child.is_dir() {
+                    return false;
+                }
+                let child_names = dir_names(&child);
+                let child_refs: Vec<&str> = child_names.iter().map(String::as_str).collect();
+                is_ide_importable(&child_refs)
+            })
+}
+
+/// Every importable workspace found under `home`, OpenClaw/Hermes first.
+pub fn import_sources(home: &Path) -> Vec<ImportSource> {
+    let mut out = Vec::new();
+    if let Some(root) = openclaw_workspace(home) {
+        let hermes = is_hermes_root(&root);
+        out.push(ImportSource {
+            id: if hermes {
+                "hermes".into()
+            } else {
+                "openclaw".into()
+            },
+            label: if hermes {
+                "Hermes".into()
+            } else {
+                "OpenClaw".into()
+            },
+        });
+    }
+    for (id, label, path) in default_ide_roots(&home.to_string_lossy()) {
+        if ide_root_ready(Path::new(&path)) {
+            out.push(ImportSource {
+                id: id.into(),
+                label: label.into(),
+            });
+        }
+    }
+    out
 }
 
 fn is_hermes_root(root: &Path) -> bool {
@@ -455,33 +522,25 @@ fn has_block(slot: &str, block: &str) -> bool {
         .any(|(at, _)| (at == 0 || slot.as_bytes()[at - 1] == b'\n') && line_end(at + block.len()))
 }
 
-/// `drafts` with an OpenClaw or Hermes workspace's files added for Review: each
-/// lands under its own heading below what is there, so nothing is replaced, and
-/// a block that is already there (as read, or as Save wrote it) is not added
-/// again. `TOOLS.md` and files with secrets stay out. Only files whose name
-/// can be imported are read, at most [`IMPORT_MAX`] of them (the workspace's
-/// own files first), and a file that would take its slot past the size cap
-/// is left out. `None` without a workspace.
-pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
-    let root = openclaw_workspace(home)?;
-    let hermes = is_hermes_root(&root);
-    let source_label = if hermes { "Hermes" } else { "OpenClaw" };
-    let mut scan_dirs = vec![root.clone()];
-    if hermes {
-        if root.file_name().and_then(|n| n.to_str()) == Some("memories") {
-            if let Some(parent) = root.parent() {
-                scan_dirs.push(parent.to_path_buf());
-            }
-        } else {
-            let mem = root.join("memories");
-            if mem.is_dir() {
-                scan_dirs.push(mem);
+/// Collect markdown note files under `dirs` (and one level of project
+/// subfolders when `nested` is true).
+fn collect_note_files(dirs: &[PathBuf], nested: bool) -> Vec<(String, PathBuf)> {
+    let mut seen_names = std::collections::BTreeSet::new();
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    let mut walk = dirs.to_vec();
+    if nested {
+        for dir in dirs {
+            let projects = dir.join("projects");
+            if let Ok(rd) = std::fs::read_dir(projects) {
+                for e in rd.flatten() {
+                    if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        walk.push(e.path());
+                    }
+                }
             }
         }
     }
-    let mut seen_names = std::collections::BTreeSet::new();
-    let mut names: Vec<(String, PathBuf)> = Vec::new();
-    for dir in scan_dirs {
+    for dir in walk {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -496,6 +555,32 @@ pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
         }
     }
     names.sort();
+    names
+}
+
+/// `drafts` with files from `root` added for Review under `source_label`.
+fn import_from_root(
+    home: &Path,
+    root: &Path,
+    source_label: &str,
+    drafts: &Drafts,
+    scan_extras: bool,
+    nested: bool,
+) -> Import {
+    let mut scan_dirs = vec![root.to_path_buf()];
+    if is_hermes_root(root) {
+        if root.file_name().and_then(|n| n.to_str()) == Some("memories") {
+            if let Some(parent) = root.parent() {
+                scan_dirs.push(parent.to_path_buf());
+            }
+        } else {
+            let mem = root.join("memories");
+            if mem.is_dir() {
+                scan_dirs.push(mem);
+            }
+        }
+    }
+    let mut names = collect_note_files(&scan_dirs, nested);
     let found = names.len();
     let mut room = IMPORT_MAX.saturating_sub(names.iter().filter(|(n, _)| is_core(n)).count());
     names.retain(|(name, _)| {
@@ -566,32 +651,34 @@ pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
         };
         notes.push(format!("{file} is nearly full; {files} left out."));
     }
-    let (skills, mcps) = scan_workspace_extras(home, &root);
-    if !skills.is_empty() {
-        let quarantined: Vec<&str> = skills
-            .iter()
-            .filter(|s| s.quarantined.is_some())
-            .map(|s| s.name.as_str())
-            .collect();
-        if quarantined.is_empty() {
+    if scan_extras {
+        let (skills, mcps) = scan_workspace_extras(home, root);
+        if !skills.is_empty() {
+            let quarantined: Vec<&str> = skills
+                .iter()
+                .filter(|s| s.quarantined.is_some())
+                .map(|s| s.name.as_str())
+                .collect();
+            if quarantined.is_empty() {
+                notes.push(format!(
+                    "Skills preview: {} skill(s) passed static scan.",
+                    skills.len()
+                ));
+            } else {
+                let safe = skills.len().saturating_sub(quarantined.len());
+                notes.push(format!(
+                    "Skills preview: {safe} safe, {} quarantined ({}).",
+                    quarantined.len(),
+                    quarantined.join(", ")
+                ));
+            }
+        }
+        if !mcps.is_empty() {
             notes.push(format!(
-                "Skills preview: {} skill(s) passed static scan.",
-                skills.len()
-            ));
-        } else {
-            let safe = skills.len().saturating_sub(quarantined.len());
-            notes.push(format!(
-                "Skills preview: {safe} safe, {} quarantined ({}).",
-                quarantined.len(),
-                quarantined.join(", ")
+                "MCP preview: {} server(s) in mcp.json (credentials omitted).",
+                mcps.len()
             ));
         }
-    }
-    if !mcps.is_empty() {
-        notes.push(format!(
-            "MCP preview: {} server(s) in mcp.json (credentials omitted).",
-            mcps.len()
-        ));
     }
     if notes.is_empty() && added == 0 {
         notes.push(if already > 0 {
@@ -600,10 +687,52 @@ pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
             format!("The {source_label} workspace has no notes to add.")
         });
     }
-    Some(Import {
+    Import {
         drafts: out,
         note: (!notes.is_empty()).then(|| notes.join(" ")),
-    })
+    }
+}
+
+/// `drafts` with an OpenClaw or Hermes workspace's files added for Review: each
+/// lands under its own heading below what is there, so nothing is replaced, and
+/// a block that is already there (as read, or as Save wrote it) is not added
+/// again. `TOOLS.md` and files with secrets stay out. Only files whose name
+/// can be imported are read, at most [`IMPORT_MAX`] of them (the workspace's
+/// own files first), and a file that would take its slot past the size cap
+/// is left out. `None` without a workspace.
+pub fn openclaw_import(home: &Path, drafts: &Drafts) -> Option<Import> {
+    let root = openclaw_workspace(home)?;
+    let hermes = is_hermes_root(&root);
+    let source_label = if hermes { "Hermes" } else { "OpenClaw" };
+    Some(import_from_root(
+        home,
+        &root,
+        source_label,
+        drafts,
+        true,
+        false,
+    ))
+}
+
+/// Import notes from a source id (`openclaw`, `hermes`, `claude`, `cursor`,
+/// `codex`). Empty id picks the first OpenClaw/Hermes workspace. `None` when
+/// that source is not on this computer.
+pub fn import_by_id(home: &Path, id: &str, drafts: &Drafts) -> Option<Import> {
+    let id = id.trim();
+    if id.is_empty() || id == "openclaw" || id == "hermes" {
+        return openclaw_import(home, drafts);
+    }
+    for (sid, label, path) in default_ide_roots(&home.to_string_lossy()) {
+        if sid != id {
+            continue;
+        }
+        let root = PathBuf::from(path);
+        if !ide_root_ready(&root) {
+            return None;
+        }
+        return Some(import_from_root(home, &root, label, drafts, false, true));
+    }
+    None
 }
 
 #[cfg(test)]

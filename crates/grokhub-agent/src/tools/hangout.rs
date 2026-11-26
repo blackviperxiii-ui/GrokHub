@@ -100,9 +100,10 @@ pub fn asks_for_action(text: &str) -> bool {
 
 /// True when this Hangout turn should send no tools: casual chat or a question
 /// with no action ask. A task, repair, research, background, or picture ask
-/// (or any action ask) keeps tools.
+/// (or any action ask) keeps tools, and so does an unclear ask: a `default`
+/// Brief is a guess, not a read that the turn is small talk.
 pub fn chat_only(brief: &Brief, text: &str) -> bool {
-    if asks_for_action(text) {
+    if brief.by == "default" || asks_for_action(text) {
         return false;
     }
     match brief.intent {
@@ -124,6 +125,16 @@ mod tests {
             confidence: 100,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn an_unclear_ask_keeps_its_tools() {
+        let guess = Brief {
+            intent: Intent::Chat,
+            by: "default".into(),
+            ..Default::default()
+        };
+        assert!(!chat_only(&guess, "do the thing"));
     }
 
     #[test]

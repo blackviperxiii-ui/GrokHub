@@ -25,6 +25,7 @@ vi.mock("./onboardApi", async (orig) => {
     drafts: null,
     amr: false,
     openclaw: false,
+    importSources: [],
     saved: null,
     note: null,
   };

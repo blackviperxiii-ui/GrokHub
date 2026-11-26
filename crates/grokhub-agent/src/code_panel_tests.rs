@@ -44,6 +44,8 @@ fn init_git_repo(dir: &Path, branch: &str) {
     git_in(dir, &["init", "-b", branch]);
     git_in(dir, &["config", "user.name", "Test User"]);
     git_in(dir, &["config", "user.email", "test@example.com"]);
+    // The runner's own line-ending setting must not reach the test's reset.
+    git_in(dir, &["config", "core.autocrlf", "false"]);
     fs::write(dir.join("app.txt"), "initial content\n").expect("write app.txt");
     git_in(dir, &["add", "."]);
     git_in(dir, &["commit", "-m", "initial"]);
@@ -545,6 +547,33 @@ fn ac7_hard_class_and_dangerous_commands_still_ask_with_both_toggles_and_always_
         ),
         Decision::Run
     );
+}
+
+#[test]
+fn a_stash_checkpoint_keeps_file_bytes_under_autocrlf() {
+    let root = scratch_dir("stash-autocrlf");
+    let cfg = root.join("config");
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    init_git_repo(&repo, "main");
+    git_in(&repo, &["config", "core.autocrlf", "true"]);
+    fs::write(repo.join("app.txt"), "dirty on main\n").unwrap();
+    fs::write(repo.join("crlf.txt"), "kept as is\r\n").unwrap();
+
+    let entry = checkpoint_before_risky_step(
+        &cfg,
+        &repo,
+        RiskyActionKind::Overwrite,
+        "Before overwrite: write app.txt",
+    )
+    .unwrap();
+    assert_eq!(entry.strategy, BackupStrategy::GitStash);
+    assert_eq!(fs::read(repo.join("app.txt")).unwrap(), b"dirty on main\n");
+    assert_eq!(fs::read(repo.join("crlf.txt")).unwrap(), b"kept as is\r\n");
+
+    fs::write(repo.join("app.txt"), "overwritten\n").unwrap();
+    restore_backup(&cfg, &repo, &entry.id).unwrap();
+    assert_eq!(fs::read(repo.join("app.txt")).unwrap(), b"dirty on main\n");
 }
 
 #[test]

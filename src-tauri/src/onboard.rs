@@ -24,9 +24,14 @@ pub enum Act {
     Draft {
         answers: Answers,
     },
-    /// Review: an OpenClaw or Hermes workspace's files added to the drafts.
+    /// Review: an OpenClaw, Hermes, Claude Code, Cursor or Codex workspace's
+    /// files added to the drafts. `source` is the id from `importSources`
+    /// (`openclaw`, `hermes`, `claude`, `cursor`, `codex`); empty picks the
+    /// first OpenClaw/Hermes workspace.
     Openclaw {
         drafts: Drafts,
+        #[serde(default)]
+        source: Option<String>,
     },
     Save {
         drafts: Drafts,
@@ -35,6 +40,13 @@ pub enum Act {
     Skip,
     /// Settings → Personal → Get to know you.
     Reopen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSource {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -48,8 +60,10 @@ pub struct Reply {
     pub drafts: Option<Drafts>,
     /// AMR is on, so Save adds Personal rows too.
     pub amr: bool,
-    /// An OpenClaw or Hermes workspace is on this computer.
+    /// An OpenClaw, Hermes, Claude Code, Cursor or Codex workspace is here.
     pub openclaw: bool,
+    /// Every importable source found on this computer.
+    pub import_sources: Vec<ImportSource>,
     pub saved: Option<Saved>,
     /// What the last act could not do, or left out, and why.
     pub note: Option<String>,
@@ -87,9 +101,13 @@ pub fn act(
             drafts = Some(onboard::draft(config_dir, &answers, now_ms));
             note = onboard::review_note(config_dir);
         }
-        Act::Openclaw { drafts: base } => {
+        Act::Openclaw {
+            drafts: base,
+            source,
+        } => {
             let held = onboard::review_note(config_dir);
-            match home.and_then(|h| onboard::openclaw_import(h, &base)) {
+            let id = source.as_deref().unwrap_or("");
+            match home.and_then(|h| onboard::import_by_id(h, id, &base)) {
                 Some(import) => {
                     drafts = Some(import.drafts);
                     note = match (held, import.note) {
@@ -98,7 +116,10 @@ pub fn act(
                     };
                 }
                 None => {
-                    note = Some("No OpenClaw or Hermes workspace on this computer.".into());
+                    note = Some(
+                        "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer."
+                            .into(),
+                    );
                     drafts = Some(base);
                 }
             }
@@ -129,6 +150,15 @@ pub fn act(
     if answers.tone.is_empty() && p.stage == Stage::Pending && before_soul {
         answers.tone = tone_for_personality(personality).to_string();
     }
+    let sources: Vec<ImportSource> = home
+        .map(onboard::import_sources)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| ImportSource {
+            id: s.id,
+            label: s.label,
+        })
+        .collect();
     Ok(Reply {
         pending: onboard::pending(config_dir) || saved.is_some(),
         stage: p.stage,
@@ -136,7 +166,8 @@ pub fn act(
         answers,
         drafts,
         amr: onboard::amr_on(config_dir),
-        openclaw: home.and_then(onboard::openclaw_workspace).is_some(),
+        openclaw: !sources.is_empty(),
+        import_sources: sources,
         saved,
         note,
     })
