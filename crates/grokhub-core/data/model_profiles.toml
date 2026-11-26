@@ -5,7 +5,7 @@
 # exact form, so keep notes in `note`, not in comments.
 
 schema = 1
-updated = "2026-11-12"
+updated = "2026-11-26"
 
 [[model]]
 key = "grok-4.7"
@@ -331,10 +331,15 @@ prompt_long = 40_000
 completion_long = 120_000
 long_threshold = 200_000
 context = 500_000
+max_output = 450_000
 input = ["text", "image", "file"]
 output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 note = "A stand-in at direct prices when xAI direct is down."
 
@@ -350,10 +355,16 @@ prompt = 1_500
 cached = 30
 completion = 6_000
 context = 1_048_576
+max_output = 393_216
 input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 hosts = 40
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps", "hosts"]
 
 [[model]]
@@ -364,12 +375,19 @@ tier = "paid"
 intelligence = 27
 roles = ["cheap_code"]
 caps = { chat = 70, code = 80, tools = 75, reasoning = 70 }
-prompt = 399
+prompt = 1_500
 cached = 300
-completion = 784
+completion = 5_000
+context = 1_048_576
+max_output = 943_717
 input = ["text", "image", "video"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -380,9 +398,18 @@ tier = "paid"
 intelligence = 31
 caps = { chat = 72, code = 78, tools = 75, reasoning = 72 }
 prompt = 699
+cached = 689
 completion = 14_000
+context = 1_048_576
+max_output = 943_718
+input = ["text"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -393,11 +420,19 @@ tier = "paid"
 intelligence = 29
 roles = ["cheap", "ui", "vision"]
 caps = { chat = 70, code = 70, tools = 70, reasoning = 65, vision = 85 }
-prompt = 750
-cached = 75
-completion = 3_000
+prompt = 1_500
+cached = 150
+completion = 6_000
+context = 1_048_576
+max_output = 524_288
+input = ["text", "image", "video"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -412,9 +447,16 @@ prompt = 1_000
 cached = 100
 cache_write = 1_250
 completion = 5_000
+context = 1_050_000
+max_output = 128_000
 input = ["file", "image", "text"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = true
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -425,9 +467,19 @@ tier = "paid"
 intelligence = 51
 caps = { chat = 88, code = 88, tools = 85, reasoning = 88 }
 prompt = 10_000
+cached = 500
+cache_write = 12_500
 completion = 50_000
+context = 1_050_000
+max_output = 128_000
+input = ["file", "image", "text"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = true
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -442,8 +494,16 @@ prompt = 20_000
 cached = 1_000
 cache_write = 25_000
 completion = 100_000
+context = 1_050_000
+max_output = 128_000
+input = ["file", "image", "text"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = true
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -454,9 +514,19 @@ tier = "frontier"
 intelligence = 56
 caps = { chat = 93, code = 93, tools = 90, reasoning = 94 }
 prompt = 100_000
+cached = 10_000
+cache_write = 125_000
 completion = 500_000
+context = 1_050_000
+max_output = 128_000
+input = ["file", "image", "text"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = true
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -469,10 +539,18 @@ roles = ["code", "agents", "mid_price"]
 caps = { chat = 85, code = 88, tools = 88, reasoning = 85, long_context = 90, vision = 90 }
 prompt = 8_250
 cached = 825
+cache_write = 417
 completion = 41_250
-input = ["audio", "file", "image", "text", "video"]
+context = 1_048_576
+max_output = 65_536
+input = ["text", "image", "video", "file", "audio"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -485,9 +563,18 @@ roles = ["backup", "low_latency"]
 caps = { chat = 75, code = 75, tools = 75, reasoning = 70, vision = 80 }
 prompt = 3_000
 cached = 300
+cache_write = 833
 completion = 25_000
+context = 1_048_576
+max_output = 65_536
+input = ["text", "image", "video", "file", "audio"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -502,9 +589,16 @@ prompt = 20_000
 cached = 1_000
 cache_write = 1_875
 completion = 100_000
+context = 1_048_576
+max_output = 943_718
 input = ["audio", "file", "image", "text", "video"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -518,8 +612,16 @@ prompt = 20_000
 cached = 1_000
 cache_write = 1_875
 completion = 100_000
+context = 1_048_576
+max_output = 943_718
+input = ["audio", "file", "image", "text", "video"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -530,12 +632,19 @@ tier = "paid"
 intelligence = 46
 roles = ["long_code"]
 caps = { chat = 85, code = 93, tools = 90, reasoning = 90, long_context = 95 }
-prompt = 2_375
-cached = 1_900
-completion = 87_856
+prompt = 2_403
+cached = 2_000
+completion = 84_023
+context = 1_048_576
+max_output = 943_718
 input = ["text", "image", "video"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -550,14 +659,18 @@ prompt = 0
 cached = 0
 completion = 0
 context = 1_000_000
+max_output = 131_072
 input = ["text", "image", "video"]
+output = ["text"]
 tools = true
 structured = true
+reasoning = true
 trains = true
+moderated = false
 hosts = 1
 speed_tps = 96
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps", "speed_tps"]
 
 [[model]]
@@ -580,6 +693,7 @@ speed_tps = 136
 source = "openrouter.ai/api/v1/models"
 verified = "2026-11-12"
 estimate = ["caps", "speed_tps"]
+gone_since = "2026-11-26"
 
 [[model]]
 key = "nvidia/nemotron-3.5-lightning:free"
@@ -592,11 +706,18 @@ caps = { chat = 65, code = 60, tools = 65, reasoning = 40 }
 prompt = 0
 cached = 0
 completion = 0
+context = 1_000_000
+max_output = 65_536
+input = ["text"]
+output = ["text"]
 tools = true
+structured = false
+reasoning = true
 trains = true
+moderated = false
 hosts = 1
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -610,11 +731,17 @@ prompt = 0
 cached = 0
 completion = 0
 context = 256_000
+max_output = 65_536
 input = ["text", "audio", "image", "video"]
+output = ["text"]
+tools = true
+structured = false
+reasoning = true
 trains = true
+moderated = false
 hosts = 1
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -629,12 +756,18 @@ prompt = 0
 cached = 0
 completion = 0
 context = 1_000_000
+max_output = 65_536
+input = ["text"]
+output = ["text"]
+tools = true
+structured = false
 reasoning = true
 efforts = ["high", "medium", "none"]
 trains = true
+moderated = false
 hosts = 1
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -689,6 +822,7 @@ hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models + Artificial Analysis Intelligence Index v5.0.1"
 verified = "2026-11-12"
+gone_since = "2026-11-26"
 
 [[model]]
 key = "baidu/ernie-5.5-flash-preview:free"
@@ -699,13 +833,18 @@ roles = ["probation"]
 prompt = 0
 cached = 0
 completion = 0
+context = 1_024_000
+max_output = 921_600
+input = ["text"]
+output = ["text"]
 tools = true
 structured = true
 reasoning = true
+moderated = false
 hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 note = "Reasoning can't be turned off."
 
 [[model]]
@@ -741,6 +880,7 @@ hosts = 1
 source = "openrouter.ai/api/v1/models"
 verified = "2026-11-12"
 estimate = ["caps"]
+gone_since = "2026-11-26"
 
 [[model]]
 key = "recursive/flint-v1.0:free"
@@ -752,11 +892,18 @@ caps = { chat = 60, code = 65, tools = 60, reasoning = 55 }
 prompt = 0
 cached = 0
 completion = 0
+context = 262_144
+max_output = 235_929
+input = ["text"]
+output = ["text"]
 tools = true
+structured = true
+reasoning = true
+moderated = false
 hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 
 [[model]]
@@ -783,12 +930,19 @@ roles = ["probation"]
 prompt = 0
 cached = 0
 completion = 0
+context = 262_144
+max_output = 8_192
+input = ["text"]
+output = ["text"]
 tools = true
+structured = true
+reasoning = true
 trains = true
+moderated = false
 hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 
 [[model]]
 key = "liquid/lfm-2.5-2.6b:free"
@@ -805,6 +959,7 @@ hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models"
 verified = "2026-11-12"
+gone_since = "2026-11-26"
 
 [[model]]
 key = "xingchen-agi/xing4.0-29b-a4b:free"
@@ -833,12 +988,18 @@ caps = { chat = 70, code = 65, tools = 65, reasoning = 65, vision = 70 }
 prompt = 0
 cached = 0
 completion = 0
+context = 262_144
+max_output = 32_768
 input = ["image", "text", "video"]
+output = ["text"]
 tools = true
+structured = true
+reasoning = true
+moderated = false
 hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 note = "The free endpoint answered only 429s in testing; the priors are for running it locally."
 
@@ -852,11 +1013,61 @@ caps = { chat = 68, code = 63, tools = 63, reasoning = 63, vision = 68 }
 prompt = 0
 cached = 0
 completion = 0
+context = 262_144
+max_output = 32_768
 input = ["image", "text", "video"]
+output = ["text"]
 tools = true
+structured = true
+reasoning = true
+moderated = false
 hosts = 1
 probation = true
 source = "openrouter.ai/api/v1/models"
-verified = "2026-11-12"
+verified = "2026-11-26"
 estimate = ["caps"]
 note = "The free endpoint answered only 429s in testing; the priors are for running it locally."
+
+[[model]]
+key = "inclusionai/ling-3.2-flash:free"
+name = "inclusionAI: Ling 3.2 Flash (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+completion = 0
+context = 1_048_576
+max_output = 262_144
+input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-26"
+note = "Added by the weekly updater; on a tryout until the router has measured it."
+
+[[model]]
+key = "particle-ai/particle-1:free"
+name = "Particle AI: Particle-1 (free)"
+provider = "openrouter"
+tier = "free"
+roles = ["probation"]
+prompt = 0
+completion = 0
+context = 1_048_576
+max_output = 943_718
+input = ["text", "image"]
+output = ["text"]
+tools = true
+structured = true
+reasoning = true
+moderated = false
+hosts = 1
+probation = true
+source = "openrouter.ai/api/v1/models"
+verified = "2026-11-26"
+note = "Added by the weekly updater; on a tryout until the router has measured it."
