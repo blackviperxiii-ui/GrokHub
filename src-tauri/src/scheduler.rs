@@ -155,6 +155,7 @@ pub fn tick_as(
     };
     let mut fired = Vec::new();
     let mut seen = HashSet::new();
+    let mut moved_back = false;
     loop {
         let now = clock();
         if !may_fire(read_lease(config_dir).as_ref(), pid, now.now_ms) {
@@ -166,6 +167,12 @@ pub fn tick_as(
             beat_ms: now.now_ms,
         };
         write_lease(config_dir, &beat)?;
+        // Late an hour because the clock went forward since its next run
+        // was set: it runs at its slot instead.
+        if !moved_back {
+            automations::move_back_to_slots(config_dir, now)?;
+            moved_back = true;
+        }
         // Condition / event-stream waits, then check-gated jobs: evaluate
         // before claiming a run. A non-match polls again with no model call.
         let mut step = None;
@@ -1421,5 +1428,39 @@ mod tests {
         );
         let row = &automations::load(&dir).expect("reload")[0];
         assert_eq!(row.next_run, Some(nine_cdt + HOUR + 24 * HOUR));
+    }
+
+    /// Sunday 14 March 2027, 03:00 UTC: Saturday 21:00 in US Central
+    /// standard time (UTC-6). Clocks go forward to UTC-5 at 02:00 local.
+    const SAT_9PM_CST: u64 = 1_804_993_200_000;
+
+    #[test]
+    fn a_daily_9am_job_fires_at_9am_on_the_day_daylight_saving_starts() {
+        let dir = temp_dir("dst-start");
+        let list = automations::add(
+            &dir,
+            "every day at 9am summarize my inbox",
+            local_clock(SAT_9PM_CST, -360),
+        )
+        .expect("added");
+        let nine_cst = SAT_9PM_CST + 12 * HOUR;
+        assert_eq!(list[0].next_run, Some(nine_cst));
+        let mut asked = 0;
+        let mut run = |_: &Automation, _: &str| {
+            asked += 1;
+            ok("done")
+        };
+        // 14:00 UTC reads 09:00 on the window's clock once it is UTC-5.
+        let cdt = |ms: u64| move || local_clock(ms, -300);
+        let nine_cdt = nine_cst - HOUR;
+        let early = tick(&dir, &cdt(nine_cdt - HOUR / 2), PID, &mut run).expect("tick");
+        assert_eq!(early, Vec::new());
+        let nine = tick(&dir, &cdt(nine_cdt), PID, &mut run).expect("tick");
+        assert_eq!(nine.len(), 1);
+        let ten = tick(&dir, &cdt(nine_cst), PID, &mut run).expect("tick");
+        assert_eq!(ten, Vec::new());
+        assert_eq!(asked, 1);
+        let row = &automations::load(&dir).expect("reload")[0];
+        assert_eq!(row.next_run, Some(nine_cdt + 24 * HOUR));
     }
 }
