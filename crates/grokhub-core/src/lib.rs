@@ -137,6 +137,7 @@ pub mod journal;
 pub mod know_me;
 pub mod learn;
 pub mod learn_notes;
+pub mod learn_skill;
 pub mod learning;
 pub mod live_coaching;
 pub mod local_discover;
@@ -220,7 +221,6 @@ pub mod self_review;
 pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
-pub mod learn_skill;
 pub mod skill;
 pub mod skill_pack;
 pub mod skills_hub;
@@ -568,6 +568,11 @@ pub use journal::{
     JournalLeaning, JournalOption, JournalOutcome, JournalStatus, MissionStart,
 };
 pub use know_me::{load_tags, tag_topics, tags_mention, KnowMeTag};
+pub use learn_skill::{
+    chat_body_from_pairs, draft_from_gathered, extract_pdf_text, gather_path_text, origin_for,
+    parse_learn_rest, usage as learn_skill_usage, write_learned_skill, LearnDraft, LearnSource,
+    LARGE_CHARS, REF_CHUNK_CHARS, REF_FILE_CAP,
+};
 pub use learning::{
     extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact,
     is_greeting_chitchat, looks_like_user_pref, prune_ephemeral_insights, record_turn,
@@ -693,11 +698,6 @@ pub use shortcuts::{
     palette_shortcut, perm_key, shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
-pub use learn_skill::{
-    chat_body_from_pairs, draft_from_gathered, extract_pdf_text, gather_path_text, origin_for,
-    parse_learn_rest, usage as learn_skill_usage, write_learned_skill, LearnDraft, LearnSource,
-    LARGE_CHARS, REF_CHUNK_CHARS, REF_FILE_CAP,
-};
 pub use skill::{
     apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill,
     load_skill_lock, match_skill, parse_skill_md, parse_skill_meta, patch_skill, prefer_patch,

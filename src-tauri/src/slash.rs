@@ -325,11 +325,7 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     },
     ShellCmd {
         desktop_only: true,
-        ..row(
-            "/learn chat",
-            "Build a skill from this chat",
-            "/learn chat",
-        )
+        ..row("/learn chat", "Build a skill from this chat", "/learn chat")
     },
     row("/mcps", "Open Connectors", "/mcps"),
     ShellCmd {
@@ -881,9 +877,10 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
             prompt: rest.to_string(),
         }),
         "/journal" => open("journal"),
-        "/learn" if rest.is_empty()
-            || rest.eq_ignore_ascii_case("reflect")
-            || rest.eq_ignore_ascii_case("now") =>
+        "/learn"
+            if rest.is_empty()
+                || rest.eq_ignore_ascii_case("reflect")
+                || rest.eq_ignore_ascii_case("now") =>
         {
             mine(Op::Learn)
         }
@@ -1970,9 +1967,8 @@ mod tests {
         let help = help();
         assert!(help.contains("/imagine — Make an image in chat"));
         assert!(help.contains("/journal — Open the decision journal"));
-        assert!(help.contains(
-            "/learn — Reflect chat, or build a skill from a URL, folder, PDF, or chat"
-        ));
+        assert!(help
+            .contains("/learn — Reflect chat, or build a skill from a URL, folder, PDF, or chat"));
         assert!(help.contains("/mcps — Open Connectors"));
         assert!(help.contains("/plugins — Open Plugins"));
         assert!(help.contains("/resume — Open History"));

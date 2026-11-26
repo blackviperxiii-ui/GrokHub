@@ -45,8 +45,8 @@ pub use registry::Settings as DeferredToolsSettings;
 pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
 pub(crate) use schema_check::{schema_message, schema_miss};
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
-pub use web_fetch::{fetch_public_markdown, public_only_resolve};
 pub(crate) use web_fetch::{dial_host, parse_public_url};
+pub use web_fetch::{fetch_public_markdown, public_only_resolve};
 #[cfg(test)]
 pub(crate) use web_fetch::{FetchResp, PageFetch};
 pub use web_search::{

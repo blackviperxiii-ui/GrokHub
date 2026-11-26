@@ -184,15 +184,7 @@ fn skill_name_from_hint(hint: &str) -> String {
         .unwrap_or(base);
     let cleaned: String = base
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else if c == '-' || c == '_' || c == ' ' {
-                ' '
-            } else {
-                ' '
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
         .collect();
     let words: Vec<&str> = cleaned.split_whitespace().take(6).collect();
     if words.is_empty() {
