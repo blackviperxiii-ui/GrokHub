@@ -396,6 +396,13 @@ impl Registry {
             .models
             .keys()
             .filter(|id| aliased.contains(&id.as_str()))
+            // A model whose own source stayed silent keeps its record.
+            .filter(|id| {
+                self.models[*id]
+                    .sources
+                    .iter()
+                    .all(|k| answered.contains(k))
+            })
             .cloned()
             .collect();
         for id in stale {
@@ -1197,5 +1204,44 @@ mod tests {
         // A new date is news again.
         reg.models.get_mut("grok-4.7").unwrap().meta.card.expires = Some("2026-11-21".into());
         assert_eq!(reg.note_expiring("2026-11-23").len(), 1);
+    }
+
+    #[test]
+    fn a_silent_source_keeps_a_model_another_source_names_as_an_alias() {
+        let mut reg = Registry::default();
+        let gb = |models| Listing::new(SourceKind::GrokBuild, models);
+        reg.apply_refresh(
+            &[
+                api(vec![meta("grok-4.7")]),
+                gb(vec![meta("grok-code-fast")]),
+            ],
+            &[],
+            1_000,
+        );
+        assert_eq!(
+            reg.get("grok-code-fast").unwrap().sources,
+            [SourceKind::GrokBuild]
+        );
+        // Grok Build stays silent; the API now lists grok-code-fast as an
+        // alias of grok-4.7.
+        let mut aliased = meta("grok-4.7");
+        aliased.aliases = vec!["grok-code-fast".into()];
+        let ev = reg.apply_refresh(&[api(vec![aliased.clone()])], &[], 2_000);
+        assert!(!ev.contains(&RegistryEvent::Deleted {
+            id: "grok-code-fast".into()
+        }));
+        assert_eq!(
+            reg.models["grok-code-fast"].sources,
+            [SourceKind::GrokBuild]
+        );
+        // A bare record a call made for the alias still goes.
+        reg.models
+            .insert("grok-4.7-0709".into(), ModelRecord::default());
+        aliased.aliases.push("grok-4.7-0709".into());
+        let ev = reg.apply_refresh(&[api(vec![aliased])], &[], 3_000);
+        assert!(ev.contains(&RegistryEvent::Deleted {
+            id: "grok-4.7-0709".into()
+        }));
+        assert!(!reg.models.contains_key("grok-4.7-0709"));
     }
 }

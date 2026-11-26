@@ -435,10 +435,24 @@ fn settle(s: &mut State, m: &'static LocalModel, end: Result<String, Halt>) {
     }
 }
 
+/// The worker's next model. With none left the worker stops in the same
+/// lock, so a download clicked just then starts a new worker instead of
+/// waiting behind one that is leaving.
+fn next_or_stop(
+    s: &mut State,
+    on_disk: impl Fn(&LocalModel) -> bool,
+) -> Option<&'static LocalModel> {
+    let next = take_next(&mut s.queue, on_disk);
+    if next.is_none() {
+        s.worker = false;
+    }
+    next
+}
+
 fn work(app: &AppHandle, config_dir: &Path) {
     loop {
         let next = match state().lock() {
-            Ok(mut s) => take_next(&mut s.queue, |m| on_disk(config_dir, m)),
+            Ok(mut s) => next_or_stop(&mut s, |m| on_disk(config_dir, m)),
             Err(_) => None,
         };
         let Some(m) = next else { break };
@@ -447,9 +461,6 @@ fn work(app: &AppHandle, config_dir: &Path) {
             settle(&mut s, m, end);
         }
         emit(app);
-    }
-    if let Ok(mut s) = state().lock() {
-        s.worker = false;
     }
     emit(app);
 }
@@ -685,7 +696,54 @@ pub fn hf_files(config_dir: &Path, repo: &str) -> Result<Vec<HfFileRow>, String>
 /// Download one GGUF (first path of a group) into the models folder and add it
 /// to the Auto pool (`ownFiles`). No runtime model picker.
 pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, String> {
-    use md::Fetch as _;
+    let dest_dir = crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"));
+    download_hf_into(config_dir, &dest_dir, repo, path, &HfFetch)
+}
+
+/// The models folder already holds `name` from this repo: a file of the same
+/// name that matches the publisher's checksum, or the one saved under this
+/// repo's name after a clash. `None` when nothing of this repo's is there,
+/// with the place to save it (beside a same-named file from another repo,
+/// under this repo's name).
+fn hf_dest(
+    dest_dir: &Path,
+    repo: &str,
+    path: &str,
+    fetch: &dyn md::Fetch,
+) -> Result<(PathBuf, bool), String> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let plain = dest_dir.join(name);
+    if !plain.exists() {
+        return Ok((plain, false));
+    }
+    let same = fetch
+        .sha256(repo, path)
+        .is_ok_and(|want| md::sha256_file(&plain).is_ok_and(|got| got.eq_ignore_ascii_case(&want)));
+    if same {
+        return Ok((plain, true));
+    }
+    let tag: String = repo
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let named = dest_dir.join(format!("{tag}_{name}"));
+    let there = named.exists();
+    Ok((named, there))
+}
+
+fn download_hf_into(
+    config_dir: &Path,
+    dest_dir: &Path,
+    repo: &str,
+    path: &str,
+    fetch: &dyn md::Fetch,
+) -> Result<String, String> {
     use std::io::{Read, Write};
     let repo = repo.trim().trim_matches('/');
     let path = path.trim().trim_start_matches('/');
@@ -696,15 +754,13 @@ pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, 
         return Err("That file path isn't allowed.".into());
     }
     let name = path.rsplit('/').next().unwrap_or(path);
-    let dest_dir = crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"));
-    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
-    let dest = dest_dir.join(name);
-    if dest.exists() {
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    let (dest, here) = hf_dest(dest_dir, repo, path, fetch)?;
+    if here {
         register_own_file(config_dir, &dest)?;
         return Ok(format!("{name} is already on this PC. Added to Auto."));
     }
     let url = grokhub_core::hf_gguf::file_url(repo, path);
-    let fetch = HfFetch;
     let (mut reader, _, total) = fetch.open(&url, 0)?;
     let part = {
         let mut s = dest.as_os_str().to_owned();
@@ -742,7 +798,27 @@ pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, 
     Ok(format!("Downloaded {name} into Auto."))
 }
 
+/// Part 2 or later of a split GGUF (`-00002-of-00003.gguf`): the engine
+/// loads the first part and reads the rest beside it.
+fn later_split_part(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase());
+    let Some(stem) = name.as_deref().and_then(|n| n.strip_suffix(".gguf")) else {
+        return false;
+    };
+    let Some((left, of)) = stem.rsplit_once("-of-") else {
+        return false;
+    };
+    let part = left.rsplit_once('-').map_or("", |(_, p)| p);
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    digits(part) && digits(of) && part.parse::<u32>().is_ok_and(|n| n > 1)
+}
+
 fn register_own_file(config_dir: &Path, path: &Path) -> Result<(), String> {
+    if later_split_part(path) {
+        return Ok(());
+    }
     let shown = path.display().to_string();
     let mut config = crate::local_ai::load(config_dir);
     if !config.own_files.iter().any(|f| f == &shown) {
@@ -1005,6 +1081,138 @@ mod tests {
         assert_eq!(read.get(), 2);
         // Nothing was offered, so nothing was kept.
         assert!(!offers_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_download_clicked_as_the_worker_exits_still_downloads() {
+        let mut s = State::default();
+        let m = ls::model_by_id(MID).unwrap();
+        assert!(
+            enqueue(&mut s, vec![m]),
+            "the first click starts the worker"
+        );
+        assert_eq!(next_or_stop(&mut s, |_| false).map(|m| m.id), Some(MID));
+        // The worker finds nothing more and leaves in that same look.
+        assert_eq!(next_or_stop(&mut s, |_| false).map(|m| m.id), None);
+        // A click right then starts a worker of its own.
+        assert!(enqueue(&mut s, vec![m]));
+        assert_eq!(next_or_stop(&mut s, |_| false).map(|m| m.id), Some(MID));
+    }
+
+    /// A Hugging Face repo whose files all hold `body`.
+    struct OneRepo {
+        repo: &'static str,
+        body: &'static [u8],
+        opens: std::cell::Cell<usize>,
+    }
+
+    impl md::Fetch for OneRepo {
+        fn open(&self, _url: &str, _offset: u64) -> Result<md::Opened, String> {
+            self.opens.set(self.opens.get() + 1);
+            let len = self.body.len() as u64;
+            Ok((
+                Box::new(std::io::Cursor::new(self.body.to_vec())),
+                0,
+                Some(len),
+            ))
+        }
+        fn sha256(&self, repo: &str, _file: &str) -> Result<String, String> {
+            assert_eq!(repo, self.repo);
+            Ok(md::sha256_hex(self.body))
+        }
+    }
+
+    #[test]
+    fn a_quant_from_another_repo_with_the_same_file_name_is_downloaded() {
+        let dir = std::env::temp_dir().join(format!("gh-hf-same-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("Qwen3-8B-Q4_K_M.gguf"), b"bartowski bytes").unwrap();
+        let other = OneRepo {
+            repo: "unsloth/Qwen3-8B-GGUF",
+            body: b"unsloth bytes",
+            opens: std::cell::Cell::new(0),
+        };
+        let said = download_hf_into(
+            &dir,
+            &models,
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            &other,
+        );
+        assert_eq!(
+            said,
+            Ok("Downloaded Qwen3-8B-Q4_K_M.gguf into Auto.".to_string())
+        );
+        assert_eq!(other.opens.get(), 1);
+        let saved = models.join("unsloth_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf");
+        assert_eq!(std::fs::read(&saved).unwrap(), b"unsloth bytes");
+        assert_eq!(
+            std::fs::read(models.join("Qwen3-8B-Q4_K_M.gguf")).unwrap(),
+            b"bartowski bytes"
+        );
+        assert_eq!(
+            crate::local_ai::load(&dir).own_files,
+            [saved.display().to_string()]
+        );
+        // Asked again, both copies are known: nothing downloads.
+        let again = download_hf_into(
+            &dir,
+            &models,
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            &other,
+        );
+        assert_eq!(
+            again,
+            Ok("Qwen3-8B-Q4_K_M.gguf is already on this PC. Added to Auto.".to_string())
+        );
+        let same = OneRepo {
+            repo: "bartowski/Qwen3-8B-GGUF",
+            body: b"bartowski bytes",
+            opens: std::cell::Cell::new(0),
+        };
+        let mine = download_hf_into(
+            &dir,
+            &models,
+            "bartowski/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            &same,
+        );
+        assert_eq!(
+            mine,
+            Ok("Qwen3-8B-Q4_K_M.gguf is already on this PC. Added to Auto.".to_string())
+        );
+        assert_eq!((other.opens.get(), same.opens.get()), (1, 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_the_first_part_of_a_split_quant_joins_auto() {
+        let dir = std::env::temp_dir().join(format!("gh-hf-split-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        let repo = OneRepo {
+            repo: "unsloth/Big-GGUF",
+            body: b"part",
+            opens: std::cell::Cell::new(0),
+        };
+        for path in [
+            "Q4_K_M/Big-Q4_K_M-00002-of-00002.gguf",
+            "Q4_K_M/Big-Q4_K_M-00001-of-00002.gguf",
+        ] {
+            download_hf_into(&dir, &models, "unsloth/Big-GGUF", path, &repo).unwrap();
+        }
+        assert!(models.join("Big-Q4_K_M-00002-of-00002.gguf").exists());
+        assert_eq!(
+            crate::local_ai::load(&dir).own_files,
+            [models
+                .join("Big-Q4_K_M-00001-of-00002.gguf")
+                .display()
+                .to_string()]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

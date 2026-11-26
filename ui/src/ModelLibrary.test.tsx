@@ -284,4 +284,32 @@ describe("ModelLibrary", () => {
     // No runtime / chat model picker.
     expect(screen.queryByRole("combobox", { name: /model/i })).toBeNull();
   });
+
+  it("downloads every part of a split quant, the first part last", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    api.searchHfGguf.mockResolvedValue([
+      { repo: "unsloth/Big-GGUF", downloads: 3, likes: 0, updated: "2026-01-01", gated: false },
+    ]);
+    api.listHfGgufFiles.mockResolvedValue([
+      {
+        label: "Q4_K_M",
+        paths: ["Q4_K_M/Big-Q4_K_M-00001-of-00003.gguf", "Q4_K_M/Big-Q4_K_M-00002-of-00003.gguf", "Q4_K_M/Big-Q4_K_M-00003-of-00003.gguf"],
+        size: "120 GB",
+        fit: "Fits this PC",
+        fitKind: "yes",
+      },
+    ]);
+    api.downloadHfGguf.mockImplementation(async (_repo: string, path: string) => `Downloaded ${path.split("/").pop()} into Auto.`);
+    render(<ModelLibrary />);
+    await userEvent.type(await screen.findByLabelText("Search Hugging Face for GGUF models"), "big");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show quants" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Download into Auto" }));
+    expect(await screen.findByText("Downloaded Big-Q4_K_M-00001-of-00003.gguf into Auto.")).toBeInTheDocument();
+    expect(api.downloadHfGguf.mock.calls).toEqual([
+      ["unsloth/Big-GGUF", "Q4_K_M/Big-Q4_K_M-00002-of-00003.gguf"],
+      ["unsloth/Big-GGUF", "Q4_K_M/Big-Q4_K_M-00003-of-00003.gguf"],
+      ["unsloth/Big-GGUF", "Q4_K_M/Big-Q4_K_M-00001-of-00003.gguf"],
+    ]);
+  });
 });

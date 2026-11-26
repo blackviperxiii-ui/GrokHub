@@ -1428,6 +1428,14 @@ fn serve(worker: Worker, inbox: PermitInbox, jobs: Receiver<Job>) {
         // Claude Code's sign-in is checked ends this turn before it starts.
         if crate::claude_chat::is_on(&config_dir, &conversation_id) {
             cancel.reset();
+            // Even the sign-in check starts Claude Code, and a plan turn
+            // sends the message to Anthropic: neither runs under Offline only.
+            if grokhub_core::offline::enabled() {
+                let _ = done.send(Err(
+                    grokhub_agent::claude_plan::engine::OFFLINE_PLAN.to_string()
+                ));
+                continue;
+            }
         }
         let plan_cli =
             match crate::claude_chat::turn_cli(&config_dir, &conversation_id, &route.workspace) {
