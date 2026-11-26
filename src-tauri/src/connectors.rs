@@ -15,12 +15,22 @@ use grokhub_agent::mcp::{self, DoctorRow, SignIn};
 use grokhub_core::mcp_catalog::{self, Catalog, CatalogAuth, CatalogEntry};
 use serde::Serialize;
 
+/// One tool on a connector, for the per-tool on/off switch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRow {
+    pub name: String,
+    /// False when the Connectors page turned it off for chat.
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Row {
     pub name: String,
     /// "connected", "error", "stopped", "not checked" or "disabled".
     pub status: String,
+    /// How many tools chat can use (off tools are not counted).
     pub tools: usize,
     pub error: String,
     /// The command or URL the entry runs.
@@ -33,6 +43,8 @@ pub struct Row {
     pub can_disconnect: bool,
     /// False once the switch turned it off; it is listed but never started.
     pub enabled: bool,
+    /// Tools from the last Check / connect; empty until then.
+    pub tool_rows: Vec<ToolRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -56,6 +68,14 @@ fn row(r: DoctorRow) -> Row {
         tools: r.tool_count,
         error: r.last_error,
         detail: r.detail,
+        tool_rows: r
+            .tools
+            .into_iter()
+            .map(|tool| ToolRow {
+                name: tool.name,
+                enabled: tool.enabled,
+            })
+            .collect(),
     }
 }
 
@@ -263,6 +283,21 @@ pub fn set_enabled(workspace: &Path, name: &str, on: bool) -> Result<Changed, St
     })
 }
 
+/// Turn one tool of a server off or back on for chat.
+pub fn set_tool_enabled(
+    workspace: &Path,
+    name: &str,
+    tool: &str,
+    on: bool,
+) -> Result<Changed, String> {
+    mcp::set_workspace(workspace);
+    let status = mcp::set_tool_enabled(name, tool, on)?;
+    Ok(Changed {
+        status,
+        rows: rows(mcp::doctor()),
+    })
+}
+
 /// Only an https sign-in page goes to the browser.
 pub fn https_only(url: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<(), String> {
     if !url.starts_with("https://") {
@@ -434,13 +469,23 @@ mod tests {
         let checked = check(&d.workspace);
         assert_eq!(checked[0].status, "connected", "{:?}", checked[0]);
         assert_eq!(checked[0].tools, 1);
+        assert_eq!(checked[0].tool_rows.len(), 1);
+        assert!(checked[0].tool_rows[0].enabled);
         assert_eq!(checked[0].error, "");
         assert!(!checked[0].needs_sign_in);
         assert!(checked[0].can_disconnect);
 
+        let tool = checked[0].tool_rows[0].name.clone();
+        let off = set_tool_enabled(&d.workspace, "box", &tool, false).expect("tool off");
+        assert_eq!(off.status, format!("Turned off box's {tool}"));
+        assert_eq!(off.rows[0].tools, 0);
+        assert!(!off.rows[0].tool_rows[0].enabled);
+
         let again = restart(&d.workspace, "box");
         assert_eq!(again.status, "Reconnected box");
         assert_eq!(again.rows[0].status, "connected");
+        assert_eq!(again.rows[0].tools, 0);
+        assert!(!again.rows[0].tool_rows[0].enabled);
     }
 
     #[test]

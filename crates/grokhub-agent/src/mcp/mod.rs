@@ -92,7 +92,17 @@ fn cabin_cua_def() -> Option<ServerDef> {
         headers: BTreeMap::new(),
         token_ref: None,
         token_env: None,
+        disabled_tools: Default::default(),
     })
+}
+
+/// One tool on a connector row, with its Connectors-page on/off switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorTool {
+    /// The server's own tool name (not `server__tool`).
+    pub name: String,
+    /// False when the Connectors page turned it off for chat.
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +113,8 @@ pub struct DoctorRow {
     pub last_error: String,
     pub detail: String,
     pub sign_in: SignIn,
+    /// Tools from the last successful list, empty until Check / connect.
+    pub tools: Vec<DoctorTool>,
 }
 
 /// A server's browser sign-in, for its row.
@@ -511,6 +523,16 @@ pub fn shutdown_all() {
     tasks::clear_memory();
 }
 
+fn doctor_tools(def: &ServerDef, listed: &[ToolRec]) -> Vec<DoctorTool> {
+    listed
+        .iter()
+        .map(|tool| DoctorTool {
+            name: tool.raw.clone(),
+            enabled: !def.disabled_tools.contains(&tool.raw),
+        })
+        .collect()
+}
+
 pub fn configured() -> Vec<DoctorRow> {
     let workspace = {
         let held = lock_state();
@@ -530,6 +552,7 @@ pub fn configured() -> Vec<DoctorRow> {
             tool_count: 0,
             last_error: String::new(),
             detail: config::target_label(&def),
+            tools: Vec::new(),
         })
         .collect()
 }
@@ -555,6 +578,7 @@ pub fn doctor() -> Vec<DoctorRow> {
                 tool_count: 0,
                 last_error: String::new(),
                 detail: config::target_label(&inner.def),
+                tools: Vec::new(),
             });
             continue;
         }
@@ -587,13 +611,16 @@ pub fn doctor() -> Vec<DoctorRow> {
         } else {
             "stopped"
         };
+        let tools = doctor_tools(&inner.def, &inner.tools);
+        let offered = tools.iter().filter(|tool| tool.enabled).count();
         rows.push(DoctorRow {
             sign_in: sign_in_state(&name, &inner.def),
             name,
             status: status.into(),
-            tool_count: inner.tools.len(),
+            tool_count: offered,
             last_error: inner.last_error.clone().unwrap_or_default(),
             detail: config::target_label(&inner.def),
+            tools,
         });
     }
     rows
@@ -719,7 +746,7 @@ pub fn disconnect(name: &str) -> Result<String, String> {
     Ok(format!("Disconnected {name}"))
 }
 
-/// Settings → Connectors switch: turn a server off (`enabled: false` in its
+/// Connectors page switch: turn a server off (`enabled: false` in its
 /// `mcp.json` entry) or back on (the flag is dropped), through the
 /// ChangeLedger (origin user, so `/connections` can undo it). A server that
 /// is off is listed but never started. Desktop servers keep their lock.
@@ -753,15 +780,104 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
     }
     let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
     let why = if on {
-        "turned on in Settings"
+        "turned on on the Connectors page"
     } else {
-        "turned off in Settings"
+        "turned off on the Connectors page"
     };
     crate::harness::record_change(&config, &target, crate::harness::Origin::User, why, || {
         crate::harness::ChangeTarget::put(&target, Some(&bytes))
     })?;
     invalidate();
     shutdown_all();
+    Ok(line)
+}
+
+/// Connectors page per-tool switch: add or drop `tool` in the server's
+/// `disabledTools` list. A disabled tool is never offered to the model and
+/// never runs through chat. The server stays connected.
+pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, String> {
+    let tool = tool.trim();
+    if tool.is_empty() {
+        return Err("Pick a tool to turn on or off.".into());
+    }
+    if is_desktop_server(server) {
+        return Err(format!(
+            "{server} belongs to the desktop; its tools stay on."
+        ));
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile {
+        path: &path,
+        name: server,
+    };
+    let cur = crate::harness::ChangeTarget::read(&target)?
+        .ok_or_else(|| format!("{server} isn't one of this app's connections"))?;
+    let mut entry: serde_json::Map<String, Value> =
+        serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    let mut disabled: std::collections::BTreeSet<String> = entry
+        .get("disabledTools")
+        .or_else(|| entry.get("disabled_tools"))
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
+    let was_on = !disabled.contains(tool);
+    let line = if on {
+        format!("Turned on {server}'s {tool}")
+    } else {
+        format!("Turned off {server}'s {tool}")
+    };
+    if was_on == on {
+        return Ok(line);
+    }
+    if on {
+        disabled.remove(tool);
+    } else {
+        disabled.insert(tool.to_string());
+    }
+    if disabled.is_empty() {
+        entry.remove("disabledTools");
+        entry.remove("disabled_tools");
+    } else {
+        entry.remove("disabled_tools");
+        entry.insert(
+            "disabledTools".into(),
+            json!(disabled.into_iter().collect::<Vec<_>>()),
+        );
+    }
+    let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
+    let why = if on {
+        "tool turned on on the Connectors page"
+    } else {
+        "tool turned off on the Connectors page"
+    };
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, why, || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    // Keep the connection; only the offered tool list changes. Sync the
+    // slot's disabled set and the file fingerprint so the next load does
+    // not tear the server down over this write.
+    {
+        let mut held = lock_state();
+        if let Some(slot) = held.slots.get(server) {
+            let mut inner = lock_slot(slot);
+            if on {
+                inner.def.disabled_tools.remove(tool);
+            } else {
+                inner.def.disabled_tools.insert(tool.to_string());
+            }
+        }
+        let (r#gen, mtime) = fingerprint(&path);
+        held.r#gen = r#gen;
+        held.mtime = mtime;
+    }
     Ok(line)
 }
 
@@ -1491,11 +1607,19 @@ fn current_tools() -> Vec<ToolRec> {
 
 /// The tools a model may find and call: [`current_tools`] without the ones
 /// a server marks app-only (`_meta.ui.visibility: ["app"]`), which only its
-/// own MCP App iframe calls, through [`app_call_tool`].
+/// own MCP App iframe calls, through [`app_call_tool`], and without tools
+/// the Connectors page turned off (`disabledTools` in `mcp.json`).
 fn model_tools() -> Vec<ToolRec> {
+    let slots = slots_now();
     current_tools()
         .into_iter()
         .filter(|tool| apps::model_visible(tool.ui.as_ref()))
+        .filter(|tool| {
+            slots
+                .get(&tool.server)
+                .map(|slot| !lock_slot(slot).def.disabled_tools.contains(&tool.raw))
+                .unwrap_or(true)
+        })
         .collect()
 }
 
@@ -1919,6 +2043,54 @@ mod tests {
             super::set_enabled("nope", false),
             Err("nope isn't one of this app's connections".into())
         );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_tool_enabled_hides_the_tool_from_chat() {
+        let (dir, _guard) = temp_cfg("tool-enabled");
+        std::fs::write(
+            dir.join("mcp.json"),
+            r#"{"mcpServers":{"box":{"command":"definitely-not-a-real-binary-xyz"}}}"#,
+        )
+        .unwrap();
+        super::invalidate();
+        assert_eq!(
+            super::set_tool_enabled("box", "create", false),
+            Ok("Turned off box's create".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(
+            text.contains("\"disabledTools\"") && text.contains("create"),
+            "{text}"
+        );
+        let _snap = install_test_tools(&[
+            ("box", "search", "find things", true),
+            ("box", "create", "make things", false),
+        ]);
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["box__search"]);
+        assert!(try_dispatch("box__create", &json!({}), &|| false).is_none());
+        assert_eq!(
+            super::set_tool_enabled("box", "create", true),
+            Ok("Turned on box's create".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(!text.contains("disabledTools"), "{text}");
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"box__search"), "{names:?}");
+        assert!(names.contains(&"box__create"), "{names:?}");
+        assert_eq!(names.len(), 2, "{names:?}");
         super::shutdown_all();
         super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);

@@ -38,6 +38,7 @@ describe("Rail", () => {
     );
     expect(screen.getByRole("navigation", { name: "Views" })).toHaveAttribute("data-rail-mode", "simple");
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "MCPs & Connectors" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
   });

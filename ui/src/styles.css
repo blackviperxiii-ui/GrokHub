@@ -5879,6 +5879,23 @@ button.primary:not(.quick-chip) {
   float: right;
 }
 
+.connector-tools {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.connector-tools label.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.9em;
+}
+
 /* Settings → Account: Sign in with Grok. */
 .grok-sign-in {
   margin-bottom: 1.5rem;

@@ -619,7 +619,7 @@ export function Home({
               {page.glance.proposed > 0 && ` (${page.glance.proposed} to review)`}
             </button>
             <button type="button" onClick={() => go.onOpen("connectors")}>
-              Connectors · {page.glance.connected} / {page.glance.connectors} connected
+              MCPs & Connectors · {page.glance.connected} / {page.glance.connectors} connected
               {page.glance.failing > 0 && ` · ${page.glance.failing} failing`}
             </button>
           </div>

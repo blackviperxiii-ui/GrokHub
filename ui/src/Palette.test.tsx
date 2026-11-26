@@ -59,7 +59,7 @@ describe("paletteRows", () => {
       "Team",
       "Personal",
       "Skills",
-      "Connectors",
+      "MCPs & Connectors",
       "Workboard",
       "Devices",
       "Fleet",
@@ -97,7 +97,7 @@ describe("paletteRows", () => {
       "Team",
       "Personal",
       "Skills",
-      "Connectors",
+      "MCPs & Connectors",
       "Workboard",
       "Updates & Drivers",
       "Settings",
@@ -113,7 +113,7 @@ describe("paletteRows", () => {
       "Settings: Background",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Automations", "Agents", "Personal", "Skills", "MCPs & Connectors", "Workboard", "Settings"]);
   });
 
   it("lists Mods right after Library on a desktop that has it, never on the web", () => {
@@ -163,7 +163,7 @@ describe("paletteRows", () => {
       "Agents",
       "Personal",
       "Skills",
-      "Connectors",
+      "MCPs & Connectors",
       "Workboard",
       "Settings",
       "New chat",
@@ -257,10 +257,18 @@ describe("hasPage", () => {
 });
 
 describe("the rail and its More list", () => {
-  it("puts six pages on the rail and the rest under More, by platform", () => {
-    expect(railViews(DESKTOP)).toEqual(["home", "chat", "pulse", "library", "settings"]);
-    expect(railViews({ ...DESKTOP, code: true })).toEqual(["home", "chat", "code", "pulse", "library", "settings"]);
-    expect(railViews(WEB)).toEqual(["home", "chat", "settings"]);
+  it("puts MCPs & Connectors on the rail and the rest under More, by platform", () => {
+    expect(railViews(DESKTOP)).toEqual(["home", "chat", "pulse", "library", "connectors", "settings"]);
+    expect(railViews({ ...DESKTOP, code: true })).toEqual([
+      "home",
+      "chat",
+      "code",
+      "pulse",
+      "library",
+      "connectors",
+      "settings",
+    ]);
+    expect(railViews(WEB)).toEqual(["home", "chat", "connectors", "settings"]);
     expect(moreViews(DESKTOP)).toEqual([
       "objectives",
       "history",
@@ -271,13 +279,12 @@ describe("the rail and its More list", () => {
       "team",
       "memory",
       "skills",
-      "connectors",
       "workboard",
       "devices",
       "fleet",
       "updates",
     ]);
-    expect(moreViews(WEB)).toEqual(["objectives", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
+    expect(moreViews(WEB)).toEqual(["objectives", "automations", "agents", "memory", "skills", "workboard"]);
   });
 
   it("Simple mode pins a page onto the rail and drops it from More", () => {
@@ -288,6 +295,7 @@ describe("the rail and its More list", () => {
       "code",
       "pulse",
       "library",
+      "connectors",
       "automations",
       "skills",
       "settings",
@@ -301,7 +309,6 @@ describe("the rail and its More list", () => {
       "agents",
       "team",
       "memory",
-      "connectors",
       "workboard",
       "devices",
       "fleet",
@@ -365,7 +372,6 @@ describe("the rail and its More list", () => {
       "Team",
       "Personal",
       "Skills",
-      "Connectors",
       "Workboard",
       "Devices",
       "Fleet",

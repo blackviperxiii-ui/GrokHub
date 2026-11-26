@@ -1578,11 +1578,19 @@ export function setChatArchive(days: number): Promise<ChatArchive> {
   return invoke<ChatArchive>("set_chat_archive", { days });
 }
 
+/** One tool on a connector, for the per-tool on/off switch. */
+export interface ConnectorToolRow {
+  name: string;
+  /** False when the Connectors page turned it off for chat. */
+  enabled: boolean;
+}
+
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
 export interface ConnectorRow {
   name: string;
   /** "connected", "error", "stopped", "not checked" or "disabled". */
   status: string;
+  /** How many tools chat can use (off tools are not counted). */
   tools: number;
   error: string;
   /** The command or URL the entry runs. */
@@ -1593,6 +1601,8 @@ export interface ConnectorRow {
   canDisconnect: boolean;
   /** False once its switch turned it off. */
   enabled: boolean;
+  /** Tools from the last Check / connect; empty until then. */
+  toolRows: ConnectorToolRow[];
 }
 
 export interface ConnectorsChanged {
@@ -1667,6 +1677,15 @@ export function setConnectorEnabled(
   on: boolean,
 ): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
+}
+
+/** Turn one tool of a connector off or back on for chat. */
+export function setConnectorToolEnabled(
+  name: string,
+  tool: string,
+  on: boolean,
+): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("set_connector_tool_enabled", { name, tool, on });
 }
 
 /** Opens the server's sign-in page in the browser and waits for it. */

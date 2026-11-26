@@ -1,0 +1,1 @@
+- Shell: MCPs & Connectors sits on the Simple rail (not under More), with per-tool on/off switches that chat respects; Settings keeps no connectors section.

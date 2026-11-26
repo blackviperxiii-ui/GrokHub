@@ -23,7 +23,7 @@ export const CHANNEL_NOTE_REMOTE =
   "Switch between beta and stable on your computer, in About, under Updates.";
 export const PLUGINS_TIP =
   "A preview: plugins work, but how they install and trust may change.";
-export const PLUGINS_MCP_NOTE = "MCP servers you add yourself are on the Connectors page.";
+export const PLUGINS_MCP_NOTE = "MCP servers you add yourself are on the MCPs & Connectors page.";
 export const INSTALL_HINT = "Nothing from the bundle runs. It installs off and untrusted.";
 export const MARKET_HINT = "An https index URL. Fetch only lists entries; Install is a separate step.";
 export const MARKET_EMPTY = "No marketplace entries.";
@@ -133,7 +133,7 @@ export function Labs({ onOpenConnectors }: { onOpenConnectors?: () => void } = {
           <>
             MCP servers you add yourself are on the{" "}
             <button type="button" className="link" onClick={onOpenConnectors}>
-              Connectors
+              MCPs & Connectors
             </button>{" "}
             page.
           </>
