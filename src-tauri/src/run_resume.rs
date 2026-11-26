@@ -260,6 +260,7 @@ pub fn run(
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
+        delivered: false,
     };
     let end = end_of(&result);
     match (&job.automation, &end) {
@@ -272,7 +273,7 @@ pub fn run(
                 asked: &auto.instructions,
                 origin: job.gate.origin.and(session),
             };
-            crate::automations::board_run_end(config_dir, ran, Some(&job.card_id), &result)
+            crate::automations::board_run_end(config_dir, ran, Some(&job.card_id), &result);
         }
         _ => settle(config_dir, &job.card_id, job.attempt, &end, &result.text),
     }

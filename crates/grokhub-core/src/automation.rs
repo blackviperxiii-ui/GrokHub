@@ -112,15 +112,15 @@ fn clip_error(why: &str) -> String {
     out
 }
 
-/// The scheduled turn finished with a reply.
-pub fn mark_automation_ok(mut a: Automation) -> Automation {
+/// The scheduled turn finished with a reply. `delivered` is whether the
+/// place its result goes (the job's board card) took it.
+pub fn mark_automation_ok(mut a: Automation, delivered: bool) -> Automation {
     a.health = AutoHealth {
         outcome: AutoOutcome::Ok,
         error: String::new(),
         fail_streak: 0,
     };
-    // Result reached the shell/activity path: delivery ok with the run.
-    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(true, true);
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(true, delivered);
     a
 }
 
@@ -146,14 +146,6 @@ pub fn mark_automation_stopped(mut a: Automation) -> Automation {
         run: crate::automation_wait::LifePhase::Stopped,
         completion: crate::automation_wait::LifePhase::Stopped,
     };
-    a
-}
-
-/// Mark delivery failed. Run phase stays Ok/Failed from the turn itself.
-pub fn mark_automation_delivery_failed(mut a: Automation) -> Automation {
-    let run_ok = a.health.outcome == AutoOutcome::Ok
-        || a.lifecycle.run == crate::automation_wait::LifePhase::Ok;
-    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(run_ok, false);
     a
 }
 
@@ -1678,12 +1670,42 @@ mod tests {
         let stopped = mark_automation_stopped(a.clone());
         assert_eq!(stopped.health.fail_streak, 2, "a halt is not a success");
         assert!(automation_health_line(&stopped).is_none());
-        let ok = mark_automation_ok(a);
+        let ok = mark_automation_ok(a, true);
         assert!(ok.health.fail_streak == 0 && ok.health.error.is_empty());
         assert!(automation_health_line(&ok).is_none());
         let long = mark_automation_failed(job("b"), &"x".repeat(500));
         assert_eq!(long.health.error.chars().count(), AUTO_ERROR_CHARS);
         assert!(long.health.error.ends_with('…'));
+    }
+
+    /// L3: delivered means the run's result reached where it goes and that
+    /// place took it. A good run whose result went nowhere is healthy, but
+    /// not delivered and not complete.
+    #[test]
+    fn a_good_run_is_delivered_only_when_its_result_landed() {
+        use crate::automation_wait::LifePhase;
+        let landed = mark_automation_ok(mark_automation_ran(job("a"), 1_000), true);
+        assert_eq!(
+            (
+                landed.lifecycle.run,
+                landed.lifecycle.delivery,
+                landed.lifecycle.completion
+            ),
+            (LifePhase::Ok, LifePhase::Ok, LifePhase::Ok)
+        );
+        let lost = mark_automation_ok(mark_automation_ran(job("b"), 1_000), false);
+        assert_eq!(
+            (
+                lost.lifecycle.run,
+                lost.lifecycle.delivery,
+                lost.lifecycle.completion
+            ),
+            (LifePhase::Ok, LifePhase::Failed, LifePhase::Failed)
+        );
+        assert!(
+            automation_health_line(&lost).is_none(),
+            "the run itself was fine"
+        );
     }
 
     /// The fields an edit re-parses: what the schedule is and what the job asks.
