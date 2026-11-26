@@ -12,10 +12,10 @@
 - the retired cabin's self_mcp.rs: `SelfServer`, `SelfIo`, `run_stdio`.
 - the retired cabin's change_undo.rs: LedgerWatch reads ledger lines the server process wrote.
 ## Change recipe
-- New tool: add a `SELF_TOOLS` row and its `mcp_tools` entry (same order), its arm in `run`, and a test that asks `harness::decide` for both the bare and `grokhub-self__` names. A delete-class tool also gets a `MCPTool(grokhub-self__…)` line in `HEADLESS_DENY_RULES` (bump the literal count).
+- New tool: add a `SELF_TOOLS` row and its `mcp_tools` entry (same order), its arm in `run`, and a test that asks `harness::decide` for both the bare and `grokhub-self__` names.
 - New guarded target: add it to `GUARDED` in `crates/grokhub-agent/src/self_manage/mod.rs`; the guard runs as a hard floor, before any ledger write.
 ## What breaks it
-- A side path around `harness::decide`: the classes live in `hard_class` / `hard_floor` (`crates/grokhub-agent/src/harness/hard.rs`), so paths A, B, C, and E agree.
+- A side path around `harness::decide`: the classes live in `hard_class` / `hard_floor` (`crates/grokhub-agent/src/harness/hard.rs`), so paths A and E agree.
 - A token in args, a span, the ledger, a park file, or `mcp.json`. It comes only from the elicit card and is sealed by `seal_connection_token`; the entry keeps `tokenRef`.
 - Writing into the user's `~/.grok`: GrokHub never touches the Grok Build CLI's config or credentials.
 - Building an `UndoAsk` here: no tool can undo; Undo stays a click or typing (only_typing_or_a_click_builds_an_undo_ask).
@@ -24,6 +24,6 @@
 ## Non-obvious
 - The stdio server runs soft calls and only parks hard class; soft calls rely on the caller's own gate. Under Always, delete and credentials still park, Enter never approves, and TTL, Halt, or a closed cabin is Deny.
 - Connections land in the cabin's native `mcp.json`, never the Grok Build CLI's config, so Undo rows stay one file.
-- A token-needing `connection_add` is still listed in `GB_DENY_GAPS` (left from the CLI's arg-blind `--deny` rules); the server's own park is what holds it.
+- A token-needing `connection_add` is hard class credentials by its args (`needs_token`), not its name; the server's own park is what holds it.
 ## See also
 - [harness](harness.md), [desktop-mcp](desktop-mcp.md), [grokhub-agent](grokhub-agent.md)

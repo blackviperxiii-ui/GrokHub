@@ -9210,11 +9210,14 @@ mod tests {
             assert_eq!(action_line(name, arguments), line, "{name}");
         }
         assert_eq!(
-            crate::harness::classify_ask(
-                "notes__type",
-                &action_line("notes__type", r#"{"text":"rm -rf ~/old"}"#)
+            crate::harness::hard_class(
+                "run_terminal_command",
+                &serde_json::json!({
+                    "command": action_line("notes__type", r#"{"text":"rm -rf ~/old"}"#)
+                })
+                .to_string()
             ),
-            crate::harness::classify_ask("type", "rm -rf ~/old")
+            Some(crate::harness::HardClass::Delete)
         );
         // Two candidates, or one beside other text, could hide what runs.
         for arguments in [
@@ -9637,10 +9640,13 @@ mod tests {
             vec![("type".to_string(), "rm -rf ~/old".to_string())]
         );
         assert_eq!(desk.calls.load(Ordering::SeqCst), 0);
-        // What the egui cabin does with that line: it holds the step.
+        // What the shell's `ask_is_hard` reads from that line: a hard step.
         assert_eq!(
-            crate::harness::classify_ask("type", &cards[0].1),
-            crate::harness::HardHit::Class(crate::harness::HardClass::Delete)
+            crate::harness::hard_class(
+                "run_terminal_command",
+                &serde_json::json!({ "command": cards[0].1 }).to_string()
+            ),
+            Some(crate::harness::HardClass::Delete)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

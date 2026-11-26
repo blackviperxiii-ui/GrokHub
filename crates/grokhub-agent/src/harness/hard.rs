@@ -3,26 +3,14 @@
 //! The floor covers shell commands only, the same scope as `host_safety`.
 //! Hard class covers shell commands, named tools, and every click, key and
 //! typed text that reaches the OS: path A (`grokhub-desktop`), the in-app
-//! desktop tools (`click`, `key`, `type`, read by their args here too), the
-//! Cua sidecar (`cua_as_desk`), and paths B and D (`classify_ask`). A click
-//! is hard by the control's label or declared effect, or by a risky window
-//! when nothing names the control; Enter, Ctrl+Enter and Alt+S are hard in a
-//! chat, mail or checkout window.
+//! desktop tools (`click`, `key`, `type`, read by their args here too), and
+//! the Cua sidecar (`cua_as_desk`). A click is hard by the control's label or
+//! declared effect, or by a risky window when nothing names the control;
+//! Enter, Ctrl+Enter and Alt+S are hard in a chat, mail or checkout window.
 //! Hard class never applies to read-only tools (read_file, grep, list_dir, …).
 
 use super::git_words::command_may_push;
 use grokhub_core::host_safety;
-
-/// Spike-1c path D: the computer-use tool names an outside agent may bring,
-/// in rule form. Every name that is not GrokHub's own desktop server.
-pub const BUILTIN_CU_DENY: &[&str] = &[
-    "MCPTool(computer__*)",
-    "MCPTool(computer-use__*)",
-    "MCPTool(computer_use__*)",
-    "MCPTool(*__computer_*)",
-    "MCPTool(*__mouse_*)",
-    "MCPTool(*__keyboard_*)",
-];
 
 /// Hard class: Always / Auto / Full cannot skip. Parks a user approval card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,69 +176,6 @@ fn use_tool_target(arguments: &str) -> Option<(String, String)> {
         _ => "{}".into(),
     };
     Some((name.to_string(), inner))
-}
-
-/// Classify a Grok Build permission ask (ACP / native side ask) from its title and
-/// one-line action. The action is usually the command, path, or site.
-pub fn classify_ask(title: &str, action: &str) -> HardHit {
-    // The lead's merge request arrives as an ask titled with the tool's name.
-    // Its action is a line about the work, not a command, so nothing below
-    // would know it, and a host in Always would answer it by itself.
-    if title.trim() == crate::tools::control::MERGE_WORK {
-        return HardHit::Class(HardClass::MergeWork);
-    }
-    let as_shell = serde_json::json!({ "command": action }).to_string();
-    let floor = classify("run_terminal_command", &as_shell);
-    if let HardHit::Floor(_) = floor {
-        return floor;
-    }
-    if let Some(class) = command_class(&action.to_ascii_lowercase(), action) {
-        return HardHit::Class(class);
-    }
-    if let Some(rule) = ask_click(title, action) {
-        return HardHit::Class(rule.class);
-    }
-    let slug = title.trim().replace([' ', '-'], "_");
-    let typing = field_words(title)
-        .iter()
-        .any(|w| matches!(w.as_str(), "type" | "typing" | "fill" | "input"));
-    if typing && (credential_hint(title) || credential_hint(action)) {
-        return HardHit::Class(HardClass::Credentials);
-    }
-    match name_class(&slug) {
-        Some(class) => HardHit::Class(class),
-        None => HardHit::None,
-    }
-}
-
-/// Paths B and D: an ask or tool card that clicks a control. The label is
-/// the first quoted text in the action, else the action after "click".
-fn ask_click(title: &str, action: &str) -> Option<ClickRule> {
-    let clicks = |s: &str| field_words(s).iter().any(|w| w == "click" || w == "tap");
-    if !clicks(title) && !clicks(action) {
-        return None;
-    }
-    let quoted = action
-        .split(['"', '\u{201c}', '\u{201d}'])
-        .nth(1)
-        .filter(|q| !q.trim().is_empty());
-    let label = match quoted {
-        Some(q) => q.to_string(),
-        None => {
-            let words = field_words(action);
-            let from = words
-                .iter()
-                .position(|w| w == "click" || w == "tap")
-                .map_or(0, |i| i + 1);
-            words[from..]
-                .iter()
-                .filter(|w| !matches!(w.as_str(), "on" | "the" | "button"))
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(" ")
-        }
-    };
-    click_target_class(None, &label, "")
 }
 
 /// Path A: a `grokhub-desktop` tool call. Typed text is checked like a shell
@@ -1265,474 +1190,6 @@ pub fn credential_action(args: &serde_json::Value) -> String {
     format!("type into {field} ({n} chars hidden)")
 }
 
-/// Path C: Grok Build `--deny` rules for a headless `grok -p` on Auto or
-/// Always. Deny beats always-approve in GB, so these hold where no prompt
-/// reaches the cabin. Only the patterns GB rules can express; the cabin
-/// classifier stays the source of truth on paths A, B, and E. The Grok CLI
-/// credential-file rules ride along from `grokhub_acp::CLI_CREDENTIAL_DENY`.
-/// Each shell head has five forms: bare, `sudo`, and after `; `, `&& `, `| `.
-/// [`HEADLESS_DENY_RULES`] adds the case, path, wrapper and encoded-command
-/// forms built from these. What GB rules can't express is listed in [`GB_DENY_GAPS`].
-const BASE_DENY_RULES: &[&str] = &[
-    // Hard floor
-    "Bash(rm -rf /)",
-    "Bash(rm -rf /*)",
-    "Bash(rm -fr /)",
-    "Bash(* --no-preserve-root*)",
-    "Bash(*mkfs*)",
-    "Bash(*dd * of=/dev/*)",
-    "Bash(*:(){*)",
-    "Bash(sudo sh*)",
-    "Bash(sudo bash*)",
-    "Bash(*| sudo sh*)",
-    "Bash(*| sudo bash*)",
-    "Bash(*.ssh/*)",
-    "Bash(*.ssh)",
-    "Bash(*.gnupg/*)",
-    "Bash(*.gnupg)",
-    "Bash(*.aws/*)",
-    "Bash(*.aws)",
-    "Bash(*.kube/*)",
-    "Bash(*.kube)",
-    "Bash(*/etc/shadow*)",
-    "Bash(*/etc/sudoers*)",
-    "Bash(*app.json*)",
-    "Bash(*secrets.json*)",
-    "Bash(*hub-state.json*)",
-    "Read(**/.ssh/**)",
-    "Read(**/.gnupg/**)",
-    "Read(**/.aws/**)",
-    "Read(**/.kube/**)",
-    "Read(/etc/shadow)",
-    "Read(/etc/sudoers)",
-    // Hard class: delete
-    "Bash(rm *)",
-    "Bash(sudo rm *)",
-    "Bash(*; rm *)",
-    "Bash(*&& rm *)",
-    "Bash(*| rm *)",
-    "Bash(rmdir *)",
-    "Bash(sudo rmdir *)",
-    "Bash(*; rmdir *)",
-    "Bash(*&& rmdir *)",
-    "Bash(*| rmdir *)",
-    "Bash(unlink *)",
-    "Bash(sudo unlink *)",
-    "Bash(*; unlink *)",
-    "Bash(*&& unlink *)",
-    "Bash(*| unlink *)",
-    "Bash(trash *)",
-    "Bash(sudo trash *)",
-    "Bash(*; trash *)",
-    "Bash(*&& trash *)",
-    "Bash(*| trash *)",
-    "Bash(trash-put *)",
-    "Bash(sudo trash-put *)",
-    "Bash(*; trash-put *)",
-    "Bash(*&& trash-put *)",
-    "Bash(*| trash-put *)",
-    "Bash(*git push --delete*)",
-    "Bash(*git branch -d*)",
-    "Bash(*git branch -D*)",
-    "MCPTool(*delete*)",
-    "MCPTool(*trash*)",
-    "MCPTool(*remove_file*)",
-    "MCPTool(*purge*)",
-    // Hard class: delete on Windows, the trash, and the Recycle Bin (Spike-1b)
-    "Bash(del *)",
-    "Bash(sudo del *)",
-    "Bash(*; del *)",
-    "Bash(*&& del *)",
-    "Bash(*| del *)",
-    "Bash(erase *)",
-    "Bash(sudo erase *)",
-    "Bash(*; erase *)",
-    "Bash(*&& erase *)",
-    "Bash(*| erase *)",
-    "Bash(rd *)",
-    "Bash(sudo rd *)",
-    "Bash(*; rd *)",
-    "Bash(*&& rd *)",
-    "Bash(*| rd *)",
-    "Bash(ri *)",
-    "Bash(sudo ri *)",
-    "Bash(*; ri *)",
-    "Bash(*&& ri *)",
-    "Bash(*| ri *)",
-    "Bash(remove-item *)",
-    "Bash(sudo remove-item *)",
-    "Bash(*; remove-item *)",
-    "Bash(*&& remove-item *)",
-    "Bash(*| remove-item *)",
-    "Bash(Remove-Item *)",
-    "Bash(sudo Remove-Item *)",
-    "Bash(*; Remove-Item *)",
-    "Bash(*&& Remove-Item *)",
-    "Bash(*| Remove-Item *)",
-    "Bash(remove-itemsafely *)",
-    "Bash(sudo remove-itemsafely *)",
-    "Bash(*; remove-itemsafely *)",
-    "Bash(*&& remove-itemsafely *)",
-    "Bash(*| remove-itemsafely *)",
-    "Bash(Remove-ItemSafely *)",
-    "Bash(sudo Remove-ItemSafely *)",
-    "Bash(*; Remove-ItemSafely *)",
-    "Bash(*&& Remove-ItemSafely *)",
-    "Bash(*| Remove-ItemSafely *)",
-    "Bash(recycle *)",
-    "Bash(sudo recycle *)",
-    "Bash(*; recycle *)",
-    "Bash(*&& recycle *)",
-    "Bash(*| recycle *)",
-    "Bash(clear-recyclebin*)",
-    "Bash(sudo clear-recyclebin*)",
-    "Bash(*; clear-recyclebin*)",
-    "Bash(*&& clear-recyclebin*)",
-    "Bash(*| clear-recyclebin*)",
-    "Bash(Clear-RecycleBin*)",
-    "Bash(sudo Clear-RecycleBin*)",
-    "Bash(*; Clear-RecycleBin*)",
-    "Bash(*&& Clear-RecycleBin*)",
-    "Bash(*| Clear-RecycleBin*)",
-    "Bash(*gio trash *)",
-    "Bash(*gio remove *)",
-    "Bash(*trash:/*)",
-    "Bash(*SendToRecycleBin*)",
-    "Bash(*sendtorecyclebin*)",
-    "Bash(*find * -delete*)",
-    "Bash(*-exec rm *)",
-    "Bash(*-execdir rm *)",
-    // Hard class: irreversible OS
-    "Bash(shutdown*)",
-    "Bash(sudo shutdown*)",
-    "Bash(*; shutdown*)",
-    "Bash(*&& shutdown*)",
-    "Bash(*| shutdown*)",
-    "Bash(reboot*)",
-    "Bash(sudo reboot*)",
-    "Bash(*; reboot*)",
-    "Bash(*&& reboot*)",
-    "Bash(*| reboot*)",
-    "Bash(poweroff*)",
-    "Bash(sudo poweroff*)",
-    "Bash(*; poweroff*)",
-    "Bash(*&& poweroff*)",
-    "Bash(*| poweroff*)",
-    "Bash(halt*)",
-    "Bash(sudo halt*)",
-    "Bash(*; halt*)",
-    "Bash(*&& halt*)",
-    "Bash(*| halt*)",
-    "Bash(wipefs*)",
-    "Bash(sudo wipefs*)",
-    "Bash(*; wipefs*)",
-    "Bash(*&& wipefs*)",
-    "Bash(*| wipefs*)",
-    "Bash(shred*)",
-    "Bash(sudo shred*)",
-    "Bash(*; shred*)",
-    "Bash(*&& shred*)",
-    "Bash(*| shred*)",
-    "Bash(diskpart*)",
-    "Bash(sudo diskpart*)",
-    "Bash(*; diskpart*)",
-    "Bash(*&& diskpart*)",
-    "Bash(*| diskpart*)",
-    // Windows power and disk cmdlets, and format.com (Spike-1W)
-    "Bash(format *)",
-    "Bash(sudo format *)",
-    "Bash(*; format *)",
-    "Bash(*&& format *)",
-    "Bash(*| format *)",
-    "Bash(format.com*)",
-    "Bash(sudo format.com*)",
-    "Bash(*; format.com*)",
-    "Bash(*&& format.com*)",
-    "Bash(*| format.com*)",
-    "Bash(stop-computer*)",
-    "Bash(sudo stop-computer*)",
-    "Bash(*; stop-computer*)",
-    "Bash(*&& stop-computer*)",
-    "Bash(*| stop-computer*)",
-    "Bash(Stop-Computer*)",
-    "Bash(sudo Stop-Computer*)",
-    "Bash(*; Stop-Computer*)",
-    "Bash(*&& Stop-Computer*)",
-    "Bash(*| Stop-Computer*)",
-    "Bash(restart-computer*)",
-    "Bash(sudo restart-computer*)",
-    "Bash(*; restart-computer*)",
-    "Bash(*&& restart-computer*)",
-    "Bash(*| restart-computer*)",
-    "Bash(Restart-Computer*)",
-    "Bash(sudo Restart-Computer*)",
-    "Bash(*; Restart-Computer*)",
-    "Bash(*&& Restart-Computer*)",
-    "Bash(*| Restart-Computer*)",
-    "Bash(format-volume*)",
-    "Bash(sudo format-volume*)",
-    "Bash(*; format-volume*)",
-    "Bash(*&& format-volume*)",
-    "Bash(*| format-volume*)",
-    "Bash(Format-Volume*)",
-    "Bash(sudo Format-Volume*)",
-    "Bash(*; Format-Volume*)",
-    "Bash(*&& Format-Volume*)",
-    "Bash(*| Format-Volume*)",
-    "Bash(clear-disk*)",
-    "Bash(sudo clear-disk*)",
-    "Bash(*; clear-disk*)",
-    "Bash(*&& clear-disk*)",
-    "Bash(*| clear-disk*)",
-    "Bash(Clear-Disk*)",
-    "Bash(sudo Clear-Disk*)",
-    "Bash(*; Clear-Disk*)",
-    "Bash(*&& Clear-Disk*)",
-    "Bash(*| Clear-Disk*)",
-    "Bash(*systemctl poweroff*)",
-    "Bash(*systemctl reboot*)",
-    "MCPTool(*hard_irreversible_stub*)",
-    // Hard class: send
-    "Bash(sendmail *)",
-    "Bash(sudo sendmail *)",
-    "Bash(*; sendmail *)",
-    "Bash(*&& sendmail *)",
-    "Bash(*| sendmail *)",
-    "Bash(mail *)",
-    "Bash(sudo mail *)",
-    "Bash(*; mail *)",
-    "Bash(*&& mail *)",
-    "Bash(*| mail *)",
-    "Bash(mutt *)",
-    "Bash(sudo mutt *)",
-    "Bash(*; mutt *)",
-    "Bash(*&& mutt *)",
-    "Bash(*| mutt *)",
-    "MCPTool(*send_message*)",
-    "MCPTool(*send_email*)",
-    "MCPTool(*send_mail*)",
-    "MCPTool(*send_draft*)",
-    "MCPTool(*send_chat*)",
-    "MCPTool(*post_message*)",
-    "MCPTool(*create_post*)",
-    "MCPTool(*publish_post*)",
-    "MCPTool(*hard_send_stub*)",
-    "MCPTool(*__send)",
-    "MCPTool(*_send)",
-    // Hard class: money
-    "MCPTool(*purchase*)",
-    "MCPTool(*payment*)",
-    "MCPTool(*checkout*)",
-    "MCPTool(*place_order*)",
-    "MCPTool(*buy_now*)",
-    "MCPTool(*transfer_funds*)",
-    "MCPTool(*hard_money_stub*)",
-    // Hard class: credentials
-    "Bash(passwd*)",
-    "Bash(sudo passwd*)",
-    "Bash(*; passwd*)",
-    "Bash(*&& passwd*)",
-    "Bash(*| passwd*)",
-    "Bash(chpasswd*)",
-    "Bash(sudo chpasswd*)",
-    "Bash(*; chpasswd*)",
-    "Bash(*&& chpasswd*)",
-    "Bash(*| chpasswd*)",
-    "Bash(*secret-tool*)",
-    "Bash(*gpg --export-secret*)",
-    "Bash(*security find-generic-password*)",
-    "MCPTool(*password*)",
-    "MCPTool(*credential*)",
-    "MCPTool(*secret*)",
-    "MCPTool(*api_key*)",
-    "MCPTool(*token_write*)",
-    // Hard floor: the consent ledger changes only by the user's click (Spike-4a)
-    "Bash(*consent.jsonl*)",
-    "Edit(**/consent.jsonl)",
-    "Write(**/consent.jsonl)",
-    // Spike-5c: Grok's own delete tools on `grokhub-self` (credentials ride in args, see GB_DENY_GAPS)
-    "MCPTool(grokhub-self__skill_delete)",
-    "MCPTool(grokhub-self__connection_remove)",
-    "MCPTool(grokhub-self__automation_delete)",
-    // A new automation runs on its own later, so it waits for your yes too
-    "MCPTool(grokhub-self__automation_create)",
-];
-
-/// Every path C `--deny` rule: [`BASE_DENY_RULES`], then the forms GB's
-/// literal, case-sensitive globs need to see what the cabin classifier
-/// already reads through (card 29 part 3):
-/// - Case: an UPPER and a Capitalized form of each [`CASE_HEADS`] rule
-///   (`REMOVE-ITEM x`, `Del x`). Cmd and PowerShell ignore case.
-/// - A full path: `/bin/rm x`, `C:\Windows\System32\shutdown.exe /s`.
-/// - A wrapper: `cmd /c del x`, `powershell -Command "Remove-Item x"`, `bash -c 'rm x'`.
-/// - Encoded PowerShell (`-EncodedCommand`, `-enc`, `-e`) is denied outright:
-///   its body can't be read by a rule or by the classifier.
-pub static HEADLESS_DENY_RULES: std::sync::LazyLock<Vec<&'static str>> =
-    std::sync::LazyLock::new(|| {
-        let mut out: Vec<&'static str> = BASE_DENY_RULES.to_vec();
-        for rule in extra_deny_rules() {
-            if !out.contains(&rule.as_str()) {
-                out.push(Box::leak(rule.into_boxed_str()));
-            }
-        }
-        out
-    });
-
-/// Shell heads Windows reads in any case (cmd built-ins, PowerShell cmdlets
-/// and aliases, and `.exe` / `.com` names).
-const CASE_HEADS: &[&str] = &[
-    "rm",
-    "rmdir",
-    "del",
-    "erase",
-    "rd",
-    "ri",
-    "remove-item",
-    "remove-itemsafely",
-    "clear-recyclebin",
-    "shutdown",
-    "diskpart",
-    "format",
-    "format.com",
-    "stop-computer",
-    "restart-computer",
-    "format-volume",
-    "clear-disk",
-];
-/// The five head positions of [`BASE_DENY_RULES`].
-const HEAD_FORMS: &[&str] = &["", "sudo ", "*; ", "*&& ", "*| "];
-/// Programs that run from a full path (`/bin/rm`, `...\System32\shutdown.exe`).
-const PATH_HEADS: &[&str] = &[
-    "rm",
-    "rmdir",
-    "unlink",
-    "shred",
-    "wipefs",
-    "trash",
-    "trash-put",
-    "shutdown",
-    "reboot",
-    "poweroff",
-    "halt",
-    "diskpart",
-    "format",
-];
-/// Deletes that come behind a wrapper: `cmd /c`, `powershell -Command` / `-c`, `bash -c`.
-const WRAPPED_HEADS: &[&str] = &[
-    "rm",
-    "rmdir",
-    "del",
-    "erase",
-    "rd",
-    "ri",
-    "remove-item",
-    "Remove-Item",
-    "shutdown",
-];
-const WRAPPERS: &[&str] = &["/c ", "/C ", "-c ", "-command ", "-Command "];
-/// PowerShell names and the `-EncodedCommand` spellings it accepts.
-const PWSH_NAMES: &[&str] = &["powershell", "PowerShell", "POWERSHELL", "pwsh"];
-const ENCODED_FLAGS: &[&str] = &[
-    "-e",
-    "-E",
-    "-ec",
-    "-EC",
-    "-en",
-    "-enc",
-    "-Enc",
-    "-ENC",
-    "-encodedcommand",
-    "-EncodedCommand",
-    "-ENCODEDCOMMAND",
-];
-
-fn capitalized(head: &str) -> String {
-    let mut c = head.chars();
-    c.next()
-        .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
-        .unwrap_or_default()
-}
-
-fn extra_deny_rules() -> Vec<String> {
-    let mut out = Vec::new();
-    for rule in BASE_DENY_RULES {
-        let Some(body) = rule.strip_prefix("Bash(") else {
-            continue;
-        };
-        for form in HEAD_FORMS {
-            let Some(rest) = body.strip_prefix(form) else {
-                continue;
-            };
-            for head in CASE_HEADS {
-                let Some(tail) = rest.strip_prefix(head) else {
-                    continue;
-                };
-                if tail.starts_with([' ', '*']) {
-                    for cased in [head.to_ascii_uppercase(), capitalized(head)] {
-                        out.push(format!("Bash({form}{cased}{tail}"));
-                    }
-                }
-            }
-        }
-    }
-    for head in PATH_HEADS {
-        out.push(format!("Bash(*/{head} *)"));
-        out.push(format!("Bash(*\\{head} *)"));
-        out.push(format!("Bash(*\\{head}.exe *)"));
-    }
-    out.push("Bash(*\\format.com *)".into());
-    for head in DISK_BOOT_HEADS {
-        for form in HEAD_FORMS {
-            out.push(format!("Bash({form}{head}*)"));
-        }
-    }
-    for phrase in &CREDENTIAL_PHRASES_SH[3..] {
-        out.push(format!("Bash(*{phrase}*)"));
-    }
-    for head in WRAPPED_HEADS {
-        for wrap in WRAPPERS {
-            for quote in ["", "\"", "'"] {
-                out.push(format!("Bash(*{wrap}{quote}{head} *)"));
-            }
-        }
-    }
-    for name in PWSH_NAMES {
-        for flag in ENCODED_FLAGS {
-            out.push(format!("Bash(*{name}*{flag} *)"));
-        }
-    }
-    out
-}
-
-/// Hard patterns no GB `--deny` rule can express, with a sample each. GB
-/// rules match a shell command line or a tool name, never a tool's args or a
-/// separator without spaces. These stay gated on paths A, B, and E only, and a
-/// path C run that does one is flagged by `approval_gate_violation`. The last
-/// entry is GB's own computer use (path D): no rule kind names a built-in
-/// tool, so the cabin's watchdog checks its frames instead.
-pub const GB_DENY_GAPS: &[(&str, &str)] = &[
-    ("doas rm notes.txt", "`doas` prefix (only `sudo` forms are listed)"),
-    ("true&&rm notes.txt", "a separator with no space after it"),
-    ("rEmOvE-iTeM notes.txt", "a head in mixed case (lower, UPPER, Capitalized and PascalCase are listed)"),
-    ("$f.InvokeVerb('delete')", "a Recycle Bin move through the Windows shell verb"),
-    ("powershell /enc ZQBjAGgAbwA=", "encoded PowerShell with `/` or an unlisted prefix (`-enco`, `-encodedc`)"),
-    ("grokhub-desktop__type", "typed text into a password, PIN, OTP, 2FA, or verification-code field (args, not the name)"),
-    (
-        "grokhub-desktop__key",
-        "Ctrl+Alt+Delete and other session-ending key combos, and Delete on a file manager's selection (args and the focused window, not the name)",
-    ),
-    (
-        "computer_screenshot",
-        "Grok Build's own (non-MCP) computer-use tools: GB rules name only Bash, Read, Edit/Write, Grep/Glob, MCPTool, WebFetch and WebSearch; the path D watchdog checks their frames",
-    ),
-    (
-        "grokhub-desktop__click",
-        "a click on a Send, Pay, Delete, or Reset control (the label under the click point, not the tool name)",
-    ),
-    ("grokhub-self__connection_add", "a connection with needs_token (args, not the name); same for connection_modify"),
-    ("cp linux.efi /boot/efi/EFI/Linux/", "a copy, move or write into /boot or the ESP (the target path, not the head)"),
-];
-
 /// An install of a tool whose driver Microsoft's cached vulnerable driver
 /// blocklist names (round 3 item 36).
 fn flagged_driver(cmd: &str) -> Option<HardClass> {
@@ -2278,8 +1735,7 @@ fn name_class(raw: &str) -> Option<HardClass> {
     None
 }
 
-/// Tool-name words per hard class. `HEADLESS_DENY_RULES` carries an
-/// `MCPTool(*word*)` rule for each (`gb_deny_rules_cover_every_hard_name_and_command`).
+/// Tool-name words per hard class.
 const MONEY_NAMES: &[&str] = &[
     "purchase",
     "payment",
@@ -2301,7 +1757,7 @@ const SEND_NAMES: &[&str] = &[
 const DELETE_NAMES: &[&str] = &["delete", "trash", "remove_file", "purge"];
 const CREDENTIAL_NAMES: &[&str] = &["password", "credential", "secret", "api_key", "token_write"];
 /// Whole words in a tool name, for names the phrases above miss (`gmail__reply`,
-/// `stripe__create_charge`, `db__drop_table`). GB rules can't match words; see [`GB_DENY_GAPS`].
+/// `stripe__create_charge`, `db__drop_table`).
 const MONEY_WORDS: &[&str] = &[
     "buy", "purchase", "pay", "money", "charge", "refund", "transfer",
 ];
@@ -2825,82 +2281,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(BASE_DENY_RULES.len(), 271);
-        assert_eq!(&HEADLESS_DENY_RULES[..271], BASE_DENY_RULES);
-        assert_eq!(HEADLESS_DENY_RULES[264], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[266], "Write(**/consent.jsonl)");
-        assert_eq!(
-            HEADLESS_DENY_RULES[267],
-            "MCPTool(grokhub-self__skill_delete)"
-        );
-        assert_eq!(
-            HEADLESS_DENY_RULES[268],
-            "MCPTool(grokhub-self__connection_remove)"
-        );
-        assert_eq!(
-            HEADLESS_DENY_RULES[269],
-            "MCPTool(grokhub-self__automation_delete)"
-        );
-        assert_eq!(
-            HEADLESS_DENY_RULES[270],
-            "MCPTool(grokhub-self__automation_create)"
-        );
-        assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
-        assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
-        assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
-        assert!(HEADLESS_DENY_RULES.contains(&"Read(**/.ssh/**)"));
-        assert!(
-            HEADLESS_DENY_RULES
-                .iter()
-                .all(|r| !r.contains("grokhub-desktop")),
-            "the desktop MCP is gated in its own dispatch (path A)"
-        );
-    }
-
-    /// GB rule `Kind(glob)` against a command line or a tool name. Stand-in
-    /// for GB's matcher: `*` (and `**`) spans any text, everything else is literal.
-    fn gb_denies(kind: &str, subject: &str) -> bool {
-        rule_hits(&HEADLESS_DENY_RULES, kind, subject)
-    }
-
-    fn rule_hits(rules: &[&str], kind: &str, subject: &str) -> bool {
-        rules.iter().any(|rule| {
-            let Some(glob) = rule
-                .strip_prefix(kind)
-                .and_then(|r| r.strip_prefix('('))
-                .and_then(|r| r.strip_suffix(')'))
-            else {
-                return false;
-            };
-            glob_regex(glob).is_some_and(|re| re.is_match(subject))
-        })
-    }
-
-    /// Each glob compiled once. Compiling per rule per command made the two
-    /// big tables ~83,000 compiles a run, the slowest tests in the suite.
-    fn glob_regex(glob: &str) -> Option<regex::Regex> {
-        use std::collections::HashMap;
-        use std::sync::{LazyLock, Mutex};
-        static COMPILED: LazyLock<Mutex<HashMap<String, Option<regex::Regex>>>> =
-            LazyLock::new(Mutex::default);
-        let mut compiled = COMPILED.lock().unwrap_or_else(|e| e.into_inner());
-        compiled
-            .entry(glob.to_string())
-            .or_insert_with(|| {
-                let pattern: Vec<String> = glob.split('*').map(regex::escape).collect();
-                regex::Regex::new(&format!("^{}$", pattern.join(".*"))).ok()
-            })
-            .clone()
-    }
-
     fn hard_shell(cmd: &str) -> bool {
         !matches!(classify("run_terminal_command", &sh(cmd)), HardHit::None)
     }
 
     #[test]
-    fn gb_deny_rules_cover_every_hard_name_and_command() {
+    fn every_hard_head_name_and_floor_path_is_hard_in_every_position() {
         let heads = [
             IRREVERSIBLE_HEADS,
             DELETE_HEADS,
@@ -2918,7 +2304,6 @@ mod tests {
                 format!("yes | {h} target"),
             ] {
                 assert!(hard_shell(&cmd), "classifier: {cmd}");
-                assert!(gb_denies("Bash", &cmd), "no GB deny rule for `{cmd}`");
             }
         }
         assert_eq!(DISK_BOOT_HEADS.len(), 17);
@@ -2935,26 +2320,24 @@ mod tests {
                     HardHit::Class(HardClass::IrreversibleOs),
                     "classifier: {cmd}"
                 );
-                assert!(gb_denies("Bash", &cmd), "no GB deny rule for `{cmd}`");
             }
         }
         for phrase in [IRREVERSIBLE_PHRASES, CREDENTIAL_PHRASES_SH, DELETE_PHRASES].concat() {
             let cmd = format!("cd /tmp && {phrase} x");
-            assert!(hard_shell(&cmd) && gb_denies("Bash", &cmd), "{cmd}");
+            assert!(hard_shell(&cmd), "{cmd}");
         }
         for cmd in [
             "git push --delete origin x",
             "git branch -d x",
             "git branch -D x",
         ] {
-            assert!(hard_shell(cmd) && gb_denies("Bash", cmd), "{cmd}");
+            assert!(hard_shell(cmd), "{cmd}");
         }
         let names = [MONEY_NAMES, SEND_NAMES, DELETE_NAMES, CREDENTIAL_NAMES].concat();
         assert_eq!(names.len(), 23);
         for w in names {
             let tool = format!("srv__{w}_now");
             assert!(hard_class(&tool, "{}").is_some(), "classifier: {tool}");
-            assert!(gb_denies("MCPTool", &tool), "no GB deny rule for `{tool}`");
         }
         for tool in [
             "mail__send",
@@ -2964,10 +2347,7 @@ mod tests {
             "x__hard_credentials_stub",
             "x__hard_irreversible_stub",
         ] {
-            assert!(
-                hard_class(tool, "{}").is_some() && gb_denies("MCPTool", tool),
-                "{tool}"
-            );
+            assert!(hard_class(tool, "{}").is_some(), "{tool}");
         }
         // Floor: every host_safety path, the ledger, and the irreversible shapes.
         for cmd in [
@@ -2995,58 +2375,44 @@ mod tests {
                 ),
                 "floor: {cmd}"
             );
-            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
         }
-        for path in [
-            "/home/me/.ssh/id_rsa",
-            "/home/me/.gnupg/x",
-            "/home/me/.aws/credentials",
-            "/home/me/.kube/config",
-        ] {
-            assert!(gb_denies("Read", path), "{path}");
+        // Soft work stays allowed; a push of your own branch is its own class.
+        for cmd in ["cargo test", "ls -la", "npm run format", "cat package.json"] {
+            assert!(!hard_shell(cmd), "over-park: {cmd}");
         }
-        assert!(gb_denies("Edit", "/home/me/.config/GrokHub/consent.jsonl"));
-        assert!(gb_denies("Write", "/home/me/.config/GrokHub/consent.jsonl"));
-        // Soft work stays allowed.
-        for cmd in [
-            "cargo test",
-            "git push origin beta",
-            "ls -la",
-            "npm run format",
-            "cat package.json",
-        ] {
-            assert!(!gb_denies("Bash", cmd), "over-deny: {cmd}");
-        }
-        for (tool, _) in crate::self_manage::SELF_TOOLS {
-            let mcp = format!("{}__{tool}", crate::self_manage::SELF_MCP_SERVER);
-            let hard = hard_class(&mcp, "{}");
-            assert_eq!(
-                hard.is_some(),
-                gb_denies("MCPTool", &mcp),
-                "{mcp}: {hard:?}"
-            );
-        }
+        assert_eq!(
+            classify("run_terminal_command", &sh("git push origin beta")),
+            HardHit::Class(HardClass::Ship)
+        );
+        let hard_self: Vec<&str> = crate::self_manage::SELF_TOOLS
+            .iter()
+            .map(|(tool, _)| *tool)
+            .filter(|tool| {
+                let mcp = format!("{}__{tool}", crate::self_manage::SELF_MCP_SERVER);
+                hard_class(&mcp, "{}").is_some()
+            })
+            .collect();
+        assert_eq!(
+            hard_self,
+            [
+                "skill_delete",
+                "connection_remove",
+                "automation_create",
+                "automation_delete"
+            ]
+        );
         for tool in [
             "srv__list_files",
             "grokhub-desktop__click",
             "gmail__search_threads",
         ] {
-            assert!(!gb_denies("MCPTool", tool), "over-deny: {tool}");
+            assert_eq!(hard_class(tool, "{}"), None, "over-park: {tool}");
         }
     }
 
-    /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell on path C.
+    /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell.
     #[test]
-    fn gb_rules_see_case_full_paths_wrappers_and_encoded_powershell() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 754);
-        let argv: usize = HEADLESS_DENY_RULES
-            .iter()
-            .map(|r| "--deny".len() + r.len() + 4)
-            .sum();
-        assert!(
-            argv < 24_000,
-            "a Windows command line holds 32,767 chars: {argv}"
-        );
+    fn case_full_paths_wrappers_and_encoded_powershell_are_hard() {
         // G1: Windows reads these heads in any case.
         for cmd in [
             "REMOVE-ITEM notes.txt",
@@ -3060,7 +2426,6 @@ mod tests {
             "RM notes.txt",
         ] {
             assert!(hard_shell(cmd), "classifier: {cmd}");
-            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
         }
         // A head called by its full path.
         for cmd in [
@@ -3071,7 +2436,6 @@ mod tests {
             "C:\\Windows\\System32\\format.com D: /q",
         ] {
             assert!(hard_shell(cmd), "classifier: {cmd}");
-            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
         }
         // A delete behind a wrapper.
         for cmd in [
@@ -3084,10 +2448,8 @@ mod tests {
             "sh -c 'rmdir out'",
         ] {
             assert!(hard_shell(cmd), "classifier: {cmd}");
-            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
         }
-        // G4: an encoded body can't be read, so it is denied outright on path C
-        // and parks a card everywhere else.
+        // G4: an encoded body can't be read, so it parks a card.
         for cmd in [
             "powershell -EncodedCommand ZQBjAGgAbwA=",
             "powershell.exe -NoProfile -enc ZQBjAGgAbwA=",
@@ -3100,7 +2462,6 @@ mod tests {
                 HardHit::Class(HardClass::IrreversibleOs),
                 "classifier: {cmd}"
             );
-            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
         }
         assert!(hard_shell("powershell /enc ZQBjAGgAbwA="));
         // Ordinary Windows and shell work stays open.
@@ -3115,7 +2476,6 @@ mod tests {
             "/usr/bin/ls -la",
         ] {
             assert!(!hard_shell(cmd), "classifier over-deny: {cmd}");
-            assert!(!gb_denies("Bash", cmd), "GB over-deny: {cmd}");
         }
     }
 
@@ -3150,85 +2510,33 @@ mod tests {
     }
 
     #[test]
-    fn builtin_cu_rules_deny_gb_computer_use_but_never_path_a() {
-        assert_eq!(BUILTIN_CU_DENY.len(), 6);
-        assert!(
-            BUILTIN_CU_DENY.iter().all(|r| r.starts_with("MCPTool(")),
-            "{BUILTIN_CU_DENY:?}"
-        );
-        for tool in [
-            "computer__click",
-            "computer-use__type",
-            "computer_use__screenshot",
-            "desk__computer_click",
-            "agent__mouse_move",
-            "agent__keyboard_type",
+    fn hard_by_args_or_spelling_not_by_name() {
+        for cmd in [
+            "doas rm notes.txt",
+            "true&&rm notes.txt",
+            "rEmOvE-iTeM notes.txt",
+            "$f.InvokeVerb('delete')",
+            "powershell /enc ZQBjAGgAbwA=",
+            // A write into /boot is hard by its target path; `cp` itself is soft work.
+            "cp linux.efi /boot/efi/EFI/Linux/",
         ] {
-            assert!(
-                rule_hits(BUILTIN_CU_DENY, "MCPTool", tool),
-                "no CU rule for `{tool}`"
-            );
+            assert!(hard_shell(cmd), "classifier: {cmd}");
         }
-        for tool in crate::harness::computer_tool_names(crate::harness::AccessMode::Supervised) {
-            let path_a = format!("{}__{tool}", grokhub_core::DESKTOP_MCP_SERVER);
-            assert!(
-                !rule_hits(BUILTIN_CU_DENY, "MCPTool", &path_a),
-                "path A must stay open: {path_a}"
-            );
-        }
-        for tool in [
-            "gmail__search_threads",
-            "srv__list_files",
-            "browser__fill",
-            "chrome__browser_tab",
-        ] {
-            assert!(
-                !rule_hits(BUILTIN_CU_DENY, "MCPTool", tool),
-                "over-deny: {tool}"
-            );
-        }
-    }
-
-    #[test]
-    fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 11);
-        for (sample, _) in &GB_DENY_GAPS[..5] {
-            assert!(hard_shell(sample), "classifier: {sample}");
-            assert!(
-                !gb_denies("Bash", sample),
-                "now covered, drop it from the gaps: {sample}"
-            );
-        }
-        // The desktop tools are one MCP name each; the hard part is in the args.
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[5].0));
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[6].0));
-        // GB's own computer use: a built-in name, not `server__tool`, so no
-        // MCPTool rule (hard or path D) can match it. The watchdog checks it.
-        let builtin = GB_DENY_GAPS[7].0;
-        assert_eq!(builtin, "computer_screenshot");
-        assert!(crate::harness::builtin_cu(builtin));
-        assert!(!gb_denies("MCPTool", builtin) && !rule_hits(BUILTIN_CU_DENY, "MCPTool", builtin));
-        // Spike-2b: a click's class is the control under it, not the tool name.
-        assert_eq!(GB_DENY_GAPS[8].0, "grokhub-desktop__click");
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[8].0));
         // A connection that needs a token is credentials by its args; the name stays soft.
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[9].0));
         assert_eq!(
             hard_class(
-                GB_DENY_GAPS[9].0,
+                "grokhub-self__connection_add",
                 r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#
             ),
             Some(HardClass::Credentials)
         );
         assert_eq!(
             hard_class(
-                GB_DENY_GAPS[9].0,
+                "grokhub-self__connection_add",
                 r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#
             ),
             None
         );
-        // A write into /boot is hard by its target path; `cp` itself is soft work.
-        assert!(hard_shell(GB_DENY_GAPS[10].0) && !gb_denies("Bash", GB_DENY_GAPS[10].0));
         assert_eq!(
             desk_classify(
                 "type",
@@ -3284,7 +2592,7 @@ mod tests {
                 reason: "hard floor: rm -rf /".into()
             })
         );
-        // Named typing tools on paths B / E and GB permission asks.
+        // Named typing tools on path E.
         assert_eq!(
             hard_class(
                 "browser__fill",
@@ -3297,13 +2605,8 @@ mod tests {
             None
         );
         assert_eq!(
-            classify_ask("Type text", "into the Verification code field"),
-            HardHit::Class(HardClass::Credentials)
-        );
-        assert_eq!(classify_ask("Type text", "hello world"), HardHit::None);
-        assert_eq!(
-            classify_ask("Run command", "ls password-store"),
-            HardHit::None
+            hard_class("run_terminal_command", &sh("ls password-store")),
+            None
         );
     }
 
@@ -3384,13 +2687,11 @@ mod tests {
             ledger
         );
         assert_eq!(
-            classify_ask(
-                "Edit file",
-                "C:\\Users\\me\\AppData\\Roaming\\GrokHub\\consent.jsonl"
+            hard_floor(
+                "search_replace",
+                r#"{"path":"C:\\Users\\me\\AppData\\Roaming\\GrokHub\\consent.jsonl","old_string":"a","new_string":"b"}"#
             ),
-            HardHit::Floor(HardFloor {
-                reason: "hard floor: consent ledger (only your click changes it)".into()
-            })
+            ledger
         );
         assert_eq!(
             hard_floor(
@@ -3738,11 +3039,6 @@ mod tests {
                 Some(class),
                 "{cmd:?}"
             );
-            assert_eq!(
-                classify_ask("Run command", cmd),
-                HardHit::Class(class),
-                "ask {cmd:?}"
-            );
         }
         for cmd in [
             "ls\ncargo test",
@@ -3822,7 +3118,7 @@ mod tests {
             "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('C:\\notes.txt','OnlyErrorDialogs','SendToRecycleBin')",
             "(New-Object -ComObject Shell.Application).Namespace(0).ParseName('C:\\notes.txt').InvokeVerb('delete')",
         ] {
-            assert_eq!(classify_ask("Run command", cmd), delete, "{cmd}");
+            assert_eq!(classify("run_terminal_command", &sh(cmd)), delete, "{cmd}");
         }
         for cmd in [
             "cp notes.txt notes.bak",
@@ -3835,7 +3131,7 @@ mod tests {
             "find . -name '*.tmp'",
             "git rm --cached x",
         ] {
-            let hit = classify_ask("Run command", cmd);
+            let hit = classify("run_terminal_command", &sh(cmd));
             // `git rm` stops the tracking only; it is not a head.
             assert_eq!(hit, HardHit::None, "{cmd}");
         }
@@ -3935,7 +3231,7 @@ mod tests {
 
     #[test]
     fn windows_launch_flags_and_power_cmdlets_park() {
-        let ask = |cmd: &str| classify_ask("Run command", cmd);
+        let ask = |cmd: &str| classify("run_terminal_command", &sh(cmd));
         let delete = HardHit::Class(HardClass::Delete);
         let os = HardHit::Class(HardClass::IrreversibleOs);
         assert_eq!(
@@ -3962,9 +3258,6 @@ mod tests {
         ] {
             assert_eq!(ask(cmd), os, "{cmd}");
         }
-        // `leaf` drops `.com`, so path C needs its own `format.com` rules.
-        assert!(gb_denies("Bash", "format.com D: /q"));
-        assert!(gb_denies("Bash", "cd C:\\; format.com D: /q"));
         assert_eq!(
             ask("powershell -ExecutionPolicy Bypass -Command Get-ChildItem"),
             HardHit::None
@@ -4000,29 +3293,6 @@ mod tests {
             vec!["/var/tmp/old.log"]
         );
         assert_eq!(delete_targets("cargo test"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn grok_build_asks_classify() {
-        assert_eq!(
-            classify_ask("Run command", "rm -f draft.md"),
-            HardHit::Class(HardClass::Delete)
-        );
-        assert_eq!(
-            classify_ask("Run command", "cat ~/.aws/credentials"),
-            HardHit::Floor(HardFloor {
-                reason: "forbidden path: aws credentials".into()
-            })
-        );
-        assert_eq!(
-            classify_ask("send_email", "to user"),
-            HardHit::Class(HardClass::Send)
-        );
-        assert_eq!(classify_ask("Run command", "ls -la"), HardHit::None);
-        assert_eq!(
-            classify_ask("grokhub-desktop__click", "click 10,20"),
-            HardHit::None
-        );
     }
 
     /// Spike-2b: (effect, label, role, context, expected rule id or "" for soft).
@@ -4285,7 +3555,7 @@ mod tests {
             "Loadout wants to click Send in Compose — Mail"
         );
         assert_eq!(click_target(&ax).source, "ax");
-        // The caller's own element (Cua `element`, path D frames) counts too.
+        // The caller's own element (Cua `element`) counts too.
         let named = serde_json::json!({"element": {"label": "Pay now", "role": "AXButton"}});
         assert_eq!(
             desk_classify("click", &named),
@@ -4428,12 +3698,6 @@ mod tests {
         // The Cua sidecar, read as the desk tool it matches.
         let hotkey = serde_json::json!({"keys": ["ctrl", "Return"], "window": "Compose - Mail"});
         assert_eq!(desk_classify("hotkey", &hotkey), send);
-        // Paths B and D: an ask card that clicks.
-        assert_eq!(
-            classify_ask("computer_click", r#"click "Place your order""#),
-            HardHit::Class(HardClass::Money)
-        );
-        assert_eq!(classify_ask("Click", "click Uninstall"), os);
         // Soft steps stay soft on every path.
         assert_eq!(classify("key", r#"{"keys":"ctrl+c"}"#), HardHit::None);
         assert_eq!(
@@ -4442,30 +3706,6 @@ mod tests {
         );
         assert_eq!(
             classify("scroll", r#"{"x":1,"y":2,"dy":-3}"#),
-            HardHit::None
-        );
-    }
-
-    #[test]
-    fn ask_cards_that_click_are_classified_by_the_quoted_label() {
-        assert_eq!(
-            classify_ask("computer_click", r#"click "Send""#),
-            HardHit::Class(HardClass::Send)
-        );
-        assert_eq!(
-            classify_ask("Click", "click on the Place order button"),
-            HardHit::Class(HardClass::Money)
-        );
-        assert_eq!(
-            classify_ask("computer_click", "click \u{201c}Reset zoom\u{201d}"),
-            HardHit::None
-        );
-        assert_eq!(
-            classify_ask("computer_click", r#"click "Sender""#),
-            HardHit::None
-        );
-        assert_eq!(
-            classify_ask("grokhub-desktop__click", "click 10,20"),
             HardHit::None
         );
     }
@@ -4889,22 +4129,6 @@ mod tests {
     }
 
     #[test]
-    fn a_merge_ask_is_hard_whatever_its_card_line_says() {
-        let merge = HardHit::Class(HardClass::MergeWork);
-        let line = "3 files (1 new, 2 changed, 0 deleted) into /home/user/my-app: Fix the parser";
-        assert_eq!(classify_ask("merge_subagent_work", line), merge);
-        // The key alone, when the card has no line for the work.
-        assert_eq!(classify_ask("merge_subagent_work", "mb3x9k2a-7q1z"), merge);
-        // A helper's title is the lead's words: it can't turn the ask into
-        // a refusal or into another class.
-        let odd = "1 file (0 new, 1 changed, 0 deleted) into /home/user/my-app: rm -rf /";
-        assert_eq!(classify_ask("merge_subagent_work", odd), merge);
-        // Only the tool's exact name.
-        assert_eq!(classify_ask("merge_subagent_work_2", line), HardHit::None);
-        assert_eq!(classify_ask("Read file", line), HardHit::None);
-    }
-
-    #[test]
     fn an_agents_own_push_or_pull_request_is_hard_class_ship_and_a_commit_is_not() {
         let shell = |cmd: &str| {
             hard_class(
@@ -4965,15 +4189,6 @@ mod tests {
         }
         // A delete push keeps its own class.
         assert_eq!(shell("git push --delete origin x"), Some(HardClass::Delete));
-        // Through a side ask (paths B and D) too.
-        assert_eq!(
-            classify_ask("Run command", "git -C . push origin x"),
-            HardHit::Class(HardClass::Ship)
-        );
-        assert_eq!(
-            classify_ask("Run command", "git commit -m x"),
-            HardHit::None
-        );
         assert_eq!(HardClass::Ship.as_str(), "ship");
     }
 
@@ -5209,7 +4424,6 @@ mod tests {
         }
         for cmd in ordinary {
             assert_eq!(shell(cmd), None, "{cmd}");
-            assert_eq!(classify_ask("Run command", cmd), HardHit::None, "{cmd}");
         }
         assert_eq!(shell("git push origin code/fix"), Some(HardClass::Ship));
     }

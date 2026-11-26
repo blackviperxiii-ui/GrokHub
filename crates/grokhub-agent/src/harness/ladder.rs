@@ -26,7 +26,8 @@ pub enum Rung {
     Retry,
     Backtrack,
     /// Soft and out of retries: re-read the goal and try another approach.
-    /// Repeats; it never stops the run.
+    /// Repeats, but an episode ends on the `REPLAN_END`th re-plan in a row
+    /// with no progress (`Episode::note_replan`).
     Replan,
     /// Hard class, or no capture backend works: the user decides.
     Pause,

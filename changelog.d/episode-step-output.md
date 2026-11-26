@@ -1,0 +1,1 @@
+- Desktop sessions: the worker now sees the latest file, shell, web or zoom result in full (up to 4,000 characters, head and tail, secrets redacted) on its next steps, instead of only the first 120 characters.
