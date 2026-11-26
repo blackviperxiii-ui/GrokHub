@@ -169,6 +169,7 @@ pub mod scopes;
 pub mod screen_record;
 pub mod screen_report;
 pub mod screen_skill;
+pub mod learn_skill;
 pub mod screenshot_offer;
 pub mod self_improve;
 #[cfg(desktop)]

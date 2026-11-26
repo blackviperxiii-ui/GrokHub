@@ -53,6 +53,8 @@ pub enum Slash {
     Compact,
     Skill(String),
     LearnReflect,
+    /// `/learn <url|path|chat|--save N>`: draft a skill from a source.
+    LearnSkill(String),
     /// `/learned`, `/learned forget <id>`, `/learned wrong <id>`: what the
     /// learning engine holds. The text after the command, as typed.
     Learned(String),
@@ -239,6 +241,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Compact => "compact",
         Slash::Skill(_) => "skill",
         Slash::LearnReflect => "reflect",
+        Slash::LearnSkill(_) => "learn_skill",
         Slash::Learned(_) => "learned",
         Slash::Update => "update",
         Slash::Help => "help",
@@ -385,7 +388,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/learn",
-        hint: "Run self-improve reflect",
+        hint: "Reflect chat, or build a skill from a URL, folder, PDF, or chat",
         insert: "/learn",
         run_on_pick: true,
     },
@@ -397,8 +400,14 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     },
     SlashDef {
         cmd: "/learn reflect",
-        hint: "Run self-improve reflect",
+        hint: "Reflect this chat into memory",
         insert: "/learn reflect",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/learn chat",
+        hint: "Build a skill from this chat",
+        insert: "/learn chat",
         run_on_pick: true,
     },
     SlashDef {
@@ -969,6 +978,18 @@ mod tests {
         assert_eq!(parse_slash("/learn reflect"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/LEARN"), Some(Slash::LearnReflect));
         assert_eq!(parse_slash("/learn now"), Some(Slash::LearnReflect));
+        assert_eq!(
+            parse_slash("/learn chat"),
+            Some(Slash::LearnSkill("chat".into()))
+        );
+        assert_eq!(
+            parse_slash("/learn https://example.com/docs"),
+            Some(Slash::LearnSkill("https://example.com/docs".into()))
+        );
+        assert_eq!(
+            parse_slash("/learn --save 4"),
+            Some(Slash::LearnSkill("--save 4".into()))
+        );
         assert_eq!(parse_slash("/learned"), Some(Slash::Learned(String::new())));
         assert_eq!(
             parse_slash("/learned forget card:suggestion"),

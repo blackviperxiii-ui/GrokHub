@@ -220,6 +220,7 @@ pub mod self_review;
 pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
+pub mod learn_skill;
 pub mod skill;
 pub mod skill_pack;
 pub mod skills_hub;
@@ -692,6 +693,11 @@ pub use shortcuts::{
     palette_shortcut, perm_key, shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
+pub use learn_skill::{
+    chat_body_from_pairs, draft_from_gathered, extract_pdf_text, gather_path_text, origin_for,
+    parse_learn_rest, usage as learn_skill_usage, write_learned_skill, LearnDraft, LearnSource,
+    LARGE_CHARS, REF_CHUNK_CHARS, REF_FILE_CAP,
+};
 pub use skill::{
     apply_skill_follow, bump_skill_run, is_feedback_ask, is_hard_run, is_junk_skill,
     load_skill_lock, match_skill, parse_skill_md, parse_skill_meta, patch_skill, prefer_patch,
