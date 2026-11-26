@@ -2998,14 +2998,14 @@ mod tests {
 
     #[test]
     fn system_prompt_carries_real_os_paths_before_voice() {
-        let ws = std::path::Path::new(r"\\?\C:\Users\alice\GrokHub-Work");
+        let ws = std::path::Path::new(r"\\?\C:\Users\alice\Work");
         let voice = "Personality: Pirate. Talk like a pirate.";
         let prompt = system_prompt(ws, false, voice);
         let at_paths = prompt.find("<paths>").expect("paths block");
         let at_voice = prompt.find(voice).expect("voice");
         assert!(at_paths < at_voice, "{prompt}");
         assert!(
-            prompt.contains(r"- Workspace: `C:\Users\alice\GrokHub-Work`"),
+            prompt.contains(r"- Workspace: `C:\Users\alice\Work`"),
             "{prompt}"
         );
         assert!(!prompt.contains(r"\\?\C:\Users\alice"), "{prompt}");
