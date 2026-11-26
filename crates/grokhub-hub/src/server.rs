@@ -1,7 +1,7 @@
 use crate::a2a_route::{self, A2aDoor};
 use grokhub_core::inhabit::InhabitBundle;
 use grokhub_core::{HubState, HUB_KIND};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,8 +9,32 @@ use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
+const PAIR_MAX_BODY: usize = 4 * 1024;
+const FLEET_MAX_BODY: usize = 16 * 1024;
+const INHABIT_MAX_BODY: usize = 256 * 1024;
+const FRAME_MAX_BODY: usize = 2 * 1024 * 1024;
 /// Requests handled at once. Past this a LAN flood gets a 503, not one more thread each.
 const MAX_IN_FLIGHT: usize = 64;
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PairRequest {
+    #[serde(default)]
+    code: String,
+    #[serde(rename = "deviceId", default)]
+    device_id: String,
+    #[serde(rename = "deviceName", default)]
+    device_name: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct FrameRequest {
+    #[serde(rename = "dataUrl", default)]
+    data_url: Option<String>,
+    #[serde(default)]
+    jpeg: Option<String>,
+}
 
 /// The standalone hub: it holds no model sign-in, so it has no agent door.
 pub fn serve(
@@ -132,18 +156,17 @@ fn handle(
         if from_web_page(&req) {
             return reject_web_page(req);
         }
-        let body = match read_json(&mut req) {
+        let body = match read_json_capped(&mut req, PAIR_MAX_BODY) {
             Ok(body) => body,
             Err(e) => return reject_body(req, e),
         };
+        let pair: PairRequest = match serde_json::from_value(body) {
+            Ok(pair) => pair,
+            Err(_) => return reject_body(req, "Invalid pairing request."),
+        };
         let mut st = lock(state);
-        let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
-        let device_id = body.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
-        let device_name = body
-            .get("deviceName")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Computer");
-        let result = st.pair_with(code, device_id, device_name);
+        let device_name = pair.device_name.as_deref().unwrap_or("Computer");
+        let result = st.pair_with(&pair.code, &pair.device_id, device_name);
         let hub_id = st.device_id.clone();
         let hub_name = st.device_name.clone();
         drop(st);
@@ -282,7 +305,7 @@ fn handle(
 
     if method == Method::Post && path == "/v1/inhabit" {
         drop(st);
-        let body = match read_json(&mut req) {
+        let body = match read_json_capped(&mut req, INHABIT_MAX_BODY) {
             Ok(body) => body,
             Err(e) => return reject_body(req, e),
         };
@@ -318,7 +341,7 @@ fn handle(
 
     if method == Method::Post && path == "/v1/fleet" {
         drop(st);
-        let body = match read_json(&mut req) {
+        let body = match read_json_capped(&mut req, FLEET_MAX_BODY) {
             Ok(body) => body,
             Err(e) => return reject_body(req, e),
         };
@@ -337,16 +360,15 @@ fn handle(
 
     if method == Method::Post && path == "/v1/frame" {
         drop(st);
-        let body = match read_json(&mut req) {
+        let body = match read_json_capped(&mut req, FRAME_MAX_BODY) {
             Ok(body) => body,
             Err(e) => return reject_body(req, e),
         };
-        let url = body
-            .get("dataUrl")
-            .or_else(|| body.get("jpeg"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let frame_req: FrameRequest = match serde_json::from_value(body) {
+            Ok(frame_req) => frame_req,
+            Err(_) => return reject_body(req, "Invalid frame request."),
+        };
+        let url = frame_req.data_url.or(frame_req.jpeg).unwrap_or_default();
         let frame = grokhub_core::store_frame(&url, grokhub_core::now_ms());
         let mut st = lock(state);
         if let Some(f) = frame {
@@ -466,18 +488,25 @@ fn lock(state: &Mutex<HubState>) -> std::sync::MutexGuard<'_, HubState> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The body as JSON. An empty body reads as `{}`; anything else that isn't JSON is a 400.
+/// The body as JSON, capped at [`MAX_BODY`]. An empty body reads as `{}`;
+/// anything else that isn't JSON is a 400.
 pub(crate) fn read_json(req: &mut Request) -> Result<Value, &'static str> {
+    read_json_capped(req, MAX_BODY)
+}
+
+/// The body as JSON, capped at `max_body` bytes. An empty body reads as `{}`;
+/// anything else that isn't JSON is a 400.
+fn read_json_capped(req: &mut Request, max_body: usize) -> Result<Value, &'static str> {
     let mut buf = Vec::new();
     if req
         .as_reader()
-        .take(MAX_BODY as u64 + 1)
+        .take(max_body as u64 + 1)
         .read_to_end(&mut buf)
         .is_err()
     {
         return Err("Couldn't read the request body.");
     }
-    if buf.len() > MAX_BODY {
+    if buf.len() > max_body {
         return Err("Request body is too large.");
     }
     if buf.iter().all(u8::is_ascii_whitespace) {
@@ -540,7 +569,7 @@ mod tests {
         let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
         s.write_all(req.as_bytes()).unwrap();
         let mut buf = Vec::new();
-        s.read_to_end(&mut buf).unwrap();
+        s.take(MAX_BODY as u64 + 1).read_to_end(&mut buf).unwrap();
         let text = String::from_utf8_lossy(&buf).into_owned();
         let status = text
             .split_whitespace()
@@ -553,6 +582,37 @@ mod tests {
             buf
         };
         (status, text, body)
+    }
+
+    fn http_json(
+        port: u16,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Option<&str>,
+    ) -> (u16, Value) {
+        let agent = grokhub_core::http::agent(grokhub_core::http::Opts::default());
+        let url = format!("http://127.0.0.1:{port}{path}");
+        let mut req = match method {
+            "GET" => agent.get(&url),
+            "POST" => agent.post(&url),
+            "PUT" => agent.put(&url),
+            other => panic!("unsupported test method {other}"),
+        }
+        .any_status();
+        if let Some(tok) = token {
+            req = req.header("Authorization", &format!("Bearer {tok}"));
+        }
+        let resp = match body {
+            Some(raw) => req
+                .header("Content-Type", "application/json")
+                .send_string(raw)
+                .expect("http_json send"),
+            None => req.call().expect("http_json call"),
+        };
+        let status = resp.status();
+        let json = resp.into_json::<Value>().unwrap_or(Value::Null);
+        (status, json)
     }
 
     #[test]
@@ -569,28 +629,18 @@ mod tests {
 
         let pair_body =
             format!(r#"{{"code":"{code}","deviceId":"d-test","deviceName":"cabin-2"}}"#);
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
-            pair_body.len()
-        );
-        let (st_p, _, body) = http(port, &req);
-        assert_eq!(st_p, 200, "{}", String::from_utf8_lossy(&body));
-        let v: Value = serde_json::from_slice(&body).unwrap();
+        let (st_p, v) = http_json(port, "POST", "/v1/pair", None, Some(&pair_body));
+        assert_eq!(st_p, 200, "{v}");
         let token = v["token"].as_str().unwrap();
         let hub_id = v["hub"]["id"].as_str().unwrap();
 
         let png = r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}"#;
-        let req = format!(
-            "POST /v1/frame HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{png}",
-            png.len()
+        assert_eq!(
+            http_json(port, "POST", "/v1/frame", Some(token), Some(png)).0,
+            200
         );
-        assert_eq!(http(port, &req).0, 200);
-        let (st_f, _, body) = http(
-            port,
-            &format!("GET /v1/frame HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"),
-        );
-        assert_eq!(st_f, 200, "{}", String::from_utf8_lossy(&body));
-        let frame: Value = serde_json::from_slice(&body).unwrap();
+        let (st_f, frame) = http_json(port, "GET", "/v1/frame", Some(token), None);
+        assert_eq!(st_f, 200, "{frame}");
         assert_eq!(frame["ok"], true);
         assert!(frame["frame"].is_object(), "{frame}");
         assert_eq!(hub_id, state.lock().unwrap().device_id);
@@ -718,12 +768,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(40));
         let pair_body =
             format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
-            pair_body.len()
-        );
-        let (_, _, body) = http(port, &req);
-        let v: Value = serde_json::from_slice(&body).unwrap();
+        let (_, v) = http_json(port, "POST", "/v1/pair", None, Some(&pair_body));
         let token = v["token"].as_str().unwrap();
         for (method, path) in [
             ("POST", "/v1/task"),
@@ -874,25 +919,15 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(40));
         let pair_body =
             format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
-            pair_body.len()
-        );
-        let (_, _, body) = http(port, &req);
-        let v: Value = serde_json::from_slice(&body).unwrap();
+        let (_, v) = http_json(port, "POST", "/v1/pair", None, Some(&pair_body));
         let cabin = v["token"].as_str().unwrap();
         let inhabit = r#"{"bundle":{"soul":"stay kind","toId":"d-cabin","toName":"cabin-2"}}"#;
-        let req = format!(
-            "POST /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {cabin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{inhabit}",
-            inhabit.len()
+        assert_eq!(
+            http_json(port, "POST", "/v1/inhabit", Some(cabin), Some(inhabit)).0,
+            200
         );
-        assert_eq!(http(port, &req).0, 200);
-        let (st_ok, _, body) = http(
-            port,
-            &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {cabin}\r\n\r\n"),
-        );
-        assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
-        let got: Value = serde_json::from_slice(&body).unwrap();
+        let (st_ok, got) = http_json(port, "GET", "/v1/inhabit", Some(cabin), None);
+        assert_eq!(st_ok, 200, "{got}");
         assert_eq!(got["bundle"]["soul"], "stay kind");
     }
 
@@ -928,12 +963,8 @@ mod tests {
                 r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgo="}"#,
             ),
         ] {
-            let req = format!(
-                "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            );
-            let (status, _, out) = http(port, &req);
-            let got: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
+            let payload = (!body.is_empty()).then_some(body);
+            let (status, got) = http_json(port, method, path, Some(&token), payload);
             assert_eq!((status, got), (403, off.clone()), "{method} {path}");
         }
         // A wrong token still hears it must pair first.
@@ -974,20 +1005,11 @@ mod tests {
     fn pair_reply(state: &Arc<Mutex<HubState>>, port: u16, id: &str, name: &str) -> (u16, Value) {
         let code = lock(state).rotate_pair().code;
         let body = format!(r#"{{"code":"{code}","deviceId":"{id}","deviceName":"{name}"}}"#);
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        let (status, _, out) = http(port, &req);
-        (status, serde_json::from_slice(&out).unwrap_or(Value::Null))
+        http_json(port, "POST", "/v1/pair", None, Some(&body))
     }
 
     fn claim(port: u16, token: &str) -> (u16, Value) {
-        let (status, _, body) = http(
-            port,
-            &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"),
-        );
-        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+        http_json(port, "GET", "/v1/inhabit", Some(token), None)
     }
 
     fn stage(state: &Arc<Mutex<HubState>>, to_id: Option<&str>, to_name: Option<&str>) {
@@ -1385,14 +1407,8 @@ mod tests {
     }
 
     fn fleet_call(port: u16, method: &str, token: &str, body: &str) -> (u16, Value) {
-        let (status, _, out) = http(
-            port,
-            &format!(
-                "{method} /v1/fleet HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-        (status, serde_json::from_slice(&out).unwrap_or(Value::Null))
+        let payload = (!body.is_empty()).then_some(body);
+        http_json(port, method, "/v1/fleet", Some(token), payload)
     }
 
     #[test]
@@ -1435,6 +1451,64 @@ mod tests {
             fleet_call(port, "GET", &desk, "").0,
             403,
             "sharing off hands out no cards"
+        );
+    }
+
+    #[test]
+    fn oversized_and_malformed_typed_bodies_are_rejected() {
+        let (state, port) = hub();
+        let code = lock(&state).rotate_pair().code;
+        let (_, token) = pair_as(&state, port, "d-bounds", "Bounds");
+        let token = token.expect("paired");
+
+        let big_pair = format!(
+            r#"{{"code":"{code}","deviceId":"d-big","deviceName":"{}"}}"#,
+            "a".repeat(PAIR_MAX_BODY + 64)
+        );
+        assert_eq!(
+            http_json(port, "POST", "/v1/pair", None, Some(&big_pair)),
+            (
+                400,
+                json!({ "ok": false, "error": "Request body is too large." })
+            )
+        );
+
+        let unknown_pair = format!(r#"{{"code":"{code}","deviceId":"d-x","extra":true}}"#);
+        assert_eq!(
+            http_json(port, "POST", "/v1/pair", None, Some(&unknown_pair)),
+            (
+                400,
+                json!({ "ok": false, "error": "Invalid pairing request." })
+            )
+        );
+
+        assert_eq!(
+            http_json(port, "POST", "/v1/pair", None, Some(r#"{"code":12345}"#)),
+            (
+                400,
+                json!({ "ok": false, "error": "Invalid pairing request." })
+            )
+        );
+
+        let unknown_frame = r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgo=","extra":1}"#;
+        assert_eq!(
+            http_json(port, "POST", "/v1/frame", Some(&token), Some(unknown_frame)),
+            (
+                400,
+                json!({ "ok": false, "error": "Invalid frame request." })
+            )
+        );
+
+        let big_fleet = format!(
+            r#"{{"appVersion":"3.6.0","pad":"{}"}}"#,
+            "x".repeat(FLEET_MAX_BODY + 64)
+        );
+        assert_eq!(
+            fleet_call(port, "POST", &token, &big_fleet),
+            (
+                400,
+                json!({ "ok": false, "error": "Request body is too large." })
+            )
         );
     }
 }
