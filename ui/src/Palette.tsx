@@ -28,7 +28,6 @@ export type View =
   | "command"
   | "history"
   | "pulse"
-  | "imagine"
   | "journal"
   | "meetings"
   | "automations"
@@ -107,7 +106,6 @@ export const VIEW_LABELS: Record<View, string> = {
   command: "Command line",
   history: "History",
   pulse: "Pulse",
-  imagine: "Imagine",
   journal: "Journal",
   meetings: "Meetings",
   automations: "Automations",
@@ -137,7 +135,6 @@ export function views(caps: Capabilities): View[] {
     ...(caps.code && !caps.remote ? (["code"] as const) : []),
     ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
-    "imagine",
     ...(caps.remote ? [] : (["journal", "meetings"] as const)),
     "automations",
     "agents",

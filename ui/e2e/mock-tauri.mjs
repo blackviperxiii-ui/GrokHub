@@ -994,6 +994,24 @@ export function initScript(theme = "ops-dark") {
           return fix.memoryFiles;
         case "get_battlenet":
           return { found: false, games: [] };
+        case "get_imagine":
+          return { tiles: [], ready: true, account: null, canSignIn: false };
+        case "imagine_cancel":
+          return true;
+        case "imagine_image":
+        case "chat_picture":
+        case "chat_media":
+          return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        case "save_chat_media_to_library":
+          return {
+            id: "saved-1",
+            name: "saved-1_a.png",
+            title: args?.prompt || "Saved creation",
+            prompt: args?.prompt || "Saved creation",
+            createdMs: 1,
+            video: false,
+            tall: false,
+          };
         case "nyx_look":
           // The companion docked beside the chat, as on a desktop with her art.
           return { set: "hanging-out", poses: ["brand/nyx-hanging-out.jpg"], explicit: false, mood: "hanging-out" };

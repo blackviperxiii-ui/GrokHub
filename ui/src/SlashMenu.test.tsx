@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionMode, Settings, SlashEffect, SlashHit } from "./api";
+import type { ImagineKind, ImagineMade, SessionMode, Settings, SlashEffect, SlashHit } from "./api";
 
 const api = vi.hoisted(() => ({
   sendChat: vi.fn<(id: string, text: string, mode?: SessionMode) => Promise<string>>(),
@@ -11,6 +11,9 @@ const api = vi.hoisted(() => ({
   closeChat: vi.fn<(id: string) => Promise<void>>(),
   addAutomation: vi.fn<(text: string) => Promise<unknown[]>>(),
   downloadModels: vi.fn<(ids: string[]) => Promise<unknown>>(),
+  imagineGenerate: vi.fn<(prompt: string, aspect: string, count: number, kind: ImagineKind) => Promise<ImagineMade>>(),
+  imagineImage: vi.fn<(name: string) => Promise<string>>(),
+  imagineCancel: vi.fn<() => Promise<boolean>>(),
 }));
 
 vi.mock("./api", async () => {
@@ -26,6 +29,11 @@ vi.mock("./api", async () => {
   closeChat: api.closeChat,
   addAutomation: api.addAutomation,
   downloadModels: api.downloadModels,
+  imagineGenerate: api.imagineGenerate,
+  imagineImage: api.imagineImage,
+  imagineCancel: api.imagineCancel,
+  chatMedia: vi.fn(),
+  saveChatMediaToLibrary: vi.fn(),
   answerElicit: vi.fn(),
   saveSettings: vi.fn(),
   answerPermission: vi.fn(),
@@ -46,7 +54,6 @@ vi.mock("./api", async () => {
 });
 
 import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
-import { subscribeImagine } from "./imagineAsk";
 import { isShellLine, isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
@@ -430,16 +437,36 @@ describe("composer slash commands", () => {
     await waitFor(() => expect(onOpenSection).toHaveBeenCalledWith("localAi"));
   });
 
-  it("/imagine-video opens Imagine and starts that prompt", async () => {
+  it("/imagine-video generates a video inline in chat without opening Imagine", async () => {
     const onOpenView = vi.fn();
-    const seen: { kind: string; prompt: string }[] = [];
-    const stop = subscribeImagine((job) => seen.push({ kind: job.kind, prompt: job.prompt }));
+    api.imagineGenerate.mockResolvedValueOnce({
+      page: {
+        tiles: [
+          {
+            id: "gen-v1",
+            name: "gen-v1_a.mp4",
+            title: "waves",
+            prompt: "waves",
+            createdMs: 1,
+            video: true,
+            tall: false,
+          },
+        ],
+        ready: true,
+        account: null,
+        canSignIn: false,
+      },
+      made: 1,
+      note: "",
+    });
+    api.imagineImage.mockResolvedValueOnce("data:video/mp4;base64,AAAA");
     render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
     api.runSlash.mockResolvedValueOnce({ kind: "imagine", media: "video", prompt: "waves" });
     await userEvent.type(screen.getByLabelText("Message"), "/imagine-video waves{Enter}");
-    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("imagine"));
-    expect(seen).toEqual([{ kind: "video", prompt: "waves" }]);
-    stop();
+    await waitFor(() => expect(api.imagineGenerate).toHaveBeenCalledWith("waves", "1:1", 1, "video"));
+    expect(onOpenView).not.toHaveBeenCalled();
+    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
+    expect(await screen.findByLabelText("waves")).toHaveAttribute("src", "data:video/mp4;base64,AAAA");
   });
 
   it("/learn posts the reflect line", async () => {

@@ -3,33 +3,49 @@ import {
   battlenetOpenFolder,
   battlenetPlay,
   getBattlenet,
+  getImagine,
   getLibrary,
   getMission,
+  imagineCancel,
+  imagineImage,
   libraryCover,
   libraryPlay,
+  onWallNews,
   type BattlenetGame,
   type CoverShape,
+  type ImagineTile,
   type LibraryGame,
   type LibraryPage,
   type Mission,
 } from "./api";
+import { Lightbox } from "./FeedCard";
 import { GameCompanion, type CompanionTarget } from "./GameCompanion";
 import { companionScreen } from "./games";
 
-export type LibraryTab = "all" | "installed" | "backlog" | "onObjective";
+export type LibraryTab = "all" | "installed" | "backlog" | "onObjective" | "creations";
 
 export const TAB_LABELS: Record<LibraryTab, string> = {
   all: "All",
   installed: "Installed",
   backlog: "Backlog",
   onObjective: "On objective",
+  creations: "Creations",
 };
-const TABS: LibraryTab[] = ["all", "installed", "backlog", "onObjective"];
+const TABS: LibraryTab[] = ["all", "installed", "backlog", "onObjective", "creations"];
 
 export const NO_STEAM = "Steam isn't installed on this computer, or its library folder wasn't found.";
 export const NO_GAMES = "No Steam or Battle.net games are installed yet.";
 export const NO_MATCH = "No games match.";
 export const NO_OBJECTIVE = "No open mission names a game yet.";
+export const CREATIONS_EMPTY =
+  "Nothing saved yet. Images and videos you save from Chat, and living wall covers, show up here.";
+export const WALL_RETRY = "The wall cover didn't come. It tries again in 15 minutes.";
+export function wallLine(title: string): string {
+  return `New cover on the wall: ${title}`;
+}
+export function paintingLine(title: string): string {
+  return `Painting a wall cover: ${title}`;
+}
 
 export type LibraryTile =
   | { kind: "steam"; game: LibraryGame }
@@ -212,6 +228,172 @@ function companionTarget(tile: LibraryTile): CompanionTarget {
     : { kind: "battlenet", seed: tile.game.seed };
 }
 
+function CreationThumb({ tile, onOpen }: { tile: ImagineTile; onOpen: () => void }) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    if (tile.video || typeof imagineImage !== "function") return;
+    let live = true;
+    imagineImage(tile.name).then(
+      (url) => {
+        if (live) setSrc(url);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [tile.name, tile.video]);
+  const label = tile.title || tile.prompt || "Saved creation";
+  return (
+    <li className={tile.tall ? "imagine-tile tall" : "imagine-tile"}>
+      <button type="button" className="media-item" aria-label={`Open ${label}`} onClick={onOpen}>
+        {tile.video ? (
+          <span className="imagine-video" aria-hidden="true">
+            ▶ Video
+          </span>
+        ) : src ? (
+          <img src={src} alt="" />
+        ) : (
+          <span className="imagine-video" aria-hidden="true" />
+        )}
+      </button>
+      <span className="imagine-caption">{label}</span>
+    </li>
+  );
+}
+
+function OpenedCreation({ tile, onClose }: { tile: ImagineTile; onClose: () => void }) {
+  const [src, setSrc] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof imagineImage !== "function") return;
+    let live = true;
+    imagineImage(tile.name).then(
+      (url) => {
+        if (live) setSrc(url);
+      },
+      (err) => {
+        if (live) setError(String(err));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [tile.name]);
+  if (error) {
+    return (
+      <p className="error" role="alert">
+        {error}
+      </p>
+    );
+  }
+  if (!src) return null;
+  return <Lightbox src={src} name={tile.name} video={tile.video} onClose={onClose} />;
+}
+
+function CreationsGallery({ query }: { query: string }) {
+  const [tiles, setTiles] = useState<ImagineTile[] | null>(null);
+  const [open, setOpen] = useState<ImagineTile | null>(null);
+  const [wall, setWall] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof getImagine !== "function") return;
+    let live = true;
+    getImagine().then(
+      (page) => {
+        if (live) setTiles(page?.tiles ?? []);
+      },
+      (err) => {
+        if (live) setError(String(err));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof onWallNews !== "function") return;
+    let live = true;
+    let unlisten: (() => void) | null = null;
+    onWallNews((news) => {
+      if (!live) return;
+      if (news.state === "painting") {
+        setWall(news.title);
+        setStatus(paintingLine(news.title));
+        setError(null);
+      } else if (news.state === "painted") {
+        setWall(null);
+        setStatus(wallLine(news.title));
+        if (typeof getImagine === "function") {
+          getImagine().then(
+            (page) => {
+              if (live) setTiles(page?.tiles ?? []);
+            },
+            () => {},
+          );
+        }
+      } else if (news.state === "failed") {
+        setWall(null);
+        setStatus(WALL_RETRY);
+        setError(null);
+      }
+    }).then(
+      (stop) => {
+        if (live) unlisten = stop;
+        else stop();
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const q = query.trim().toLowerCase();
+  const visible = (tiles ?? []).filter(
+    (t) => !q || t.title.toLowerCase().includes(q) || t.prompt.toLowerCase().includes(q),
+  );
+
+  return (
+    <div className="library-creations">
+      {status && (
+        <div className="library-creations-status">
+          <p className="note" role="status" aria-busy={wall !== null}>
+            {status}
+          </p>
+          {wall !== null && (
+            <button type="button" className="quiet" onClick={() => void imagineCancel()}>
+              Stop
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {tiles === null && !error && <p className="empty">Loading saved creations…</p>}
+      {tiles !== null && tiles.length === 0 && <p className="empty">{CREATIONS_EMPTY}</p>}
+      {tiles !== null && tiles.length > 0 && visible.length === 0 && (
+        <p className="empty">No creations match.</p>
+      )}
+      {visible.length > 0 && (
+        <ul className="imagine-gallery" aria-label="Creations">
+          {visible.map((item) => (
+            <CreationThumb key={item.id} tile={item} onOpen={() => setOpen(item)} />
+          ))}
+        </ul>
+      )}
+      {open && <OpenedCreation tile={open} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
 /** The Library page: Steam and Battle.net covers, with a companion frame. */
 export function Library() {
   const [page, setPage] = useState<LibraryPage | null>(null);
@@ -318,88 +500,94 @@ export function Library() {
         </div>
         <input
           type="search"
-          aria-label="Search games"
-          placeholder="Search games"
+          aria-label={tab === "creations" ? "Search creations" : "Search games"}
+          placeholder={tab === "creations" ? "Search creations" : "Search games"}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      {note && (
-        <p className="note" role="status">
-          {note}
-        </p>
-      )}
-      {page === null && bnet.length === 0 && !note && <p className="empty">Loading your games…</p>}
-      {emptyLibrary && <p className="empty">{emptyLibrary}</p>}
-      {emptyFilter && !emptyLibrary && <p className="empty">{emptyFilter}</p>}
-      {tile && (
-        <div className="library-body">
-          <ul className="library-grid" aria-label="Games">
-            {shown.map((t) => (
-              <Tile
-                key={tileKey(t)}
-                tile={t}
-                src={
-                  t.kind === "steam" ? covers[coverKey(t.game.appId, "tall")] : undefined
-                }
-                picked={samePick(picked ?? pickOf(tile), pickOf(t))}
-                onPick={() => setPicked(pickOf(t))}
-                onWant={() => {
-                  if (t.kind === "steam") wantSteam(t.game.appId, "tall");
-                }}
-              />
-            ))}
-          </ul>
-          <aside className="library-detail card" aria-label="Game details">
-            <Art
-              name={tileName(tile)}
-              seed={tileSeed(tile)}
-              src={
-                tile.kind === "steam" ? covers[coverKey(tile.game.appId, "wide")] : undefined
-              }
-              shape="wide"
-            />
-            <h2>{tileName(tile)}</h2>
-            {tile.kind === "steam" && (
-              <>
-                <p className="card-status">{playtimeLabel(tile.game.playtimeMin)}</p>
-                {tile.game.lastPlayed > 0 && (
-                  <p className="card-status">
-                    Last played {new Date(tile.game.lastPlayed * 1000).toLocaleDateString()}
-                  </p>
+      {tab === "creations" ? (
+        <CreationsGallery query={query} />
+      ) : (
+        <>
+          {note && (
+            <p className="note" role="status">
+              {note}
+            </p>
+          )}
+          {page === null && bnet.length === 0 && !note && <p className="empty">Loading your games…</p>}
+          {emptyLibrary && <p className="empty">{emptyLibrary}</p>}
+          {emptyFilter && !emptyLibrary && <p className="empty">{emptyFilter}</p>}
+          {tile && (
+            <div className="library-body">
+              <ul className="library-grid" aria-label="Games">
+                {shown.map((t) => (
+                  <Tile
+                    key={tileKey(t)}
+                    tile={t}
+                    src={
+                      t.kind === "steam" ? covers[coverKey(t.game.appId, "tall")] : undefined
+                    }
+                    picked={samePick(picked ?? pickOf(tile), pickOf(t))}
+                    onPick={() => setPicked(pickOf(t))}
+                    onWant={() => {
+                      if (t.kind === "steam") wantSteam(t.game.appId, "tall");
+                    }}
+                  />
+                ))}
+              </ul>
+              <aside className="library-detail card" aria-label="Game details">
+                <Art
+                  name={tileName(tile)}
+                  seed={tileSeed(tile)}
+                  src={
+                    tile.kind === "steam" ? covers[coverKey(tile.game.appId, "wide")] : undefined
+                  }
+                  shape="wide"
+                />
+                <h2>{tileName(tile)}</h2>
+                {tile.kind === "steam" && (
+                  <>
+                    <p className="card-status">{playtimeLabel(tile.game.playtimeMin)}</p>
+                    {tile.game.lastPlayed > 0 && (
+                      <p className="card-status">
+                        Last played {new Date(tile.game.lastPlayed * 1000).toLocaleDateString()}
+                      </p>
+                    )}
+                    {!tile.game.installed && (
+                      <p className="card-status">Steam is still downloading or updating it.</p>
+                    )}
+                    <button type="button" disabled={busy} onClick={() => void playSteam(tile.game)}>
+                      Play
+                    </button>
+                  </>
                 )}
-                {!tile.game.installed && (
-                  <p className="card-status">Steam is still downloading or updating it.</p>
+                {tile.kind === "battlenet" && (
+                  <>
+                    <p className="card-status">
+                      {tile.game.prefix ? "Battle.net in a Wine prefix" : "Battle.net"}
+                    </p>
+                    <div className="library-detail-actions">
+                      <button type="button" disabled={busy} onClick={() => void playBnet(tile.game)}>
+                        Play
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void openBnetFolder(tile.game)}
+                      >
+                        Open folder
+                      </button>
+                    </div>
+                  </>
                 )}
-                <button type="button" disabled={busy} onClick={() => void playSteam(tile.game)}>
-                  Play
-                </button>
-              </>
-            )}
-            {tile.kind === "battlenet" && (
-              <>
-                <p className="card-status">
-                  {tile.game.prefix ? "Battle.net in a Wine prefix" : "Battle.net"}
-                </p>
-                <div className="library-detail-actions">
-                  <button type="button" disabled={busy} onClick={() => void playBnet(tile.game)}>
-                    Play
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void openBnetFolder(tile.game)}
-                  >
-                    Open folder
-                  </button>
-                </div>
-              </>
-            )}
-            <GameCompanion key={tileKey(tile)} target={companionTarget(tile)}>
-              {companionScreen(tile)}
-            </GameCompanion>
-          </aside>
-        </div>
+                <GameCompanion key={tileKey(tile)} target={companionTarget(tile)}>
+                  {companionScreen(tile)}
+                </GameCompanion>
+              </aside>
+            </div>
+          )}
+        </>
       )}
     </section>
   );

@@ -75,11 +75,11 @@ pub fn kit_here() -> Option<Kit> {
 /// The tool an on-device turn draws with.
 pub const TOOL: &str = crate::tools::registry::IMAGE_GENERATE;
 /// Told to the device when this computer can draw.
-pub const CAN_DRAW: &str = "[Pictures] You can draw pictures here: for a picture, call image_generate with a prompt you write. Never say you can't make images.";
+pub const CAN_DRAW: &str = "[Pictures] You can draw pictures here: for a picture, call image_generate with a prompt you write. Never say you can't make images, and never answer with emoji instead of calling image_generate.";
 /// Added when the newest ask is for a picture.
 pub const ASKED: &str = "They want one now.";
 /// Told to the device on a picture ask when nothing here can draw yet.
-pub const NO_KIT: &str = "[Pictures] Nothing here can draw pictures yet. Never say you can't make images: call image_generate, and if it can't, tell the user to download a picture model (Z-Image Turbo or Chroma1-HD) and the picture guard from Settings → Download models → Image.";
+pub const NO_KIT: &str = "[Pictures] Nothing here can draw pictures yet. Never say you can't make images and never answer with emoji: call image_generate, and if it can't, tell the user to download a picture model (Z-Image Turbo or Chroma1-HD) and the picture guard from Settings → Download models → Image.";
 
 #[cfg(test)]
 thread_local! {

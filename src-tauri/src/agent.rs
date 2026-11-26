@@ -155,11 +155,14 @@ pub enum UiEvent {
         title: String,
         status: String,
         detail: String,
-        /// The picture a finished `image_generate` made, as a file path. The
-        /// card shows it through `chat_picture`, which reads only the app's
-        /// media folders.
+        /// The picture a finished `image_generate` or `image_edit` made, as a
+        /// file path. The card shows it through `chat_picture`.
         #[serde(skip_serializing_if = "Option::is_none")]
         picture: Option<String>,
+        /// The video a finished `video_generate`, `video_edit`, or
+        /// `video_extend` made, as a file path. Shown through `chat_media`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        video: Option<String>,
     },
     Permission {
         id: String,
@@ -498,10 +501,10 @@ pub fn ask_is_hard(ask: &grokhub_core::wire::PermissionAsk) -> bool {
         .is_some()
 }
 
-/// The picture file a finished `image_generate` names on its `IMAGINE:`
-/// line. A web address, a relative path or a video gives `None`.
+/// The picture file a finished `image_generate` or `image_edit` names on its
+/// `IMAGINE:` line. A web address, a relative path or a video gives `None`.
 fn made_picture(tool: &str, status: &str, detail: &str) -> Option<String> {
-    if tool != "image_generate" || status != "completed" {
+    if !matches!(tool, "image_generate" | "image_edit") || status != "completed" {
         return None;
     }
     detail.lines().find_map(|line| {
@@ -512,12 +515,27 @@ fn made_picture(tool: &str, status: &str, detail: &str) -> Option<String> {
     })
 }
 
+/// The video file a finished `video_generate`, `video_edit`, or `video_extend`
+/// names on its `IMAGINE:` line. A web address, relative path or image gives `None`.
+fn made_video(tool: &str, status: &str, detail: &str) -> Option<String> {
+    if !matches!(tool, "video_generate" | "video_edit" | "video_extend") || status != "completed" {
+        return None;
+    }
+    detail.lines().find_map(|line| {
+        let path = line.strip_prefix("IMAGINE: ")?.trim();
+        let video =
+            std::path::Path::new(path).is_absolute() && crate::imagine::video_mime(path).is_some();
+        video.then(|| path.to_string())
+    })
+}
+
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
     Some(match event {
         AcpEvent::Text(text) => UiEvent::Text { text },
         AcpEvent::Thought(text) => UiEvent::Thought { text },
         AcpEvent::Tool(card) => UiEvent::Tool {
             picture: made_picture(&card.kind, &card.status, &card.detail),
+            video: made_video(&card.kind, &card.status, &card.detail),
             id: card.id,
             title: card.title,
             status: card.status,
@@ -2739,12 +2757,30 @@ mod tests {
             status: "completed".into(),
             detail: "ok".into(),
             picture: None,
+            video: None,
         })
         .expect("json");
         assert_eq!(
             json,
             serde_json::json!({"kind": "tool", "id": "call-1", "title": "read_file", "status": "completed", "detail": "ok"})
         );
+        let clip = if cfg!(windows) {
+            r"C:\Users\me\media\video-1.mp4"
+        } else {
+            "/home/me/media/video-1.mp4"
+        };
+        let video_ev = ui_event(card(
+            "video_generate",
+            "completed",
+            format!("IMAGINE: {clip}"),
+        ));
+        match video_ev {
+            Some(UiEvent::Tool { picture, video, .. }) => {
+                assert_eq!(picture, None);
+                assert_eq!(video.as_deref(), Some(clip));
+            }
+            other => panic!("expected video tool event, got {other:?}"),
+        }
     }
 
     #[test]

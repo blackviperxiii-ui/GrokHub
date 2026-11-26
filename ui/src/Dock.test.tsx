@@ -13,7 +13,7 @@ import {
 } from "./Dock";
 import type { View } from "./Palette";
 
-const AVAILABLE: View[] = ["chat", "imagine", "automations", "skills", "workboard", "pulse"];
+const AVAILABLE: View[] = ["chat", "automations", "skills", "workboard", "pulse"];
 
 const pane = (id: string, tabs: string[], active = 0, share = 1000): DockPane => ({ id, tabs, active, share });
 
@@ -28,14 +28,26 @@ describe("cleanLayout", () => {
     expect(all.filter((tab) => tab === "pulse")).toHaveLength(1);
     expect(cleaned.panes[0].tabs).toEqual(["chat", "pulse"]);
     // Pages with no tab yet fold into the focused pane, as in the cabin.
-    expect(cleaned.panes[1].tabs).toEqual(["skills", "imagine", "automations", "workboard"]);
+    expect(cleaned.panes[1].tabs).toEqual(["skills", "automations", "workboard"]);
   });
 
   it("drops pages this platform does not have and clamps the indexes", () => {
     const saved: DockLayout = { panes: [pane("a", ["chat", "pulse"], 9, 0)], focused: 4 };
-    const cleaned = cleanLayout(saved, ["chat", "imagine"]);
+    const cleaned = cleanLayout(saved, ["chat", "automations"]);
     expect(cleaned).toEqual({
-      panes: [pane("a", ["chat", "imagine"], 0, 1000)],
+      panes: [pane("a", ["chat", "automations"], 0, 1000)],
+      focused: 0,
+    });
+  });
+
+  it("drops a legacy imagine tab cleanly from an old saved layout", () => {
+    const legacy: DockLayout = {
+      panes: [pane("a", ["chat", "imagine"], 1, 500), pane("b", ["imagine"], 0, 500)],
+      focused: 1,
+    };
+    const cleaned = cleanLayout(legacy, ["chat", "pulse"]);
+    expect(cleaned).toEqual({
+      panes: [pane("a", ["chat", "pulse"], 0, 500)],
       focused: 0,
     });
   });
@@ -54,7 +66,7 @@ describe("cleanLayout", () => {
   it("returns the same layout when nothing had to change", () => {
     const saved: DockLayout = {
       panes: [
-        pane("a", ["chat", "imagine", "automations", "skills", "workboard"], 0, 600),
+        pane("a", ["chat", "automations", "skills", "workboard"], 0, 600),
         pane("b", ["pulse"], 0, 400),
       ],
       focused: 1,
@@ -78,9 +90,9 @@ describe("focusPage", () => {
   });
 
   it("a page with no tab yet joins the focused pane; a non-dockable page changes nothing", () => {
-    const next = focusPage(two, "imagine");
-    expect(next.panes[0].tabs).toEqual(["chat", "pulse", "imagine"]);
-    expect(focusedPage(next)).toBe("imagine");
+    const next = focusPage(two, "automations");
+    expect(next.panes[0].tabs).toEqual(["chat", "pulse", "automations"]);
+    expect(focusedPage(next)).toBe("automations");
     expect(focusPage(two, "settings")).toBe(two);
   });
 });

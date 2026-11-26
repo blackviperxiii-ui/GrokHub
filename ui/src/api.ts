@@ -153,8 +153,10 @@ export type ChatEvent =
       title: string;
       status: string;
       detail: string;
-      /** The picture file a finished image_generate made; read it with `chatPicture`. */
+      /** The picture file a finished image_generate or image_edit made; read it with `chatPicture`. */
       picture?: string;
+      /** The video file a finished video_generate/edit/extend made; read it with `chatMedia`. */
+      video?: string;
     }
   | {
       kind: "permission";
@@ -2100,6 +2102,16 @@ export function imagineImage(name: string): Promise<string> {
 /** A picture a chat's tool made, as a data URL. Only the app's media folders are read. */
 export function chatPicture(path: string): Promise<string> {
   return invoke<string>("chat_picture", { path });
+}
+
+/** A picture or short video a chat's tool made, as a data URL. */
+export function chatMedia(path: string): Promise<string> {
+  return invoke<string>("chat_media", { path });
+}
+
+/** Saves an inline chat image or video to Library → Creations. */
+export function saveChatMediaToLibrary(path: string, prompt: string): Promise<ImagineTile> {
+  return invoke<ImagineTile>("save_chat_media_to_library", { path, prompt });
 }
 
 /** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */
