@@ -103,6 +103,35 @@ fn a_message_is_capped_in_parts_and_bytes() {
             "messageId is 1 to 128 characters".into()
         ))
     );
+    let mut long_context = ask("hi");
+    long_context.context_id = Some("c".repeat(129));
+    assert_eq!(
+        long_context.check(),
+        Err(A2aError::InvalidParams(
+            "contextId is 1 to 128 characters".into()
+        ))
+    );
+    long_context.context_id = Some("c".repeat(128));
+    assert_eq!(long_context.check(), Ok(()));
+    let mut blank_task = ask("hi");
+    blank_task.task_id = Some(" ".into());
+    assert_eq!(
+        blank_task.check(),
+        Err(A2aError::InvalidParams(
+            "taskId is 1 to 128 characters".into()
+        ))
+    );
+    // ProtoJSON sends an unset id as "".
+    let unset: Message = serde_json::from_value(json!({
+        "messageId": "m-1",
+        "contextId": "",
+        "taskId": "",
+        "role": "ROLE_USER",
+        "parts": [{ "text": "hi" }],
+    }))
+    .unwrap();
+    assert_eq!(unset.check(), Ok(()));
+    assert_eq!((unset.context_id, unset.task_id), (None, None));
 }
 
 #[test]
@@ -231,10 +260,81 @@ fn ended_tasks_give_way_and_open_ones_never_do() {
         book.get(&a, None),
         Err(A2aError::TaskNotFound("task-1".into()))
     );
-    let listed: Vec<String> = book.list(None, 10).into_iter().map(|t| t.id).collect();
+    let all = book.list(&ListQuery::default()).unwrap();
+    let listed: Vec<&str> = all.tasks.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(listed, vec!["task-3", "task-2"]);
-    assert!(book.list(None, 10).iter().all(|t| t.history.is_empty()));
-    assert_eq!(book.list(Some("ctx-2"), 10).len(), 1);
+    assert!(all.tasks.iter().all(|t| t.history.is_empty()));
+    let in_context = ListQuery {
+        context_id: Some("ctx-2".into()),
+        ..ListQuery::default()
+    };
+    assert_eq!(book.list(&in_context).unwrap().total_size, 1);
+}
+
+#[test]
+fn a_task_list_pages_by_token_and_filters_by_state() {
+    let mut book = TaskBook::new(8);
+    for word in ["a", "b", "c"] {
+        let id = book.open(ask(word), T0).unwrap();
+        book.start(&id, T0).unwrap();
+        book.finish(&id, Outcome::Completed(format!("re {word}")), T0)
+            .unwrap();
+    }
+    let working = book.open(ask("d"), T0).unwrap();
+    book.start(&working, T0).unwrap();
+    let ids =
+        |page: &TaskPage| -> Vec<String> { page.tasks.iter().map(|t| t.id.clone()).collect() };
+    let first = book
+        .list(&ListQuery {
+            page_size: 3,
+            ..ListQuery::default()
+        })
+        .unwrap();
+    assert_eq!(ids(&first), ["task-4", "task-3", "task-2"]);
+    assert_eq!(
+        (
+            first.next_page_token.as_str(),
+            first.page_size,
+            first.total_size
+        ),
+        ("task-2", 3, 4)
+    );
+    assert!(first.tasks.iter().all(|t| t.artifacts.is_empty()));
+    let second = book
+        .list(&ListQuery {
+            page_size: 3,
+            page_token: Some(first.next_page_token.clone()),
+            include_artifacts: true,
+            history_length: Some(1),
+            ..ListQuery::default()
+        })
+        .unwrap();
+    assert_eq!(ids(&second), ["task-1"]);
+    assert_eq!(second.next_page_token, "");
+    assert_eq!(second.tasks[0].reply().as_deref(), Some("re a"));
+    assert_eq!(second.tasks[0].history.len(), 1);
+    let done = book
+        .list(&ListQuery {
+            status: Some(TaskState::Working),
+            ..ListQuery::default()
+        })
+        .unwrap();
+    assert_eq!((ids(&done), done.total_size), (vec![working], 1));
+    assert_eq!(
+        book.list(&ListQuery {
+            page_token: Some("task-9".into()),
+            ..ListQuery::default()
+        }),
+        Err(A2aError::InvalidParams(
+            "pageToken `task-9` isn't a listed task".into()
+        ))
+    );
+    let page = serde_json::to_value(&first).unwrap();
+    assert_eq!(page["nextPageToken"], "task-2");
+    assert_eq!(
+        (page["pageSize"].clone(), page["totalSize"].clone()),
+        (json!(3), json!(4))
+    );
 }
 
 #[test]
@@ -267,10 +367,25 @@ fn json_rpc_calls_parse_and_the_rest_answer_with_spec_codes() {
     let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "ListTasks" });
     assert_eq!(
         parse_call(list.to_string().as_bytes()).unwrap().1,
-        Call::ListTasks {
-            context_id: None,
-            page_size: 20
+        Call::ListTasks(ListQuery::default())
+    );
+    let filtered = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "ListTasks",
+        "params": {
+            "contextId": "", "status": "TASK_STATE_WORKING", "pageSize": 500,
+            "pageToken": "task-2", "historyLength": 3, "includeArtifacts": true
         }
+    });
+    assert_eq!(
+        parse_call(filtered.to_string().as_bytes()).unwrap().1,
+        Call::ListTasks(ListQuery {
+            context_id: None,
+            status: Some(TaskState::Working),
+            page_size: 100,
+            page_token: Some("task-2".into()),
+            history_length: Some(3),
+            include_artifacts: true,
+        })
     );
 
     let code = |body: Value| {
@@ -356,6 +471,10 @@ fn a_profile_card_has_the_required_fields_and_one_skill() {
                 "protocolVersion": "1.0",
             }],
             "capabilities": { "streaming": false, "pushNotifications": false, "extendedAgentCard": false },
+            "securitySchemes": {
+                "hub-token": { "httpAuthSecurityScheme": { "scheme": "Bearer" } }
+            },
+            "securityRequirements": [{ "schemes": { "hub-token": { "list": [] } } }],
             "defaultInputModes": ["text/plain", "application/json"],
             "defaultOutputModes": ["text/plain"],
             "skills": [{

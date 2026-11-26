@@ -571,7 +571,7 @@ mod tests {
             2,
         )
         .unwrap();
-        assert_eq!(s.session_id, "chat-1");
+        assert!((s.session_id) == ("chat-1"));
         assert_eq!(s.args_redacted, r#"{"x":120,"y":48}"#);
         assert_eq!(s.path, "A");
         assert_eq!(s.turn, 2);
@@ -591,7 +591,7 @@ mod tests {
             0,
         )
         .unwrap();
-        assert_eq!(t.session_id, "grok-build-cu");
+        assert!((t.session_id) == ("grok-build-cu"));
         assert_eq!(t.args_redacted, r#"{"chars":7}"#);
         assert_eq!(t.decision, "deny");
         assert_eq!(t.access, "readonly");

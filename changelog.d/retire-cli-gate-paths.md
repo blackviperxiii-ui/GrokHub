@@ -1,0 +1,1 @@
+- Internal: removed the retired CLI's gate paths B, C and D (deny-rule tables, the built-in computer-use watchdog, the ACP ask classifier) and the unused recovery-state projection; nothing that asks or runs changes.

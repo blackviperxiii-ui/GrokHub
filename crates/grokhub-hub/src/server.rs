@@ -1,3 +1,4 @@
+use crate::a2a_route::{self, A2aDoor};
 use grokhub_core::inhabit::InhabitBundle;
 use grokhub_core::{HubState, HUB_KIND};
 use serde::Serialize;
@@ -11,26 +12,51 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 /// Requests handled at once. Past this a LAN flood gets a 503, not one more thread each.
 const MAX_IN_FLIGHT: usize = 64;
 
+/// The standalone hub: it holds no model sign-in, so it has no agent door.
 pub fn serve(
     state: Arc<Mutex<HubState>>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = Server::http(("0.0.0.0", port))?;
-    accept_loop(state, server);
+    accept_loop(state, server, None);
     Ok(())
 }
 
 /// Loopback bind for tests. Returns the bound port.
 pub fn serve_background(state: Arc<Mutex<HubState>>, port: u16) -> Result<u16, String> {
-    serve_bind(state, "127.0.0.1", port)
+    serve_bind(state, "127.0.0.1", port, None)
+}
+
+/// [`serve_background`] with the agent door at `/a2a/v1`.
+pub fn serve_background_with(
+    state: Arc<Mutex<HubState>>,
+    port: u16,
+    door: Option<Arc<A2aDoor>>,
+) -> Result<u16, String> {
+    serve_bind(state, "127.0.0.1", port, door)
 }
 
 /// LAN bind for the native cabin. Other computers pair against this.
 pub fn serve_lan(state: Arc<Mutex<HubState>>, port: u16) -> Result<u16, String> {
-    serve_bind(state, "0.0.0.0", port)
+    serve_bind(state, "0.0.0.0", port, None)
 }
 
-fn serve_bind(state: Arc<Mutex<HubState>>, host: &str, port: u16) -> Result<u16, String> {
+/// [`serve_lan`] with the agent door at `/a2a/v1`, for the app that answers
+/// paired computers' messages to its shared agents.
+pub fn serve_lan_with(
+    state: Arc<Mutex<HubState>>,
+    port: u16,
+    door: Option<Arc<A2aDoor>>,
+) -> Result<u16, String> {
+    serve_bind(state, "0.0.0.0", port, door)
+}
+
+fn serve_bind(
+    state: Arc<Mutex<HubState>>,
+    host: &str,
+    port: u16,
+    door: Option<Arc<A2aDoor>>,
+) -> Result<u16, String> {
     let server = Server::http((host, port)).map_err(|e| e.to_string())?;
     let bound = server
         .server_addr()
@@ -38,12 +64,12 @@ fn serve_bind(state: Arc<Mutex<HubState>>, host: &str, port: u16) -> Result<u16,
         .map(|a| a.port())
         .unwrap_or(port);
     std::thread::spawn(move || {
-        accept_loop(state, server);
+        accept_loop(state, server, door);
     });
     Ok(bound)
 }
 
-fn accept_loop(state: Arc<Mutex<HubState>>, server: Server) {
+fn accept_loop(state: Arc<Mutex<HubState>>, server: Server, door: Option<Arc<A2aDoor>>) {
     let in_flight = Arc::new(AtomicUsize::new(0));
     for req in server.incoming_requests() {
         let Some(slot) = InFlight::enter(&in_flight, MAX_IN_FLIGHT) else {
@@ -55,9 +81,10 @@ fn accept_loop(state: Arc<Mutex<HubState>>, server: Server) {
             continue;
         };
         let state = state.clone();
+        let door = door.clone();
         std::thread::spawn(move || {
             let _slot = slot;
-            let _ = handle(&state, req);
+            let _ = handle(&state, door.as_ref(), req);
         });
     }
 }
@@ -89,7 +116,11 @@ impl Drop for InFlight {
 /// What a paired computer hears while this hub isn't sharing.
 const SHARING_OFF: &str = "Sharing is off on this computer.";
 
-fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
+fn handle(
+    state: &Arc<Mutex<HubState>>,
+    door: Option<&Arc<A2aDoor>>,
+    mut req: Request,
+) -> Result<(), ()> {
     let method = req.method().clone();
     let url = req.url().to_string();
     let path = url_path(&url);
@@ -116,6 +147,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         let hub_id = st.device_id.clone();
         let hub_name = st.device_name.clone();
         drop(st);
+        // A computer that pairs again gets a new token; its old turns stop.
+        if let (Ok(_), Some(door)) = (&result, door) {
+            door.recheck(state);
+        }
         return match result {
             Ok(peer) => send_json(
                 req,
@@ -181,6 +216,13 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         p.last_seen = grokhub_core::now_ms();
     }
     let peer = st.peer_for_token(&token).cloned().ok_or(())?;
+
+    if let Some(door) = door.filter(|_| path == a2a_route::A2A_PATH || path.starts_with("/a2a/v1/"))
+    {
+        let port = st.port;
+        drop(st);
+        return a2a_route::handle(door, req, &path, &peer, state, port);
+    }
 
     if method == Method::Get && path == "/v1/status" {
         let peers: Vec<Value> = std::iter::once(json!({
@@ -331,6 +373,12 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         );
     }
     drop(st);
+    not_found(req)
+}
+
+/// The 404 for a route this hub doesn't have, or an agent a paired computer
+/// may not reach.
+pub(crate) fn not_found(req: Request) -> Result<(), ()> {
     send_json(
         req,
         404,

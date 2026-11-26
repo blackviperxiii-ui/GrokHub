@@ -115,9 +115,9 @@ mod tests {
         assert_eq!(
             ids(&w[..3]),
             [
+                "qwen3-coder-30b-a3b-heretic-q4_k_m",
+                "devstral-small2-24b-abliterated-q4_k_m",
                 "qwen3.6-35b-a3b-heretic-q4_k_m",
-                "qwen3.8-27b-heretic-q4_k_m",
-                "zai-glm4.7-flash-30b-a3b-heretic-q4_k_m",
             ]
         );
         assert!(w

@@ -188,13 +188,16 @@ fn context_files_in(dir: &Path) -> Vec<PathBuf> {
 ///
 /// Chat keeps the full skills reminder and plugin extras. Background and
 /// Unattended drop those unless the job declares a [`PromptNeed`]. Review is
-/// the lean nightly body from [`grokhub_core::review_system_prompt`].
+/// the lean nightly body from [`grokhub_core::review_system_prompt`]. Peer is
+/// an agent answering a paired computer: no AGENTS.md or CLAUDE.md layer, no
+/// environment facts, skills or plugin extras, since those are the person's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptProfile {
     Chat,
     Background,
     Unattended,
     Review,
+    Peer,
 }
 
 /// Extras a job opts into beyond the profile default.
@@ -280,11 +283,19 @@ pub fn tool_set_from_job(job: &str) -> crate::tools::ToolSet {
 
 impl PromptProfile {
     fn want_skills(self, need: PromptNeed) -> bool {
-        matches!(self, PromptProfile::Chat) || need.skills
+        match self {
+            PromptProfile::Chat => true,
+            PromptProfile::Peer => false,
+            _ => need.skills,
+        }
     }
 
     fn want_plugins(self, need: PromptNeed) -> bool {
-        matches!(self, PromptProfile::Chat) || need.plugins
+        match self {
+            PromptProfile::Chat => true,
+            PromptProfile::Peer => false,
+            _ => need.plugins,
+        }
     }
 }
 
@@ -424,12 +435,17 @@ fn compose(
         out.push_str("\n\n");
         out.push_str(grokhub_core::conversation::CORE);
     }
-    if let Some(agents) = layered_agents(workspace, home) {
+    let peer = profile == PromptProfile::Peer;
+    if let Some(agents) = (!peer).then(|| layered_agents(workspace, home)).flatten() {
         out.push_str("\n\n<agents>\n");
         out.push_str(&agents);
         out.push_str("\n</agents>");
     }
-    let facts = facts_block(workspace);
+    let facts = if peer {
+        String::new()
+    } else {
+        facts_block(workspace)
+    };
     if !facts.is_empty() {
         out.push_str("\n\n");
         out.push_str(&facts);
@@ -804,6 +820,19 @@ mod tests {
         );
         assert!(full.find("Cabin rule line.").unwrap() < full.find("GLOBAL_MARK").unwrap());
         assert!(full.contains("<agents>"));
+        // An agent answering a paired computer gets none of these layers.
+        let peer = compose(
+            "Cabin rule line.",
+            "",
+            &cwd,
+            Some(&home),
+            PromptProfile::Peer,
+            PromptNeed::FULL,
+        );
+        assert!(peer.contains("Cabin rule line."), "{peer}");
+        for mark in ["GLOBAL_MARK", "ROOT_MARK", "CWD_MARK", "<agents>", ".grok"] {
+            assert!(!peer.contains(mark), "{mark}: {peer}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -817,14 +817,14 @@ fn a_key_shaped_line_is_flagged_by_path_and_line_and_never_by_value() {
         got.blocked,
         ["The secret scan flagged 1 place in the change."]
     );
-    assert_eq!(
-        got.checks.as_ref().expect("checks").secrets,
-        Some(vec![hit(
-            "src/client.txt",
-            Some(3),
-            SecretKind::Shape,
-            None
-        )])
+    assert!(
+        (got.checks.as_ref().expect("checks").secrets)
+            == (Some(vec![hit(
+                "src/client.txt",
+                Some(3),
+                SecretKind::Shape,
+                None
+            )]))
     );
     let sent = serde_json::to_string(&got).unwrap();
     assert!(!sent.contains(key), "{sent}");
@@ -845,14 +845,14 @@ fn a_secrets_file_is_flagged_by_its_name_and_an_example_file_is_not() {
         got.blocked,
         ["The secret scan flagged 4 places in the change."]
     );
-    assert_eq!(
-        got.checks.expect("checks").secrets,
-        Some(vec![
-            hit(".env", None, SecretKind::Name, None),
-            hit("certs/site.pem", None, SecretKind::Name, None),
-            hit("config/auth.json", None, SecretKind::Name, None),
-            hit("deploy/id_ed25519", None, SecretKind::Name, None),
-        ])
+    assert!(
+        (got.checks.expect("checks").secrets)
+            == (Some(vec![
+                hit(".env", None, SecretKind::Name, None),
+                hit("certs/site.pem", None, SecretKind::Name, None),
+                hit("config/auth.json", None, SecretKind::Name, None),
+                hit("deploy/id_ed25519", None, SecretKind::Name, None),
+            ]))
     );
 }
 
@@ -911,9 +911,9 @@ fn a_line_that_holds_one_of_the_projects_secrets_is_flagged_as_held() {
         got.blocked,
         ["The secret scan flagged 1 place in the change."]
     );
-    assert_eq!(
-        got.checks.as_ref().expect("checks").secrets,
-        Some(vec![hit("src/a.txt", Some(2), SecretKind::Held, None)])
+    assert!(
+        (got.checks.as_ref().expect("checks").secrets)
+            == (Some(vec![hit("src/a.txt", Some(2), SecretKind::Held, None)]))
     );
     assert!(!serde_json::to_string(&got).unwrap().contains(value));
     // Without the keychain value the same line is plain text.
@@ -966,10 +966,7 @@ fn an_origin_address_changed_since_the_session_began_is_in_the_way_and_hides_no_
             exit: 3
         }
     );
-    assert_eq!(
-        checks.secrets,
-        Some(vec![hit("src/a.txt", Some(2), SecretKind::Held, None)])
-    );
+    assert!((checks.secrets) == (Some(vec![hit("src/a.txt", Some(2), SecretKind::Held, None)])));
 }
 
 #[test]
@@ -1009,10 +1006,7 @@ fn a_secrets_file_committed_before_the_review_is_flagged_in_its_commit() {
     );
     let checks = got.checks.expect("checks");
     assert_eq!(checks.review, ReviewCheck::Clean);
-    assert_eq!(
-        checks.secrets,
-        Some(vec![hit(".env", None, SecretKind::Name, Some(&sha))])
-    );
+    assert!((checks.secrets) == (Some(vec![hit(".env", None, SecretKind::Name, Some(&sha))])));
 }
 
 #[test]
@@ -1033,14 +1027,14 @@ fn a_key_one_commit_added_and_the_next_removed_is_still_found() {
         got.blocked,
         ["The secret scan flagged 1 place in the change."]
     );
-    assert_eq!(
-        got.checks.expect("checks").secrets,
-        Some(vec![hit(
-            "src/k.txt",
-            Some(2),
-            SecretKind::Shape,
-            Some(&added)
-        )])
+    assert!(
+        (got.checks.expect("checks").secrets)
+            == (Some(vec![hit(
+                "src/k.txt",
+                Some(2),
+                SecretKind::Shape,
+                Some(&added)
+            )]))
     );
 }
 
@@ -1466,10 +1460,7 @@ fn a_shape_hit_the_person_allowed_is_named_in_the_confirm_and_stays_allowed_in_t
         allowed: true,
         ..hit("src/client.txt", Some(3), SecretKind::Shape, None)
     };
-    assert_eq!(
-        got.checks.as_ref().expect("checks").secrets,
-        Some(vec![shape.clone()])
-    );
+    assert!((got.checks.as_ref().expect("checks").secrets) == (Some(vec![shape.clone()])));
     assert_eq!(
         serde_json::to_string(&shape).unwrap(),
         r#"{"path":"src/client.txt","line":3,"kind":"shape","commit":null,"allowed":true}"#
@@ -1505,17 +1496,17 @@ fn a_shape_hit_the_person_allowed_is_named_in_the_confirm_and_stays_allowed_in_t
     );
     // The line is in the commit now, and stays allowed there.
     assert_eq!(done.status.blocked, ["There is nothing to commit."]);
-    assert_eq!(
-        done.status.checks.expect("checks").secrets,
-        Some(vec![SecretHit {
-            allowed: true,
-            ..hit(
-                "src/client.txt",
-                Some(3),
-                SecretKind::Shape,
-                Some(&done.sha)
-            )
-        }])
+    assert!(
+        (done.status.checks.expect("checks").secrets)
+            == (Some(vec![SecretHit {
+                allowed: true,
+                ..hit(
+                    "src/client.txt",
+                    Some(3),
+                    SecretKind::Shape,
+                    Some(&done.sha)
+                )
+            }]))
     );
     let log = code_activity::list(&fx.cfg, 10);
     assert_eq!(
@@ -1604,9 +1595,9 @@ fn an_allow_given_for_one_value_does_not_allow_another_written_on_that_line() {
         got.blocked,
         ["The secret scan flagged 1 place in the change."]
     );
-    assert_eq!(
-        got.checks.expect("checks").secrets,
-        Some(vec![hit("src/a.txt", Some(1), SecretKind::Shape, None)])
+    assert!(
+        (got.checks.expect("checks").secrets)
+            == (Some(vec![hit("src/a.txt", Some(1), SecretKind::Shape, None)]))
     );
     assert_eq!(got.commit.expect("a plan").confirm, None);
     let before = head(&fx);
@@ -1642,10 +1633,7 @@ fn a_line_allowed_in_the_commit_made_here_stays_allowed_after_more_changes() {
         allowed: true,
         ..hit("src/client.txt", Some(3), SecretKind::Shape, Some(sha))
     };
-    assert_eq!(
-        got.checks.expect("checks").secrets,
-        Some(vec![allowed_in(&one.sha)])
-    );
+    assert!((got.checks.expect("checks").secrets) == (Some(vec![allowed_in(&one.sha)])));
     let confirm = got.commit.expect("a plan").confirm.expect("a confirm");
     assert!(
         confirm.ends_with(": \"Change made in this session\", 1 earlier commit, no tests run"),
@@ -1660,10 +1648,7 @@ fn a_line_allowed_in_the_commit_made_here_stays_allowed_after_more_changes() {
         }]
     );
     assert_eq!(two.status.blocked, ["There is nothing to commit."]);
-    assert_eq!(
-        two.status.checks.expect("checks").secrets,
-        Some(vec![allowed_in(&one.sha)])
-    );
+    assert!((two.status.checks.expect("checks").secrets) == (Some(vec![allowed_in(&one.sha)])));
 }
 
 /// Correctness m2: the confirm's subject is the committed subject, to the

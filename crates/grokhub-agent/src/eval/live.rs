@@ -89,6 +89,8 @@ pub struct LiveTask {
     /// highest still worth paying for), hand-labeled like the offline set in
     /// `route::ask_set`. Each call the router makes is scored against it.
     pub effort: (&'static str, &'static str),
+    /// A coding-eval task: pass or fail is that fixture's tests, not the reply.
+    pub coding_id: Option<&'static str>,
 }
 
 /// An injected step buried in a long, plain run, scored the way desktop
@@ -130,6 +132,7 @@ const fn task(id: &'static str, set: TaskSet, turns: &'static [&'static str]) ->
         adult: None,
         natural: false,
         effort: ("low", "medium"),
+        coding_id: None,
     }
 }
 
@@ -1007,6 +1010,31 @@ impl ModelClient for Capped {
     }
 }
 
+/// Which task list a live run uses. `Default` is the chat and diagnostics set.
+/// `Coding` is the 30 fixed coding tasks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvalSuite {
+    Default,
+    Coding,
+}
+
+impl EvalSuite {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "default" => Ok(Self::Default),
+            "coding" => Ok(Self::Coding),
+            _ => Err("--suite takes default or coding".into()),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Coding => "coding",
+        }
+    }
+}
+
 pub struct LiveOpts {
     pub model: String,
     /// None: the router's starting effort for a chat, as in the app.
@@ -1014,6 +1042,8 @@ pub struct LiveOpts {
     pub k: u32,
     /// Run only tasks whose id contains this.
     pub only: Option<String>,
+    /// Which task list to run.
+    pub suite: EvalSuite,
     /// Where the calls go (prices the cap).
     pub provider: Provider,
     /// Run every task with this switch on and then off (one of [`AB_FLAGS`]).
@@ -1045,6 +1075,7 @@ impl LiveOpts {
             effort: None,
             k: DEFAULT_K,
             only: None,
+            suite: EvalSuite::Default,
             provider: Provider::Grok,
             ab: None,
             mde: super::paired::DEFAULT_MDE,
@@ -1081,6 +1112,10 @@ pub struct Attempt {
     pub effort_range: (&'static str, &'static str),
     /// Each response call's model, effort and cost.
     pub picks: Vec<Pick>,
+    /// Local tool calls checked against their schema on this try.
+    pub tool_calls: u32,
+    /// Of those, the ones whose arguments missed the schema.
+    pub malformed_calls: u32,
 }
 
 pub struct LiveReport {
@@ -1107,6 +1142,8 @@ pub struct LiveReport {
     pub retries: u32,
     /// False while the run is still going (a progress snapshot).
     pub done: bool,
+    /// Which task list this report came from.
+    pub suite: EvalSuite,
 }
 
 struct NoHalt;
@@ -1188,6 +1225,11 @@ fn one_try(
     seed(&ws, task.files);
     if let Some(make) = task.seed_with {
         make(&ws);
+    }
+    if let Some(fix) = task.coding_id.and_then(super::coding::fixture) {
+        if let Err(err) = super::coding::seed_workspace(&ws, fix) {
+            error = Some(format!("could not seed the coding task: {err}"));
+        }
     }
     let shared = client.clone();
     let permits = Arc::new(if task.probe.is_some() {
@@ -1277,6 +1319,14 @@ fn one_try(
     }
     crate::mcp::detach_elicit(&conversation_id);
     crate::set_plan_session(&conversation_id, false);
+    let mut test_error = None;
+    if error.is_none() {
+        if let Some(fix) = task.coding_id.and_then(super::coding::fixture) {
+            if let Err(err) = super::coding::grade(&ws, fix) {
+                test_error = Some(err);
+            }
+        }
+    }
     let wall_ms = start.elapsed().as_millis();
     let safety = task.probe.map(|probe| {
         let mut score = score_probe(&probe, &reply, &trace, &ws);
@@ -1285,17 +1335,23 @@ fn one_try(
         score
     });
     let pass = error.is_none()
+        && test_error.is_none()
         && check(task, &reply, &ws)
         && check_trace(task, &trace)
         && safety.is_none_or(|s| s.clean());
     if !pass && error.is_none() {
-        error = shown_err;
+        error = test_error.or(shown_err);
     }
     let TryLog {
         usage,
         calls,
         picks,
     } = capped.take_usage();
+    let chat = crate::route::session_metrics::load(&cfg)
+        .chats
+        .remove(&conversation_id);
+    let tool_calls = chat.as_ref().map(|c| c.tool_calls).unwrap_or(0);
+    let malformed_calls = chat.as_ref().map(|c| c.malformed).unwrap_or(0);
     let _ = std::fs::remove_dir_all(&dir);
     Attempt {
         task: task.id,
@@ -1313,7 +1369,21 @@ fn one_try(
         round: n,
         effort_range: task.effort,
         picks,
+        tool_calls,
+        malformed_calls,
     }
+}
+
+/// The 30 coding tasks, as live tasks. Pass or fail is each task's tests.
+fn coding_tasks() -> Vec<LiveTask> {
+    super::coding::fixtures()
+        .iter()
+        .map(|fix| LiveTask {
+            coding_id: Some(fix.id),
+            effort: ("low", "high"),
+            ..task(fix.id, TaskSet::Capability, fix.turns)
+        })
+        .collect()
 }
 
 /// Run every task `k` times through `client`, stopping when the budget runs out.
@@ -1340,7 +1410,11 @@ pub fn run_live_with(
     progress: &mut dyn FnMut(&LiveReport, &Attempt),
 ) -> LiveReport {
     let _class = crate::route::live::ClassScope::enter(super::EVAL_CLASS);
-    let list: Vec<LiveTask> = tasks()
+    let source = match opts.suite {
+        EvalSuite::Default => tasks(),
+        EvalSuite::Coding => coding_tasks(),
+    };
+    let list: Vec<LiveTask> = source
         .into_iter()
         .filter(|t| opts.only.as_deref().is_none_or(|o| t.id.contains(o)))
         .collect();
@@ -1365,6 +1439,7 @@ pub fn run_live_with(
         planned: list.len() * arms.len() * k as usize,
         retries: 0,
         done: false,
+        suite: opts.suite,
     };
     // Tries from an earlier run come back first and count against the cap.
     let mut earlier_ticks = 0i64;
@@ -1450,6 +1525,11 @@ pub struct AttemptRow {
     pub calls: u32,
     pub safety: Option<SafetyScore>,
     pub picks: Vec<Pick>,
+    /// Local tool calls and schema misses. Old progress files omit both.
+    #[serde(default)]
+    pub tool_calls: u32,
+    #[serde(default)]
+    pub malformed_calls: u32,
 }
 
 impl AttemptRow {
@@ -1471,6 +1551,8 @@ impl AttemptRow {
             calls: a.calls,
             safety: a.safety,
             picks: a.picks.clone(),
+            tool_calls: a.tool_calls,
+            malformed_calls: a.malformed_calls,
         }
     }
 
@@ -1500,6 +1582,8 @@ impl AttemptRow {
             round: self.round,
             effort_range: task.effort,
             picks: self.picks.clone(),
+            tool_calls: self.tool_calls,
+            malformed_calls: self.malformed_calls,
         })
     }
 }
@@ -1541,6 +1625,43 @@ pub fn write_progress(
 }
 
 /// Write `body` to `path` through a side file and a rename.
+fn coding_totals(report: &LiveReport) -> super::coding::CodingTotals<'_> {
+    let a = &report.attempts;
+    let passed = a.iter().filter(|x| x.pass).count();
+    let input: u64 = a.iter().map(|x| x.usage.input_tokens).sum();
+    let output: u64 = a
+        .iter()
+        .map(|x| x.usage.output_tokens + x.usage.reasoning_tokens)
+        .sum();
+    let mut walls: Vec<u128> = a.iter().map(|x| x.wall_ms).collect();
+    walls.sort_unstable();
+    let p50 = walls.get(walls.len() / 2).copied().unwrap_or(0);
+    let models: Vec<Vec<&str>> = a
+        .iter()
+        .map(|x| x.picks.iter().map(|pick| pick.model.as_str()).collect())
+        .collect();
+    super::coding::CodingTotals {
+        model: &report.model,
+        provider: report.provider.label(),
+        task_set: super::coding::fixtures().len(),
+        tries: a.len(),
+        passed,
+        escalations: super::coding::count_escalations(&models),
+        input_tokens: input,
+        output_tokens: output,
+        wall_ms: a.iter().map(|x| x.wall_ms).sum(),
+        p50_wall_ms: p50,
+    }
+}
+
+/// Write `<out>.results.json` for a coding-suite run.
+pub fn write_coding_results(report: &LiveReport, out: &Path) -> std::io::Result<PathBuf> {
+    let path = super::coding::results_path(out);
+    let body = super::coding::results_json(&coding_totals(report));
+    write_atomic(&path, body.as_bytes())?;
+    Ok(path)
+}
+
 pub fn write_atomic(path: &Path, body: &[u8]) -> std::io::Result<()> {
     let mut side = path.as_os_str().to_owned();
     side.push(".part");
@@ -1739,6 +1860,10 @@ pub fn render_live(report: &LiveReport) -> String {
         format!("{:.1}%", cached as f64 * 100.0 / input as f64)
     };
     let asks: u32 = a.iter().map(|x| x.asks).sum();
+    let tool_calls: u32 = a.iter().map(|x| x.tool_calls).sum();
+    let malformed: u32 = a.iter().map(|x| x.malformed_calls).sum();
+    let malformed_rate = crate::route::session_metrics::malformed_rate(tool_calls, malformed)
+        .unwrap_or_else(|| "n/a".into());
     let mut out = format!(
         "# Live eval\n\nmodel: {}  ·  provider: {}{}  ·  k: {}  ·  spent {} of {}{}\n\n\
          | metric | value |\n|---|---|\n\
@@ -1746,7 +1871,8 @@ pub fn render_live(report: &LiveReport) -> String {
          | capability | {} |\n| regression | {} |\n| recall | {} |\n\
          | input tokens | {} |\n| cached share | {} |\n| output + reasoning tokens | {} |\n\
          | cost | {} |\n| p50 wall | {} ms |\n| gate asks | {} |\n\
-         | billed failures | {} |\n| calls retried | {} |\n\n",
+         | billed failures | {} |\n| calls retried | {} |\n\
+         | malformed tool calls | {} |\n\n",
         report.model,
         report.provider.label(),
         report
@@ -1772,7 +1898,11 @@ pub fn render_live(report: &LiveReport) -> String {
         asks,
         report.billed_errors,
         report.retries,
+        malformed_rate,
     );
+    if report.suite == EvalSuite::Coding {
+        out.push_str(&super::coding::render_section(&coding_totals(report)));
+    }
     out.push_str(&render_routing(a));
     // The conversation core: the live talk cases, then the fixed before/after set.
     let (p_talk, n_talk) = passed(&|x| x.task.starts_with("talk-"));

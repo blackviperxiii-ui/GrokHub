@@ -22,6 +22,7 @@ mod read_file;
 pub(crate) mod registry;
 pub(crate) mod run_routine;
 pub(crate) mod save_routine;
+mod schema_check;
 mod search_replace;
 pub(crate) mod seen;
 mod session_search;
@@ -37,9 +38,14 @@ pub(crate) mod workspace_tools;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
+#[cfg(test)]
+pub(crate) use schema_check::PLAIN_SCHEMA_ERROR;
+pub(crate) use schema_check::{schema_message, schema_miss};
 pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
 pub(crate) use web_fetch::{dial_host, parse_public_url};
+#[cfg(test)]
+pub(crate) use web_fetch::{FetchResp, PageFetch};
 pub use web_search::{
     brave_key_present, seal_brave_key, searxng_url_problem, Backend as WebSearchBackend,
     Settings as WebSearchSettings, BACKENDS as WEB_SEARCH_BACKENDS,
@@ -420,6 +426,26 @@ fn parse_args(arguments: &str) -> Result<Value, ToolOutput> {
 /// Whether a call's arguments parse the way [`parse_args`] takes them.
 pub fn args_parse(arguments: &str) -> bool {
     parse_args(arguments).is_ok()
+}
+
+/// File and shell tools. A chat with no folder cannot run them.
+pub fn needs_workspace(name: &str) -> bool {
+    matches!(
+        name,
+        "read_file"
+            | "list_dir"
+            | "grep"
+            | "glob"
+            | "write"
+            | "search_replace"
+            | "run_terminal_command"
+            | "run_tool_script"
+    )
+}
+
+/// No folder was picked, or the path is not a directory on disk.
+pub fn workspace_missing(path: &Path) -> bool {
+    path.as_os_str().is_empty() || !path.is_dir()
 }
 
 /// Lexical `..` and symlink targets that leave the canonical workspace are rejected.

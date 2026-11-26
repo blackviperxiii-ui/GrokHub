@@ -3028,6 +3028,8 @@ export interface LibraryRow {
   id: string;
   name: string;
   line: string;
+  /** Catalog job: General chat, Coding, Reasoning, Vision, Image gen, Video gen, or Voice. */
+  useCase: string;
   about: string;
   state: LibraryRowState;
 }
