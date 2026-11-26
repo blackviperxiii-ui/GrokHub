@@ -2686,7 +2686,9 @@ fn replay_result(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> 
 
 /// Order 0.5: this Hangout turn is chat-only (no tools offered).
 fn turn_is_chat_only(conversation_id: &str, user_text: &str) -> bool {
-    crate::checkpoint::turn_brief(conversation_id)
+    // A Code tab turn is never small talk.
+    !crate::code_guard::is_set(conversation_id)
+        && crate::checkpoint::turn_brief(conversation_id)
         .is_some_and(|brief| tools::hangout::chat_only(&brief, user_text))
 }
 
