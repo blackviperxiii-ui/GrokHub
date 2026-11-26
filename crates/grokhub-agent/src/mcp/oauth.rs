@@ -186,11 +186,14 @@ pub(super) fn forget(server: &str) {
 
 /// Sign in to `server` at `url` in the browser `open` launches. Returns the
 /// line naming the account ("Signed in to Linear as ada@example.com").
-pub(super) fn sign_in(
+/// Ends once `stop` says so (Decline on the chat sign-in card), so cancel
+/// leaves no half-finished OAuth wait.
+pub(super) fn sign_in_until(
     server: &str,
     url: &str,
     open: &dyn Fn(&str) -> Result<(), String>,
     wait: Duration,
+    stop: &dyn Fn() -> bool,
 ) -> Result<String, String> {
     let (listener, redirect) = crate::loopback::bind()?;
     let (auth, scope) = discover(server, url)?;
@@ -227,7 +230,13 @@ pub(super) fn sign_in(
         resource: &resource,
     });
     open(&link)?;
-    let code = crate::loopback::wait_code(&listener, &state, &format!("{server} sign-in"), wait)?;
+    let code = crate::loopback::wait_code_until(
+        &listener,
+        &state,
+        &format!("{server} sign-in"),
+        wait,
+        stop,
+    )?;
     let (ok, v) = post(
         &auth.token_endpoint,
         "application/x-www-form-urlencoded",
@@ -481,6 +490,15 @@ pub(super) mod tests {
             }
         }
         String::new()
+    }
+
+    fn sign_in(
+        server: &str,
+        url: &str,
+        open: &dyn Fn(&str) -> Result<(), String>,
+        wait: Duration,
+    ) -> Result<String, String> {
+        sign_in_until(server, url, open, wait, &|| false)
     }
 
     /// The browser: approve at once by calling the loopback with `code`.

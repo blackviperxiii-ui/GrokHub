@@ -42,17 +42,8 @@ fn request_line(stream: &mut impl Read) -> String {
 }
 
 /// Wait for `/callback` and hand back its code ([`grokhub_core::pkce::loopback_code`]).
-/// Strays (a favicon, a prefetch) get a 404 and the wait goes on.
-pub(crate) fn wait_code(
-    listener: &TcpListener,
-    state: &str,
-    who: &str,
-    wait: Duration,
-) -> Result<String, String> {
-    wait_code_until(listener, state, who, wait, &|| false)
-}
-
-/// [`wait_code`] that also ends, with "`who` stopped", once `stop` says so.
+/// Strays (a favicon, a prefetch) get a 404 and the wait goes on. Ends early with
+/// "`who` stopped" once `stop` says so (chat Decline on the sign-in card).
 pub(crate) fn wait_code_until(
     listener: &TcpListener,
     state: &str,
@@ -113,7 +104,13 @@ mod tests {
             sink
         });
         assert_eq!(
-            wait_code(&listener, "", "Test sign-in", Duration::from_secs(5)),
+            wait_code_until(
+                &listener,
+                "",
+                "Test sign-in",
+                Duration::from_secs(5),
+                &|| { false }
+            ),
             Ok("abc".to_string())
         );
         assert!(client.join().unwrap().starts_with("HTTP/1.1 200 OK"));
