@@ -29,6 +29,8 @@ const api = vi.hoisted(() => {
     onUpdateAvailable: vi.fn(() => Promise.resolve(() => {})),
     onLocalEngineEvent: vi.fn(() => Promise.resolve(() => {})),
     onCompanionEvent: vi.fn(() => Promise.resolve(() => {})),
+    takeSkillInstallOffer: vi.fn(() => Promise.resolve(null)),
+    onSkillInstallOffer: vi.fn(() => Promise.resolve(() => {})),
     workboardSweepUndo: vi.fn(() => Promise.resolve({})),
     listChats: vi.fn(() => Promise.resolve([])),
     shareSchedulerClock: vi.fn(() => Promise.resolve()),
