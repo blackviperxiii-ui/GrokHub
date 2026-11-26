@@ -987,6 +987,19 @@ impl Fresh {
         }
     }
 
+    /// Note a shell command that ran to an exit code other than 0: a test,
+    /// build or other program it ran still checked the changes it covers,
+    /// since its result says how the check went. A change it may have made
+    /// is not assumed.
+    pub fn note_failed_run(&mut self, args: &Value) {
+        for step in classify("run_terminal_command", args) {
+            if matches!(step, Step::Run | Step::Exec) {
+                self.unchecked
+                    .retain(|(what, n)| !n.checked_by(what, &step));
+            }
+        }
+    }
+
     /// The changes no check has covered since they ran, oldest first.
     pub fn unchecked(&self) -> &[(String, Needs)] {
         &self.unchecked

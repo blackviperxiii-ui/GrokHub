@@ -163,57 +163,342 @@ pub fn before_write(path: &Path) {
     prune_keeping(Some(&active.conversation));
 }
 
+/// Commands that write files whatever their arguments, lowercased: the sh
+/// ones and PowerShell's, with Windows PowerShell 5.1's short names.
+const WRITERS: &[&str] = &[
+    "rm",
+    "mv",
+    "cp",
+    "tee",
+    "truncate",
+    "patch",
+    "touch",
+    "dd",
+    "mkdir",
+    "set-content",
+    "add-content",
+    "clear-content",
+    "out-file",
+    "tee-object",
+    "new-item",
+    "remove-item",
+    "copy-item",
+    "move-item",
+    "rename-item",
+    "del",
+    "erase",
+    "ri",
+    "copy",
+    "cpi",
+    "move",
+    "mi",
+    "ren",
+    "rni",
+    "ni",
+    "ac",
+    "clc",
+];
+/// `git` subcommands that change the working tree.
+const GIT_WRITERS: &[&str] = &[
+    "checkout",
+    "switch",
+    "reset",
+    "restore",
+    "apply",
+    "am",
+    "clean",
+    "rm",
+    "mv",
+    "stash",
+    "pull",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "revert",
+];
+/// `git stash` subcommands that only read.
+const STASH_READS: &[&str] = &["list", "show"];
+/// Package managers' subcommands that change the project's files or the
+/// packages installed in it.
+const PACKAGE_WRITERS: &[(&str, &[&str])] = &[
+    ("cargo", &["add", "remove", "rm", "fix"]),
+    (
+        "npm",
+        &["install", "i", "ci", "add", "remove", "uninstall", "rm"],
+    ),
+    ("pnpm", &["install", "i", "add", "remove", "rm"]),
+    ("yarn", &["install", "add", "remove"]),
+    ("pip", &["install", "uninstall"]),
+    ("pip3", &["install", "uninstall"]),
+];
+/// Shell words that come before the command they start: `then rm a.txt`.
+const KEYWORDS: &[&str] = &["if", "then", "else", "elif", "do", "while", "until", "!"];
+/// Commands that may write, depending on their arguments or script: an
+/// interpreter, `chmod`, `install`, a `sed` or `perl` without `-i`.
+const MAY_WRITE: &[&str] = &[
+    "chmod",
+    "install",
+    "sed",
+    "perl",
+    "python",
+    "python3",
+    "node",
+    "ruby",
+    "sh",
+    "bash",
+    "zsh",
+    "pwsh",
+    "powershell",
+];
+
 /// True when `command` looks like it may create, modify, or delete workspace
-/// files (Card 957). Pure read-only inspection commands return `false`.
+/// files (Card 957), for a snapshot before it runs. Wider than
+/// [`changes_files`] on purpose: any `>` and any command that may write
+/// counts, quoted words too (`bash -c "rm a.txt"` runs them). Pure read-only
+/// inspection commands return `false`.
 pub fn is_potentially_mutating_shell(command: &str) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return false;
     }
-    if trimmed.contains('>') {
+    if trimmed.contains('>') || changes_files(trimmed) {
         return true;
     }
-    const MUTATING_TOKENS: &[&str] = &[
-        "rm",
-        "mv",
-        "cp",
-        "tee",
-        "truncate",
-        "patch",
-        "touch",
-        "chmod",
-        "dd",
-        "install",
-        "sed",
-        "perl",
-        "python",
-        "python3",
-        "node",
-        "ruby",
-        "sh",
-        "bash",
-        "zsh",
-        "pwsh",
-        "powershell",
-    ];
-    for raw in trimmed.split_whitespace() {
+    let lower = trimmed.to_ascii_lowercase();
+    lower.split_whitespace().any(|raw| {
         let tok = raw
             .trim_matches(|c: char| matches!(c, '\'' | '"' | ';' | '(' | ')' | '{' | '}'))
             .rsplit('/')
             .next()
             .unwrap_or("");
-        if MUTATING_TOKENS.contains(&tok) {
-            return true;
+        WRITERS.contains(&tok) || MAY_WRITE.contains(&tok)
+    }) || GIT_WRITERS
+        .iter()
+        .any(|sub| lower.contains(&format!("git {sub}")))
+}
+
+/// True when `command` clearly changes files: a redirect that writes a file
+/// (not `2>&1` or `> /dev/null`), or a command whose program writes
+/// ([`WRITERS`]), `sed`, `perl` or `ruby` with `-i`, a `git` or package
+/// manager subcommand that changes the tree, a formatter that writes, or
+/// `find` with `-delete` or an `-exec` that writes. Only
+/// the program's own position counts (`sudo rm` does, `ls rm` doesn't), names
+/// are read lowercased, and quoted text, comments and here-document bodies
+/// are data. An interpreter (`python -m pytest`, `bash -c …`) may or may not
+/// write, so it doesn't count.
+pub(crate) fn changes_files(command: &str) -> bool {
+    if crate::shell_redirect::redirects(command)
+        .iter()
+        .any(|r| r.file.is_some())
+    {
+        return true;
+    }
+    commands(&without_heredoc_bodies(command))
+        .iter()
+        .any(|words| writes(words))
+}
+
+/// `command` is one command alone: no `&&`, `;`, pipe or line break joins
+/// another to it.
+pub(crate) fn one_command(command: &str) -> bool {
+    commands(&without_heredoc_bodies(command)).len() == 1
+}
+
+/// One command, as its words, clearly writes files.
+fn writes(words: &[&str]) -> bool {
+    let Some((name, args)) = program(words) else {
+        return false;
+    };
+    // A formatter told to check or show a diff writes nothing.
+    let checks = args.iter().any(|w| matches!(*w, "--check" | "--diff"));
+    let first = args.first().copied().unwrap_or("");
+    match name.as_str() {
+        "git" => git_subcommand(args).is_some_and(|(sub, rest)| {
+            GIT_WRITERS.contains(&sub.as_str())
+                && !(sub == "stash" && rest.first().is_some_and(|w| STASH_READS.contains(w)))
+        }),
+        "sed" | "perl" | "ruby" => args.iter().any(|w| in_place(w)),
+        "cargo" if first == "fmt" => !checks,
+        "rustfmt" | "black" => !checks,
+        "prettier" => args.iter().any(|w| matches!(*w, "--write" | "-w")),
+        "eslint" => args.contains(&"--fix"),
+        "gofmt" => args.contains(&"-w"),
+        "find" => {
+            args.contains(&"-delete")
+                || args
+                    .iter()
+                    .position(|w| matches!(*w, "-exec" | "-execdir" | "-ok" | "-okdir"))
+                    .is_some_and(|at| writes(&args[at + 1..]))
+        }
+        name => {
+            WRITERS.contains(&name)
+                || PACKAGE_WRITERS
+                    .iter()
+                    .any(|(tool, subs)| *tool == name && subs.contains(&first))
         }
     }
-    let lower = trimmed.to_ascii_lowercase();
-    lower.contains("git checkout")
-        || lower.contains("git reset")
-        || lower.contains("git restore")
-        || lower.contains("git clean")
-        || lower.contains("git apply")
-        || lower.contains("git rm")
-        || lower.contains("git mv")
+}
+
+/// Words that run the command after them: `sudo rm`, `xargs rm`,
+/// `timeout 10 rm`.
+const WRAPPERS: &[&str] = &[
+    "sudo", "doas", "env", "time", "nohup", "nice", "ionice", "timeout", "xargs", "command",
+    "exec", "stdbuf", "chrt", "builtin",
+];
+
+/// The program a command runs, lowercased and without its folder, and the
+/// words after it. `NAME=value` settings, shell keywords ([`KEYWORDS`]) and
+/// wrappers before it are passed over, with a wrapper's flags and numbers
+/// (`nice -n 5`, `timeout 10`).
+fn program<'a, 'w>(words: &'a [&'w str]) -> Option<(String, &'a [&'w str])> {
+    let mut i = 0;
+    let mut after_wrapper = false;
+    while let Some(word) = words.get(i) {
+        let setting = !word.starts_with('-')
+            && word.split_once('=').is_some_and(|(name, _)| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+        let wrapper_arg = after_wrapper
+            && (word.starts_with('-') || word.chars().all(|c| c.is_ascii_digit() || c == '.'));
+        let name = base_name(word);
+        if setting || wrapper_arg || KEYWORDS.contains(word) {
+            i += 1;
+        } else if WRAPPERS.contains(&name.as_str()) {
+            after_wrapper = true;
+            i += 1;
+        } else {
+            return Some((name, &words[i + 1..]));
+        }
+    }
+    None
+}
+
+/// `word` lowercased, without any folder before it.
+fn base_name(word: &str) -> String {
+    word.rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+/// The subcommand of a `git` command whose arguments are `args`, past the
+/// options before it (`git -C sub reset`), and the words after it.
+fn git_subcommand<'a, 'w>(args: &'a [&'w str]) -> Option<(String, &'a [&'w str])> {
+    let mut i = 0;
+    while let Some(word) = args.get(i) {
+        if matches!(
+            *word,
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace"
+        ) {
+            i += 2;
+        } else if word.starts_with('-') {
+            i += 1;
+        } else {
+            return Some((word.to_ascii_lowercase(), &args[i + 1..]));
+        }
+    }
+    None
+}
+
+/// The edit-in-place flag of `sed`, `perl` and `ruby`: `-i`, `-i.bak`,
+/// `--in-place`, or a short cluster such as `-pi` or `-Ei`. Case matters:
+/// perl's `-I` adds an include path.
+fn in_place(word: &str) -> bool {
+    if word == "--in-place" || word.starts_with("--in-place=") {
+        return true;
+    }
+    word.strip_prefix('-')
+        .filter(|flags| !flags.starts_with('-'))
+        .is_some_and(|flags| {
+            let letters: String = flags
+                .chars()
+                .take_while(char::is_ascii_alphabetic)
+                .collect();
+            letters.len() <= 3 && letters.contains('i')
+        })
+}
+
+/// `command` with each here-document's body left out: the lines after a
+/// line that opens one (`<<EOF`, `<<-'EOF'`), up to its closing word.
+fn without_heredoc_bodies(command: &str) -> String {
+    let mut kept = String::new();
+    let mut lines = command.lines();
+    while let Some(line) = lines.next() {
+        kept.push_str(line);
+        kept.push('\n');
+        for delimiter in heredoc_delimiters(line) {
+            for body in lines.by_ref() {
+                if body.trim() == delimiter {
+                    break;
+                }
+            }
+        }
+    }
+    kept
+}
+
+/// The closing words of the here-documents `line` opens, in order. A `<<<`
+/// here-string and a shift (`$((1<<2))`) open none.
+fn heredoc_delimiters(line: &str) -> Vec<String> {
+    line.match_indices("<<")
+        .filter(|(at, _)| !line[..*at].ends_with('<') && !line[at + 2..].starts_with('<'))
+        .filter_map(|(at, _)| {
+            let rest = line[at + 2..]
+                .trim_start_matches('-')
+                .trim_start()
+                .trim_start_matches(['\'', '"']);
+            let word: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            (!word.is_empty() && !word.chars().all(|c| c.is_ascii_digit())).then_some(word)
+        })
+        .collect()
+}
+
+/// Each command of `command` as its words outside quotes, in order. A new
+/// command starts after `;`, `|`, `&`, a newline, a paren, a brace or a
+/// backtick. Quoted text and a comment make no word.
+fn commands(command: &str) -> Vec<Vec<&str>> {
+    let mut out = Vec::new();
+    let mut words = Vec::new();
+    let mut start = None;
+    let mut quote = None;
+    let mut comment = false;
+    for (i, c) in command.char_indices() {
+        if comment && c != '\n' {
+            continue;
+        }
+        comment = false;
+        if let Some(open) = quote {
+            if c == open {
+                quote = None;
+            }
+            continue;
+        }
+        let splits = matches!(c, ';' | '|' | '&' | '(' | ')' | '{' | '}' | '`' | '\n');
+        if c.is_whitespace() || splits || matches!(c, '\'' | '"') {
+            if let Some(at) = start.take() {
+                words.push(&command[at..i]);
+            }
+            if matches!(c, '\'' | '"') {
+                quote = Some(c);
+            } else if splits && !words.is_empty() {
+                out.push(std::mem::take(&mut words));
+            }
+        } else if c == '#' && start.is_none() {
+            comment = true;
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(at) = start {
+        words.push(&command[at..]);
+    }
+    if !words.is_empty() {
+        out.push(words);
+    }
+    out
 }
 
 /// Snapshot workspace files referenced by a potentially mutating shell command
@@ -725,5 +1010,123 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"original content");
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn powershell_writers_and_any_case_get_a_snapshot() {
+        assert!(is_potentially_mutating_shell("Set-Content a.txt x"));
+        assert!(is_potentially_mutating_shell(
+            "(Get-Content a.rs) -replace 'a','b' | Set-Content a.rs"
+        ));
+        assert!(is_potentially_mutating_shell("Remove-Item -Recurse build"));
+        assert!(is_potentially_mutating_shell("RM -f notes.txt"));
+        // Windows PowerShell 5.1's short names.
+        assert!(is_potentially_mutating_shell("del a.txt"));
+        assert!(is_potentially_mutating_shell("copy a b"));
+        assert!(is_potentially_mutating_shell("Clear-Content a.txt"));
+        assert!(is_potentially_mutating_shell("Tee-Object -FilePath a.txt"));
+        assert!(!is_potentially_mutating_shell("Get-Content a.txt"));
+        assert!(!is_potentially_mutating_shell("git status"));
+        // Still as wide as before: an interpreter, or any `>`.
+        assert!(is_potentially_mutating_shell("python -m pytest"));
+        assert!(is_potentially_mutating_shell("cargo test 2>&1 | tail -5"));
+    }
+
+    #[test]
+    fn only_a_command_that_clearly_writes_changes_files() {
+        for cmd in [
+            "echo v1 > a.txt",
+            "cat a >> log.txt",
+            "sed -i s/a/b/ a.rs",
+            "sed -i.bak 's/a/b/' a.rs",
+            "perl -pi -e 's/a/b/' a.rs",
+            "ruby -i -pe 'sub(/a/, \"b\")' a.txt",
+            "printf x | tee a.txt",
+            "rm -f a.txt",
+            "/bin/cp a b",
+            "sudo rm -rf build",
+            "FOO=1 timeout 10 touch a.txt",
+            "find . -name '*.tmp' -delete",
+            "find . -name '*.tmp' -exec rm {} \\;",
+            "cargo test && git checkout -- a.rs",
+            "git -C sub reset --hard",
+            "Set-Content a.txt v1",
+            "(Get-Content a.rs) -replace 'a','b' | Set-Content a.rs",
+            "Get-ChildItem *.tmp | Remove-Item",
+            "New-Item -ItemType File a.txt",
+            "Rename-Item a.txt b.txt",
+            // Subcommands that change the tree or the project's files.
+            "git stash",
+            "git stash pop",
+            "git switch other",
+            "git pull",
+            "git merge x",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git revert HEAD",
+            "git am fix.patch",
+            "cargo add serde",
+            "cargo fmt",
+            "cargo fix --allow-dirty",
+            "npm install x",
+            "pnpm add x",
+            "yarn remove x",
+            "pip install x",
+            "mkdir d",
+            "rustfmt src/a.rs",
+            "prettier --write .",
+            // A command after a shell keyword.
+            "for f in src/*.rs; do sed -i 's/old/new/' \"$f\"; done",
+            "if true; then rm a.txt; fi",
+            "while read f; do rm \"$f\"; done",
+            "if test -f a.txt; then echo ok; else touch a.txt; fi",
+            // PowerShell 5.1's short names and the rest of its writers.
+            "del src\\old.rs",
+            "erase a.txt",
+            "copy a.rs.bak a.rs",
+            "move a b",
+            "ren a b",
+            "ri a.txt",
+            "ni a.txt",
+            "ac a.txt x",
+            "Tee-Object -FilePath a.txt",
+            "Clear-Content a.txt",
+        ] {
+            assert!(changes_files(cmd), "{cmd}");
+            assert!(is_potentially_mutating_shell(cmd), "{cmd}");
+        }
+        for cmd in [
+            "cargo test 2>&1 | tail -5",
+            "cargo build > /dev/null 2>&1",
+            "npm test *> $null",
+            "python -m pytest",
+            "node test.js",
+            "bash -c 'rm a.txt'",
+            "sed -n 1,20p a.rs",
+            "cat a.rs | sed -n p; grep -i main a.rs",
+            "perl -I lib -e 'print 1'",
+            "grep -rn \"rm\" src",
+            "ls cp",
+            "echo rm a.txt",
+            "git log --oneline -- reset.rs",
+            "git status",
+            "find . -name '*.rs'",
+            "# rm a.txt\necho ok",
+            "cat <<EOF\nrm a.txt\nEOF\necho ok",
+            "Get-Content a.txt",
+            "git stash list",
+            "git stash show -p",
+            "cargo fmt --check",
+            "cargo fmt -- --check",
+            "rustfmt --check src/a.rs",
+            "cargo build",
+            "npm test",
+            "pip list",
+            "prettier --check .",
+            "for f in src/*.rs; do cat \"$f\"; done",
+            "if test -f a.txt; then echo yes; fi",
+        ] {
+            assert!(!changes_files(cmd), "{cmd}");
+        }
     }
 }
