@@ -5701,6 +5701,37 @@ async fn install_skills_hub(
     .await?
 }
 
+/// Curated Skills Library catalog and packs (Everyday Life Pack, categories, install state).
+#[tauri::command]
+async fn get_skill_library(state: State<'_, ShellState>) -> Result<skills::LibraryPage, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::library(&dir, &workspace, home.as_deref())).await
+}
+
+/// Install a single skill from the curated Skills Library through the 959 scanner. Desktop only.
+#[tauri::command]
+async fn install_library_skill(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<skills::LibraryInstall, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::install_library_item(&dir, &workspace, home.as_deref(), &id)).await?
+}
+
+/// Install an entire curated skill pack (e.g. Everyday Life Pack). Desktop only.
+#[tauri::command]
+async fn install_library_pack(
+    state: State<'_, ShellState>,
+    pack_id: String,
+) -> Result<skills::LibraryInstall, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    let home = grokhub_core::user_home();
+    off_main(move || skills::install_library_pack(&dir, &workspace, home.as_deref(), &pack_id))
+        .await?
+}
+
 #[tauri::command]
 async fn get_library() -> Result<library::Page, String> {
     capabilities::needs(capabilities::current().library, "Library")?;
@@ -9922,6 +9953,9 @@ pub fn run() {
             edit_skill,
             search_skills_hub,
             install_skills_hub,
+            get_skill_library,
+            install_library_skill,
+            install_library_pack,
             get_learned,
             learned_act,
             learned_say,

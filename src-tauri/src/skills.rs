@@ -7,6 +7,7 @@
 //! path both apps share (`grokhub_agent::skill_write`), and a skill's
 //! verify script never runs from here.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -54,6 +55,12 @@ pub struct Row {
     /// Present when the static SKILL.md scanner quarantined this skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantined: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pack: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -92,6 +99,7 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
             continue;
         }
         let skill = grokhub_core::parse_skill_md(&raw);
+        let meta = grokhub_core::parse_skill_meta(&raw);
         let name = skill.name.trim().to_string();
         if name.is_empty() {
             continue;
@@ -108,6 +116,9 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
         let row = Row {
             on: quarantined.is_none() && !grokhub_agent::skill_is_off_in(&skills_dir, &name),
             quarantined,
+            category: meta.category,
+            tags: meta.tags,
+            pack: meta.pack,
             description: skill.description.trim().to_string(),
             trigger,
             source: Source::Cabin,
@@ -158,12 +169,18 @@ fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row,
         let source = Source::of(skill.source);
         let dir = (source != Source::Builtin).then_some(skill.dir.clone());
         let quarantined = grokhub_agent::skill_quarantine_in(&skills_dir, &skill);
+        let meta = read_capped(&skill.path)
+            .map(|raw| grokhub_core::parse_skill_meta(&raw))
+            .unwrap_or_default();
         out.push((
             Row {
                 on: quarantined.is_none()
                     && (source == Source::Builtin
                         || !grokhub_agent::skill_is_off_in(&skills_dir, &skill.name)),
                 quarantined,
+                category: meta.category,
+                tags: meta.tags,
+                pack: meta.pack,
                 trigger: by_name(&skill.name),
                 description: skill.description,
                 source,
@@ -355,6 +372,185 @@ pub fn hub_install(
     };
     Ok(HubInstall {
         page: load(config_dir, workspace, home),
+        note,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPack {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub total: usize,
+    pub installed: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryItem {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub pack: String,
+    pub trigger: String,
+    pub instructions: String,
+    pub pitfalls: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPage {
+    pub packs: Vec<LibraryPack>,
+    pub categories: Vec<String>,
+    pub items: Vec<LibraryItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryInstall {
+    pub page: Page,
+    pub library: LibraryPage,
+    pub note: String,
+}
+
+fn installed_skill_keys(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+) -> BTreeSet<String> {
+    load(config_dir, workspace, home)
+        .rows
+        .into_iter()
+        .map(|row| grokhub_agent::skill_name_key(&row.name))
+        .collect()
+}
+
+fn is_library_skill_installed(
+    skills_dir: &Path,
+    installed_keys: &BTreeSet<String>,
+    item: &grokhub_core::LibrarySkill,
+) -> bool {
+    installed_keys.contains(&grokhub_agent::skill_name_key(item.name))
+        || installed_keys.contains(&grokhub_agent::skill_name_key(item.id))
+        || skills_dir.join(item.id).join("SKILL.md").is_file()
+}
+
+/// Curated Skills Library catalog with categories, packs, and live install state.
+pub fn library(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> LibraryPage {
+    let skills_dir = config_dir.join("skills");
+    let installed_keys = installed_skill_keys(config_dir, workspace, home);
+    let mut categories = BTreeSet::new();
+    let mut items = Vec::with_capacity(grokhub_core::library_skills().len());
+    for skill in grokhub_core::library_skills() {
+        categories.insert(skill.category.to_string());
+        let installed = is_library_skill_installed(&skills_dir, &installed_keys, skill);
+        items.push(LibraryItem {
+            id: skill.id.to_string(),
+            name: skill.name.to_string(),
+            description: skill.description.to_string(),
+            category: skill.category.to_string(),
+            tags: skill.tags.iter().map(|t| (*t).to_string()).collect(),
+            pack: skill.pack.to_string(),
+            trigger: skill.trigger.to_string(),
+            instructions: skill.instructions.to_string(),
+            pitfalls: skill.pitfalls.to_string(),
+            installed,
+        });
+    }
+    let packs = grokhub_core::library_packs()
+        .iter()
+        .map(|pack| {
+            let pack_items: Vec<&LibraryItem> =
+                items.iter().filter(|i| i.pack == pack.id).collect();
+            let installed = pack_items.iter().filter(|i| i.installed).count();
+            LibraryPack {
+                id: pack.id.to_string(),
+                name: pack.name.to_string(),
+                description: pack.description.to_string(),
+                category: pack.category.to_string(),
+                total: pack_items.len(),
+                installed,
+            }
+        })
+        .collect();
+    LibraryPage {
+        packs,
+        categories: categories.into_iter().collect(),
+        items,
+    }
+}
+
+/// Install a single skill from the curated Skills Library through the same
+/// safety check and ChangeLedger as user-created and hub-installed skills.
+pub fn install_library_item(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    id: &str,
+) -> Result<LibraryInstall, String> {
+    let item = grokhub_core::library_skill_by_id(id)
+        .ok_or_else(|| format!("Unknown library skill `{id}`"))?;
+    let skills_dir = config_dir.join("skills");
+    grokhub_agent::harness::record_skill_change(
+        config_dir,
+        &skills_dir,
+        item.id,
+        grokhub_agent::harness::Origin::User,
+        "installed from Skills Library",
+        || grokhub_core::install_library_skill(&skills_dir, item).map(|_| ()),
+    )?;
+    grokhub_agent::invalidate_discover_cache();
+    Ok(LibraryInstall {
+        page: load(config_dir, workspace, home),
+        library: library(config_dir, workspace, home),
+        note: format!("Installed {}. Chat can use it.", item.name),
+    })
+}
+
+/// Install every not-yet-installed skill in a curated pack (e.g. Everyday Life Pack).
+pub fn install_library_pack(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    pack_id: &str,
+) -> Result<LibraryInstall, String> {
+    let pack = grokhub_core::library_pack_by_id(pack_id)
+        .ok_or_else(|| format!("Unknown skill pack `{pack_id}`"))?;
+    let skills_dir = config_dir.join("skills");
+    let existing = installed_skill_keys(config_dir, workspace, home);
+    let mut added = 0usize;
+    let reason = format!("installed {} pack from Skills Library", pack.name);
+    for item in grokhub_core::library_skills()
+        .iter()
+        .filter(|s| s.pack.eq_ignore_ascii_case(pack.id))
+    {
+        if is_library_skill_installed(&skills_dir, &existing, item) {
+            continue;
+        }
+        grokhub_agent::harness::record_skill_change(
+            config_dir,
+            &skills_dir,
+            item.id,
+            grokhub_agent::harness::Origin::User,
+            &reason,
+            || grokhub_core::install_library_skill(&skills_dir, item).map(|_| ()),
+        )?;
+        added += 1;
+    }
+    grokhub_agent::invalidate_discover_cache();
+    let note = if added == 0 {
+        format!("{} is already installed.", pack.name)
+    } else {
+        format!("Installed {added} skills from {}.", pack.name)
+    };
+    Ok(LibraryInstall {
+        page: load(config_dir, workspace, home),
+        library: library(config_dir, workspace, home),
         note,
     })
 }
@@ -827,5 +1023,56 @@ mod tests {
 
         let err = set_on(&cfg, &ws, Some(&home), "sneaky", true).unwrap_err();
         assert!(err.contains("is quarantined"), "{err}");
+    }
+
+    #[test]
+    fn skills_library_lists_and_installs_everyday_life_pack() {
+        let root = scratch("library-pack");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+
+        let initial = library(&cfg, &ws, Some(&home));
+        assert_eq!(initial.packs.len(), 1);
+        assert_eq!(initial.packs[0].id, "everyday-life");
+        assert_eq!(initial.packs[0].total, 12);
+        assert_eq!(initial.packs[0].installed, 0);
+        assert_eq!(initial.items.len(), 12);
+        assert_eq!(initial.categories.len(), 6);
+        assert!(initial.items.iter().all(|item| !item.installed));
+
+        let single =
+            install_library_item(&cfg, &ws, Some(&home), "weekly-meal-plan").expect("install one");
+        assert_eq!(single.note, "Installed Weekly Meal Plan. Chat can use it.");
+        assert_eq!(single.library.packs[0].installed, 1);
+        let installed_row = find(&single.page, "Weekly Meal Plan");
+        assert_eq!(installed_row.source, Source::Cabin);
+        assert_eq!(installed_row.category, "Home & Meals");
+        assert_eq!(installed_row.pack, "everyday-life");
+        assert!(installed_row.on);
+        assert_eq!(installed_row.quarantined, None);
+
+        let pack =
+            install_library_pack(&cfg, &ws, Some(&home), "everyday-life").expect("install pack");
+        assert_eq!(pack.note, "Installed 11 skills from Everyday Life Pack.");
+        assert_eq!(pack.library.packs[0].installed, 12);
+        assert!(pack.library.items.iter().all(|item| item.installed));
+        assert_eq!(
+            pack.page
+                .rows
+                .iter()
+                .filter(|r| r.pack == "everyday-life")
+                .count(),
+            12
+        );
+
+        let lock = grokhub_core::load_skill_lock(&cfg.join("skills"));
+        assert!(lock.entries.len() >= 12);
+        assert!(lock.entries.values().all(|e| !e.quarantined));
+
+        let again =
+            install_library_pack(&cfg, &ws, Some(&home), "everyday-life").expect("idempotent");
+        assert_eq!(again.note, "Everyday Life Pack is already installed.");
+        assert!(install_library_item(&cfg, &ws, Some(&home), "no-such-skill").is_err());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

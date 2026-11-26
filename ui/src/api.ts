@@ -4108,6 +4108,44 @@ export interface SkillRow {
   folder: string;
   /** False when it's switched off: it stays listed but chat won't use it. */
   on: boolean;
+  quarantined?: string;
+  category?: string;
+  tags?: string[];
+  pack?: string;
+}
+
+export interface SkillLibraryPack {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  total: number;
+  installed: number;
+}
+
+export interface SkillLibraryItem {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  tags: string[];
+  pack: string;
+  trigger: string;
+  instructions: string;
+  pitfalls: string;
+  installed: boolean;
+}
+
+export interface SkillLibraryPage {
+  packs: SkillLibraryPack[];
+  categories: string[];
+  items: SkillLibraryItem[];
+}
+
+export interface SkillLibraryInstall {
+  page: SkillPage;
+  library: SkillLibraryPage;
+  note: string;
 }
 
 export interface SkillPage {
@@ -4183,6 +4221,20 @@ export function installSkillsHub(hit: SkillsHubHit): Promise<SkillsHubInstall> {
     name: hit.name,
     description: hit.description,
   });
+}
+
+export function getSkillLibrary(): Promise<SkillLibraryPage> {
+  return invoke<SkillLibraryPage>("get_skill_library");
+}
+
+export function installLibrarySkill(id: string): Promise<SkillLibraryInstall> {
+  return invoke<SkillLibraryInstall>("install_library_skill", { id });
+}
+
+export function installLibraryPack(
+  packId: string,
+): Promise<SkillLibraryInstall> {
+  return invoke<SkillLibraryInstall>("install_library_pack", { packId });
 }
 
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
