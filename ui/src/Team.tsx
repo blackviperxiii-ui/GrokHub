@@ -17,6 +17,7 @@ import {
   type PairedComputer,
   type TeamPage,
 } from "./teamApi";
+import { ago } from "./Devices";
 import { ConfirmRow, PageHead, StatusLine, useNote } from "./ui";
 
 export const KINDS: { kind: AgentKind; label: string; hint: string }[] = [
@@ -56,6 +57,7 @@ export const KEPT_FOLDER =
 export const SHARE_LEGEND = "Paired computers that can message it";
 export const NO_COMPUTERS = "No computer is paired yet. Pair one in Devices, under Share.";
 export const GONE_COMPUTER = "A computer that's no longer paired";
+export const SHARE_PAUSED = "Sharing is paused, so no computer can message it until you tick one.";
 
 const POLL_MS = 5000;
 const kindLabel = (kind: AgentKind) => KINDS.find((k) => k.kind === kind)?.label ?? kind;
@@ -63,9 +65,24 @@ const kindLabel = (kind: AgentKind) => KINDS.find((k) => k.kind === kind)?.label
 /** The paired computers that may message the agent now. */
 const sharedWith = (a: AgentProfile) => (a.share ? (a.share_with ?? []) : []);
 
+/** Shared, with computers listed, but switched off in the file. */
+const paused = (a: AgentProfile) => !a.share && (a.share_with?.length ?? 0) > 0;
+
 function sharedLabel(a: AgentProfile): string {
   const n = sharedWith(a).length;
+  if (paused(a)) return " · sharing paused";
   return n === 0 ? "" : ` · shared with ${n} computer${n === 1 ? "" : "s"}`;
+}
+
+/** The end of a device id, to tell two rows apart. */
+const idTail = (id: string) => (id.length > 6 ? `…${id.slice(-6)}` : id);
+
+/** A paired computer's row: its name, when it last called, and the end of
+ * its id when another paired computer has the same name. */
+function computerLabel(c: PairedComputer, all: PairedComputer[], now: number): string {
+  const seen = c.lastSeen > 0 ? `Last used ${ago(c.lastSeen, now)}` : "Paired, not used yet";
+  const twin = all.some((o) => o.id !== c.id && o.name === c.name);
+  return `${c.name} · ${seen}${twin ? ` · ${idTail(c.id)}` : ""}`;
 }
 
 /** A file id from a name: lowercase letters, digits and dashes, at most 40
@@ -447,6 +464,8 @@ function AgentForm({
   const [p, setP] = useState(draft.profile);
   // Null until read, and where there's no hub to share from (a phone).
   const [computers, setComputers] = useState<PairedComputer[] | null>(null);
+  // When the list was read, for its "Last used" lines.
+  const [readAt, setReadAt] = useState(0);
   const set = (patch: Partial<AgentProfile>) => setP((now) => ({ ...now, ...patch }));
   const customer = p.kind === "customer";
   const others = page.agents.filter((a) => a.id !== p.id);
@@ -459,8 +478,10 @@ function AgentForm({
   useEffect(() => {
     let live = true;
     pairedComputers().then(
-      (now) => {
-        if (live) setComputers(now);
+      (list) => {
+        if (!live) return;
+        setComputers(list);
+        setReadAt(Date.now());
       },
       () => {
         if (live) setComputers(null);
@@ -555,6 +576,7 @@ function AgentForm({
         <fieldset>
           <legend>{SHARE_LEGEND}</legend>
           {computers.length === 0 && gone.length === 0 && <p className="empty">{NO_COMPUTERS}</p>}
+          {paused(p) && <p className="team-about">{SHARE_PAUSED}</p>}
           {computers.map((c) => (
             <label key={c.id} className="team-check">
               <input
@@ -562,13 +584,13 @@ function AgentForm({
                 checked={picked.includes(c.id)}
                 onChange={(e) => pick(c.id, e.target.checked)}
               />
-              {c.name}
+              {computerLabel(c, computers, readAt)}
             </label>
           ))}
-          {gone.map((id, i) => (
+          {gone.map((id) => (
             <label key={id} className="team-check">
               <input type="checkbox" checked onChange={(e) => pick(id, e.target.checked)} />
-              {gone.length > 1 ? `${GONE_COMPUTER} (${i + 1})` : GONE_COMPUTER}
+              {`${GONE_COMPUTER} · ${idTail(id)}`}
             </label>
           ))}
         </fieldset>

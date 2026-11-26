@@ -1102,7 +1102,7 @@ async function peerDoor(s, config) {
   await typeInto(s, await find(s, `${form} textarea`), "Answers when the garden shop is open.");
   await press(
     "the paired computer in the share list",
-    `//form[@aria-label='New role']//fieldset[legend[normalize-space()='Paired computers that can message it']]//label[normalize-space()='${PEER_PC_NAME}']/input`,
+    `//form[@aria-label='New role']//fieldset[legend[normalize-space()='Paired computers that can message it']]//label[starts-with(normalize-space(), '${PEER_PC_NAME} · ')]/input`,
   );
   await shot(s, "team-share-list");
   await click(s, `${form} button[type='submit']`);

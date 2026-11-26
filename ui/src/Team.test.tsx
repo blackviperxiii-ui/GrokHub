@@ -24,6 +24,7 @@ import {
   KEPT_FOLDER,
   NO_COMPUTERS,
   SHARE_LEGEND,
+  SHARE_PAUSED,
   Team,
   TASKS_EMPTY,
 } from "./Team";
@@ -66,6 +67,8 @@ beforeEach(() => {
 
 const LAPTOP: PairedComputer = { id: "laptop-1", name: "Laptop", lastSeen: 0 };
 const TABLET: PairedComputer = { id: "tablet-2", name: "Tablet", lastSeen: 0 };
+const LAPTOP_ROW = "Laptop · Paired, not used yet";
+const TABLET_ROW = "Tablet · Paired, not used yet";
 
 async function editWriter() {
   await userEvent.click((await card("Writer")).getByRole("button", { name: "Edit" }));
@@ -80,8 +83,8 @@ describe("sharing an agent with paired computers", () => {
     render(<Team />);
     const form = await editWriter();
     expect(await form.findByRole("group", { name: SHARE_LEGEND })).toBeInTheDocument();
-    expect(form.getByLabelText("Tablet")).not.toBeChecked();
-    await userEvent.click(form.getByLabelText("Laptop"));
+    expect(form.getByLabelText(TABLET_ROW)).not.toBeChecked();
+    await userEvent.click(form.getByLabelText(LAPTOP_ROW));
     await userEvent.click(form.getByRole("button", { name: "Save" }));
     expect(api.saveAgent).toHaveBeenCalledWith(shared, false);
     expect(
@@ -97,8 +100,8 @@ describe("sharing an agent with paired computers", () => {
     render(<Team />);
     expect((await card("Writer")).getByText("Role · Ask first · shared with 2 computers")).toBeInTheDocument();
     const form = await editWriter();
-    await userEvent.click(await form.findByLabelText("Laptop"));
-    await userEvent.click(form.getByLabelText("Tablet"));
+    await userEvent.click(await form.findByLabelText(LAPTOP_ROW));
+    await userEvent.click(form.getByLabelText(TABLET_ROW));
     await userEvent.click(form.getByRole("button", { name: "Save" }));
     expect(api.saveAgent).toHaveBeenCalledWith({ ...shared, share: false, share_with: [] }, false);
   });
@@ -111,13 +114,46 @@ describe("sharing an agent with paired computers", () => {
     api.saveAgent.mockResolvedValue(page);
     render(<Team />);
     let form = await editWriter();
-    expect(await form.findByLabelText(GONE_COMPUTER)).toBeChecked();
+    expect(await form.findByLabelText(`${GONE_COMPUTER} · old-pc`)).toBeChecked();
     await userEvent.click(form.getByRole("button", { name: "Save" }));
     expect(api.saveAgent).toHaveBeenLastCalledWith(shared, false);
     form = await editWriter();
-    await userEvent.click(await form.findByLabelText(GONE_COMPUTER));
+    await userEvent.click(await form.findByLabelText(`${GONE_COMPUTER} · old-pc`));
     await userEvent.click(form.getByRole("button", { name: "Save" }));
     expect(api.saveAgent).toHaveBeenLastCalledWith({ ...shared, share_with: ["laptop-1"] }, false);
+  });
+
+  it("tells two computers with one name apart by when they last called and their ids", async () => {
+    const old = { id: "laptop-old-0001", name: "Laptop", lastSeen: 0 };
+    const fresh = { id: "laptop-new-0002", name: "Laptop", lastSeen: Date.now() - 5 * 60_000 };
+    api.pairedComputers.mockResolvedValue([old, fresh, TABLET]);
+    api.saveAgent.mockResolvedValue(PAGE);
+    render(<Team />);
+    const form = await editWriter();
+    expect(await form.findByLabelText("Laptop · Paired, not used yet · …d-0001")).not.toBeChecked();
+    expect(form.getByLabelText(TABLET_ROW)).not.toBeChecked();
+    await userEvent.click(form.getByLabelText("Laptop · Last used 5 min ago · …w-0002"));
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenCalledWith(
+      { ...PAGE.agents[0], share: true, share_with: ["laptop-new-0002"] },
+      false,
+    );
+  });
+
+  it("says when sharing is paused in the file, and a tick shares with just that computer", async () => {
+    const held = agent({ share: false, share_with: ["laptop-1", "tablet-2"] });
+    api.getTeam.mockResolvedValue({ ...PAGE, agents: [held], teams: [] });
+    api.pairedComputers.mockResolvedValue([LAPTOP, TABLET]);
+    api.saveAgent.mockResolvedValue(PAGE);
+    render(<Team />);
+    expect((await card("Writer")).getByText("Role · Ask first · sharing paused")).toBeInTheDocument();
+    const form = await editWriter();
+    expect(await form.findByText(SHARE_PAUSED)).toBeInTheDocument();
+    expect(form.getByLabelText(LAPTOP_ROW)).not.toBeChecked();
+    expect(form.getByLabelText(TABLET_ROW)).not.toBeChecked();
+    await userEvent.click(form.getByLabelText(LAPTOP_ROW));
+    await userEvent.click(form.getByRole("button", { name: "Save" }));
+    expect(api.saveAgent).toHaveBeenCalledWith({ ...held, share: true, share_with: ["laptop-1"] }, false);
   });
 
   it("says where to pair a computer when none is paired", async () => {
