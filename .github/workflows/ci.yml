@@ -2,9 +2,9 @@ name: CI
 
 on:
   # PRs into beta run the lean gate (changes, fmt, guards, linux; pii-guard
-  # lives in pii-guard.yml), with ui-shots only when ui/ or src-tauri/
-  # changes. Push to beta adds windows and, by paths, phone-android and
-  # shell (ubuntu + windows). PRs into main and push to main add windows,
+  # lives in pii-guard.yml), with shell-lint and ui-shots only when the shell
+  # or the UI changes. Push to beta adds windows and, by paths, phone-android
+  # and shell (ubuntu + windows). PRs into main and push to main add windows,
   # shell and deny as before; macOS jobs run on v* tags,
   # the nightly (a dispatched run on beta) and manual runs;
   # windows-release runs only on the nightly and manual runs
@@ -52,9 +52,10 @@ env:
 # PRs into beta run the lean gate: fmt, guards, changes and linux (clippy
 # and tests in two parallel jobs; tests cover only the crates the PR can
 # reach, see .github/scripts/affected_crates.py), plus ui-shots when ui/ or
-# src-tauri/ changes. Windows, phone-android and shell moved to push to
-# beta (windows always, the other two by paths), so they still run before
-# a promotion. PRs into main keep windows and path-filtered shell and
+# src-tauri/ changes and shell-lint when the shell or a crate it builds
+# changes (ui lint and tests, shell fmt and clippy, no build or smoke).
+# Windows, phone-android and shell moved to push to beta (windows always,
+# the other two by paths), so they still run before a promotion. PRs into main keep windows and path-filtered shell and
 # phone-android. Push to main adds windows,
 # deny, shell on ubuntu + windows and path-filtered phone-android. The
 # macOS jobs (cross-check, macOS shell, phone-ios) run on v* tags, nightly
@@ -101,6 +102,10 @@ jobs:
       # ui-shots: on PRs only when the UI or the shell changes.
       ui_shots: ${{ github.event_name != 'pull_request' || steps.paths.outputs.ui == 'true' }}
       shell_os: ${{ steps.shell.outputs.os }}
+      # shell-lint: PRs into beta only, when the shell matrix runs nothing.
+      # The `shell` filter lists the crates src-tauri builds, since a crate
+      # change can break the shell while the workspace clippy passes.
+      shell_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'beta' && (steps.paths.outputs.shell == 'true' || steps.paths.outputs.ci_workflow == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Source SHA
@@ -185,7 +190,8 @@ jobs:
               - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
-      # Shell matrix: PRs into beta run none; push to beta runs ubuntu +
+      # Shell matrix: PRs into beta run none (shell-lint covers lint and
+      # clippy there); push to beta runs ubuntu +
       # windows when shell/UI paths change; PRs into main run ubuntu when
       # they change. merge_group and push to main run ubuntu + windows;
       # tags, nightly and manual add macOS.
@@ -381,7 +387,7 @@ jobs:
         run: test -x target/debug/grokhub-hub && test -x target/debug/grokhub
 
   linux:
-    needs: [changes, linux-clippy, linux-tests]
+    needs: [changes, linux-clippy, linux-tests, shell-lint]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -396,6 +402,54 @@ jobs:
         run: |
           echo "linux-clippy=$CLIPPY linux-tests=$TESTS"
           test "$CLIPPY" = success && test "$TESTS" = success
+      # GitHub auto-merge waits only on required checks, so shell-lint
+      # counts here. Skipped passes only when `changes` asked for none.
+      - name: shell-lint passed or was not needed
+        env:
+          WANTED: ${{ needs.changes.outputs.shell_lint }}
+          SHELL_LINT: ${{ needs.shell-lint.result }}
+        run: |
+          echo "shell-lint wanted=$WANTED result=$SHELL_LINT"
+          if [ "$WANTED" = true ]; then test "$SHELL_LINT" = success; else test "$SHELL_LINT" = skipped; fi
+  # The shell job's lint half for PRs into beta, which run no shell job:
+  # ui lint (eslint and the CSS scale guards) and tests, shell fmt and
+  # clippy. It restores the shell job's ubuntu cache (saved on push to
+  # beta) and never saves. The shell's tests, builds and smoke stay on push.
+  shell-lint:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.code == 'true' && needs.changes.outputs.shell_lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+          shared-key: shell-ubuntu-latest
+          save-if: false
+      - name: Linux webview libraries
+        run: |
+          sudo apt-get update
+          # Ubuntu 26.04 renamed the WebKit driver package; clippy needs
+          # only the dev libraries.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: npm ci --prefix ui
+      - run: npm run lint --prefix ui
+      - run: npm test --prefix ui
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      # clippy compiles against ui/dist, so build the UI first.
+      - run: npm run build --prefix ui
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
