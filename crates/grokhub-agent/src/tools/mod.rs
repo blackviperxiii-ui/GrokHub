@@ -24,10 +24,12 @@ pub(crate) mod run_routine;
 pub(crate) mod save_routine;
 mod schema_check;
 mod search_replace;
+pub(crate) mod seen;
 mod session_search;
 pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
+pub(crate) mod spool;
 pub(crate) mod taint;
 pub(crate) mod talk;
 mod web_fetch;
@@ -259,8 +261,8 @@ pub fn dispatch_for_job(
         return output;
     }
     match name {
-        "write" => write::run(ctx.workspace, &args),
-        "search_replace" => search_replace::run(ctx.workspace, &args),
+        "write" => write::run(ctx.workspace, ctx.session, &args),
+        "search_replace" => search_replace::run(ctx.workspace, ctx.session, &args),
         "run_terminal_command" => run_shell(ctx, &args),
         "kill_command_or_subagent" => control::kill(ctx.tasks.as_ref(), &args),
         control::MERGE_WORK => control::merge(ctx, &args),
@@ -315,15 +317,15 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
         // Where background tasks are on, a command that outlives its timeout
         // keeps running as one instead of being killed.
         let Some(tasks) = ctx.tasks.as_ref() else {
-            return shell::run(ctx.workspace, args, ctx.stop);
+            return shell::run_adoptable(ctx.workspace, ctx.session, args, ctx.stop, None);
         };
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut adopt = |proc, guard| tasks.adopt(proc, &command, ctx.owner, guard);
-        return shell::run_adoptable(ctx.workspace, args, ctx.stop, Some(&mut adopt));
+        let mut adopt = |proc, guard| tasks.adopt(proc, ctx.workspace, &command, ctx.owner, guard);
+        return shell::run_adoptable(ctx.workspace, ctx.session, args, ctx.stop, Some(&mut adopt));
     }
     let Some(tasks) = ctx.tasks.as_ref() else {
         return ToolOutput::err("background tasks are not available on this run");
@@ -367,7 +369,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         return show_panel::run(args);
     }
     match name {
-        "read_file" => read_file::run(ctx.workspace, args),
+        "read_file" => read_file::run(ctx.workspace, ctx.session, args),
         "list_dir" => list_dir::run(ctx.workspace, args),
         // A scratch chat's search skips every MEMORY.md.
         "grep" if ctx.session.is_some_and(crate::scratch::is_scratch) => {

@@ -2062,3 +2062,172 @@ fn a_rendered_command_reads_back_as_the_same_words() {
         "npm test"
     );
 }
+
+/// The file a long shell output's cut marker names, as the model reads it.
+#[cfg(unix)]
+fn marker_path(output: &str) -> Option<String> {
+    let rest = output.split("The whole output is in `").nth(1)?;
+    rest.split('`').next().map(str::to_string)
+}
+
+/// The cut marker of a long shell output names a file in the config folder:
+/// the gate lets `read_file` read it from that workspace only.
+#[test]
+fn the_gate_lets_read_file_reach_a_saved_output_of_its_own_workspace_only() {
+    let root = ws_file("spool-gate");
+    let cfg = root.join("cfg");
+    let _guard = ConfigGuard::set(&cfg);
+    let (ws, ws2) = (root.join("ws"), root.join("ws2"));
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::create_dir_all(&ws2).unwrap();
+    let keep = crate::tools::spool::Keep {
+        workspace: &ws,
+        session: None,
+        outside: false,
+    };
+    let saved = crate::tools::spool::save(&keep, "exit 0\nsaved").expect("saved");
+    std::fs::write(cfg.join("consent.jsonl"), "{}\n").unwrap();
+    let consent = cfg.join("consent.jsonl").display().to_string();
+    let read = |target: &str| serde_json::json!({ "target_file": target }).to_string();
+    for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
+        let decide = |workspace: &Path, target: &str| {
+            gate::decide_with(
+                &gate(mode, true),
+                "read_file",
+                &read(target),
+                false,
+                None,
+                workspace,
+                Some(&Policy::load(workspace)),
+            )
+        };
+        assert_eq!(decide(&ws, &saved), Decision::Run, "{mode:?}");
+        let escapes = Decision::Refuse("path escapes the workspace".into());
+        assert_eq!(decide(&ws2, &saved), escapes, "{mode:?}");
+        assert_eq!(decide(&ws, &consent), escapes, "{mode:?}");
+        // Only read_file reaches it.
+        let write = serde_json::json!({ "path": saved, "content": "x" }).to_string();
+        let wrote = gate::decide_with(
+            &gate(mode, true),
+            "write",
+            &write,
+            false,
+            None,
+            &ws,
+            Some(&Policy::load(&ws)),
+        );
+        assert_eq!(wrote, escapes, "{mode:?}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Runs a long command, then reads back the lines its cut marker names.
+#[cfg(unix)]
+struct ReadsTheMarker {
+    requests: AtomicUsize,
+}
+
+#[cfg(unix)]
+impl ModelClient for ReadsTheMarker {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<crate::TurnOutput, ClientError> {
+        let calls = match self.requests.fetch_add(1, Ordering::SeqCst) {
+            0 => vec![FunctionCall {
+                call_id: "s1".into(),
+                name: "run_terminal_command".into(),
+                arguments: shell("seq 1 6000"),
+            }],
+            1 => {
+                let path = req
+                    .input
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        crate::InputItem::FunctionCallOutput { output, .. } => marker_path(output),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                vec![FunctionCall {
+                    call_id: "r1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({
+                        "target_file": path, "offset": 2222, "limit": 3
+                    })
+                    .to_string(),
+                }]
+            }
+            _ => Vec::new(),
+        };
+        Ok(crate::TurnOutput {
+            calls,
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_chat_with_permission_rules_reads_back_a_long_outputs_cut_lines() {
+    let root = ws_file("spool-loop");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let _guard = ConfigGuard::set(root.join("cfg"));
+    let permits = Answer {
+        answer: crate::gate::PermAnswer::Allow,
+        asks: AtomicUsize::new(0),
+    };
+    let client = ReadsTheMarker {
+        requests: AtomicUsize::new(0),
+    };
+    let policy = Policy::load(&project);
+    let input = LoopIn {
+        client: &client,
+        workspace: &project,
+        model: "grok-4.7",
+        effort: None,
+        system: "",
+        conversation_id: "spool-loop",
+        max_turns: 4,
+        usage_base: Usage::default(),
+        cancel: &CancelToken::new(),
+        steer: &crate::SteerQueue::new(),
+        halt: &Quiet,
+        gate: gate(PermMode::Ask, true),
+        desktop: None,
+        permits: &permits,
+        perms: Some(&policy),
+        context_length: 0,
+        tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
+    };
+    let mut history = Vec::new();
+    run_loop(&input, &mut history, "count to 6000", None, &mut |_| {});
+    let output_of = |id: &str| {
+        history.iter().find_map(|item| match item {
+            crate::InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                Some(output.clone())
+            }
+            _ => None,
+        })
+    };
+    let shell_out = output_of("s1").expect("the command ran");
+    assert!(
+        shell_out.contains("(output truncated: lines 2222-4001 of 6001 are cut."),
+        "{}",
+        &shell_out[..shell_out.len().min(200)]
+    );
+    assert!(marker_path(&shell_out).is_some(), "the marker names a file");
+    assert_eq!(
+        output_of("r1").as_deref(),
+        Some("2222|2221\n2223|2222\n2224|2223\n")
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

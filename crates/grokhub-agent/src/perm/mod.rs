@@ -119,7 +119,7 @@ pub fn govern(
     let paths = collect_paths(name, arguments);
     if paths
         .iter()
-        .any(|path| matchers::path_escapes(workspace, path))
+        .any(|path| matchers::path_escapes(workspace, path) && !saved_output(name, workspace, path))
     {
         return Decision::Refuse("path escapes the workspace".into());
     }
@@ -449,6 +449,13 @@ fn tool_kind(name: &str) -> Option<Tool> {
 fn sandbox_holds(name: &str, arguments: &str, workspace: &Path) -> bool {
     serde_json::from_str::<serde_json::Value>(arguments)
         .is_ok_and(|args| crate::sandbox::auto_allows(&config_dir(), name, &args, workspace))
+}
+
+/// A long shell output this workspace's command saved in the config folder:
+/// the only path outside the workspace `read_file` reads, the one its cut
+/// marker names (`tools::spool::find`).
+fn saved_output(name: &str, workspace: &Path, path: &str) -> bool {
+    name == "read_file" && crate::tools::spool::find(workspace, path).is_some()
 }
 
 fn command_arg(arguments: &str) -> Option<String> {

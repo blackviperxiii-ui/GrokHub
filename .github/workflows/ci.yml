@@ -2,9 +2,9 @@ name: CI
 
 on:
   # PRs into beta run the lean gate (changes, fmt, guards, linux; pii-guard
-  # lives in pii-guard.yml), with ui-shots only when ui/ or src-tauri/
-  # changes. Push to beta adds windows and, by paths, phone-android and
-  # shell (ubuntu + windows). PRs into main and push to main add windows,
+  # lives in pii-guard.yml), with shell-lint and ui-shots only when the shell
+  # or the UI changes. Push to beta adds windows and, by paths, phone-android
+  # and shell (ubuntu + windows). PRs into main and push to main add windows,
   # shell and deny as before; macOS jobs run on v* tags,
   # the nightly (a dispatched run on beta) and manual runs;
   # windows-release runs only on the nightly and manual runs
@@ -52,12 +52,14 @@ env:
 # PRs into beta run the lean gate: fmt, guards, changes and linux (clippy
 # and tests in two parallel jobs; tests cover only the crates the PR can
 # reach, see .github/scripts/affected_crates.py), plus ui-shots when ui/ or
-# src-tauri/ changes. Windows, phone-android and shell moved to push to
-# beta (windows always, the other two by paths), so they still run before
-# a promotion. PRs into main keep windows and path-filtered shell and
-# phone-android. Push to main adds windows,
-# deny, shell on ubuntu + windows and path-filtered phone-android. The
-# macOS jobs (cross-check, macOS shell, phone-ios) run on v* tags, nightly
+# src-tauri/ changes and shell-lint when the shell or a crate it builds
+# changes (ui lint, tests and build, shell fmt and clippy; no shell build,
+# tests or smoke).
+# Windows, phone-android and shell moved to push to beta (windows always,
+# the other two by paths), so they still run before a promotion. PRs into
+# main keep windows and path-filtered shell and phone-android. Push to main
+# adds windows, deny, shell on ubuntu + windows and path-filtered
+# phone-android. The macOS jobs (cross-check, macOS shell, phone-ios) run on v* tags, nightly
 # (on beta) and manual runs; windows-release only on nightly and manual.
 # Every gate is a job-level `if:`, never a workflow-level path filter, so a
 # skipped job still reports and required checks never hang. Each job
@@ -101,6 +103,11 @@ jobs:
       # ui-shots: on PRs only when the UI or the shell changes.
       ui_shots: ${{ github.event_name != 'pull_request' || steps.paths.outputs.ui == 'true' }}
       shell_os: ${{ steps.shell.outputs.os }}
+      # shell-lint: PRs into beta only, when the shell matrix runs nothing.
+      # The `shell` filter lists the crates src-tauri builds, since a crate
+      # change can break the shell while the workspace clippy passes, and
+      # ci.yml, so a change to this file runs it.
+      shell_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'beta' && steps.paths.outputs.shell == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Source SHA
@@ -169,10 +176,18 @@ jobs:
             ui:
               - 'ui/**'
               - 'src-tauri/**'
+              - 'brand/**'
               - '.github/workflows/ci.yml'
+            # brand/ art is imported by the UI; the root Rust config files
+            # also govern src-tauri, which has none of its own.
             shell:
               - 'ui/**'
               - 'src-tauri/**'
+              - 'brand/**'
+              - 'clippy.toml'
+              - 'rustfmt.toml'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
               - 'crates/grokhub-core/**'
               - 'crates/grokhub-agent/**'
               - 'crates/grokhub-code/**'
@@ -185,7 +200,8 @@ jobs:
               - 'scripts/stage-hub-sidecar.mjs'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
-      # Shell matrix: PRs into beta run none; push to beta runs ubuntu +
+      # Shell matrix: PRs into beta run none (shell-lint covers lint and
+      # clippy there); push to beta runs ubuntu +
       # windows when shell/UI paths change; PRs into main run ubuntu when
       # they change. merge_group and push to main run ubuntu + windows;
       # tags, nightly and manual add macOS.
@@ -291,7 +307,8 @@ jobs:
 
   # Clippy and tests run side by side in two jobs, each with its own cache,
   # so the gate waits for the slower of the two instead of their sum.
-  # `linux` is the required check: it fails unless both passed. A required
+  # `linux` is the required check: it fails unless both passed, and unless
+  # shell-lint passed when `changes` asked for it. A required
   # check that is skipped counts as passed, so when `changes` does not
   # succeed it still runs and fails in its first step.
   linux-clippy:
@@ -381,7 +398,7 @@ jobs:
         run: test -x target/debug/grokhub-hub && test -x target/debug/grokhub
 
   linux:
-    needs: [changes, linux-clippy, linux-tests]
+    needs: [changes, linux-clippy, linux-tests, shell-lint]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -396,6 +413,54 @@ jobs:
         run: |
           echo "linux-clippy=$CLIPPY linux-tests=$TESTS"
           test "$CLIPPY" = success && test "$TESTS" = success
+      # GitHub auto-merge waits only on required checks, so shell-lint
+      # counts here. Skipped passes only when `changes` asked for none.
+      - name: shell-lint passed or was not needed
+        env:
+          WANTED: ${{ needs.changes.outputs.shell_lint }}
+          SHELL_LINT: ${{ needs.shell-lint.result }}
+        run: |
+          echo "shell-lint wanted=$WANTED result=$SHELL_LINT"
+          if [ "$WANTED" = true ]; then test "$SHELL_LINT" = success; else test "$SHELL_LINT" = skipped; fi
+  # The shell job's lint half for PRs into beta, which run no shell job:
+  # ui eslint, vitest (the CSS scale guards are tests) and the UI build,
+  # shell fmt and clippy. It restores the shell job's ubuntu cache (saved on push to
+  # beta) and never saves. The shell's tests, builds and smoke stay on push.
+  shell-lint:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.code == 'true' && needs.changes.outputs.shell_lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+          shared-key: shell-ubuntu-latest
+          save-if: false
+      - name: Linux webview libraries
+        run: |
+          sudo apt-get update
+          # Ubuntu 26.04 renamed the WebKit driver package; clippy needs
+          # only the dev libraries.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: npm ci --prefix ui
+      - run: npm run lint --prefix ui
+      - run: npm test --prefix ui
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      # clippy compiles against ui/dist, so build the UI first.
+      - run: npm run build --prefix ui
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
   # Supply chain: known advisories (RustSec), licenses, wildcard deps and
   # crate sources, per deny.toml.
   deny:
@@ -510,8 +575,10 @@ jobs:
       # Beta Windows builds the hub sidecar from the same dev artifacts the
       # `windows-parts` job caches (shared-key windows-test). That cache also
       # holds the workspace cargo home, so park the shell's cargo home first
-      # and put it back before src-tauri compiles. save-if false: this job
-      # must not overwrite the workspace test cache with a hub-only target.
+      # and put it back before src-tauri compiles. The rename takes rustup off
+      # PATH, so the parked bin goes back on PATH for the restore (`rustc -vV`)
+      # and the sidecar stage. save-if false: this job must not overwrite the
+      # workspace test cache with a hub-only target.
       - name: Park the shell toolchain home
         if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
         shell: pwsh
@@ -520,6 +587,7 @@ jobs:
           $backup = Join-Path $env:USERPROFILE '.cargo-shell'
           if (Test-Path $backup) { Remove-Item -Recurse -Force $backup }
           Rename-Item $cargo $backup
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $backup 'bin')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
         with:
