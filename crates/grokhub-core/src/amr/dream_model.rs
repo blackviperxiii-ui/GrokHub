@@ -164,11 +164,16 @@ pub fn stage_core_line(
     }
 }
 
+/// The Pulse card's source id for the morning line, so a Wipe can find the
+/// cards an earlier build posted, which quoted the line it proposed.
+pub const MORNING_CARD_SOURCE: &str = "dream-model";
+
+/// The morning line. It counts the proposals and quotes none: the line goes on
+/// a Pulse card, and a card keeps it after the proposal is paused or wiped.
 pub fn morning_text(proposed: &[String], lesson_applied: bool, threshold_log: &str) -> String {
-    let head = match proposed {
-        [] => "Proposed nothing".to_string(),
-        [one] => format!("Proposed {one}"),
-        many => format!("Proposed {}", many.len()),
+    let head = match proposed.len() {
+        0 => "Proposed nothing".to_string(),
+        n => format!("Proposed {n}"),
     };
     let lesson = if lesson_applied {
         "applied dream-lessons"
@@ -323,14 +328,14 @@ mod tests {
     }
 
     #[test]
-    fn morning_line_names_one_proposal_or_the_count() {
+    fn morning_line_counts_the_proposals_and_quotes_none() {
         assert_eq!(
             morning_text(
                 &["prefers quiet mornings".into()],
                 true,
                 "reflect_min_confidence 0.70"
             ),
-            "Proposed prefers quiet mornings. applied dream-lessons. reflect_min_confidence 0.70"
+            "Proposed 1. applied dream-lessons. reflect_min_confidence 0.70"
         );
         assert_eq!(
             morning_text(

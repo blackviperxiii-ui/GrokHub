@@ -351,6 +351,40 @@ fn quote(node: &Node, sealed: bool) -> String {
     cut
 }
 
+/// How a dream report quotes a plain node, as in its proposed USER.md lines.
+pub(super) fn report_quote(node: &Node) -> String {
+    quote(node, false)
+}
+
+/// True when a report line carries text `gone` or `proposed` points at: a
+/// Merged line that names a gone id on either side, a Retired line that
+/// names one, or a proposed USER.md line (`+- <quote>`) `proposed` holds.
+/// A quote never holds `"` (it becomes `'`), so the merged id is the first
+/// `` ", merged `id` `` after the kept one.
+fn dream_line_holds(
+    line: &str,
+    gone: &dyn Fn(&str) -> bool,
+    proposed: &dyn Fn(&str) -> bool,
+) -> bool {
+    if let Some(quoted) = line.strip_prefix("+- ") {
+        return proposed(quoted);
+    }
+    if let Some(rest) = line.strip_prefix("- Retired `") {
+        return rest.split_once('`').is_some_and(|(id, _)| gone(id));
+    }
+    let Some((kept, rest)) = line
+        .strip_prefix("- Kept `")
+        .and_then(|rest| rest.split_once('`'))
+    else {
+        return false;
+    };
+    let merged = rest
+        .split_once("\", merged `")
+        .and_then(|(_, rest)| rest.split_once('`'))
+        .map(|(id, _)| id);
+    gone(kept) || merged.is_some_and(gone)
+}
+
 /// Winner order: higher confidence, newer `updated`, lower id.
 fn rank(a: &Node, b: &Node) -> std::cmp::Ordering {
     b.confidence
@@ -421,6 +455,70 @@ impl AmrStore {
         Ok(links)
     }
 
+    /// Take every line that quotes a node `gone` names, or a proposal
+    /// `proposed` holds, out of the nightly reports (`dreams/<date>.md`; the
+    /// import and forget reports quote no text). Every other byte of a
+    /// report stays, its counts too. A linked report is left alone.
+    pub(super) fn drop_dream_lines(
+        &self,
+        gone: &dyn Fn(&str) -> bool,
+        proposed: &dyn Fn(&str) -> bool,
+    ) -> Result<(), AmrError> {
+        let io = |err: std::io::Error| AmrError::Io(err.to_string());
+        let read = match fs::read_dir(self.root().join("dreams")) {
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(io(err)),
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            let report = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_suffix(".md"))
+                .is_some_and(is_date);
+            if !report || !path.symlink_metadata().is_ok_and(|meta| meta.is_file()) {
+                continue;
+            }
+            let text = fs::read_to_string(&path).map_err(io)?;
+            let kept: String = text
+                .split_inclusive('\n')
+                .filter(|line| {
+                    !dream_line_holds(line.trim_end_matches(['\n', '\r']), gone, proposed)
+                })
+                .collect();
+            if kept != text {
+                fs::write(&path, kept).map_err(io)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Held by a dream pass from its read of the notes through its report,
+    /// and by a pause or a Wipe from its change through taking lines out of
+    /// the reports, so a report never gets a line paused or wiped while the
+    /// dream ran. A lock file (`dream.lock`) covers other processes too.
+    pub(super) fn hold_reports(&self) -> Result<fs::File, AmrError> {
+        let io = |err: std::io::Error| AmrError::Io(err.to_string());
+        fs::create_dir_all(self.root()).map_err(io)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.root().join("dream.lock"))
+            .map_err(io)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                #[cfg(test)]
+                tests::report_step(self.root(), tests::ReportStep::Waiting);
+                file.lock().map_err(io)?;
+            }
+            Err(fs::TryLockError::Error(err)) => return Err(io(err)),
+        }
+        Ok(file)
+    }
+
     /// The retention pass: tombstone every live note older than `days` with
     /// confidence below `stale_below` and no edges, the same rule as the
     /// dream's step 4, without the rest of the dream. `days == 0` keeps
@@ -487,6 +585,7 @@ impl AmrStore {
         if self.is_scratch() {
             return Err(AmrError::Scratch);
         }
+        let _held = self.hold_reports()?;
         let stamp = |days: u64| {
             crate::oauth::unix_ms_to_rfc3339(now_ms.saturating_sub(days.saturating_mul(DAY_MS)))
         };
@@ -503,6 +602,11 @@ impl AmrStore {
         // A proposed line stays in the approval queue until a person approves it.
         nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
         nodes.retain(|n| !n.tags.iter().any(|t| t == super::user_model::PROPOSED_TAG));
+        // A paused line is one the user said not to use: the dream doesn't
+        // merge, retire or quote it, so no copy of it lands in a report.
+        nodes.retain(|n| !self.is_paused(&n.id));
+        #[cfg(test)]
+        tests::report_step(self.root(), tests::ReportStep::DreamRead);
         nodes.sort_by(rank);
         let links = self.link_map()?;
         let link_of = |id: &str| links.get(id).copied().unwrap_or(Linked::None);
@@ -670,7 +774,7 @@ impl AmrStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::amr::{NodeDraft, Sealer, Sensitivity};
     use std::sync::Arc;
@@ -1373,5 +1477,350 @@ mod tests {
         let (date, text) = latest_dream(&tmp.0).unwrap();
         assert_eq!(date, "2026-10-08");
         assert!(text.starts_with("# Memory dream 2026-10-08\n"), "{text}");
+    }
+
+    /// The lines of a report that quote a node: Merged, Retired, proposed.
+    fn quoting_lines(text: &str) -> Vec<String> {
+        text.lines()
+            .filter(|l| {
+                l.starts_with("- Kept ") || l.starts_with("- Retired ") || l.starts_with("+- ")
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    const OTHER_MERGE: &str = "- Kept `other-a` \"Ferry leaves the harbor at nine\", merged `other-b` \"ferry leaves the harbor at nine.\" because 100% of their words are the same. Kept `other-a` because it is more certain (confidence 0.8 vs 0.6).";
+    const STALE_RETIRE: &str = "- Retired `stale-old` \"Maybe the dock hides on hover\" because it was unsure (confidence 0.2, below 0.3), not updated since 2026-03-01 (over 90 days), and nothing links to it.";
+
+    /// Personal's Pause: "Keep a line but stop using it". The dream doesn't
+    /// merge, retire or quote a paused line, and its live twin stays live.
+    #[test]
+    fn the_dream_leaves_a_paused_line_alone_and_quotes_none_of_it() {
+        let tmp = Tmp::new("paused");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        for draft in [
+            node(
+                "dup-a",
+                "The composer glow stays white at night",
+                0.8,
+                RECENT,
+                &["ui"],
+            ),
+            node(
+                "dup-b",
+                "the composer glow stays white at night.",
+                0.6,
+                RECENT,
+                &["ui"],
+            ),
+            node("stale-old", "Maybe the dock hides on hover", 0.2, OLD, &[]),
+        ] {
+            store.remember(&draft).unwrap();
+        }
+        store.set_paused("dup-a", true).unwrap();
+        store.set_paused("stale-old", true).unwrap();
+        let report = store.dream_once(NOW, &DreamOpts::default()).unwrap();
+        assert_eq!(
+            (report.looked_at, report.merges.len(), report.retired.len()),
+            (1, 0, 0)
+        );
+        assert_eq!(
+            (store.is_forgotten("dup-b"), store.is_forgotten("stale-old")),
+            (false, false)
+        );
+        let text = fs::read_to_string(tmp.0.join("dreams/2026-10-07.md")).unwrap();
+        assert_eq!(quoting_lines(&text), Vec::<String>::new());
+        assert!(!text.to_lowercase().contains("composer"), "{text}");
+    }
+
+    /// A line paused after a night of dreaming leaves that night's report:
+    /// the Merged line it kept and its proposed USER.md line go, other lines
+    /// stay as they were.
+    #[test]
+    fn pausing_a_line_takes_its_quotes_out_of_earlier_dream_reports() {
+        let tmp = Tmp::new("pause-scrub");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        let mut pref = node("pref-short", "I like short answers", 0.95, RECENT, &[]);
+        pref.node_type = NodeType::Preference;
+        for draft in [
+            node(
+                "dup-a",
+                "The composer glow stays white at night",
+                0.8,
+                RECENT,
+                &["ui"],
+            ),
+            node(
+                "dup-b",
+                "the composer glow stays white at night.",
+                0.6,
+                RECENT,
+                &["ui"],
+            ),
+            node(
+                "other-a",
+                "Ferry leaves the harbor at nine",
+                0.8,
+                RECENT,
+                &[],
+            ),
+            node(
+                "other-b",
+                "ferry leaves the harbor at nine.",
+                0.6,
+                RECENT,
+                &[],
+            ),
+            node("stale-old", "Maybe the dock hides on hover", 0.2, OLD, &[]),
+            pref,
+        ] {
+            store.remember(&draft).unwrap();
+        }
+        let opts = DreamOpts {
+            user_md: Some(String::new()),
+            ..DreamOpts::default()
+        };
+        store.dream_once(NOW, &opts).unwrap();
+        let path = tmp.0.join("dreams/2026-10-07.md");
+        assert_eq!(
+            quoting_lines(&fs::read_to_string(&path).unwrap()),
+            [
+                "- Kept `dup-a` \"The composer glow stays white at night\", merged `dup-b` \"the composer glow stays white at night.\" because 100% of their words are the same. Kept `dup-a` because it is more certain (confidence 0.8 vs 0.6).",
+                OTHER_MERGE,
+                STALE_RETIRE,
+                "+- I like short answers",
+            ]
+        );
+        store.set_paused("dup-a", true).unwrap();
+        store.set_paused("pref-short", true).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(quoting_lines(&text), [OTHER_MERGE, STALE_RETIRE]);
+        assert!(text.contains("- Merged: 2\n"), "the counts stay: {text}");
+        // Use it again: the report doesn't get the lines back.
+        store.set_paused("dup-a", false).unwrap();
+        assert_eq!(
+            quoting_lines(&fs::read_to_string(&path).unwrap()),
+            [OTHER_MERGE, STALE_RETIRE]
+        );
+    }
+
+    /// Where a report writer is, for a test that lines two up.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(in crate::amr) enum ReportStep {
+        /// A dream read the notes and holds the report lock.
+        DreamRead,
+        /// A wiki export read the nodes and holds the report lock.
+        WikiRead,
+        /// A pause, forget or Wipe found the report lock held and waits for it.
+        Waiting,
+    }
+
+    type StepHook = Arc<dyn Fn(ReportStep) + Send + Sync>;
+
+    /// One hook per store root, so tests side by side never see each other's.
+    static REPORT_HOOKS: std::sync::Mutex<Vec<(PathBuf, StepHook)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    pub(in crate::amr) fn report_step(root: &Path, step: ReportStep) {
+        let hook = REPORT_HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(at, _)| at == root)
+            .map(|(_, hook)| hook.clone());
+        if let Some(hook) = hook {
+            hook(step);
+        }
+    }
+
+    struct HookGuard(PathBuf);
+
+    impl Drop for HookGuard {
+        fn drop(&mut self) {
+            REPORT_HOOKS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|(at, _)| *at != self.0);
+        }
+    }
+
+    /// Runs `act` on its own thread while a dream on `root` has read the
+    /// notes and not yet written its report, then lets the dream go on.
+    /// Returns what `act` did first ("waits" when it found the report lock
+    /// held, "done" when it ran to its end), the dream's merge count, and
+    /// what `act` returned.
+    fn beside_a_dream<T: Send + 'static>(
+        root: &Path,
+        act: impl FnOnce(&AmrStore) -> T + Send + 'static,
+    ) -> (&'static str, Result<usize, AmrError>, T) {
+        beside(
+            root,
+            |store| {
+                store
+                    .dream_once(NOW, &DreamOpts::default())
+                    .map(|done| done.merges.len())
+            },
+            act,
+        )
+    }
+
+    /// Runs `act` on its own thread while `parked` on `root` (a dream or a
+    /// wiki export) has read what it writes from and not yet written, then
+    /// lets `parked` go on. Returns what `act` did first ("waits" when it
+    /// found the report lock held, "done" when it ran to its end), what
+    /// `parked` returned, and what `act` returned.
+    pub(in crate::amr) fn beside<P: Send + 'static, T: Send + 'static>(
+        root: &Path,
+        parked: impl FnOnce(&AmrStore) -> P + Send + 'static,
+        act: impl FnOnce(&AmrStore) -> T + Send + 'static,
+    ) -> (&'static str, P, T) {
+        use std::sync::{mpsc, Mutex};
+        let (event_tx, events) = mpsc::channel::<&'static str>();
+        let (go_tx, go) = mpsc::channel::<()>();
+        let hook_tx = Mutex::new(event_tx.clone());
+        let go = Mutex::new(go);
+        let hook: StepHook = Arc::new(move |step| {
+            let tx = hook_tx.lock().unwrap().clone();
+            match step {
+                ReportStep::DreamRead | ReportStep::WikiRead => {
+                    tx.send("read").unwrap();
+                    go.lock().unwrap().recv().unwrap();
+                }
+                ReportStep::Waiting => tx.send("waits").unwrap(),
+            }
+        });
+        REPORT_HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root.to_path_buf(), hook));
+        let _hook = HookGuard(root.to_path_buf());
+        let first_run = {
+            let root = root.to_path_buf();
+            std::thread::spawn(move || parked(&AmrStore::at(&root)))
+        };
+        assert_eq!(events.recv().unwrap(), "read");
+        let other = {
+            let root = root.to_path_buf();
+            std::thread::spawn(move || {
+                let out = act(&AmrStore::at(&root));
+                event_tx.send("done").unwrap();
+                out
+            })
+        };
+        // With no lock across both, `act` runs to its end right here,
+        // before `parked` has written.
+        let first = events.recv().unwrap();
+        go_tx.send(()).unwrap();
+        let parked = first_run.join().unwrap();
+        (first, parked, other.join().unwrap())
+    }
+
+    /// Two copies of a line the dream merges, quoted in its report.
+    fn remember_twins(store: &AmrStore) {
+        store.init().unwrap();
+        for draft in [
+            node(
+                "dup-a",
+                "The composer glow stays white at night",
+                0.8,
+                RECENT,
+                &["ui"],
+            ),
+            node(
+                "dup-b",
+                "the composer glow stays white at night.",
+                0.6,
+                RECENT,
+                &["ui"],
+            ),
+        ] {
+            store.remember(&draft).unwrap();
+        }
+    }
+
+    /// Every file under `root` holding `needle` (any case), relative.
+    fn holding(root: &Path, needle: &str) -> Vec<String> {
+        let needle = needle.to_ascii_lowercase().into_bytes();
+        let mut found: Vec<String> = walk(root)
+            .into_iter()
+            .filter(|path| {
+                fs::read(path)
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .windows(needle.len())
+                    .any(|w| w == needle.as_slice())
+            })
+            .map(|path| {
+                let rel = path.strip_prefix(root).unwrap();
+                let parts: Vec<String> = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                parts.join("/")
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Personal's Pause at the moment a dream has read the notes and not
+    /// yet written its report: the pause waits for the report, then takes
+    /// the paused line's quotes out of it. The counts stay.
+    #[test]
+    fn a_pause_beside_a_dream_leaves_no_quote_of_the_line_in_its_report() {
+        let tmp = Tmp::new("pause-race");
+        remember_twins(&AmrStore::at(&tmp.0));
+        let (first, merges, paused) =
+            beside_a_dream(&tmp.0, |store| store.set_paused("dup-a", true));
+        assert_eq!((first, merges, paused), ("waits", Ok(1), Ok(())));
+        let text = fs::read_to_string(tmp.0.join("dreams/2026-10-07.md")).unwrap();
+        assert_eq!(quoting_lines(&text), Vec::<String>::new());
+        assert!(text.contains("- Merged: 1\n"), "{text}");
+        assert!(!text.to_lowercase().contains("composer"), "{text}");
+    }
+
+    /// Personal's Pause at the moment a wiki export has read the lines and
+    /// not yet written its pages: the pause waits for the export, then takes
+    /// the page it wrote for the line out again, and its index line.
+    #[test]
+    fn a_pause_beside_a_wiki_export_leaves_no_page_of_the_line() {
+        let tmp = Tmp::new("wiki-race");
+        remember_twins(&AmrStore::at(&tmp.0));
+        let (first, written, paused) = beside(
+            &tmp.0,
+            |store| store.export_wiki().map(|done| done.written),
+            |store| store.set_paused("dup-a", true),
+        );
+        assert_eq!((first, written, paused), ("waits", Ok(2), Ok(())));
+        let wiki = tmp.0.join("wiki");
+        assert!(wiki.join("dup-b.md").is_file());
+        assert_eq!(holding(&wiki, "dup-a"), Vec::<String>::new());
+    }
+
+    /// Wipe at the same moment: it waits for the dream to finish, then takes
+    /// the wiped lines out of its report, so no byte of them is left under
+    /// the store. (Run under it, Wipe pulls the notes out from under the
+    /// dream, which then fails part way or quotes them after the Wipe.)
+    #[test]
+    fn a_wipe_beside_a_dream_leaves_no_byte_of_a_wiped_line() {
+        let tmp = Tmp::new("wipe-race");
+        remember_twins(&AmrStore::at(&tmp.0));
+        let (first, merges, wiped) = beside_a_dream(&tmp.0, |store| {
+            crate::amr::wipe_user_model(store, crate::amr::UserForget::from_click())
+        });
+        assert_eq!(
+            (first, merges, wiped),
+            (
+                "waits",
+                Ok(1),
+                Ok(crate::amr::WipeReport {
+                    removed: 2,
+                    locked: 0
+                })
+            )
+        );
+        assert_eq!(holding(&tmp.0, "composer"), Vec::<String>::new());
     }
 }

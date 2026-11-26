@@ -1,0 +1,1 @@
+- CI: the sidecar test reads the required `windows` job with either line ending.

@@ -186,3 +186,66 @@ fn wipe_turns_it_off_and_forgets_everything() {
     assert_eq!(v.tags, Vec::new());
     assert!(profile.find("Rust").is_none());
 }
+
+#[test]
+fn wipe_takes_the_pc_topics_of_a_signal_switched_off_earlier() {
+    let d = dir("wipe-after-off");
+    set_on(&d, true).expect("on");
+    let mut profile = InterestProfile::default();
+    profile.add("Bouldering", InterestSource::Explicit, 1);
+    apply(&d, scan(), 1_000, into(&mut profile)).expect("apply");
+    // The user turns the game library signal off: its tags leave the list.
+    set_signal(&d, "games", false).expect("games off");
+    assert_eq!(
+        view(&d, 2_000)
+            .tags
+            .iter()
+            .map(|t| t.tag.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Rust"]
+    );
+    // Then Wipe all: "Know me is off and everything it learned is gone."
+    assert_eq!(
+        wipe(&d, into(&mut profile)).expect("wipe"),
+        "Know me is off and everything it learned is gone."
+    );
+    assert_eq!(
+        profile.find("Stardew Valley").map(|t| t.source),
+        None,
+        "a From your PC topic outlived Wipe"
+    );
+    // A topic you added yourself is yours, so it stays.
+    let left: Vec<(&str, InterestSource)> = profile
+        .topics
+        .iter()
+        .map(|t| (t.topic.as_str(), t.source))
+        .collect();
+    assert_eq!(left, [("Bouldering", InterestSource::Explicit)]);
+}
+
+#[test]
+fn wipe_takes_the_pc_topic_of_a_tag_a_rescan_dropped() {
+    let d = dir("wipe-after-rescan");
+    set_on(&d, true).expect("on");
+    let mut profile = InterestProfile::default();
+    apply(&d, scan(), 1_000, into(&mut profile)).expect("apply");
+    // Next week's scan no longer sees the game (uninstalled).
+    let mut later = scan();
+    later.tags.retain(|t| t.tag != "Stardew Valley");
+    apply(&d, later, 2_000, into(&mut profile)).expect("rescan");
+    assert_eq!(
+        view(&d, 2_000)
+            .tags
+            .iter()
+            .map(|t| t.tag.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Rust"]
+    );
+    wipe(&d, into(&mut profile)).expect("wipe");
+    assert_eq!(
+        profile.find("Stardew Valley").map(|t| t.source),
+        None,
+        "a From your PC topic outlived Wipe"
+    );
+    assert_eq!(profile.topics, Vec::new());
+}
