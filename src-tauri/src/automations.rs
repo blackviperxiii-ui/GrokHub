@@ -656,6 +656,24 @@ pub fn claim_due(
     Ok(claimed)
 }
 
+/// Clock jobs whose next run is left late by the clock going forward
+/// (daylight saving started) move back to their slot on `clock`.
+pub fn move_back_to_slots(config_dir: &Path, clock: LocalClock) -> Result<(), String> {
+    let _store = store();
+    let mut list = load_unlocked(config_dir)?;
+    let mut moved = false;
+    for a in &mut list {
+        if let Some(at) = grokhub_core::automation::slot_moved_earlier(a, clock) {
+            a.next_run = Some(at);
+            moved = true;
+        }
+    }
+    if moved {
+        save(config_dir, &list)?;
+    }
+    Ok(())
+}
+
 /// Peek at the next due job the shell would claim, without saving a run.
 pub fn next_due(
     config_dir: &Path,

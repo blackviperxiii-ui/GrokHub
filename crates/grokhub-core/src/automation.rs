@@ -357,7 +357,7 @@ const OFFSET_SHIFT_MAX_MS: u64 = 2 * 3_600_000;
 /// offset changed (daylight saving ended overnight): it waits for the slot
 /// instead of firing an hour early. A late or missed slot still fires.
 pub fn due_before_its_slot(a: &Automation, clock: LocalClock) -> bool {
-    if matches!(a.schedule.as_str(), "heartbeat" | "once" | "monthly") || a.wait.active() {
+    if a.wait.active() {
         return false;
     }
     let Some(next) = a.next_run else {
@@ -367,12 +367,46 @@ pub fn due_before_its_slot(a: &Automation, clock: LocalClock) -> bool {
     if now < next {
         return false;
     }
+    let slots = clock_slots(a, clock);
+    let came = slots.iter().any(|&at| at + 60_000 >= next && at <= now);
+    let ahead = slots
+        .iter()
+        .any(|&at| at > now && at - now <= OFFSET_SHIFT_MAX_MS);
+    !came && ahead
+}
+
+/// A clock job whose next run was worked out before the UTC offset moved
+/// forward (daylight saving started overnight) sits up to two hours past its
+/// slot on `clock`. Its slot there, to run at instead, or `None` when the job
+/// is on its slot. The offset moving back is [`due_before_its_slot`]'s.
+pub fn slot_moved_earlier(a: &Automation, clock: LocalClock) -> Option<u64> {
+    if !a.enabled || a.wait.active() {
+        return None;
+    }
+    let next = a.next_run?;
+    if next <= clock.now_ms {
+        return None;
+    }
+    // Offsets move in steps of 30 minutes or more; seconds of drift are not one.
+    const SHIFT_MIN_MS: u64 = 15 * 60_000;
+    clock_slots(a, clock)
+        .into_iter()
+        .find(|&at| next > at && (SHIFT_MIN_MS..=OFFSET_SHIFT_MAX_MS).contains(&(next - at)))
+}
+
+/// A slot job's times on `clock`'s yesterday, today and tomorrow. Jobs not
+/// tied to a daily slot have none.
+fn clock_slots(a: &Automation, clock: LocalClock) -> Vec<u64> {
+    if matches!(a.schedule.as_str(), "heartbeat" | "once" | "monthly") {
+        return Vec::new();
+    }
     const DAY_MS: u64 = 24 * 3_600_000;
+    let now = clock.now_ms;
     let into_day = u64::from(clock.hour * 60 + clock.minute) * 60_000 + now % 60_000;
     let Some(today) = now.checked_sub(into_day) else {
-        return false;
+        return Vec::new();
     };
-    let slots: Vec<u64> = normalize_times(&a.time, &a.times)
+    normalize_times(&a.time, &a.times)
         .iter()
         .filter_map(|t| hm_min(t))
         .flat_map(|min| {
@@ -380,12 +414,7 @@ pub fn due_before_its_slot(a: &Automation, clock: LocalClock) -> bool {
             [at.checked_sub(DAY_MS), Some(at), Some(at + DAY_MS)]
         })
         .flatten()
-        .collect();
-    let came = slots.iter().any(|&at| at + 60_000 >= next && at <= now);
-    let ahead = slots
-        .iter()
-        .any(|&at| at > now && at - now <= OFFSET_SHIFT_MAX_MS);
-    !came && ahead
+        .collect()
 }
 
 pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8) -> bool {
@@ -1524,6 +1553,54 @@ mod tests {
             health: AutoHealth::default(),
             lifecycle: Default::default(),
         }
+    }
+
+    /// Set as 09:00 at UTC-6, the clock now reads UTC-5: the job moves back
+    /// to 09:00 on that clock, before or after the slot. On time, already
+    /// due, or a job not tied to a slot, it stays.
+    #[test]
+    fn a_job_set_before_the_clock_went_forward_moves_back_to_its_slot() {
+        const MIN: u64 = 60_000;
+        const HOUR: u64 = 60 * MIN;
+        // Sunday 14:00 UTC: 09:00 at UTC-5.
+        let nine_cdt = 1_805_032_800_000;
+        let at = |ms: u64, offset: i32| LocalClock::at_offset(ms, offset);
+        let mut daily = job("a");
+        daily.next_run = Some(nine_cdt + HOUR);
+        assert_eq!(
+            slot_moved_earlier(&daily, at(nine_cdt - 30 * MIN, -300)),
+            Some(nine_cdt)
+        );
+        assert_eq!(
+            slot_moved_earlier(&daily, at(nine_cdt + 10 * MIN, -300)),
+            Some(nine_cdt)
+        );
+        assert_eq!(
+            slot_moved_earlier(&daily, at(nine_cdt - 30 * MIN, -360)),
+            None
+        );
+        // A few seconds off the slot is drift, not a moved clock.
+        let mut drift = daily.clone();
+        drift.next_run = Some(nine_cdt + 30_000);
+        assert_eq!(
+            slot_moved_earlier(&drift, at(nine_cdt - 30 * MIN, -300)),
+            None
+        );
+        let mut due = daily.clone();
+        due.next_run = Some(nine_cdt - MIN);
+        assert_eq!(slot_moved_earlier(&due, at(nine_cdt, -300)), None);
+        let mut beat = daily.clone();
+        beat.schedule = "heartbeat".into();
+        assert_eq!(
+            slot_moved_earlier(&beat, at(nine_cdt - 30 * MIN, -300)),
+            None
+        );
+        let mut off = daily.clone();
+        off.enabled = false;
+        assert_eq!(
+            slot_moved_earlier(&off, at(nine_cdt - 30 * MIN, -300)),
+            None
+        );
     }
 
     /// Only a job whose slot is still ahead since its next run waits: an
