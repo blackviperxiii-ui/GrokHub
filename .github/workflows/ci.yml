@@ -507,6 +507,29 @@ jobs:
           shared-key: shell-${{ matrix.os }}
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' || inputs.nightly == true }}
+      # Beta Windows builds the hub sidecar from the same dev artifacts the
+      # `windows-parts` job caches (shared-key windows-test). That cache also
+      # holds the workspace cargo home, so park the shell's cargo home first
+      # and put it back before src-tauri compiles. The rename takes rustup off
+      # PATH, so the parked bin goes back on PATH for the restore (`rustc -vV`)
+      # and the sidecar stage. save-if false: this job must not overwrite the
+      # workspace test cache with a hub-only target.
+      - name: Park the shell toolchain home
+        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
+        shell: pwsh
+        run: |
+          $cargo = Join-Path $env:USERPROFILE '.cargo'
+          $backup = Join-Path $env:USERPROFILE '.cargo-shell'
+          if (Test-Path $backup) { Remove-Item -Recurse -Force $backup }
+          Rename-Item $cargo $backup
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $backup 'bin')
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
+        with:
+          workspaces: .
+          shared-key: windows-test
+          cache-on-failure: true
+          save-if: false
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: |
@@ -519,15 +542,63 @@ jobs:
       # (src-tauri/tauri.{windows,macos}.conf.json). Tauri's build script
       # checks the staged binary exists, so it goes in before any src-tauri
       # cargo step. Linux ships it as a package file instead.
+      # On Windows the UI install, lint, test and build run beside the sidecar
+      # (they do not need it). Beta pushes pass --profile dev so the build
+      # reuses target/debug from the windows-test cache. Tags, nightly and
+      # manual runs keep the release profile because they still bundle.
       - name: Stage the grokhub-hub sidecar
         if: runner.os != 'Linux'
-        run: node scripts/stage-hub-sidecar.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            (
+              set -euo pipefail
+              npm ci --prefix ui
+              npm run lint --prefix ui
+              npm test --prefix ui
+              npm run build --prefix ui
+            ) > "$RUNNER_TEMP/ui-pre.log" 2>&1 &
+            ui_pid=$!
+          fi
+          extra=
+          if [ "$RUNNER_OS" = "Windows" ] && [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${GITHUB_REF:-}" = "refs/heads/beta" ]; then
+            extra="--profile dev"
+          fi
+          set +e
+          # Unquoted so an empty extra adds no argument (macOS bash 3.2).
+          node scripts/stage-hub-sidecar.mjs $extra
+          sidecar_status=$?
+          ui_status=0
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            wait "$ui_pid"
+            ui_status=$?
+            cat "$RUNNER_TEMP/ui-pre.log"
+          fi
+          set -e
+          if [ "$sidecar_status" -ne 0 ] || [ "$ui_status" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Restore the shell toolchain home
+        if: always() && runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
+        shell: pwsh
+        run: |
+          $cargo = Join-Path $env:USERPROFILE '.cargo'
+          $backup = Join-Path $env:USERPROFILE '.cargo-shell'
+          if (-not (Test-Path $backup)) { exit 0 }
+          if (Test-Path $cargo) { Remove-Item -Recurse -Force $cargo }
+          Rename-Item $backup $cargo
       - run: npm ci --prefix ui
+        if: runner.os != 'Windows'
       - run: npm run lint --prefix ui
+        if: runner.os != 'Windows'
       - run: npm test --prefix ui
+        if: runner.os != 'Windows'
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       # clippy and tests compile against ui/dist, so build the UI first.
+      # Windows already built it beside the sidecar.
       - run: npm run build --prefix ui
+        if: runner.os != 'Windows'
       # The web app (Phase 5) in Chromium against a mocked desktop: pair,
       # chat with one tool approval, and no pairing code in browser storage.
       - name: Web smoke test
@@ -731,17 +802,23 @@ jobs:
       - name: Smoke test
         run: node ui/e2e/phone.mjs ios "$APP"
 
-  # Clippy and tests in one job so they share one build and one cache.
-  # Like linux, it runs and fails when `changes` did not succeed.
-  windows:
+  # Clippy once, tests in two parts so a beta push waits for the slower
+  # half instead of the whole nextest run. Both parts restore the same
+  # windows-test cache the shell job uses for the dev sidecar. Part 1 is
+  # the one that saves it. Every test still runs: count partitions cover
+  # the suite, and doctests stay on part 1 (nextest does not run them).
+  # `windows` is the required check: it fails unless both parts passed.
+  windows-parts:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || (needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true')) }}
+    if: needs.changes.result == 'success' && needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
+    name: windows (${{ matrix.part }}/2)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - name: changes job must succeed
-        if: needs.changes.result != 'success'
-        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -751,15 +828,34 @@ jobs:
         with:
           shared-key: windows-test
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' || inputs.nightly == true }}
+          save-if: ${{ matrix.part == 1 && (github.event_name == 'push' || inputs.nightly == true) }}
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
-      # must be deleted, not allowed.
+      # must be deleted, not allowed. Once, on part 1.
       - run: cargo clippy --workspace --all-targets -- -D warnings
+        if: matrix.part == 1
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: nextest
-      - run: cargo nextest run --workspace --locked --profile ci
+      - run: cargo nextest run --workspace --locked --profile ci --partition count:${{ matrix.part }}/2
       - run: cargo test --doc --workspace --locked
+        if: matrix.part == 1
+
+  # Like linux, it runs and fails when `changes` did not succeed.
+  windows:
+    needs: [changes, windows-parts]
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || (needs.changes.outputs.code == 'true' && needs.changes.outputs.windows == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: changes job must succeed
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - name: both windows parts passed
+        env:
+          PARTS: ${{ needs.windows-parts.result }}
+        run: |
+          echo "windows-parts=$PARTS"
+          test "$PARTS" = success
 
   windows-release:
     needs: changes

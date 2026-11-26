@@ -123,11 +123,26 @@ the address the computer called (`Host`), else the LAN address.
   before the turn starts, and before the answer goes out.
   `A2aDoor::recheck` cancels the turns of computers that may no longer
   reach the agent; the hub runs it after a pairing and on every `/a2a`
-  request, and the app after it stops sharing, unpairs a computer or saves
-  the team.
+  request, and the app after it stops sharing and after the Team page saves
+  or removes an agent. Only an agent's own fields decide who reaches it, so
+  a team edit needs no recheck. The app has no way to unpair one computer
+  yet; pairing again is the hub's own recheck.
 - A blocking `SendMessage` waits for the turn to end, up to the turn's time
   limit, and then answers with an error, never a task still working.
 - A turn that panics still ends its task, as failed, and frees its place.
+
+In the app, `HubShare` builds the hub with the door, and each message runs
+`answer_peer` with the person's own sign-in and router, read at that message
+as for a scheduled run. With no model to answer (no sign-in, no Local AI, no
+added provider), the task log keeps why and the computer gets the fixed
+line. On the Team page, an agent's form lists the paired computers from
+Devices, under Share, each with when it last called, and the end of its id
+when two have one name. Ticking one adds it to `share_with` and turns
+`share` on, and unticking the last turns it off. A computer that is no
+longer paired stays ticked, as "A computer that's no longer paired" with
+the end of its id, until the person clears it, so a failed read never
+drops a share. A file with `share` off and computers listed shows as
+sharing paused; a tick then shares with the computers ticked.
 
 ## What it builds on
 

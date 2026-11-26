@@ -15,6 +15,10 @@
 //! hand-off) lives in memory for one launch and is never written to the
 //! file, so no hub started later serves it. A copy an earlier launch left in
 //! the file is dropped, and the hub answers nothing while sharing is off.
+//!
+//! The hub also serves the agent door (`/a2a/v1`), where a paired computer
+//! messages the agents the Team page shares with it. Stopping share stops
+//! their turns.
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -24,6 +28,7 @@ use grokhub_core::{
     hub_pair_url, load_hub_state, now_ms, pair::pair_code_is_live, pair::start_hub_rotates_pair,
     save_hub_state, state::Peer, HubSnapshot, HubState, InhabitBundle, DEFAULT_PORT,
 };
+use grokhub_hub::A2aDoor;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -116,11 +121,27 @@ pub struct HubShare {
     /// unbound while the app runs, so stopping share keeps it and closes the
     /// pairing instead.
     bound: Mutex<Option<u16>>,
-    /// Starts the listener on a port (0 for any free one); the app uses the
-    /// real hub, tests use loopback.
-    bind: fn(Arc<Mutex<HubState>>, u16) -> Result<u16, String>,
+    /// Starts the listener on a port (0 for any free one), with the agent
+    /// door when there is one; the app uses the real hub, tests use loopback.
+    bind: Bind,
     /// This computer's LAN address.
     lan: fn() -> Option<IpAddr>,
+    /// Where paired computers message shared agents. It must be in place
+    /// before the listener starts, which is once per launch.
+    door: Option<Arc<A2aDoor>>,
+}
+
+type Bind = fn(Arc<Mutex<HubState>>, u16, Option<Arc<A2aDoor>>) -> Result<u16, String>;
+
+fn peer_views(st: &HubState) -> Vec<PeerView> {
+    st.peers
+        .iter()
+        .map(|p| PeerView {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            last_seen: p.last_seen,
+        })
+        .collect()
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -130,15 +151,26 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 impl HubShare {
     /// The hub as the config folder has it: its paired computers stay, but
     /// sharing is off, and no pairing code, share or hand-off carries over.
-    pub fn open(config_dir: &Path) -> Self {
-        Self::with(config_dir, grokhub_hub::serve_lan, crate::remote::lan_ip)
+    pub fn open(config_dir: &Path, door: Arc<A2aDoor>) -> Self {
+        Self {
+            door: Some(door),
+            ..Self::with(
+                config_dir,
+                grokhub_hub::serve_lan_with,
+                crate::remote::lan_ip,
+            )
+        }
     }
 
     /// The hub on loopback, on any free port, for tests elsewhere in the app.
     #[cfg(test)]
     pub(crate) fn on_loopback(config_dir: &Path) -> Self {
-        fn bind(state: Arc<Mutex<HubState>>, _port: u16) -> Result<u16, String> {
-            grokhub_hub::serve_background(state, 0)
+        fn bind(
+            state: Arc<Mutex<HubState>>,
+            _port: u16,
+            door: Option<Arc<A2aDoor>>,
+        ) -> Result<u16, String> {
+            grokhub_hub::serve_background_with(state, 0, door)
         }
         fn none() -> Option<IpAddr> {
             None
@@ -146,11 +178,7 @@ impl HubShare {
         Self::with(config_dir, bind, none)
     }
 
-    fn with(
-        config_dir: &Path,
-        bind: fn(Arc<Mutex<HubState>>, u16) -> Result<u16, String>,
-        lan: fn() -> Option<IpAddr>,
-    ) -> Self {
+    fn with(config_dir: &Path, bind: Bind, lan: fn() -> Option<IpAddr>) -> Self {
         let path = config_dir.join("hub-state.json");
         let mut state = load_hub_state(&path).unwrap_or_else(HubState::empty);
         state.sharing = false;
@@ -171,6 +199,7 @@ impl HubShare {
             bound: Mutex::new(None),
             bind,
             lan,
+            door: None,
         }
     }
 
@@ -182,7 +211,7 @@ impl HubShare {
             None => {
                 let want = lock(&self.hub).port;
                 let want = if want == 0 { DEFAULT_PORT } else { want };
-                let port = (self.bind)(self.hub.clone(), want).map_err(|e| {
+                let port = (self.bind)(self.hub.clone(), want, self.door.clone()).map_err(|e| {
                     if grokhub_core::pair::lan_bind_in_use(&e) {
                         format!(
                             "Port {want} is already in use. Stop the other hub on this computer, then try again."
@@ -208,15 +237,27 @@ impl HubShare {
         Ok(self.view())
     }
 
-    /// Stop sharing: the pairing code goes, so no new computer can pair.
+    /// Stop sharing: the pairing code goes, so no new computer can pair,
+    /// and the paired computers' turns with shared agents stop.
     pub fn stop(&self) -> ShareView {
         {
             let mut st = lock(&self.hub);
             st.sharing = false;
             st.pair = None;
         }
+        self.recheck();
         self.persist();
         self.view()
+    }
+
+    /// The agent door looks again at who may reach which agent and stops
+    /// the turns of computers that no longer may: after sharing stops and
+    /// after the Team page saves or removes an agent. It takes the hub
+    /// lock, so never call it while holding that.
+    pub fn recheck(&self) {
+        if let Some(door) = &self.door {
+            door.recheck(&self.hub);
+        }
     }
 
     /// A new pairing code, once the old one is used or expired.
@@ -275,16 +316,14 @@ impl HubShare {
                 String::new()
             },
             paired_since_code,
-            peers: st
-                .peers
-                .iter()
-                .map(|p| PeerView {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    last_seen: p.last_seen,
-                })
-                .collect(),
+            peers: peer_views(&st),
         }
+    }
+
+    /// The paired computers, as the Team page's share list shows them.
+    /// Memory only.
+    pub fn computers(&self) -> Vec<PeerView> {
+        peer_views(&lock(&self.hub))
     }
 
     /// Whether sharing is on, and the newest frame a paired computer sent,
@@ -409,11 +448,19 @@ pub fn device_glance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grokhub_core::a2a::Outcome;
+    use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
     use std::io::{Read, Write};
     use std::net::TcpStream;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+    use std::time::{Duration, Instant};
 
-    fn loopback(state: Arc<Mutex<HubState>>, _port: u16) -> Result<u16, String> {
-        grokhub_hub::serve_background(state, 0)
+    fn loopback(
+        state: Arc<Mutex<HubState>>,
+        _port: u16,
+        door: Option<Arc<A2aDoor>>,
+    ) -> Result<u16, String> {
+        grokhub_hub::serve_background_with(state, 0, door)
     }
 
     fn no_lan() -> Option<IpAddr> {
@@ -904,7 +951,7 @@ mod tests {
 
     #[test]
     fn a_port_in_use_says_so_without_the_os_text() {
-        fn busy(_: Arc<Mutex<HubState>>, _: u16) -> Result<u16, String> {
+        fn busy(_: Arc<Mutex<HubState>>, _: u16, _: Option<Arc<A2aDoor>>) -> Result<u16, String> {
             Err("Address already in use (os error 98)".into())
         }
         let dir = temp("busy");
@@ -917,5 +964,157 @@ mod tests {
             )
         );
         assert!(!share.view().on);
+    }
+
+    /// Answers with who asked what, or holds while `hold` is on until its
+    /// turn is canceled.
+    struct Desk {
+        hold: AtomicBool,
+        started: AtomicUsize,
+        canceled: AtomicUsize,
+    }
+
+    impl grokhub_hub::PeerTurns for Desk {
+        fn run(&self, ask: grokhub_hub::PeerAsk) -> Outcome {
+            self.started.fetch_add(1, SeqCst);
+            while self.hold.load(SeqCst) {
+                if ask.cancel.is_cancelled() {
+                    self.canceled.fetch_add(1, SeqCst);
+                    return Outcome::Failed("canceled".into());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Outcome::Completed(format!("{} asked {}: {}", ask.peer, ask.agent, ask.text))
+        }
+    }
+
+    /// `front-desk`, shared with the computers in `with`.
+    fn share_desk(dir: &Path, with: &[&str]) {
+        let mut desk = Profile::new(Kind::Customer, "front-desk", "Front desk");
+        desk.share = true;
+        desk.share_with = with.iter().map(|c| c.to_string()).collect();
+        TeamFile {
+            version: VERSION,
+            agents: vec![desk],
+            teams: Vec::new(),
+        }
+        .save(dir)
+        .unwrap();
+    }
+
+    /// The share with an agent door, sharing on, and `laptop-1` paired:
+    /// the share, the turns, the port and the laptop's token.
+    fn shared(name: &str, hold: bool) -> (PathBuf, HubShare, Arc<Desk>, u16, String) {
+        let dir = temp(name);
+        share_desk(&dir, &["laptop-1"]);
+        let desk = Arc::new(Desk {
+            hold: AtomicBool::new(hold),
+            started: AtomicUsize::new(0),
+            canceled: AtomicUsize::new(0),
+        });
+        let door = Arc::new(A2aDoor::new(dir.clone(), desk.clone(), no_lan, "3.6.0"));
+        let share = HubShare {
+            door: Some(door),
+            ..HubShare::with(&dir, loopback, no_lan)
+        };
+        let on = share.start().unwrap();
+        let (status, out) = pair(on.port, &on.code, "Laptop");
+        assert_eq!(status, 200, "{out}");
+        let reply: Value = serde_json::from_str(out.split_once("\r\n\r\n").unwrap().1).unwrap();
+        let token = reply["token"].as_str().unwrap().to_string();
+        (dir, share, desk, on.port, token)
+    }
+
+    fn a2a(port: u16, token: &str, method: &str, path: &str, body: &str) -> (u16, String) {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            s,
+            "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        let status = out.split(' ').nth(1).unwrap().parse().unwrap();
+        let body = out.split_once("\r\n\r\n").map(|(_, b)| b.to_string());
+        (status, body.unwrap_or_default())
+    }
+
+    /// Asks `front-desk` when it is open; `now` answers before the turn ends.
+    fn ask(port: u16, token: &str, now: bool) -> Value {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "SendMessage",
+            "params": {
+                "message": { "messageId": "m-1", "role": "ROLE_USER", "parts": [{ "text": "When are you open?" }] },
+                "configuration": { "returnImmediately": now },
+            },
+        });
+        let (status, out) = a2a(port, token, "POST", "/a2a/v1/front-desk", &body.to_string());
+        assert_eq!(status, 200, "{out}");
+        serde_json::from_str(&out).unwrap()
+    }
+
+    fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < until, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_paired_computer_messages_a_shared_agent_through_the_apps_hub() {
+        let (dir, _share, desk, port, token) = shared("door", false);
+        let (status, list) = a2a(port, &token, "GET", "/a2a/v1", "");
+        assert_eq!(status, 200, "{list}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&list).unwrap(),
+            serde_json::json!({
+                "ok": true,
+                "agents": [{
+                    "id": "front-desk",
+                    "name": "Front desk",
+                    "url": format!("http://127.0.0.1:{port}/a2a/v1/front-desk"),
+                }],
+            })
+        );
+        let task = &ask(port, &token, false)["result"]["task"];
+        assert_eq!(task["status"]["state"], "TASK_STATE_COMPLETED", "{task}");
+        assert_eq!(
+            task["artifacts"][0]["parts"][0]["text"],
+            "laptop-1 asked front-desk: When are you open?"
+        );
+        assert_eq!(desk.started.load(SeqCst), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stopping_share_stops_a_paired_computers_turn() {
+        let (dir, share, desk, port, token) = shared("door-stop", true);
+        let working = ask(port, &token, true);
+        assert_eq!(working["result"]["task"]["id"], "task-1", "{working}");
+        wait_for("the turn to start", || desk.started.load(SeqCst) == 1);
+        // Nothing else reaches the hub: stop share alone ends the turn.
+        share.stop();
+        wait_for("the turn to stop", || desk.canceled.load(SeqCst) == 1);
+        let (status, _) = a2a(port, &token, "GET", "/a2a/v1", "");
+        assert_ne!(status, 200);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unsharing_an_agent_stops_its_turn_once_the_share_rechecks() {
+        let (dir, share, desk, port, token) = shared("door-unshare", true);
+        ask(port, &token, true);
+        wait_for("the turn to start", || desk.started.load(SeqCst) == 1);
+        // The Team page saves the agent without the laptop.
+        share_desk(&dir, &[]);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(desk.canceled.load(SeqCst), 0, "nothing told the door yet");
+        share.recheck();
+        wait_for("the turn to stop", || desk.canceled.load(SeqCst) == 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

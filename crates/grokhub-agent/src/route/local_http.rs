@@ -824,7 +824,7 @@ pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn L
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::local_sidecar::fake_server::{read_http_request, FakeServer};
+    use crate::route::local_sidecar::fake_server::FakeServer;
 
     fn sse(lines: &[&str]) -> std::io::Cursor<Vec<u8>> {
         let text: String = lines.iter().map(|l| format!("data: {l}\n\n")).collect();
@@ -1239,19 +1239,43 @@ mod tests {
     #[test]
     fn a_local_chat_sends_repetition_penalty_and_max_tokens_for_that_model() {
         fn sent(model: &str) -> Value {
-            use std::io::Write;
+            use std::io::{Read, Write};
+            use std::time::Duration;
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let server = std::thread::spawn(move || {
                 let (mut sock, _) = listener.accept().unwrap();
-                let raw = read_http_request(&mut sock).unwrap_or_default();
+                sock.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match sock.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            raw.extend_from_slice(&buf[..n]);
+                            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                                let header = String::from_utf8_lossy(&raw[..pos]);
+                                let len = header.lines().find_map(|line| {
+                                    line.split_once(':')
+                                        .filter(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                                        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                                });
+                                let body_at = pos + 4;
+                                if len.is_some_and(|len| raw.len() >= body_at + len) {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
                 let answer = r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}"#;
                 let http = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
                     answer.len()
                 );
                 let _ = sock.write_all(http.as_bytes());
-                raw
+                String::from_utf8(raw).unwrap_or_default()
             });
             let rt = HttpLocalRuntime::new(format!("http://{addr}"), "t").with_model(model);
             let req = ResponsesRequest {
@@ -1295,16 +1319,32 @@ mod tests {
 
     #[test]
     fn embeddings_endpoint_parses_vectors_in_index_order() {
-        use std::io::Write;
+        use std::io::{BufRead, Read, Write};
         use std::net::TcpListener;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            // The whole request, body too: closing with its body unread
-            // resets the connection on Windows before the client reads.
-            let req = read_http_request(&mut stream).unwrap();
+            // Read the whole request, body included. A server that closes
+            // with bytes unread resets the connection on Windows before the
+            // client reads the reply.
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut req = String::new();
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap();
+                }
+                req.push_str(&line);
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body).unwrap();
             assert!(req.starts_with("POST /v1/embeddings HTTP/1.1"), "{req}");
             assert!(
                 req.to_ascii_lowercase()

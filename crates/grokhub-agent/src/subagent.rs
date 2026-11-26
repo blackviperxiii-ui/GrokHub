@@ -530,6 +530,24 @@ pub fn answer_peer(turn: PeerTurn) -> grokhub_core::a2a::Outcome {
     }
 }
 
+/// A paired computer's message that no model can answer, such as when the
+/// app has no sign-in: the task log keeps `why` and the peer gets the
+/// fixed line, as for a failed model call.
+pub fn peer_unanswered(
+    config: &Path,
+    peer: &str,
+    agent: &str,
+    text: &str,
+    why: &str,
+) -> grokhub_core::a2a::Outcome {
+    let task = AgentTask {
+        asked: crate::agent_message::peer_asked(config, peer, agent, text),
+        started_ms: grokhub_core::now_ms(),
+    };
+    task.log(TaskState::Failed, why);
+    grokhub_core::a2a::Outcome::Failed(PEER_FAILED.into())
+}
+
 /// What goes back to a paired computer: the agent's own words, without the
 /// files it looked at or the calls it was refused, secrets redacted, clipped.
 fn peer_answer(done: &ChildDone) -> String {
@@ -5975,6 +5993,35 @@ mod tests {
         assert_eq!(log[0].state, grokhub_core::a2a::TaskState::Failed);
         assert!(log[0].reply.contains("401"), "{log:?}");
         let _ = drain_side_events();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_message_with_no_model_to_answer_it_is_logged_with_why() {
+        use grokhub_core::a2a::{Outcome, TaskState as State};
+        let dir = scratch("peer-no-model");
+        let cfg = dir.join("app-config");
+        shared_desk(&cfg, "laptop");
+        assert_eq!(
+            peer_unanswered(
+                &cfg,
+                "laptop",
+                "front-desk",
+                "  When are you open?  ",
+                "Sign in with Grok or add an API key."
+            ),
+            Outcome::Failed("the agent couldn't answer".into())
+        );
+        let log = grokhub_core::agent_tasks::recent(&cfg, 10);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!(log[0].state, State::Failed);
+        assert_eq!(log[0].to, "front-desk");
+        assert_eq!(log[0].asked, "When are you open?");
+        assert_eq!(log[0].reply, "Sign in with Grok or add an API key.");
+        assert_eq!(
+            serde_json::to_value(&log[0].from).unwrap(),
+            serde_json::json!({ "peer": "laptop" })
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
