@@ -88,7 +88,6 @@ const loaders = {
   code: () => import("./Code").then((m) => ({ default: m.Code })),
   command: () => import("./CommandBox").then((m) => ({ default: m.CommandBox })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
-  imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
@@ -108,7 +107,6 @@ const loaders = {
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
-const Imagine = lazy(loaders.imagine);
 const Devices = lazy(loaders.devices);
 const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
@@ -974,12 +972,6 @@ export function App() {
             <Fleet shown={shown} />
           </Page>
         ) : null;
-      case "imagine":
-        return opened.has("imagine") ? (
-          <Page key="imagine" shown={shown}>
-            <Imagine />
-          </Page>
-        ) : null;
       case "agents":
         return opened.has("agents") ? (
           <Page key="agents" shown={shown}>
@@ -1178,7 +1170,6 @@ export function App() {
               {pageNode("settings", view === "settings")}
               {pageNode("devices", view === "devices")}
               {pageNode("fleet", view === "fleet")}
-              {pageNode("imagine", view === "imagine")}
               {pageNode("agents", view === "agents")}
               {pageNode("team", view === "team")}
             </>

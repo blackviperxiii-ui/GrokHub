@@ -16,6 +16,7 @@ import {
   codeSessionPlan,
   answerPermission,
   cancelChat,
+  chatMedia,
   chatPicture,
   closeChat,
   clearChat,
@@ -28,6 +29,9 @@ import {
   getStartChat,
   getSettings,
   helperQuestions,
+  imagineCancel,
+  imagineGenerate,
+  imagineImage,
   loadChat,
   onChatEvent,
   onEventGap,
@@ -36,6 +40,7 @@ import {
   commandBoxApprove,
   hubSendApprove,
   runSlash,
+  saveChatMediaToLibrary,
   saveSettings,
   sendChat,
   setHangoutMode,
@@ -47,6 +52,8 @@ import {
   type ElicitAction,
   type HangoutMode,
   type HubSend,
+  type ImagineKind,
+  type ImagineTile,
   type SavedFile,
   type SessionMode,
   type Settings,
@@ -70,7 +77,7 @@ import {
   MessageMenu,
   withoutCut,
 } from "./DeleteMessage";
-import { requestImagine } from "./imagineAsk";
+import { Lightbox } from "./FeedCard";
 import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
@@ -138,7 +145,25 @@ export type Item =
    * person collapses or expands it (thoughts.ts). The chat saves its text,
    * never its fold. */
   | { kind: "thought"; text: string; fold?: Fold }
-  | { kind: "tool"; id: string; title: string; status: string; detail: string; picture?: string }
+  | {
+      kind: "tool";
+      id: string;
+      title: string;
+      status: string;
+      detail: string;
+      picture?: string;
+      video?: string;
+    }
+  | {
+      kind: "media";
+      id: string;
+      media: ImagineKind;
+      prompt: string;
+      status: "running" | "done" | "error";
+      note?: string;
+      error?: string;
+      tiles?: ImagineTile[];
+    }
   | {
       kind: "permission";
       id: string;
@@ -607,39 +632,180 @@ const ThoughtCard = memo(function ThoughtCard({
   );
 });
 
+export function makingLine(kind: ImagineKind, count: number): string {
+  if (kind === "video") return "Making a video… this can take a few minutes.";
+  return count === 1 ? "Making 1 image…" : `Making ${count} images…`;
+}
+
+export const IMAGINE_PROMPT_HINT =
+  "Type a prompt after /imagine to generate an image in chat (or /imagine-video for a short video).";
+
 const ToolCard = memo(function ToolCard({
   title,
   status,
   detail,
   picture,
+  video,
 }: {
   title: string;
   status: string;
   detail?: string;
   /** The made picture's file; shown above the detail once it loads. */
   picture?: string;
+  /** The made video's file; shown above the detail once it loads. */
+  video?: string;
 }) {
+  const mediaPath = picture ?? video;
+  const isVideo = !picture && Boolean(video);
   const [shown, setShown] = useState<{ path: string; url: string } | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState(false);
   useEffect(() => {
-    if (!picture) return;
+    if (!mediaPath) return;
     let live = true;
-    chatPicture(picture).then(
+    const loader = isVideo ? chatMedia : chatPicture;
+    if (typeof loader !== "function") return;
+    loader(mediaPath).then(
       (url) => {
-        if (live) setShown({ path: picture, url });
+        if (live) setShown({ path: mediaPath, url });
       },
       () => {},
     );
     return () => {
       live = false;
     };
-  }, [picture]);
-  const url = shown && shown.path === picture ? shown.url : null;
+  }, [mediaPath, isVideo]);
+  const url = shown && shown.path === mediaPath ? shown.url : null;
+  const fileName = mediaPath?.split(/[/\\]/).pop() || (isVideo ? "video.mp4" : "image.png");
+  async function saveToLibrary() {
+    if (!mediaPath || saving || saved || typeof saveChatMediaToLibrary !== "function") return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      await saveChatMediaToLibrary(mediaPath, title);
+      setSaved(true);
+    } catch (err) {
+      setSaveErr(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
   return (
     <div className="card tool" data-status={status}>
       <span className="card-title">{title}</span>
       <span className="card-status">{status}</span>
-      {url && <img className="card-picture" src={url} alt="The picture this made" />}
+      {url &&
+        (isVideo ? (
+          <video className="card-video" src={url} controls playsInline aria-label="The video this made" />
+        ) : (
+          <img className="card-picture" src={url} alt="The picture this made" />
+        ))}
+      {url && mediaPath && (
+        <div className="card-media-actions">
+          <button
+            type="button"
+            className="quiet"
+            disabled={saving || saved}
+            onClick={() => void saveToLibrary()}
+          >
+            {saved ? "Saved to Library" : saving ? "Saving…" : "Save to Library"}
+          </button>
+          <button type="button" className="quiet" onClick={() => setLightbox(true)}>
+            Open
+          </button>
+          {saveErr && (
+            <span className="error" role="alert">
+              {saveErr}
+            </span>
+          )}
+        </div>
+      )}
+      {lightbox && url && (
+        <Lightbox src={url} name={fileName} video={isVideo} onClose={() => setLightbox(false)} />
+      )}
       {detail && <pre className="card-detail">{detail}</pre>}
+    </div>
+  );
+});
+
+function ChatMediaTile({ tile }: { tile: ImagineTile }) {
+  const [src, setSrc] = useState("");
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (typeof imagineImage !== "function") return;
+    let live = true;
+    imagineImage(tile.name).then(
+      (url) => {
+        if (live) setSrc(url);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [tile.name]);
+  const label = tile.title || tile.prompt || (tile.video ? "Generated video" : "Generated image");
+  if (!src) return null;
+  return (
+    <div className="chat-media-result">
+      {tile.video ? (
+        <video className="card-video" src={src} controls playsInline aria-label={label} />
+      ) : (
+        <img className="card-picture" src={src} alt={label} />
+      )}
+      <div className="card-media-actions">
+        <button type="button" className="quiet" onClick={() => setOpen(true)}>
+          Open
+        </button>
+        <span className="card-status">Saved to Library</span>
+      </div>
+      {open && <Lightbox src={src} name={tile.name} video={tile.video} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+const ChatMediaCard = memo(function ChatMediaCard({
+  item,
+}: {
+  item: Extract<Item, { kind: "media" }>;
+}) {
+  return (
+    <div
+      className="card tool chat-media-card"
+      data-status={item.status}
+      aria-label={item.media === "video" ? "Generated video" : "Generated image"}
+    >
+      <span className="card-title">{item.media === "video" ? "/imagine-video" : "/imagine"}</span>
+      <span className="card-status">{item.prompt}</span>
+      {item.status === "running" && (
+        <div className="card-media-actions">
+          <p className="note" role="status" aria-busy="true">
+            {makingLine(item.media, 1)}
+          </p>
+          <button type="button" className="quiet" onClick={() => void imagineCancel()}>
+            Stop
+          </button>
+        </div>
+      )}
+      {item.status === "error" && item.error && (
+        <p className="error" role="alert">
+          {item.error}
+        </p>
+      )}
+      {item.status === "done" && (
+        <>
+          {item.note && (
+            <p className="note" role="status">
+              {item.note}
+            </p>
+          )}
+          {(item.tiles ?? []).map((tile) => (
+            <ChatMediaTile key={tile.id} tile={tile} />
+          ))}
+        </>
+      )}
     </div>
   );
 });
@@ -769,7 +935,17 @@ function LogItem({
     case "thought":
       return <ThoughtCard text={item.text} fold={foldOf(item.fold, thoughtsFolded)} onFold={onFold} />;
     case "tool":
-      return <ToolCard title={item.title} status={item.status} detail={item.detail} picture={item.picture} />;
+      return (
+        <ToolCard
+          title={item.title}
+          status={item.status}
+          detail={item.detail}
+          picture={item.picture}
+          video={item.video}
+        />
+      );
+    case "media":
+      return <ChatMediaCard item={item} />;
     case "permission":
       return (
         <PermissionCard
@@ -2031,13 +2207,45 @@ export function Chat({
           setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
         }
         break;
-      case "imagine":
-        if (onOpenView?.("imagine") === false) {
-          setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
-        } else {
-          requestImagine(effect.media, effect.prompt);
+      case "imagine": {
+        const mediaPrompt = effect.prompt.trim();
+        if (!mediaPrompt) {
+          setDraft(effect.media === "video" ? "/imagine-video " : "/imagine ");
+          composerRef.current?.focus();
+          setItems((now) => withNotice(now, { kind: "slash", command, text: IMAGINE_PROMPT_HINT }));
+          break;
         }
+        const mediaId = `media-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        setItems((now) => [
+          ...now,
+          { kind: "media", id: mediaId, media: effect.media, prompt: mediaPrompt, status: "running" },
+        ]);
+        imagineGenerate(mediaPrompt, "1:1", 1, effect.media).then(
+          (made) => {
+            const count = Math.max(made.made, 1);
+            const tiles = made.page.tiles.slice(0, count);
+            const base = made.made === 1 ? "Made 1." : `Made ${made.made}.`;
+            const note = made.note ? `${base} ${made.note}` : base;
+            setItems((now) =>
+              now.map((it) =>
+                it.kind === "media" && it.id === mediaId
+                  ? { ...it, status: "done", tiles, note }
+                  : it,
+              ),
+            );
+          },
+          (err) => {
+            setItems((now) =>
+              now.map((it) =>
+                it.kind === "media" && it.id === mediaId
+                  ? { ...it, status: "error", error: String(err) }
+                  : it,
+              ),
+            );
+          },
+        );
         break;
+      }
       case "openSection":
         if (onOpenSection) onOpenSection(effect.section);
         else onOpenView?.("settings");

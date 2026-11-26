@@ -13,7 +13,6 @@ const PATHS: Record<IconName, string> = {
   command: "M4 6l5 5-5 5M12 18h8",
   history: "M3 12a9 9 0 1 0 2.6-6.4M3 4v4h4M12 7v5l3 2",
   pulse: "M3 12h4l2-6 4 12 2-6h6",
-  imagine: "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 9.5h0",
   journal: "M6 3h11a1 1 0 0 1 1 1v17H7a2 2 0 0 1-2-2V4a1 1 0 0 1 1-1zM5 18a2 2 0 0 1 2-2h11",
   meetings: "M4 6h16v10H4zM8 20h8M12 16v4M7 10h2M11 10h2M15 10h2",
   automations: "M13 3 5 14h6l-1 7 8-11h-6z",

@@ -1,0 +1,1 @@
+- Dropped the standalone Imagine page and moved image and short-video generation directly into Chat (`/imagine`, `/imagine-video`, and plain requests in Chat and Hangout), with inline image/video rendering, Save to Library, and saved creations reachable under Library → Creations.

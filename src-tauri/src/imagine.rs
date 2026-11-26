@@ -646,6 +646,94 @@ pub fn picture_mime(name: &str) -> Option<&'static str> {
     mime(name).filter(|m| m.starts_with("image/"))
 }
 
+/// The video type of a file name, or `None` for an image or anything else.
+pub fn video_mime(name: &str) -> Option<&'static str> {
+    mime(name).filter(|m| m.starts_with("video/"))
+}
+
+/// Canonicalizes `path` and ensures it sits inside one of this app's media
+/// folders (`media/`, `imagine/`, `imagine-wall/`, or `sessions/<id>/media/`).
+/// Returns `(canonical_path, mime, owning_chat_id)`.
+fn resolve_app_media(
+    config_dir: &Path,
+    path: &str,
+    not_ours: &str,
+    gone: &str,
+) -> Result<(PathBuf, &'static str, Option<String>), String> {
+    let mime = mime(path).ok_or_else(|| not_ours.to_string())?;
+    let file = std::fs::canonicalize(path).map_err(|_| gone.to_string())?;
+    let root = std::fs::canonicalize(config_dir).map_err(|_| not_ours.to_string())?;
+    let rel = file
+        .strip_prefix(&root)
+        .map_err(|_| not_ours.to_string())?;
+    let parts: Vec<_> = rel.components().map(|c| c.as_os_str()).collect();
+    let chat = match parts.as_slice() {
+        [dir, _] if *dir == "media" || *dir == "imagine" || *dir == "imagine-wall" => None,
+        [sessions, id, media, _] if *sessions == "sessions" && *media == "media" => {
+            Some(id.to_str().ok_or_else(|| not_ours.to_string())?.to_string())
+        }
+        _ => return Err(not_ours.to_string()),
+    };
+    if !file.is_file() {
+        return Err(not_ours.to_string());
+    }
+    Ok((file, mime, chat))
+}
+
+/// A picture or video a chat's tool made, as a data URL. Only files inside
+/// this app's media folders are read, after links are followed.
+pub fn chat_media(
+    config_dir: &Path,
+    path: &str,
+    may_read: &dyn Fn(Option<&str>) -> bool,
+) -> Result<String, String> {
+    const NOT_OURS: &str = "Not media this app made.";
+    let (file, mime, chat) = resolve_app_media(config_dir, path, NOT_OURS, "That media is gone.")?;
+    if !may_read(chat.as_deref()) {
+        return Err(NOT_OURS.into());
+    }
+    data_url(&file, mime)
+}
+
+/// Saves a chat-generated image or video into the Library Creations wall
+/// (`imagine-wall.json` + `imagine-wall/`). Returns the saved [`Tile`].
+pub fn save_to_library(
+    config_dir: &Path,
+    path: &str,
+    prompt: &str,
+    now_ms: u64,
+) -> Result<Tile, String> {
+    save_to_library_with(config_dir, path, prompt, now_ms, &|_| true)
+}
+
+/// [`save_to_library`] with a chat-ownership check for remote browser callers.
+pub fn save_to_library_with(
+    config_dir: &Path,
+    path: &str,
+    prompt: &str,
+    now_ms: u64,
+    may_read: &dyn Fn(Option<&str>) -> bool,
+) -> Result<Tile, String> {
+    const NOT_OURS: &str = "Not media this app made.";
+    let (file, _, chat) = resolve_app_media(config_dir, path, NOT_OURS, "That media is gone.")?;
+    if !may_read(chat.as_deref()) {
+        return Err(NOT_OURS.into());
+    }
+    let saved_path = file.display().to_string();
+    let label = prompt.trim();
+    let label = if label.is_empty() {
+        "Chat creation"
+    } else {
+        label
+    };
+    pin(config_dir, &[saved_path], label, "1:1", now_ms)?;
+    let page = load(config_dir, ready())?;
+    page.tiles
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Could not save to Library.".to_string())
+}
+
 /// A picture a chat's tool made, as a data URL. Only a picture file inside
 /// `{config}/media/` or a chat's `{config}/sessions/<id>/media/` is read,
 /// after links are followed, so a tool result can't point the chat at
@@ -1432,5 +1520,46 @@ mod tests {
             "Not a picture this app made."
         );
         let _ = std::fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn chat_media_serves_video_and_save_to_library_pins_into_wall() {
+        let d = dirs("chat-media-lib");
+        let media = d.config.join("sessions").join("chat-9").join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let img = media.join("image-1.png");
+        let vid = media.join("video-2.mp4");
+        std::fs::write(&img, png()).unwrap();
+        let mut mp4 = b"\x00\x00\x00\x18ftypmp42".to_vec();
+        mp4.resize(48, 0);
+        std::fs::write(&vid, &mp4).unwrap();
+        let outside = d.config.join("secret.mp4");
+        std::fs::write(&outside, &mp4).unwrap();
+
+        let vid_url = chat_media(&d.config, &vid.display().to_string(), &|_| true).unwrap();
+        assert!(vid_url.starts_with("data:video/mp4;base64,"), "{vid_url}");
+        assert_eq!(
+            chat_media(&d.config, &outside.display().to_string(), &|_| true).unwrap_err(),
+            "Not media this app made."
+        );
+
+        let saved_img =
+            save_to_library(&d.config, &img.display().to_string(), "neon fox", NOW).unwrap();
+        assert!(!saved_img.video);
+        assert_eq!(saved_img.prompt, "neon fox");
+        let saved_vid = save_to_library(
+            &d.config,
+            &vid.display().to_string(),
+            "ocean waves",
+            NOW + 10,
+        )
+        .unwrap();
+        assert!(saved_vid.video);
+        assert_eq!(saved_vid.prompt, "ocean waves");
+
+        let page = load(&d.config, true).unwrap();
+        assert_eq!(page.tiles.len(), 2);
+        assert!(page.tiles.iter().any(|t| t.prompt == "neon fox" && !t.video));
+        assert!(page.tiles.iter().any(|t| t.prompt == "ocean waves" && t.video));
     }
 }

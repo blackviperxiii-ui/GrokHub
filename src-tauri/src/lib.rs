@@ -6962,6 +6962,24 @@ async fn chat_picture(state: State<'_, ShellState>, path: String) -> Result<Stri
     off_main(move || imagine::chat_picture(&dir, &path, &|_| true)).await?
 }
 
+/// A picture or short video a chat's tool made, as a data URL for its tool card.
+#[tauri::command]
+async fn chat_media(state: State<'_, ShellState>, path: String) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::chat_media(&dir, &path, &|_| true)).await?
+}
+
+/// Saves a chat-generated image or video to Library → Creations.
+#[tauri::command]
+async fn save_chat_media_to_library(
+    state: State<'_, ShellState>,
+    path: String,
+    prompt: String,
+) -> Result<imagine::Tile, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || imagine::save_to_library(&dir, &path, &prompt, grokhub_core::now_ms())).await?
+}
+
 #[tauri::command]
 async fn get_ai_models(state: State<'_, ShellState>) -> Result<ai_models::AiModelsView, String> {
     capabilities::needs(capabilities::current().local_ai, "AI models")?;
@@ -8460,6 +8478,23 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 chat.is_some_and(|id| web.owns(id))
             })?)
         }
+        "chat_media" => {
+            let path: String = arg(args, "path")?;
+            out(imagine::chat_media(&state.config_dir, &path, &|chat| {
+                chat.is_some_and(|id| web.owns(id))
+            })?)
+        }
+        "save_chat_media_to_library" => {
+            let path: String = arg(args, "path")?;
+            let prompt: String = arg(args, "prompt")?;
+            out(imagine::save_to_library_with(
+                &state.config_dir,
+                &path,
+                &prompt,
+                grokhub_core::now_ms(),
+                &|chat| chat.is_some_and(|id| web.owns(id)),
+            )?)
+        }
         "get_skills" => out(block_on(get_skills(state))?),
         "nyx_look" => out(nyx_look(
             state,
@@ -9857,6 +9892,8 @@ pub fn run() {
             imagine_cancel,
             imagine_image,
             chat_picture,
+            chat_media,
+            save_chat_media_to_library,
             imagine_sign_in_start,
             imagine_sign_in_poll,
             imagine_sign_out,

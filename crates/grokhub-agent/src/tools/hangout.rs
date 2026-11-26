@@ -7,7 +7,7 @@
 //! [`crate::perm::earlier_result`]). A tool call on a chat-only turn gets one
 //! plain [`CANT_DO_HERE`] and no retry.
 
-use crate::brain::{is_picture_ask, Brief, Intent};
+use crate::brain::{is_picture_ask, is_video_ask, Brief, Intent};
 
 /// Plain refusal when a chat-only Hangout turn cannot run a tool.
 pub const CANT_DO_HERE: &str = "I can't do that here";
@@ -76,7 +76,7 @@ pub fn asks_for_action(text: &str) -> bool {
     if t.is_empty() {
         return false;
     }
-    if is_picture_ask(&t) {
+    if is_picture_ask(&t) || is_video_ask(&t) {
         return true;
     }
     if SEARCH_ASK.iter().any(|p| t.contains(p)) {
@@ -145,5 +145,14 @@ mod tests {
         assert!(asks_for_action("read the notes file"));
         assert!(asks_for_action("run a shell command to list files"));
         assert!(asks_for_action("draw me a red fox"));
+        assert!(!chat_only(
+            &brief(Intent::Chat),
+            "Nyx send me a picture of yourself"
+        ));
+        assert!(!chat_only(&brief(Intent::Chat), "send a selfie"));
+        assert!(!chat_only(
+            &brief(Intent::Chat),
+            "make a short video of ocean waves"
+        ));
     }
 }

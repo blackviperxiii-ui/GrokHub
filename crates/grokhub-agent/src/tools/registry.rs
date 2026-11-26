@@ -208,6 +208,23 @@ pub fn note_brief(session: &str, brief: &crate::brain::Brief) {
 
 /// The picture tool.
 pub const IMAGE_GENERATE: &str = "image_generate";
+/// The short-video tool.
+pub const VIDEO_GENERATE: &str = "video_generate";
+
+/// Offer `image_generate` / `video_generate` up front (at the volatile tail so
+/// the cached prefix holds) whenever the user asks for a picture or video in
+/// Chat or Hangout, so media tools are never left deferred on media asks.
+pub fn ensure_media_tools(session: &str, text: &str) {
+    if session.is_empty() {
+        return;
+    }
+    if crate::brain::is_picture_ask(text) {
+        remember_loaded(session, IMAGE_GENERATE);
+    }
+    if crate::brain::is_video_ask(text) {
+        remember_loaded(session, VIDEO_GENERATE);
+    }
+}
 
 /// Append every demoted tool to the chat's tail, once, in [`TALK_DEMOTED`] order.
 fn upgrade_talk(session: &str) {

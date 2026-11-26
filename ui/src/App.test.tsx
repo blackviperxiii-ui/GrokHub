@@ -358,7 +358,6 @@ describe("App", () => {
     expect(await morePages()).toEqual([
       "Objectives",
       "History",
-      "Imagine",
       "Journal",
       "Meetings",
       "Automations",
@@ -544,7 +543,6 @@ describe("App", () => {
     expect(await morePages()).toEqual([
       "Objectives",
       "History",
-      "Imagine",
       "Journal",
       "Meetings",
       "Automations",
@@ -563,7 +561,7 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(api.getCapabilities).toHaveBeenCalled());
     expect(rail()).toEqual(["Home", "Chat", "More", "Settings"]);
-    expect(await morePages()).toEqual(["Objectives", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard"]);
+    expect(await morePages()).toEqual(["Objectives", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard"]);
     await openPage("Workboard");
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
