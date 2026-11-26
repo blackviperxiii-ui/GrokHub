@@ -274,3 +274,72 @@ fn a_new_grant_shows_nothing_learned_and_forget_keeps_it_allowed() {
     assert_eq!(row(&view(&config, 3_000), "apps").granted.len(), 1);
     assert_eq!(forget(&config, "nope"), "That grant is already gone.");
 }
+
+/// "Forget these" tombstones every fact the scope taught, a fact the user
+/// paused on Personal too, so resuming that line later brings nothing back
+/// to the model. The row lists the paused fact while it is there.
+#[test]
+fn forget_these_takes_a_paused_fact_too_and_resume_brings_nothing_back() {
+    use grokhub_core::amr::{pause_node, NodeDraft, NodeType, Sensitivity};
+    let config = dir("forget-paused");
+    allow(&config, Some(Path::new("/home/you")), "apps", "");
+    let g = row(&view(&config, 2_000), "apps").granted[0].clone();
+    let store = idx::scope_store(&config);
+    store.init().unwrap();
+    for (item, name) in [
+        ("aion", "Installed app: AION 2"),
+        ("arc", "Installed app: ARC Raiders"),
+    ] {
+        store
+            .remember(&NodeDraft {
+                id: format!("scope-apps-{item}"),
+                node_type: NodeType::Fact,
+                created: "2026-10-12T12:00:00Z".into(),
+                updated: "2026-10-12T12:00:00Z".into(),
+                source: "scope:apps".into(),
+                confidence: 0.7,
+                tags: vec!["scope:apps".into()],
+                body: format!("{name}\n"),
+                sensitivity: Sensitivity::Personal,
+                consent_ref: g.id.clone(),
+            })
+            .unwrap();
+    }
+    // Personal: Pause ("Keep a line but stop using it").
+    pause_node(&store, "scope-apps-arc", true).unwrap();
+    let learned = row(&view(&config, 3_000), "apps").granted[0]
+        .learned
+        .clone();
+    assert_eq!(
+        learned.head.as_deref(),
+        Some("Learned 2 things, sealed on this computer:")
+    );
+    assert_eq!(
+        learned.lines,
+        ["Installed app: AION 2", "Installed app: ARC Raiders"]
+    );
+    assert_eq!(
+        forget(&config, &g.id),
+        "Forgot 2 things learned from Installed apps. It stays allowed; revoke it to stop reading."
+    );
+    assert_eq!(
+        (
+            store.is_forgotten("scope-apps-aion"),
+            store.is_forgotten("scope-apps-arc")
+        ),
+        (true, true)
+    );
+    pause_node(&store, "scope-apps-arc", false).unwrap();
+    assert_eq!(
+        ScopeIndex::recallable(&config).for_scope("apps"),
+        &[] as &[IndexedFact]
+    );
+    assert_eq!(
+        ScopeIndex::load(&config).for_scope("apps"),
+        &[] as &[IndexedFact]
+    );
+    assert_eq!(
+        row(&view(&config, 4_000), "apps").granted[0].learned.lines,
+        Vec::<String>::new()
+    );
+}

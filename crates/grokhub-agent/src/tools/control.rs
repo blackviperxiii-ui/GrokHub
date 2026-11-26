@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use super::{ToolCtx, ToolOutput};
 use crate::tasks::{TaskHub, MONITOR_CAP_MS};
+use crate::web_origin::JobWords;
 
 const STORE_CAP: u64 = 32 * 1024 * 1024;
 const DAY_SECS: u64 = 24 * 60 * 60;
@@ -315,7 +316,7 @@ fn with_id_hint(err: String) -> String {
 
 /// The ids an output read waits on: `task_id` split at commas, or every
 /// entry of a `task_ids` list.
-fn task_ids(args: &Value) -> Vec<String> {
+pub(crate) fn task_ids(args: &Value) -> Vec<String> {
     let listed: Vec<String> = match text_field(args, "task_id") {
         Some(id) => id.split(',').map(String::from).collect(),
         None => args
@@ -468,8 +469,9 @@ pub(crate) fn write_automation(
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
-    let mark = |id: &str, before: Option<&str>| {
-        crate::web_origin::note_job_write(&crate::perm::config_dir(), id, session, before, prompt)
+    let mark = |id: &str, before: Option<&JobWords>, after: &Automation| {
+        let after = JobWords::of(after);
+        crate::web_origin::note_job_write(&crate::perm::config_dir(), id, session, before, &after)
     };
     let mut now = clock();
     now.now_ms = now_ms;
@@ -478,7 +480,8 @@ pub(crate) fn write_automation(
         let Some(row) = list.iter_mut().find(|row| row.id == id) else {
             return Err(format!("automation {id} not found"));
         };
-        let before = std::mem::replace(&mut row.instructions, prompt.to_string());
+        let before = JobWords::of(row);
+        row.instructions = prompt.to_string();
         row.name = name;
         row.schedule = "heartbeat".into();
         row.heartbeat_every_min = mins;
@@ -496,7 +499,7 @@ pub(crate) fn write_automation(
         if let Some(slot) = list.iter_mut().find(|item| item.id == id) {
             *slot = row.clone();
         }
-        mark(&id, Some(&before))?;
+        mark(&id, Some(&before), &row)?;
         ledgered(&path, &id, &format!("changed to every {mins} min"), || {
             save_list(&path, &list)
         })?;
@@ -534,7 +537,7 @@ pub(crate) fn write_automation(
     }
     let id = row.id.clone();
     list.push(row.clone());
-    mark(&id, None)?;
+    mark(&id, None, &row)?;
     ledgered(&path, &id, &format!("scheduled every {mins} min"), || {
         save_list(&path, &list)
     })?;
@@ -803,8 +806,8 @@ mod tests {
         let marked = || serde_json::from_str::<serde_json::Value>(&marks().unwrap()).unwrap();
         let web = |id: &str| {
             let jobs = load_list(&store_path()).unwrap();
-            let words = &jobs.iter().find(|job| job.id == id).unwrap().instructions;
-            crate::web_origin::job_origin(&dir, id, words) == RunOrigin::Browser
+            let job = jobs.iter().find(|job| job.id == id).unwrap();
+            crate::web_origin::job_origin(&dir, id, &JobWords::of(job)) == RunOrigin::Browser
         };
 
         let here = id_in(&call(
@@ -895,7 +898,7 @@ mod tests {
         };
         let jobs = load_list(&store_path()).unwrap();
         assert_eq!(jobs[0].instructions, "click Send in Mail", "{}", out.text);
-        let origin = crate::web_origin::job_origin(&dir, &here, &jobs[0].instructions);
+        let origin = crate::web_origin::job_origin(&dir, &here, &JobWords::of(&jobs[0]));
         let said = out.text.replace(&here, "<id>");
         let _ = take_automation_changes();
         let _ = crate::harness::take_self_changes(&dir);

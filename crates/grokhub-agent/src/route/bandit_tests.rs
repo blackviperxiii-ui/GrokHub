@@ -209,6 +209,36 @@ fn a_settled_turn_logs_ids_and_probabilities_and_every_signal_moves_its_quality(
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// C10: a step that one of the run's own checks sent back (E4) is trouble,
+/// so the turn settles at the trouble quality and the similar-turn bank
+/// learns that it needed more.
+#[test]
+fn a_step_a_self_check_sent_back_marks_the_turn_as_trouble() {
+    let dir = crate::harness::test_dir("bandit-low-check");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let ep = "bandit-ep-low-check";
+    assert!(
+        !in_holdout(ep),
+        "{ep} sits in the holdout; pick another name"
+    );
+    let _ = crate::route::ladder::take_stage(true);
+    let _ = crate::route::ladder::take_tool_errors();
+    let text = "how does ray tracing work?";
+    let first = turn(&dir, &chat(ep, text), 1_000, 0);
+    // The same turn's next step, after a check sent the model back.
+    crate::route::ladder::note_low_check();
+    let step = turn(&dir, &chat(ep, text), 1_500, 0);
+    assert_eq!(
+        (first.route.effort.as_deref(), step.route.effort.as_deref()),
+        (Some("medium"), Some("high"))
+    );
+    turn(&dir, &chat(ep, "thanks, what about shadows?"), 2_000, 0);
+    let qs: Vec<f64> = read_log(&dir).iter().map(|l| l.q).collect();
+    assert_eq!(qs, [Q_TROUBLE]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn an_adult_turn_and_the_holdout_never_steer_and_only_the_holdout_is_logged() {
     let dir = crate::harness::test_dir("bandit-skip");

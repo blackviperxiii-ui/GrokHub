@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -2102,6 +2103,99 @@ impl ModelClient for XaiSignedOut {
 }
 
 /// A local model that answers chat.
+/// Starts cold, then stays loaded. A switch clears that so the next turn
+/// loads again.
+struct StaysWarm {
+    loads: AtomicUsize,
+    warm: AtomicBool,
+}
+
+impl StaysWarm {
+    fn loads(&self) -> usize {
+        self.loads.load(Ordering::SeqCst)
+    }
+
+    fn switch_model(&self) {
+        self.warm.store(false, Ordering::SeqCst);
+    }
+}
+
+impl super::local::LocalRuntime for StaysWarm {
+    fn warmed(&self) -> bool {
+        self.warm.load(Ordering::SeqCst)
+    }
+    fn classify(&self, _: &str, labels: &[&str]) -> Result<serde_json::Value, String> {
+        Ok(json!({ "label": labels[0], "score": 0.9 }))
+    }
+    fn summarize(&self, _: &str, _: u32) -> Result<serde_json::Value, String> {
+        Ok(json!({ "summary": "" }))
+    }
+    fn difficulty(&self, _: &str) -> Result<serde_json::Value, String> {
+        Ok(json!({ "d": 0.3 }))
+    }
+    fn chat_stream(
+        &self,
+        _: &[super::local::ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        if !self.warm.swap(true, Ordering::SeqCst) {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+        }
+        on_delta("kept warm");
+        Ok("kept warm".into())
+    }
+}
+
+#[test]
+fn two_back_to_back_turns_load_the_local_model_once_and_note_it_once() {
+    let (dir, wire) = setup("keep-warm");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    save_registry(&dir, &reg).unwrap();
+    let stays = Arc::new(StaysWarm {
+        loads: AtomicUsize::new(0),
+        warm: AtomicBool::new(false),
+    });
+    let _on = super::local::ForceOn::with(Some(stays.clone()));
+    let send = || {
+        let mut thought = String::new();
+        let out = live::stream_routed(
+            &XaiSignedOut,
+            &chat("keep-warm-1", &["hey"]),
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::ReasoningDelta(t) = ev {
+                    thought.push_str(&t);
+                }
+            },
+            "chat:default",
+        );
+        let notes = thought.matches(super::local::LOCAL_LOADING_NOTE).count();
+        (out, notes, thought)
+    };
+
+    let (first, notes, thought) = send();
+    assert_eq!(first.expect("the first turn answers").text, "kept warm");
+    assert_eq!(notes, 1, "a cold load says so once: {thought}");
+    assert_eq!(stays.loads(), 1);
+    assert_eq!(wire.n(), 0, "nothing left the computer");
+
+    let (second, notes, thought) = send();
+    assert_eq!(second.expect("the second turn answers").text, "kept warm");
+    assert_eq!(notes, 0, "a warm model says nothing: {thought}");
+    assert_eq!(stays.loads(), 1, "the server stayed up between turns");
+    assert_eq!(wire.n(), 0, "nothing left the computer");
+
+    stays.switch_model();
+    let (third, notes, thought) = send();
+    assert_eq!(third.expect("the switched turn answers").text, "kept warm");
+    assert_eq!(notes, 1, "a model switch says so: {thought}");
+    assert_eq!(stays.loads(), 2, "a model switch loads again");
+    assert_eq!(wire.n(), 0, "nothing left the computer");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 struct LocalChat;
 
 impl super::local::LocalRuntime for LocalChat {

@@ -852,6 +852,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                     || stage.looped
                     || stage.check_failed
                     || stage.out_of_budget
+                    || stage.low_check
                     || (rejects.unwrap_or(0) > 0 && !verify_ok);
                 if trouble && !new_turn {
                     super::knn::note_trouble(key);
@@ -864,8 +865,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 verify_ok,
                 // "That's wrong" or "try again": the next answer starts one rung up.
                 correction: is_correction(call.text) || super::ask::asks_redo(call.text),
-                // No self-check score yet, so E4 stays quiet. App-side budget caps never throttle effort.
-                low_check: None,
+                // App-side budget caps never throttle effort.
                 budget_pct: None,
                 routine,
                 stage,
@@ -2144,12 +2144,13 @@ pub fn stream_routed(
                     super::local::LOCAL_FALLBACK_MSG.into(),
                 ));
             }
-            if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
-                sink(StreamEvent::ReasoningDelta(
-                    super::local_live::loading_note(Some(reason)),
-                ));
-            }
-            let step_out = super::local::serve_request(class, &sent, cancel);
+            let step_out = super::local::serve_request_noting(class, &sent, cancel, &mut || {
+                if !class.trim().starts_with("background:") {
+                    sink(StreamEvent::ReasoningDelta(
+                        super::local_live::loading_note(Some(reason)),
+                    ));
+                }
+            });
             if let Ok(turn) = &step_out {
                 if !turn.text.is_empty() {
                     super::adult::guard(

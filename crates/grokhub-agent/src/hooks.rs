@@ -613,6 +613,10 @@ pub fn after_tool(
             }
         }
     }
+    // A formatter hook may have rewritten the file the edit wrote.
+    if !failed {
+        crate::tools::seen::after_hook(session, workspace, name, arguments);
+    }
     extra
 }
 

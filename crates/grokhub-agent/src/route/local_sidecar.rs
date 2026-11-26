@@ -1521,6 +1521,16 @@ fn load(config_dir: &Path, want: Want) -> Result<Busy, String> {
         let (model, stand_in) = match swap {
             Plan::Keep | Plan::Later { .. } => (paths.model.clone(), None),
             Plan::Load { model, stand_in } => {
+                // The same file, already serving, is not a switch. A path
+                // that only looks different (a symlink, a prefix) must not
+                // stop the server and start it again on the next turn.
+                if slot.as_ref().is_some_and(|side| {
+                    side.alive() && same_file(&side.model, &model) && side.sees_pictures() == vision
+                }) {
+                    let side = slot.as_ref().expect("same model file");
+                    side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
+                    return Ok(side.busy());
+                }
                 PENDING_STEP_UP.lock().expect("pending step up").take();
                 // Only a chat's ask swaps with requests in flight, and only
                 // background ones (see `local_swap::plan`): new requests wait
@@ -2797,6 +2807,71 @@ pub struct Endpoint {
     pub sees_pictures: bool,
 }
 
+/// Two paths name one model file. Equal paths match even when the file is
+/// not on disk yet; otherwise the canonical path does, so a symlink is not
+/// a different model.
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// `0` is not "unload now". Settings' shortest wait is one minute; a missing
+/// or cleared timeout keeps the default.
+fn idle_limit(secs: u64) -> u64 {
+    match secs {
+        0 => super::local_perf::IDLE_UNLOAD_SECS,
+        s => s,
+    }
+}
+
+/// The running server would be stopped for idle before this turn uses it.
+fn idle_would_unload(side: &Sidecar) -> bool {
+    if in_flight() > 0 || keep_loaded() {
+        return false;
+    }
+    let last = side
+        .last_used_secs
+        .load(Ordering::SeqCst)
+        .max(LAST_DONE_SECS.load(Ordering::SeqCst))
+        .max(LAST_NEEDED_SECS.load(Ordering::SeqCst));
+    super::local_perf::idle_unload_due(last, unix_secs(), idle_limit(side.idle_unload_secs))
+}
+
+/// A live server will answer the next request without a start: it is up, and
+/// its idle timeout has not run out.
+pub(crate) fn answers_now() -> bool {
+    let slot = global_slot().lock().expect("sidecar global");
+    slot.as_ref()
+        .is_some_and(|side| side.alive() && !idle_would_unload(side))
+}
+
+/// This turn will cold-start the server, or stop it and start a different
+/// model file. Looking does not start or stop anything.
+pub(crate) fn will_start_or_switch(config_dir: &Path) -> bool {
+    let slot = global_slot().lock().expect("sidecar global");
+    let Some(side) = slot.as_ref().filter(|s| s.alive()) else {
+        return true;
+    };
+    if idle_would_unload(side) {
+        return true;
+    }
+    let Ok(paths) = runtime_paths(config_dir) else {
+        return false;
+    };
+    let (plan, vision) = swap_plan(config_dir, &paths.model, Some(side), Want::Request);
+    match plan {
+        Plan::Load { ref model, .. } => {
+            !same_file(&side.model, model) || side.sees_pictures() != vision
+        }
+        Plan::Keep | Plan::Later { .. } => false,
+    }
+}
+
 /// Base URL, token and how the model thinks of the global sidecar, when running.
 pub fn global_endpoint() -> Option<Endpoint> {
     tick_idle_unload();
@@ -2859,7 +2934,7 @@ pub fn tick_idle_unload() {
         .load(Ordering::SeqCst)
         .max(LAST_DONE_SECS.load(Ordering::SeqCst))
         .max(LAST_NEEDED_SECS.load(Ordering::SeqCst));
-    if super::local_perf::idle_unload_due(last, unix_secs(), side.idle_unload_secs) {
+    if super::local_perf::idle_unload_due(last, unix_secs(), idle_limit(side.idle_unload_secs)) {
         if let Some(side) = slot.take() {
             *LAST_IDLE_UNLOAD.lock().expect("last idle unload") =
                 Some((side.model.clone(), unix_secs()));
@@ -3300,6 +3375,86 @@ mod tests {
         assert!(!game_settled(1_000_000, 0), "no game seen");
         assert!(!game_settled(1_000_000 + gone - 1, 1_000_000), "alt-tab");
         assert!(game_settled(1_000_000 + gone, 1_000_000));
+    }
+
+    #[test]
+    fn a_zero_idle_timeout_does_not_unload_a_model_that_just_answered() {
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        *global_slot().lock().unwrap() = Some(idle_child_sidecar(0, unix_secs()));
+        let pid = global_pid().expect("planted");
+        tick_idle_unload();
+        assert_eq!(
+            global_pid(),
+            Some(pid),
+            "a cleared timeout waits the default, it does not unload now"
+        );
+        assert!(answers_now(), "the server is still warm");
+        assert!(
+            !will_start_or_switch(Path::new("/no/such/config")),
+            "a warm server is not a cold load when its paths cannot be read"
+        );
+        stop_global();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_the_loaded_model_is_not_a_different_file() {
+        let dir = crate::harness::test_dir("same-model-file");
+        let file = dir.join("model.gguf");
+        let link = dir.join("link.gguf");
+        std::fs::write(&file, b"gguf").unwrap();
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert_ne!(file, link);
+        assert!(same_file(&file, &link));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn two_chat_turns_keep_one_server() {
+        use std::os::unix::fs::PermissionsExt;
+        let _one = SLOT_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        stop_global();
+        local_gov::reset_for_test();
+        let dir = crate::harness::test_dir("sidecar-stay");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let bin = dir.join("bin").join("llama-server");
+        let seen = dir.join("args.txt");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho \"$@\" > {}\nexit 1\n", seen.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let model = dir.join("models").join("m.gguf");
+        std::fs::create_dir_all(model.parent().expect("models")).unwrap();
+        std::fs::write(&model, b"gguf").unwrap();
+        clear_paths_cache();
+        let paths = resolve_paths(&dir).expect("the test engine and model");
+        let _on = crate::route::local::ForceOn::with(None);
+        let _need =
+            super::super::local_scale::NeedGuard::set(super::super::local_scale::Need::Normal);
+        let mut planted = idle_child_sidecar(600, unix_secs());
+        planted.model = paths.model.clone();
+        planted.binary = paths.binary.clone();
+        *global_slot().lock().unwrap() = Some(planted);
+        let pid = global_pid().expect("planted");
+        assert!(
+            !will_start_or_switch(&dir),
+            "the loaded file is the one this turn would start"
+        );
+        for _ in 0..2 {
+            let busy = acquire_for_request(&dir).expect("the loaded model answers");
+            assert!(busy.endpoint().is_some());
+            drop(busy);
+            assert_eq!(global_pid(), Some(pid), "the server stayed up");
+        }
+        assert!(!seen.exists(), "llama-server was not started again");
+        stop_global();
+        clear_paths_cache();
+        set_last_error(None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A long-running stand-in child (not llama-server) in a [`Sidecar`].
@@ -4708,6 +4863,9 @@ mod tests {
         std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
         assert!(resolve_paths(&dir).is_none());
         std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        // Same timestamp tick: the folder mtime does not move, so the earlier
+        // "nothing here" answer would stand. Both files are on disk now.
+        clear_paths_cache();
         let p = resolve_paths(&dir).expect("paths");
         assert!(p.binary.ends_with(llama_server_name()));
         assert!(p.model.ends_with("a.gguf"));

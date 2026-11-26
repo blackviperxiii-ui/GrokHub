@@ -142,8 +142,7 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
         );
         if name == "release.yml" {
             assert!(
-                body.iter()
-                    .any(|line| *line == "        run: node scripts/stage-hub-sidecar.mjs"),
+                body.contains(&"        run: node scripts/stage-hub-sidecar.mjs"),
                 "release builds keep the optimized sidecar"
             );
         }
@@ -173,13 +172,32 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
 #[test]
 fn windows_nextest_on_beta_is_split_in_two_and_the_check_name_stays() {
     let ci = include_str!("../../.github/workflows/ci.yml");
+    // A Windows checkout rewrites LF as CRLF. lines() drops either ending, so
+    // the job key is compared as text. A raw "\n  windows:\n" misses on CRLF.
+    let lines: Vec<&str> = ci.lines().collect();
     assert!(ci.contains("part: [1, 2]"));
     assert!(ci.contains(
         "cargo nextest run --workspace --locked --profile ci --partition count:${{ matrix.part }}/2"
     ));
-    assert!(ci.contains("\n  windows:\n"));
-    assert!(ci.contains("needs: [changes, windows-parts]"));
+    let job = lines
+        .iter()
+        .position(|line| *line == "  windows:")
+        .expect("the required check is the windows job");
+    assert_eq!(
+        lines.get(job + 1).copied(),
+        Some("    needs: [changes, windows-parts]"),
+        "the windows job gates both parts"
+    );
+    assert!(ci.contains("PARTS: ${{ needs.windows-parts.result }}"));
+    assert!(ci.contains(r#"test "$PARTS" = success"#));
+    assert!(lines.contains(
+        &"    needs: [changes, fmt, guards, linux, deny, cross-check, shell, phone-android, phone-ios, windows, windows-release]"
+    ));
     assert!(ci.contains("shared-key: windows-test"));
+    assert!(
+        ci.contains("Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $backup 'bin')"),
+        "parked rustup shims stay on PATH for the windows-test restore and the sidecar stage"
+    );
 }
 
 /// The value of every `path = "…"` or `path = '…'` key in a Cargo manifest.

@@ -4,7 +4,7 @@ This page describes which GitHub Actions jobs run on which event, as the workflo
 
 Columns, left to right:
 
-- **PR**: a pull request into `beta` or `main`.
+- **PR**: a pull request into `beta` or `main`. A cell that names one base applies only to PRs into that base.
 - **Queue**: `merge_group`.
 - **Beta**: a push to `beta`, which every merged PR makes.
 - **Main**: a push to `main`, made by a promotion or a hotfix.
@@ -18,10 +18,11 @@ Columns, left to right:
 |---|---|---|---|---|---|---|---|
 | `changes`, `fmt`, `guards` | yes | yes | yes | yes | yes | yes | yes |
 | `linux` (required) | code ¹ | yes | yes | yes | yes | yes ² | yes |
-| `windows` (required) | Rust ³ | yes | yes | yes | yes | yes ² | yes |
+| `windows` (required) | into `main`, Rust ³ | yes | yes | yes | yes | yes ² | yes |
 | `deny` | lock ⁴ | yes | no | yes | yes | yes ² | yes |
-| `shell` | ubuntu ⁵ | ubuntu, windows | no | ubuntu, windows | 3 OS | 3 OS ² | 3 OS |
-| `phone (android)` | phone ⁶ | yes | no | phone ⁶ | yes | yes ² | yes |
+| `shell` | into `main`, ubuntu ⁵ | ubuntu, windows | ubuntu, windows ⁵ | ubuntu, windows | 3 OS | 3 OS ² | 3 OS |
+| `shell-lint` ⁷ | into `beta`, shell ⁵ | no | no | no | no | no | no |
+| `phone (android)` | into `main`, phone ⁶ | yes | phone ⁶ | phone ⁶ | yes | yes ² | yes |
 | `phone (ios)` | no | no | no | no | yes | yes ² | yes |
 | `cross-check` (macOS, iOS, Android, wasm) | no | no | no | no | yes | yes ² | yes |
 | `windows-release` | no | no | no | no | no | yes ² | yes |
@@ -31,8 +32,9 @@ Columns, left to right:
 2. Skipped when `beta` has not moved since the last green nightly (see below).
 3. Same as 1, and also skipped when a PR touches only `ui/` or workflows other than `ci.yml`.
 4. Only when `Cargo.lock` or `deny.toml` changes.
-5. Only when shell paths change (`ui/`, `src-tauri/`, the shared crates, `ci.yml`). The Windows WebView2 smoke test runs on Queue, Main, Tag, Nightly and Manual.
+5. Only when shell paths change: `ui/`, `src-tauri/`, `brand/`, the crates the shell builds, the root `Cargo.toml`, the root Rust config (`clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml`, `.cargo/`), `ci.yml`, `release.yml` and the two scripts the shell tests read. The Windows WebView2 smoke test runs on every event that runs the Windows shell job.
 6. Only when `ui/`, `src-tauri/` or `ci.yml` changes.
+7. The lint half of `shell` on ubuntu: ui eslint, vitest and the UI build, then `cargo fmt --check` and `cargo clippy --all-targets -D warnings` for `src-tauri`. It restores the `shell-ubuntu-latest` cache that a push to `beta` saves, and never saves one. It is not a required check of its own: `linux` fails unless `shell-lint` passed, or was skipped because no shell path changed.
 
 Every gate is a job-level `if:`, never a workflow-level path filter. A skipped job still reports, so a required check (`fmt`, `guards`, `linux`, `windows`, `pii-guard`) never sits waiting.
 

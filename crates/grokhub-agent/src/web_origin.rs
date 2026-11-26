@@ -9,6 +9,11 @@
 //! or a Workboard card whose words a browser run writes is marked
 //! ([`JOBS_FILE`], [`CARDS_FILE`]), so each later run of it starts as a
 //! browser run too, until a person saves its words again at this computer.
+//! Words made from other words take their origin: a job made from a card's
+//! title, a card a job's run files or reports on, and a job's saved words
+//! with a check's or a wait's lines added to them, whose run is the saved
+//! job's ([`job_origin`] reads [`JobWords`], made only from the saved job,
+//! never from the run's prompt).
 //!
 //! Three things decide from the origin, each in one place:
 //! - who wrote a job's or a card's words: [`note_job_write`] and
@@ -204,8 +209,49 @@ pub fn desktop_allowed(origin: RunOrigin) -> bool {
 /// the fingerprint of the words a person saved at this computer since, or
 /// none. A run of the job is a browser's unless the words it runs are those,
 /// so the order in which a browser's save and a person's save land never
-/// leaves a browser's words with the desktop.
+/// leaves a browser's words with the desktop. A job whose check command a
+/// browser's words set also has an entry under [`check_key`]: the
+/// fingerprint of the check command a person's words said since, or none.
 type JobMarks = BTreeMap<String, Option<String>>;
+
+/// Where [`JOBS_FILE`] keeps job `id`'s check-command mark. A job id has no
+/// space in it.
+fn check_key(id: &str) -> String {
+    format!("{id} check")
+}
+
+/// The words a run of a job goes on, as the job is saved: its instructions
+/// and its check command. Made only from the saved job ([`JobWords::of`]),
+/// so the prompt a run asks (these words with what the check printed or the
+/// wait found added) can never stand in for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobWords {
+    all: String,
+    check: String,
+}
+
+impl JobWords {
+    pub fn of(job: &grokhub_core::Automation) -> Self {
+        Self::new(&job.instructions, &job.check_command)
+    }
+
+    /// A job no longer on file runs no words: it is a browser's whenever a
+    /// browser wrote it.
+    pub fn gone() -> Self {
+        Self::new("", "")
+    }
+
+    /// A job with no check command's words are its instructions, so a mark
+    /// saved for them before the check counted still holds.
+    fn new(instructions: &str, check_command: &str) -> Self {
+        let check = check_command.trim().to_string();
+        let all = match check.as_str() {
+            "" => instructions.to_string(),
+            check => format!("{instructions}\0check {check}"),
+        };
+        Self { all, check }
+    }
+}
 
 fn fingerprint(words: &str) -> String {
     grokhub_core::model_download::sha256_hex(words.as_bytes())
@@ -230,12 +276,37 @@ pub fn mark_job(config_dir: &Path, id: &str) -> Result<(), String> {
     })
 }
 
-/// A person at this computer saved `words` as job `id`'s: a job a browser
-/// wrote runs as theirs while it runs exactly those words.
-pub fn job_saved_here(config_dir: &Path, id: &str, words: &str) -> Result<(), String> {
+/// [`mark_job`], for words that also give the job its check command: that
+/// check stays the browser's until a person's words at this computer say it.
+pub fn mark_job_check(config_dir: &Path, id: &str) -> Result<(), String> {
     change_jobs(config_dir, |marks| {
+        marks.insert(id.to_string(), None);
+        marks.insert(check_key(id), None);
+    })
+}
+
+/// A person at this computer saved `words` as job `id`'s, their words saying
+/// its check command when `check_said`: a job a browser wrote runs as theirs
+/// while it runs exactly those words. A save that keeps, unsaid, a check
+/// command a browser's words set gives nothing back, since the check is
+/// still the browser's.
+pub fn job_saved_here(
+    config_dir: &Path,
+    id: &str,
+    words: &JobWords,
+    check_said: bool,
+) -> Result<(), String> {
+    let check = fingerprint(&words.check);
+    change_jobs(config_dir, |marks| {
+        let key = check_key(id);
+        match marks.get_mut(&key) {
+            Some(said) if check_said => *said = Some(check),
+            Some(Some(said)) if *said == check => {}
+            Some(_) => return,
+            None => {}
+        }
         if let Some(mark) = marks.get_mut(id) {
-            *mark = Some(fingerprint(words));
+            *mark = Some(fingerprint(&words.all));
         }
     })
 }
@@ -248,14 +319,14 @@ pub fn note_job_write(
     config_dir: &Path,
     id: &str,
     session: Option<&str>,
-    before: Option<&str>,
-    words: &str,
+    before: Option<&JobWords>,
+    words: &JobWords,
 ) -> Result<(), String> {
     match (of_in(config_dir, session), before) {
         (RunOrigin::Browser, _) => mark_job(config_dir, id),
         (RunOrigin::Window, None) => Ok(()),
         (RunOrigin::Window, Some(before)) => {
-            let (was, now) = (fingerprint(before), fingerprint(words));
+            let (was, now) = (fingerprint(&before.all), fingerprint(&words.all));
             change_jobs(config_dir, |marks| {
                 if let Some(mark) = marks.get_mut(id).filter(|m| m.as_deref() == Some(&was)) {
                     *mark = Some(now);
@@ -268,11 +339,11 @@ pub fn note_job_write(
 /// Whose words a run of job `id` that runs `words` goes on: a browser's when
 /// a browser run wrote the job and a person hasn't saved these words here
 /// since, and when [`JOBS_FILE`] can't be read.
-pub fn job_origin(config_dir: &Path, id: &str, words: &str) -> RunOrigin {
+pub fn job_origin(config_dir: &Path, id: &str, words: &JobWords) -> RunOrigin {
     match read::<JobMarks>(config_dir, JOBS_FILE) {
         Ok(marks) => match marks.get(id) {
             None => RunOrigin::Window,
-            Some(Some(saved)) if *saved == fingerprint(words) => RunOrigin::Window,
+            Some(Some(saved)) if *saved == fingerprint(&words.all) => RunOrigin::Window,
             Some(_) => RunOrigin::Browser,
         },
         Err(_) => RunOrigin::Browser,
@@ -290,6 +361,9 @@ pub enum CardPart {
     Steps,
     /// What it waits on.
     Blocker,
+    /// A Follow up card's report from its automation's run. No person edits
+    /// it; the next report a run of a person's words files replaces it.
+    Report,
 }
 
 impl CardPart {
@@ -299,6 +373,7 @@ impl CardPart {
             Self::Notes => "notes",
             Self::Steps => "steps",
             Self::Blocker => "blocker",
+            Self::Report => "report",
         }
     }
 }
@@ -334,9 +409,9 @@ pub fn card_seen(config_dir: &Path, id: &str, part: CardPart) -> Option<u64> {
         .filter(|count| count % 2 == 1)
 }
 
-/// A person at this computer saved `part` of card `id`, whose mark was
-/// `seen` ([`card_seen`]) when they saved it: the mark comes off unless a
-/// browser wrote that part again since.
+/// A person at this computer saved `part` of card `id`, or a run of a
+/// person's words wrote it whole, and its mark was `seen` ([`card_seen`])
+/// then: the mark comes off unless a browser wrote that part again since.
 pub fn card_saved_here(
     config_dir: &Path,
     id: &str,
@@ -382,6 +457,23 @@ pub fn card_origin(config_dir: &Path, id: &str) -> RunOrigin {
             if !marks
                 .get(id)
                 .is_some_and(|card| card.values().any(|c| c % 2 == 1)) =>
+        {
+            RunOrigin::Window
+        }
+        _ => RunOrigin::Browser,
+    }
+}
+
+/// Whose words `part` of card `id` holds, for words made from that part
+/// alone (a job made from a card's title): a browser's while a browser
+/// run's write of it stands, and when [`CARDS_FILE`] can't be read.
+pub fn card_part_origin(config_dir: &Path, id: &str, part: CardPart) -> RunOrigin {
+    match read::<CardMarks>(config_dir, CARDS_FILE) {
+        Ok(marks)
+            if !marks
+                .get(id)
+                .and_then(|card| card.get(part.key()))
+                .is_some_and(|c| c % 2 == 1) =>
         {
             RunOrigin::Window
         }
@@ -460,6 +552,11 @@ mod tests {
     const INBOX_FP: &str = "0751050589ed0e198d207b091565d76f629a8f0bc72c3904f6317993dc7c8ac4";
     const SEND: &str = "click Send in Mail";
 
+    /// A job's words with no check command.
+    fn w(instructions: &str) -> JobWords {
+        JobWords::new(instructions, "")
+    }
+
     /// A job a browser wrote runs as a browser's until a person saves the
     /// words it runs, whichever save lands last: the person's save made
     /// first and the browser's after (the race) still runs as the browser's.
@@ -467,38 +564,114 @@ mod tests {
     fn a_job_is_a_browsers_until_a_person_saves_the_words_it_runs() {
         use RunOrigin::{Browser, Window};
         let dir = temp_dir("marks");
-        assert_eq!(job_origin(&dir, "auto-1", INBOX), Window);
+        assert_eq!(job_origin(&dir, "auto-1", &w(INBOX)), Window);
         mark_job(&dir, "auto-1").unwrap();
         mark_job(&dir, "auto-1").unwrap();
         mark_job(&dir, "auto-2").unwrap();
         let file = || std::fs::read_to_string(dir.join(JOBS_FILE)).unwrap();
         assert_eq!(file(), r#"{"auto-1":null,"auto-2":null}"#);
-        assert_eq!(job_origin(&dir, "auto-1", SEND), Browser);
+        assert_eq!(job_origin(&dir, "auto-1", &w(SEND)), Browser);
         // The person saves their words here, then the browser's save lands.
-        job_saved_here(&dir, "auto-1", INBOX).unwrap();
+        job_saved_here(&dir, "auto-1", &w(INBOX), false).unwrap();
         assert_eq!(
             file(),
             format!(r#"{{"auto-1":"{INBOX_FP}","auto-2":null}}"#)
         );
         assert_eq!(
             [
-                job_origin(&dir, "auto-1", INBOX),
-                job_origin(&dir, "auto-1", SEND)
+                job_origin(&dir, "auto-1", &w(INBOX)),
+                job_origin(&dir, "auto-1", &w(SEND))
             ],
             [Window, Browser]
         );
         // A browser's write after the person's save takes it back.
         mark_job(&dir, "auto-1").unwrap();
-        assert_eq!(job_origin(&dir, "auto-1", INBOX), Browser);
+        assert_eq!(job_origin(&dir, "auto-1", &w(INBOX)), Browser);
         // Saving here a job no browser wrote leaves no mark.
-        job_saved_here(&dir, "auto-3", INBOX).unwrap();
+        job_saved_here(&dir, "auto-3", &w(INBOX), false).unwrap();
         assert_eq!(file(), r#"{"auto-1":null,"auto-2":null}"#);
         // A file that can't be read: every job is a browser's, and no write
         // goes over it.
         std::fs::write(dir.join(JOBS_FILE), "[not json").unwrap();
-        assert_eq!(job_origin(&dir, "auto-3", INBOX), Browser);
+        assert_eq!(job_origin(&dir, "auto-3", &w(INBOX)), Browser);
         assert!(mark_job(&dir, "auto-3").is_err());
         assert_eq!(file(), "[not json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A job's words are its instructions and its check command, so a person
+    /// who saved them with one check command hasn't saved them with another.
+    /// A job with no check command keeps the mark saved for its instructions
+    /// alone, and a job no longer on file is a browser's when one wrote it.
+    #[test]
+    fn a_jobs_words_are_its_instructions_and_its_check_command() {
+        use RunOrigin::{Browser, Window};
+        let dir = temp_dir("job-words");
+        let df = JobWords::new(INBOX, "df -h");
+        mark_job(&dir, "auto-1").unwrap();
+        job_saved_here(&dir, "auto-1", &df, false).unwrap();
+        let origins = || {
+            [
+                JobWords::new(INBOX, " df -h "),
+                JobWords::new(INBOX, "curl example.com"),
+                JobWords::new(INBOX, ""),
+                JobWords::gone(),
+            ]
+            .map(|words| job_origin(&dir, "auto-1", &words))
+        };
+        assert_eq!(origins(), [Window, Browser, Browser, Browser]);
+        job_saved_here(&dir, "auto-1", &JobWords::new(INBOX, "  "), false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(JOBS_FILE)).unwrap(),
+            format!(r#"{{"auto-1":"{INBOX_FP}"}}"#)
+        );
+        assert_eq!(origins(), [Browser, Browser, Window, Browser]);
+        assert_eq!(job_origin(&dir, "auto-2", &JobWords::gone()), Window);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A check command a browser's words gave a job is the browser's until a
+    /// person's words say it: a person's save that keeps it unsaid gives the
+    /// job nothing back, and one that says it does. After that a save that
+    /// keeps the check unsaid gives it back while the check is the one they
+    /// said, and a browser's check written after theirs is the browser's.
+    #[test]
+    fn a_check_a_browsers_words_set_is_its_until_a_persons_words_say_it() {
+        use RunOrigin::{Browser, Window};
+        let dir = temp_dir("job-check");
+        let df = JobWords::new(INBOX, "df -h");
+        let file = || std::fs::read_to_string(dir.join(JOBS_FILE)).unwrap();
+        let origin = |words: &JobWords| job_origin(&dir, "auto-1", words);
+        mark_job_check(&dir, "auto-1").unwrap();
+        assert_eq!(file(), r#"{"auto-1":null,"auto-1 check":null}"#);
+        job_saved_here(&dir, "auto-1", &df, false).unwrap();
+        assert_eq!(origin(&df), Browser);
+        job_saved_here(&dir, "auto-1", &df, true).unwrap();
+        assert_eq!(origin(&df), Window);
+        assert_eq!(
+            file(),
+            r#"{"auto-1":"99bb02849b0e966b6c5696ed74976d7aef095ecfde8e51535549db96a9814ef9","auto-1 check":"798339512a506f29d1c0b37e9e8cbaec68357873a3b840c9b10379d6632cbae2"}"#
+        );
+        let twice = JobWords::new("summarize my inbox twice", "df -h");
+        job_saved_here(&dir, "auto-1", &twice, false).unwrap();
+        assert_eq!([origin(&df), origin(&twice)], [Browser, Window]);
+        // The race: a browser marks its check, the person's save says theirs,
+        // and then the browser's save lands with another check. The
+        // person's next save leaves that one unsaid.
+        mark_job_check(&dir, "auto-1").unwrap();
+        job_saved_here(&dir, "auto-1", &df, true).unwrap();
+        let curl = JobWords::new(INBOX, "curl example.com");
+        assert_eq!(origin(&curl), Browser);
+        job_saved_here(&dir, "auto-1", &curl, false).unwrap();
+        assert_eq!(origin(&curl), Browser);
+        // A browser's check written after the person's is the browser's.
+        mark_job_check(&dir, "auto-1").unwrap();
+        job_saved_here(&dir, "auto-1", &df, false).unwrap();
+        assert_eq!(origin(&df), Browser);
+        // A job whose check no browser's words set: a save keeps it unsaid.
+        mark_job(&dir, "auto-2").unwrap();
+        job_saved_here(&dir, "auto-2", &df, false).unwrap();
+        assert_eq!(job_origin(&dir, "auto-2", &df), Window);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -512,17 +685,17 @@ mod tests {
         start_run(&dir, "shell-web-writes-1", Browser).unwrap();
         let desk = Some("shell-desk-writes-1");
         mark_job(&dir, "auto-1").unwrap();
-        job_saved_here(&dir, "auto-1", INBOX).unwrap();
+        job_saved_here(&dir, "auto-1", &w(INBOX), false).unwrap();
         mark_job(&dir, "auto-2").unwrap();
         let twice = "summarize my inbox twice";
-        note_job_write(&dir, "auto-1", desk, Some(INBOX), twice).unwrap();
-        note_job_write(&dir, "auto-2", desk, Some(SEND), "click Send twice").unwrap();
-        note_job_write(&dir, "auto-4", desk, None, INBOX).unwrap();
+        note_job_write(&dir, "auto-1", desk, Some(&w(INBOX)), &w(twice)).unwrap();
+        note_job_write(&dir, "auto-2", desk, Some(&w(SEND)), &w("click Send twice")).unwrap();
+        note_job_write(&dir, "auto-4", desk, None, &w(INBOX)).unwrap();
         assert_eq!(
             [
-                job_origin(&dir, "auto-1", twice),
-                job_origin(&dir, "auto-2", "click Send twice"),
-                job_origin(&dir, "auto-4", INBOX),
+                job_origin(&dir, "auto-1", &w(twice)),
+                job_origin(&dir, "auto-2", &w("click Send twice")),
+                job_origin(&dir, "auto-4", &w(INBOX)),
             ],
             [Window, Browser, Window]
         );
@@ -530,11 +703,11 @@ mod tests {
             &dir,
             "auto-1",
             Some("shell-web-writes-1"),
-            Some(twice),
-            SEND,
+            Some(&w(twice)),
+            &w(SEND),
         )
         .unwrap();
-        assert_eq!(job_origin(&dir, "auto-1", SEND), Browser);
+        assert_eq!(job_origin(&dir, "auto-1", &w(SEND)), Browser);
         assert_eq!(
             std::fs::read_to_string(dir.join(JOBS_FILE)).unwrap(),
             r#"{"auto-1":null,"auto-2":null}"#
@@ -584,6 +757,32 @@ mod tests {
         assert_eq!(card_origin(&dir, "card-2"), Browser);
         assert_eq!(card_seen(&dir, "card-1", Notes), None);
         assert!(mark_card(&dir, "card-2", &[Words]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Words made from one part of a card (a job made from its title) are a
+    /// browser's while that part is, whatever the other parts hold, and
+    /// when the marks can't be read.
+    #[test]
+    fn one_parts_origin_is_that_parts_mark() {
+        use CardPart::{Notes, Report, Words};
+        use RunOrigin::{Browser, Window};
+        let dir = temp_dir("card-part");
+        let parts = || [Words, Notes, Report].map(|part| card_part_origin(&dir, "card-1", part));
+        assert_eq!(parts(), [Window, Window, Window]);
+        mark_card(&dir, "card-1", &[Notes]).unwrap();
+        assert_eq!(parts(), [Window, Browser, Window]);
+        mark_card(&dir, "card-1", &[Words, Report]).unwrap();
+        assert_eq!(parts(), [Browser, Browser, Browser]);
+        card_saved_here(&dir, "card-1", Words, card_seen(&dir, "card-1", Words)).unwrap();
+        card_saved_here(&dir, "card-1", Report, card_seen(&dir, "card-1", Report)).unwrap();
+        assert_eq!(parts(), [Window, Browser, Window]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(CARDS_FILE)).unwrap(),
+            r#"{"card-1":{"notes":1,"report":2,"words":2}}"#
+        );
+        std::fs::write(dir.join(CARDS_FILE), "[not json").unwrap();
+        assert_eq!(card_part_origin(&dir, "card-2", Words), Browser);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -173,17 +173,27 @@ pub fn delete(
     Ok(String::new())
 }
 
+/// Wipe all: Know me turns off, its tags go, and every topic it added to
+/// Pulse ("From your PC") leaves with them, including one whose tag a signal
+/// switch or a later scan already took off the list. A topic you added
+/// yourself stays.
 pub fn wipe(
     config_dir: &Path,
     interests: impl FnOnce(Edit<'_>) -> Result<(), String>,
 ) -> Result<String, String> {
     let mut state = load(config_dir);
-    let gone = state.wipe();
+    state.wipe();
     save(config_dir, &state)?;
     interests(&mut |profile| {
+        let from_pc: Vec<String> = profile
+            .topics
+            .iter()
+            .filter(|t| t.source == InterestSource::KnowMe)
+            .map(|t| t.topic.clone())
+            .collect();
         let mut dropped = false;
-        for tag in &gone {
-            dropped |= drop_topic(profile, tag.topic.as_deref());
+        for topic in &from_pc {
+            dropped |= profile.remove(topic);
         }
         dropped
     })?;

@@ -1183,11 +1183,15 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         crate::hooks::on_subagent_stop(&job.parent_session, &job.workspace, &job.kind_name, false);
     // A SubagentStop hook that blocks sends the helper on once with its reason.
     if let Some(reason) = blocked.filter(|_| matches!(out.stop, StopReason::EndTurn)) {
-        let again = crate::run_loop(&input, &mut history, &reason, None, &mut |ev| {
-            job.tasks.note_step(&agent_id, &ev);
-            keep(&ev);
-            emit_child(ev, background, &parent_session, tx)
-        });
+        // The rerun goes on from the first run's record, so a check in it
+        // covers the first run's changes and its own changes add to them.
+        let first = std::mem::take(&mut out.kept);
+        let again =
+            crate::run::run_loop_from(&input, &mut history, &reason, None, first, &mut |ev| {
+                job.tasks.note_step(&agent_id, &ev);
+                keep(&ev);
+                emit_child(ev, background, &parent_session, tx)
+            });
         let _ = crate::hooks::on_subagent_stop(
             &job.parent_session,
             &job.workspace,
@@ -1197,6 +1201,7 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
         out.usage.add(&again.usage);
         out.compacted |= again.compacted;
         out.stop = again.stop;
+        out.kept = again.kept;
     }
     // A fork's answer is what it added, not the chat it inherited. Once it
     // compacted, the inherited part is a summary and the whole is its own.
@@ -1205,10 +1210,18 @@ fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
     } else {
         inherited
     };
+    let mut text = child_text(&history[own..]);
+    let did = did_lines(&out.kept);
+    if !did.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&did);
+    }
     ChildDone {
         stop: out.stop,
         usage: out.usage,
-        text: child_text(&history[own..]),
+        text,
         said: last_said(&history[own..]),
         looked_at: looked_at(&history[own..]),
         work: None,
@@ -1511,6 +1524,100 @@ fn child_text(history: &[InputItem]) -> String {
 
 /// Most files and pages listed from one run.
 const LOOKED_AT_MAX: usize = 12;
+/// Commands a helper's result names, newest kept.
+const DID_COMMANDS: usize = 8;
+/// Characters kept of each command a helper's result names.
+const DID_COMMAND_CHARS: usize = 80;
+
+/// What a helper's own calls did, from the run's record rather than its
+/// words: the files it changed, the commands that ran and how each ended,
+/// and the changes no check covered after them. Empty when it changed and
+/// ran nothing, so a helper that only read hands back its answer alone.
+fn did_lines(kept: &crate::run::Kept) -> String {
+    let mut lines = Vec::new();
+    if !kept.modified_paths.is_empty() {
+        let paths: Vec<String> = kept.modified_paths.iter().map(|p| flat(p)).collect();
+        lines.push(format!("changed: {}", listed(&paths)));
+    }
+    // A refused command never ran.
+    let ran: Vec<String> = kept
+        .ran
+        .iter()
+        .filter(|r| r.name == "run_terminal_command")
+        .map(|r| (r, r.ended()))
+        .filter(|(_, ended)| ended != "not run")
+        .map(|(r, ended)| format!("{} ({ended})", one_line(&cleaned(&r.command))))
+        .collect();
+    match ran.len() {
+        0 => {}
+        n if n > DID_COMMANDS => lines.push(format!(
+            "ran (newest {DID_COMMANDS} of {n}): {}",
+            ran[n - DID_COMMANDS..].join("; ")
+        )),
+        _ => lines.push(format!("ran: {}", ran.join("; "))),
+    }
+    let unchecked: Vec<String> = kept
+        .fresh
+        .unchecked()
+        .iter()
+        .map(|(what, _)| cut_middle(&flat(&cleaned(what))))
+        .collect();
+    if !unchecked.is_empty() {
+        lines.push(format!(
+            "unchecked: no check ran after the last change ({})",
+            listed(&unchecked)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// `items` joined by commas, the first [`LOOKED_AT_MAX`] of them and a count
+/// of the rest.
+fn listed(items: &[String]) -> String {
+    let shown = items[..items.len().min(LOOKED_AT_MAX)].join(", ");
+    match items.len().saturating_sub(LOOKED_AT_MAX) {
+        0 => shown,
+        rest => format!("{shown}, and {rest} more"),
+    }
+}
+
+/// A command, or an unchecked change that may be one, as the lead may see
+/// it: secrets and personal details masked as the close check masks them.
+fn cleaned(command: &str) -> String {
+    grokhub_core::redact_pii(&grokhub_core::redact_for_share(command)).0
+}
+
+/// `text` on one line, its runs of whitespace one space each.
+fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `text` cut to [`DID_COMMAND_CHARS`] in the middle, so a path keeps its
+/// file name.
+fn cut_middle(text: &str) -> String {
+    let count = text.chars().count();
+    if count <= DID_COMMAND_CHARS {
+        return text.to_string();
+    }
+    let head = DID_COMMAND_CHARS / 2;
+    let tail = DID_COMMAND_CHARS - head - 1;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - tail).collect();
+    format!("{start}…{end}")
+}
+
+/// A command on one line, cut at [`DID_COMMAND_CHARS`].
+fn one_line(command: &str) -> String {
+    let flat = flat(command);
+    if flat.chars().count() > DID_COMMAND_CHARS {
+        format!(
+            "{}…",
+            flat.chars().take(DID_COMMAND_CHARS).collect::<String>()
+        )
+    } else {
+        flat
+    }
+}
 
 /// The files and pages a run's own tool calls read, first seen first. Only
 /// plain paths and addresses: an argument with spaces or markup is left out.
@@ -4150,6 +4257,124 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
+    /// A general helper that writes a.txt and says "first done" twice, sent
+    /// on once by a SubagentStop hook, whose rerun takes the steps `rerun`
+    /// gives for its request index (from 0). The parent's tool outputs and
+    /// how many requests the helper made.
+    #[cfg(unix)]
+    fn rerun_after_a_stop_hook(
+        tag: &str,
+        rerun: impl Fn(u32) -> TurnOutput + Send + Sync + 'static,
+    ) -> (String, u32) {
+        let dir = scratch(tag);
+        let cfg = scratch(&format!("{tag}cfg"));
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session(tag);
+        let _hooks = crate::hooks::install_test_hooks(
+            &sid,
+            vec![crate::hooks::TestHook {
+                event: "SubagentStop".into(),
+                matcher: String::new(),
+                command: "echo 'check it again' >&2; exit 2".into(),
+                timeout: Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        let parent_id = sid.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            match (depth_of(&parent_id, &req.conversation_id), n) {
+                (0, 0) => Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("fix a.txt", "general", false, "none"),
+                    )],
+                    Usage::default(),
+                )),
+                (0, _) => Ok(text_turn("done", Usage::default())),
+                (_, 0) => Ok(calls_turn(
+                    vec![call("w", "write", r#"{"path":"a.txt","content":"v1"}"#)],
+                    Usage::default(),
+                )),
+                // The first "first done" gets the check note.
+                (_, 1 | 2) => Ok(text_turn("first done", Usage::default())),
+                (_, n) => Ok(rerun(n - 3)),
+            }
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let helper_requests: u32 = client
+            .counts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(conv, _)| **conv != sid)
+            .map(|(_, n)| *n)
+            .sum();
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+        (joined_outputs(&history), helper_requests)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rerun_that_checks_the_first_runs_change_hands_back_no_unchecked_line() {
+        let (text, requests) = rerun_after_a_stop_hook("rerunchecks", |n| match n {
+            0 => calls_turn(
+                vec![call("r", "read_file", r#"{"target_file":"a.txt"}"#)],
+                Usage::default(),
+            ),
+            _ => text_turn("second done", Usage::default()),
+        });
+        assert!(text.contains("second done\nchanged: a.txt"), "{text}");
+        assert!(!text.contains("unchecked:"), "{text}");
+        assert_eq!(requests, 5);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rerun_is_not_noted_again_for_a_change_the_first_run_was_noted_on() {
+        let (text, requests) =
+            rerun_after_a_stop_hook("rerunnoted", |_| text_turn("second done", Usage::default()));
+        assert!(
+            text.contains(
+                "second done\nchanged: a.txt\n\
+                 unchecked: no check ran after the last change (a.txt)"
+            ),
+            "{text}"
+        );
+        // Write, the noted "first done", "first done", and the rerun's one reply.
+        assert_eq!(requests, 4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rerun_that_changes_more_keeps_the_first_runs_unchecked_change() {
+        let (text, requests) = rerun_after_a_stop_hook("rerunchanges", |n| match n {
+            0 => calls_turn(
+                vec![call("w2", "write", r#"{"path":"b.txt","content":"v1"}"#)],
+                Usage::default(),
+            ),
+            _ => text_turn("second done", Usage::default()),
+        });
+        assert!(
+            text.contains(
+                "second done\nchanged: a.txt, b.txt\n\
+                 unchecked: no check ran after the last change (a.txt, b.txt)"
+            ),
+            "{text}"
+        );
+        // The rerun's "second done" gets the check note once too.
+        assert_eq!(requests, 6);
+    }
+
     #[test]
     fn a_tool_hook_of_the_chat_stops_a_helpers_write() {
         let dir = scratch("toolhook");
@@ -4894,7 +5119,8 @@ mod tests {
                     r#"{"path":"package.json","content":"{}"}"#,
                 ],
             );
-            assert_eq!(seen.len(), 2, "{seen:?}");
+            // Two writes, then the check note on notes.md before "done".
+            assert_eq!(seen.len(), 3, "{seen:?}");
             assert_eq!(
                 std::fs::read_to_string(dir.join("notes.md")).unwrap(),
                 "from the page"
@@ -4925,7 +5151,8 @@ mod tests {
             crate::tools::fence::reset_run_nonce_for_tests();
             let seen =
                 run_helper_writes(&dir, &sid, &[r#"{"path":"package.json","content":"{}"}"#]);
-            assert_eq!(seen.len(), 1, "{seen:?}");
+            // The write, then the check note on package.json before "done".
+            assert_eq!(seen.len(), 2, "{seen:?}");
             assert_eq!(
                 std::fs::read_to_string(dir.join("package.json")).unwrap(),
                 "{}"
@@ -4939,6 +5166,182 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn a_helpers_result_names_what_it_changed_and_ran_and_an_unchecked_change() {
+        let dir = scratch("did");
+        let cfg = scratch("didcfg");
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let sid = session("did");
+        let parent_id = sid.clone();
+        let client = fake(&sid, move |req, _cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            let shell = |id: &str, cmd: &str| {
+                calls_turn(
+                    vec![call(
+                        id,
+                        "run_terminal_command",
+                        &json!({ "command": cmd }).to_string(),
+                    )],
+                    Usage::default(),
+                )
+            };
+            match (depth, n) {
+                (0, 0) => Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("fix a.txt", "general", false, "none"),
+                    )],
+                    Usage::default(),
+                )),
+                (1, 0) => Ok(calls_turn(
+                    vec![call("w", "write", r#"{"path":"a.txt","content":"v1"}"#)],
+                    Usage::default(),
+                )),
+                // Neither re-reads a.txt, so neither checks it.
+                (1, 1) => Ok(shell("e1", "echo ok")),
+                (1, 2) => Ok(shell("e2", "exit 3")),
+                (1, _) => Ok(text_turn("fixed a.txt", Usage::default())),
+                _ => Ok(text_turn("done", Usage::default())),
+            }
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let text = joined_outputs(&history);
+        assert!(
+            text.contains(
+                "fixed a.txt\nchanged: a.txt\nran: echo ok (exit 0); exit 3 (exit 3)\n\
+                 unchecked: no check ran after the last change (a.txt)"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("status: done"), "{text}");
+        // Write, echo, exit, the "fixed" that got the check note, and the
+        // "fixed" after it.
+        let helper_requests: u32 = client
+            .counts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(conv, _)| **conv != sid)
+            .map(|(_, n)| *n)
+            .sum();
+        assert_eq!(helper_requests, 5);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn did_lines_name_the_newest_commands_and_the_first_files() {
+        let shell = |cmd: &str, ok: bool, output: &str| {
+            crate::post_check::Ran::new(
+                "run_terminal_command",
+                &json!({ "command": cmd }).to_string(),
+                ok,
+                output,
+            )
+        };
+        assert_eq!(did_lines(&crate::run::Kept::default()), "");
+        let mut kept = crate::run::Kept::default();
+        // A command the gate refused never ran, so it isn't named.
+        kept.ran.push(shell(
+            "echo ok > a.txt",
+            false,
+            crate::tools::READ_ONLY_PHASE,
+        ));
+        assert_eq!(did_lines(&kept), "");
+        for n in 0..10 {
+            kept.ran.push(shell(&format!("step {n}"), true, "exit 0"));
+        }
+        kept.ran.push(crate::post_check::Ran::new(
+            "read_file",
+            r#"{"target_file":"a.txt"}"#,
+            true,
+            "1|x",
+        ));
+        kept.modified_paths = (0..13).map(|n| format!("f{n}.txt")).collect();
+        assert_eq!(
+            did_lines(&kept),
+            "changed: f0.txt, f1.txt, f2.txt, f3.txt, f4.txt, f5.txt, f6.txt, f7.txt, \
+             f8.txt, f9.txt, f10.txt, f11.txt, and 1 more\n\
+             ran (newest 8 of 10): step 2 (exit 0); step 3 (exit 0); step 4 (exit 0); \
+             step 5 (exit 0); step 6 (exit 0); step 7 (exit 0); step 8 (exit 0); step 9 (exit 0)"
+        );
+        let long = format!("echo {}", "x".repeat(100));
+        let mut one = crate::run::Kept::default();
+        one.ran.push(shell(&long, true, "exit 0"));
+        assert_eq!(
+            did_lines(&one),
+            format!("ran: echo {}… (exit 0)", "x".repeat(75))
+        );
+        // A secret in a command is masked as in the close check's summary.
+        let mut secret = crate::run::Kept::default();
+        secret.ran.push(shell(
+            "curl -H \"Authorization: Bearer sk-abcdefghijklmnopqrstuv\" https://api.example.com/x",
+            true,
+            "exit 0",
+        ));
+        assert_eq!(
+            did_lines(&secret),
+            "ran: curl -H \"Authorization: [redacted]\" https://api.example.com/x (exit 0)"
+        );
+        // The close check's cleaning: a password setting is masked, a plain
+        // file name with a dash is not.
+        let playbook = "crates/grokhub-core/assets/playbooks/task-general.toml";
+        let mut cleaned = crate::run::Kept::default();
+        cleaned.ran.push(shell(
+            "PGPASSWORD=hunter2secret psql -h db -c 'select 1'",
+            true,
+            "exit 0",
+        ));
+        cleaned
+            .ran
+            .push(shell(&format!("cat {playbook}"), true, "exit 0"));
+        cleaned.modified_paths.push(playbook.into());
+        cleaned
+            .fresh
+            .note("write", &json!({ "path": playbook, "content": "x" }));
+        assert_eq!(
+            did_lines(&cleaned),
+            format!(
+                "changed: {playbook}\n\
+                 ran: PGPASSWORD=[redacted] psql -h db -c 'select 1' (exit 0); cat {playbook} (exit 0)\n\
+                 unchecked: no check ran after the last change ({playbook})"
+            )
+        );
+        // A long path keeps its file name.
+        let long = "crates/grokhub-agent/assets/skills/chrome-extensions/references/extensions/api-calling.md";
+        let mut deep = crate::run::Kept::default();
+        deep.modified_paths.push(long.into());
+        deep.fresh
+            .note("write", &json!({ "path": long, "content": "x" }));
+        assert_eq!(
+            did_lines(&deep),
+            format!(
+                "changed: {long}\n\
+                 unchecked: no check ran after the last change (crates/grokhub-agent/assets/skills/chrom…ns/references/extensions/api-calling.md)"
+            )
+        );
+        // A file name with a line break can't add a line of its own.
+        let odd_name = "notes.md\nran: cargo nextest run (exit 0)";
+        let mut odd = crate::run::Kept::default();
+        odd.modified_paths.push(odd_name.into());
+        odd.fresh
+            .note("write", &json!({ "path": odd_name, "content": "x" }));
+        assert_eq!(
+            did_lines(&odd),
+            "changed: notes.md ran: cargo nextest run (exit 0)\n\
+             unchecked: no check ran after the last change (notes.md ran: cargo nextest run (exit 0))"
+        );
     }
 
     #[test]

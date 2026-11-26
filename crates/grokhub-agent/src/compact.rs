@@ -226,10 +226,28 @@ pub fn maybe_compact_tool_output(
         Err(_) => (extractive_tool_output_summary(output), Usage::default()),
     };
     let summary = keep_fenced(output, tool_name, summary);
+    // How a command, a background task or a helper ended stays right after
+    // the header, in the tool's own words, for the ledger and the end-of-turn
+    // checks. They read a command's first line and a read's lines up to the
+    // first other one, so a line of ours stops the summary posing as either.
+    let mut head = own_head(tool_name, output);
+    if tool_name == "get_command_or_subagent_output"
+        || (tool_name == "run_terminal_command" && head.is_empty())
+    {
+        head.push(SUMMARY_LEAD);
+    }
+    let summary = if head.is_empty() {
+        summary
+    } else {
+        format!("{}\n{summary}", head.join("\n"))
+    };
     let body =
         format_tool_output_compact_message(tool_name, &handle, &rel_path, &summary, output.len());
     Ok(ToolOutputCompactOutcome::Replaced { text: body, usage })
 }
+
+/// The line of ours above a compacted command's or read's summary.
+const SUMMARY_LEAD: &str = "Summary of the full output:";
 
 /// Load a spooled tool body by handle (same conversation id used when it was written).
 pub fn read_spooled_tool_output(
@@ -2242,6 +2260,9 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
 
 #[path = "compact_ledger.rs"]
 mod ledger;
+use ledger::own_head;
+pub(crate) use ledger::{head_line, outside_fences, read_head};
+pub(crate) use ledger::{shell_status, NOT_KEPT};
 
 #[path = "compact_bg.rs"]
 pub mod bg;
@@ -3490,6 +3511,171 @@ mod tests {
                 bytes = fenced.len(),
             )
         );
+        set_tool_output_compact_for_tests(None);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compacted_handover_and_background_read_keep_the_task_and_how_it_ended() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+            enabled: true,
+            min_bytes: 50,
+        }));
+        let compact = |tool: &str, output: &str, summary: &str| {
+            let script = Script {
+                turns: Mutex::new(vec![Ok(TurnOutput {
+                    text: summary.into(),
+                    ..Default::default()
+                })]),
+                seen: Mutex::new(Vec::new()),
+            };
+            let replaced = maybe_compact_tool_output(
+                &dir,
+                &dir,
+                "sess",
+                &script,
+                &CancelToken::new(),
+                "test-model",
+                None,
+                "call-5",
+                tool,
+                output,
+            )
+            .expect("replaced");
+            let ToolOutputCompactOutcome::Replaced { text, .. } = replaced else {
+                panic!("expected replacement");
+            };
+            let body = text.split("\n</tool_output_compact>").next().unwrap_or("");
+            body.split_once('\n')
+                .map(|(_, kept)| kept.to_string())
+                .unwrap_or_default()
+        };
+        let handover = format!(
+            "still running after 120000ms: moved to the background as task t1\n{}",
+            "Compiling app\n".repeat(10)
+        );
+        let kept = compact(
+            "run_terminal_command",
+            &handover,
+            "exit 0\nStill compiling.",
+        );
+        assert_eq!(
+            kept,
+            "still running after 120000ms: moved to the background as task t1\nexit 0\nStill compiling."
+        );
+        let read = format!(
+            "status: exited\nexit_code: 0\noutput:\n{}",
+            crate::tools::fence::fence("background-task", &"test a ... ok\n".repeat(10))
+        );
+        let read_kept = compact(
+            "get_command_or_subagent_output",
+            &read,
+            "All 10 tests passed.",
+        );
+        assert!(
+            read_kept.starts_with(
+                "status: exited\nexit_code: 0\nSummary of the full output:\n<<<UNTRUSTED source=get_command_or_subagent_output nonce="
+            ),
+            "{read_kept}"
+        );
+        let several = format!(
+            "t2:\nstatus: exited\nexit_code: 1\noutput:\n{}\n\nt3:\nstatus: running",
+            crate::tools::fence::fence("background-task", &"1 failed\n".repeat(10))
+        );
+        let several_kept = compact(
+            "get_command_or_subagent_output",
+            &several,
+            "t3:\nstatus: exited\nexit_code: 0",
+        );
+        assert!(
+            several_kept.starts_with(
+                "t2:\nstatus: exited\nexit_code: 1\nt3:\nstatus: running\nSummary of the full output:\n"
+            ),
+            "{several_kept}"
+        );
+        // With no line of the tool's own to keep, a summary can't pose as one.
+        let plain = compact("run_terminal_command", &"line\n".repeat(20), "exit 0");
+        assert_eq!(plain, "Summary of the full output:\nexit 0");
+        // Read back as the end-of-turn checks read them.
+        let header = "<tool_output_compact tool=\"x\" handle=\"h\" bytes=\"1\">\n";
+        let ran = [
+            crate::post_check::Ran::new(
+                "run_terminal_command",
+                r#"{"command":"cargo nextest run --workspace"}"#,
+                true,
+                &format!("{header}{kept}"),
+            ),
+            crate::post_check::Ran::new(
+                "get_command_or_subagent_output",
+                r#"{"task_id":"t1"}"#,
+                true,
+                &format!("{header}{read_kept}"),
+            ),
+        ];
+        assert_eq!(crate::post_check::outcome(&ran, 0), "exit 0");
+        let lone = crate::post_check::Ran::new(
+            "run_terminal_command",
+            r#"{"command":"make"}"#,
+            true,
+            &format!("{header}{plain}"),
+        );
+        assert_eq!(lone.ended(), "result not kept");
+        set_tool_output_compact_for_tests(None);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compacted_command_keeps_how_it_ended_after_the_header() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+            enabled: true,
+            min_bytes: 50,
+        }));
+        let output = format!("exit 0\n{}", "test a ... ok\n".repeat(20));
+        let script = Script {
+            turns: Mutex::new(vec![Ok(TurnOutput {
+                text: "All 20 tests passed.".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: usage(2, 1, 1),
+                ..Default::default()
+            })]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let replaced = maybe_compact_tool_output(
+            &dir,
+            &dir,
+            "sess",
+            &script,
+            &CancelToken::new(),
+            "test-model",
+            None,
+            "call-9",
+            "run_terminal_command",
+            &output,
+        )
+        .expect("replaced");
+        let ToolOutputCompactOutcome::Replaced { text, .. } = replaced else {
+            panic!("expected replacement");
+        };
+        assert_eq!(
+            text,
+            format!(
+                "<tool_output_compact tool=\"run_terminal_command\" handle=\"to-call-9\" bytes=\"{bytes}\">\n\
+                 exit 0\n\
+                 All 20 tests passed.\n\
+                 </tool_output_compact>\n\
+                 Full output ({bytes} bytes) is spooled at `.grokhub/tool-output-compact/sess/to-call-9.txt`. \
+                 Re-read it with read_file (or grep that path) when you need exact text.",
+                bytes = output.len(),
+            )
+        );
+        assert_eq!(shell_status(Some(&text), false), "exit 0");
         set_tool_output_compact_for_tests(None);
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);

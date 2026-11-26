@@ -5,7 +5,9 @@
 //!
 //! The node files stay the truth, and this is a copy that each export brings
 //! up to date: changed pages are rewritten, and pages for nodes that were
-//! forgotten, superseded or sealed since are removed. A page is ours only
+//! superseded or sealed since are removed. A line the user pauses, forgets
+//! or wipes leaves the wiki right then, its page and its index line, so the
+//! folder never keeps a copy of a line recall leaves out. A page is ours only
 //! when its frontmatter carries `amr_export: 1`, so notes the user adds to
 //! the folder are never touched.
 //!
@@ -116,6 +118,30 @@ fn ours(path: &Path) -> bool {
     })
 }
 
+/// `index` without the lines that link a node `gone` names, and without a
+/// type heading left with no line under it: the index an export of the rest
+/// would write.
+fn without_index_lines(index: &str, gone: &dyn Fn(&str) -> bool) -> String {
+    let names = |line: &str| {
+        line.strip_prefix("- [[")
+            .and_then(|rest| rest.split_once("]]"))
+            .is_some_and(|(id, _)| gone(id))
+    };
+    let mut parts = index.split("\n## ");
+    let mut out = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        let kept: String = part
+            .split_inclusive('\n')
+            .filter(|line| !names(line))
+            .collect();
+        if kept.lines().any(|line| line.starts_with("- [[")) {
+            out.push_str("\n## ");
+            out.push_str(&kept);
+        }
+    }
+    out
+}
+
 fn write_if_changed(path: &Path, text: &str) -> Result<bool, AmrError> {
     if fs::read_to_string(path).is_ok_and(|old| old == text) {
         return Ok(false);
@@ -130,14 +156,20 @@ impl AmrStore {
         self.root().join(WIKI_DIR)
     }
 
-    /// Bring the wiki in [`Self::wiki_dir`] up to date. Refuses scratch.
+    /// Bring the wiki in [`Self::wiki_dir`] up to date. Refuses scratch. It
+    /// holds the report lock from its read of the nodes through its writes,
+    /// so a pause, forget or Wipe at that moment takes its pages out after
+    /// it has written them.
     pub fn export_wiki(&self) -> Result<WikiReport, AmrError> {
         if self.is_scratch() {
             return Err(AmrError::Scratch);
         }
+        let _held = self.hold_reports()?;
         let dir = self.wiki_dir();
         fs::create_dir_all(&dir).map_err(|e| AmrError::Io(e.to_string()))?;
         let (nodes, locked) = self.recallable();
+        #[cfg(test)]
+        super::dream::tests::report_step(self.root(), super::dream::tests::ReportStep::WikiRead);
         let mut report = WikiReport {
             private: locked + nodes.iter().filter(|n| n.sensitivity.sealed()).count(),
             ..WikiReport::default()
@@ -193,6 +225,34 @@ impl AmrStore {
             report.removed += 1;
         }
         Ok(report)
+    }
+
+    /// Take the page of every node `gone` names out of the wiki, and its line
+    /// out of the index, now rather than at the next export: what pausing,
+    /// forgetting or wiping a line does, each under the report lock, so an
+    /// export running at that moment writes its pages first. Only what an
+    /// export wrote goes; with no wiki folder it does nothing.
+    pub(super) fn drop_wiki_pages(&self, gone: &dyn Fn(&str) -> bool) -> Result<(), AmrError> {
+        let io = |e: std::io::Error| AmrError::Io(e.to_string());
+        let dir = self.wiki_dir();
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        for path in fs::read_dir(&dir).map_err(io)?.flatten().map(|e| e.path()) {
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let is_md = path.extension().and_then(|x| x.to_str()) == Some("md");
+            if is_md && stem != INDEX_PAGE && gone(stem) && ours(&path) {
+                fs::remove_file(&path).map_err(io)?;
+            }
+        }
+        let index = dir.join(format!("{INDEX_PAGE}.md"));
+        if ours(&index) {
+            let text = fs::read_to_string(&index).map_err(io)?;
+            write_if_changed(&index, &without_index_lines(&text, gone))?;
+        }
+        Ok(())
     }
 }
 
@@ -352,8 +412,11 @@ mod tests {
             .link("new-card", "old-card", EdgeRel::Supersedes)
             .unwrap();
         store.forget("dock-layout").unwrap();
+        // The forget took its page out already; the export takes the
+        // replaced one.
+        assert!(!dir.join("dock-layout.md").exists());
         let report = store.export_wiki().unwrap();
-        assert_eq!((report.written, report.pages, report.removed), (1, 1, 2));
+        assert_eq!((report.written, report.pages, report.removed), (1, 1, 1));
         assert!(dir.join("new-card.md").is_file());
         assert!(!dir.join("old-card.md").exists());
         assert!(!dir.join("dock-layout.md").exists());
@@ -361,6 +424,75 @@ mod tests {
             fs::read_to_string(dir.join("my-notes.md")).unwrap(),
             "---\ntitle: mine\n---\n\nKeep me.\n"
         );
+    }
+
+    /// Pausing, forgetting or wiping a line takes its page and its index line
+    /// out of the wiki right then, not at the next export: the index reads
+    /// as an export of what is left would write it. Resuming a line brings
+    /// its page back with the next export. Wipe leaves project pages and the
+    /// user's own notes.
+    #[test]
+    fn a_paused_forgotten_or_wiped_line_leaves_the_wiki_right_away() {
+        let tmp = Tmp::new("hide");
+        let store = store(&tmp);
+        store
+            .remember(&draft("dock-layout", "Berth 4 is ours."))
+            .unwrap();
+        store
+            .remember(&draft("tide-table", "High tide is at noon."))
+            .unwrap();
+        store
+            .remember(&NodeDraft {
+                node_type: NodeType::Project,
+                ..draft("boat-refit", "Refit the boat this winter.")
+            })
+            .unwrap();
+        store.export_wiki().unwrap();
+        let dir = store.wiki_dir();
+        let mine = "---\ntitle: mine\n---\n\nBerth 4 is ours.\n";
+        fs::write(dir.join("my-notes.md"), mine).unwrap();
+        let pages = || {
+            let mut names: Vec<String> = fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let index = || fs::read_to_string(dir.join("index.md")).unwrap();
+        const HEAD: &str = "---\namr_export: 1\n---\n\n# Memory\n";
+        const PROJECT: &str = "\n## project\n\n- [[boat-refit]] Refit the boat this winter.\n";
+
+        store.set_paused("dock-layout", true).unwrap();
+        assert_eq!(
+            pages(),
+            ["boat-refit.md", "index.md", "my-notes.md", "tide-table.md"]
+        );
+        assert_eq!(
+            index(),
+            format!("{HEAD}\n## fact\n\n- [[tide-table]] High tide is at noon.\n{PROJECT}")
+        );
+
+        store.forget("tide-table").unwrap();
+        assert_eq!(pages(), ["boat-refit.md", "index.md", "my-notes.md"]);
+        assert_eq!(index(), format!("{HEAD}{PROJECT}"));
+
+        store.set_paused("dock-layout", false).unwrap();
+        assert_eq!(pages(), ["boat-refit.md", "index.md", "my-notes.md"]);
+        let report = store.export_wiki().unwrap();
+        assert_eq!((report.written, report.pages, report.removed), (1, 2, 0));
+        assert_eq!(
+            pages(),
+            ["boat-refit.md", "dock-layout.md", "index.md", "my-notes.md"]
+        );
+
+        let wiped =
+            crate::amr::wipe_user_model(&store, crate::amr::UserForget::from_click()).unwrap();
+        assert_eq!(wiped.removed, 2);
+        assert_eq!(pages(), ["boat-refit.md", "index.md", "my-notes.md"]);
+        assert_eq!(index(), format!("{HEAD}{PROJECT}"));
+        assert_eq!(fs::read_to_string(dir.join("my-notes.md")).unwrap(), mine);
     }
 
     #[test]

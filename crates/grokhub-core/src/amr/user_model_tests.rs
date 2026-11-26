@@ -881,3 +881,152 @@ fn personal_adds_groups_pauses_exports_and_wipes() {
     );
     assert!(personal_export(&store, NOW).contains("Nothing learned yet."));
 }
+
+/// Every file under `root` holding `needle` (any case), relative, sorted.
+fn files_holding(root: &std::path::Path, needle: &str) -> Vec<String> {
+    let needle = needle.to_ascii_lowercase().into_bytes();
+    let mut found = Vec::new();
+    let mut todo = vec![root.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                todo.push(path);
+            } else if fs::read(&path)
+                .unwrap()
+                .to_ascii_lowercase()
+                .windows(needle.len())
+                .any(|w| w == needle.as_slice())
+            {
+                let rel = path.strip_prefix(root).unwrap();
+                let parts: Vec<String> = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                found.push(parts.join("/"));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A night of dreaming merged two copies of a learned line, retired an
+/// unsure one and proposed a preference for USER.md, each quoted in
+/// `dreams/<date>.md`. Wipe takes those lines out of the report too, and a
+/// project note's Merged line stays.
+#[test]
+fn wipe_takes_merged_retired_and_proposed_lines_out_of_the_dream_report() {
+    let tmp = Tmp::new("wipe-dream");
+    let store = tmp.store();
+    let draft =
+        |id: &str, node_type: NodeType, body: &str, confidence: f32, updated: &str| NodeDraft {
+            id: id.into(),
+            node_type,
+            created: updated.into(),
+            updated: updated.into(),
+            source: "user".into(),
+            confidence,
+            tags: Vec::new(),
+            body: format!("{body}\n"),
+            sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
+        };
+    const RECENT: &str = "2026-10-01T12:00:00Z";
+    const OLD: &str = "2026-03-01T12:00:00Z";
+    for d in [
+        draft(
+            "fact-a",
+            NodeType::Fact,
+            "I keep a pet tortoise named Quillfeather",
+            0.8,
+            RECENT,
+        ),
+        draft(
+            "fact-b",
+            NodeType::Fact,
+            "i keep a pet tortoise named Quillfeather.",
+            0.6,
+            RECENT,
+        ),
+        draft(
+            "fact-old",
+            NodeType::Fact,
+            "Maybe I moved to Brambleton",
+            0.2,
+            OLD,
+        ),
+        draft(
+            "pref-tea",
+            NodeType::Preference,
+            "I like Ottermere tea in the morning",
+            0.95,
+            RECENT,
+        ),
+        draft(
+            "project-a",
+            NodeType::Project,
+            "Garage rebuild plan for spring",
+            0.8,
+            RECENT,
+        ),
+        draft(
+            "project-b",
+            NodeType::Project,
+            "garage rebuild plan for spring.",
+            0.6,
+            RECENT,
+        ),
+    ] {
+        store.remember(&d).unwrap();
+    }
+    let opts = DreamOpts {
+        user_md: Some(String::new()),
+        ..DreamOpts::default()
+    };
+    let dreamed = store.dream_once(NOW, &opts).unwrap();
+    assert_eq!((dreamed.merges.len(), dreamed.retired.len()), (2, 1));
+    let root = store.root().to_path_buf();
+    let words = ["quillfeather", "brambleton", "ottermere"];
+    let held = |root: &std::path::Path| -> Vec<Vec<String>> {
+        words.iter().map(|w| files_holding(root, w)).collect()
+    };
+    assert_eq!(
+        held(&root),
+        [
+            vec!["dreams/2026-10-07.md", "nodes/fact-a.md", "nodes/fact-b.md"],
+            vec!["dreams/2026-10-07.md", "nodes/fact-old.md"],
+            vec!["dreams/2026-10-07.md", "nodes/pref-tea.md"],
+        ]
+    );
+    let report = wipe_user_model(&store, UserForget::from_click()).unwrap();
+    assert_eq!(
+        report,
+        WipeReport {
+            removed: 4,
+            locked: 0
+        }
+    );
+    assert_eq!(held(&root), [Vec::<String>::new(), Vec::new(), Vec::new()]);
+    let text = fs::read_to_string(root.join("dreams/2026-10-07.md")).unwrap();
+    let quoting: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("- Kept ") || l.starts_with("- Retired ") || l.starts_with("+- "))
+        .collect();
+    assert_eq!(
+        quoting,
+        ["- Kept `project-a` \"Garage rebuild plan for spring\", merged `project-b` \"garage rebuild plan for spring.\" because 100% of their words are the same. Kept `project-a` because it is more certain (confidence 0.8 vs 0.6)."]
+    );
+    // A second Wipe finds nothing left to take.
+    assert_eq!(
+        wipe_user_model(&store, UserForget::from_click()).unwrap(),
+        WipeReport {
+            removed: 0,
+            locked: 0
+        }
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("dreams/2026-10-07.md")).unwrap(),
+        text
+    );
+}

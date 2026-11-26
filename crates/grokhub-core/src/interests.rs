@@ -288,6 +288,27 @@ impl InterestProfile {
         true
     }
 
+    /// Drop every topic that came from `source`, and the links that name one,
+    /// keeping no copy of their words: unlike [`Self::remove`], nothing is
+    /// added to `removed`. `seeded` stays as it is, so seeding doesn't run
+    /// again. Returns whether a topic went.
+    pub fn drop_source(&mut self, source: InterestSource) -> bool {
+        let gone: Vec<String> = self
+            .topics
+            .iter()
+            .filter(|t| t.source == source)
+            .map(|t| key(&t.topic))
+            .collect();
+        if gone.is_empty() {
+            return false;
+        }
+        self.topics.retain(|t| t.source != source);
+        self.graph
+            .edges
+            .retain(|e| !gone.contains(&key(&e.from)) && !gone.contains(&key(&e.to)));
+        true
+    }
+
     pub fn set_pinned(&mut self, topic: &str, pinned: bool) -> bool {
         match self.find_mut(topic) {
             Some(t) if t.pinned != pinned => {
@@ -1612,6 +1633,53 @@ mod tests {
             t.weight = InterestSource::KnowMe.start_weight() - 2;
         }
         assert!(!p.find("Bouldering").is_some_and(|t| p.topic_is_ready(t)));
+    }
+
+    #[test]
+    fn dropping_a_source_keeps_no_copy_of_its_topics() {
+        let mut p = InterestProfile::default();
+        p.seed(
+            &SeedFrom {
+                user_md: "Interests: Quillfeather gardening, tortoise care",
+                memory_md: "",
+                chats: &[],
+                saved_titles: &titles(&["Bambu printers"]),
+            },
+            7,
+        );
+        p.add("Formula 1", InterestSource::Explicit, 7);
+        p.graph.upsert_edge(
+            "tortoise care",
+            "Bambu printers",
+            EdgeKind::Related,
+            "c1",
+            7,
+        );
+        p.graph
+            .upsert_edge("Formula 1", "Bambu printers", EdgeKind::Related, "c1", 7);
+        assert!(p.drop_source(InterestSource::Memory));
+        let left: Vec<(&str, InterestSource)> = p
+            .topics
+            .iter()
+            .map(|t| (t.topic.as_str(), t.source))
+            .collect();
+        assert_eq!(
+            left,
+            vec![
+                ("Bambu printers", InterestSource::Saved),
+                ("Formula 1", InterestSource::Explicit),
+            ]
+        );
+        let edges: Vec<(&str, &str)> = p
+            .graph
+            .edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect();
+        assert_eq!(edges, vec![("Formula 1", "Bambu printers")]);
+        assert_eq!(p.removed, Vec::<String>::new());
+        assert!(p.seeded);
+        assert!(!p.drop_source(InterestSource::Memory));
     }
 
     #[test]
