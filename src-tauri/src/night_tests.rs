@@ -482,6 +482,111 @@ fn the_model_dream_posts_its_card_and_signed_out_falls_back() {
     assert!(report(&d, "2026-10-08").is_file());
 }
 
+/// The nightly model pass proposing one line about the user.
+struct Insight;
+
+impl ModelClient for Insight {
+    fn stream(
+        &self,
+        _req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        Ok(TurnOutput {
+            text: r#"{"lessons":[],"insights":[{"block":"user","text":"I keep a pet tortoise named Quillfeather","source":"ep-7"}]}"#.into(),
+            ..TurnOutput::default()
+        })
+    }
+}
+
+/// Every file under `root` holding `needle` (any case), relative.
+fn files_holding(root: &Path, needle: &str) -> Vec<String> {
+    let needle = needle.to_ascii_lowercase().into_bytes();
+    let mut found = Vec::new();
+    let mut todo = vec![root.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                todo.push(path);
+                continue;
+            }
+            let bytes = std::fs::read(&path).unwrap().to_ascii_lowercase();
+            if bytes.windows(needle.len()).any(|w| w == needle.as_slice()) {
+                let parts: Vec<String> = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                found.push(parts.join("/"));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The morning card counts the line the model pass proposed and quotes
+/// none of it, so the proposal's words live only in its node, and
+/// Personal's Wipe leaves no byte of them in the config folder, the
+/// card included: Wipe takes the memory dream's cards off Pulse.
+#[test]
+fn the_model_dreams_card_quotes_no_proposal_and_wipe_takes_it_off() {
+    let d = temp_dir("model-wipe");
+    app_json(&d, "{\"memory_backend\":\"amr\",\"dream_model\":true}\n");
+    let store = repeat_notes(&d);
+    let signed_in = || -> Result<Box<dyn ModelClient>, String> { Ok(Box::new(Insight)) };
+    assert_eq!(
+        look(
+            &d,
+            PID,
+            AT_3AM,
+            Some(0),
+            false,
+            &signed_in,
+            &mut NightState::default()
+        ),
+        Look::Ran(Night {
+            lessons: true,
+            review: Some(Reviewed::NotWorth { new_turns: 0 }),
+            dream: Dream::Dreamed { card: true }
+        })
+    );
+    let cards = |d: &Path| -> Vec<(String, Option<String>)> {
+        crate::pulse::cards(d)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.title, c.body))
+            .collect()
+    };
+    assert_eq!(
+        cards(&d),
+        [(
+            "Memory dream".to_string(),
+            Some("Proposed 1. no lesson applied. reflect_min_confidence 0.70".to_string())
+        )]
+    );
+    let _config = grokhub_agent::perm::ConfigGuard::set(&d);
+    let proposed = grokhub_core::amr::memory_rows(&store)
+        .0
+        .into_iter()
+        .find(|row| row.proposed)
+        .map(|row| (row.id, row.text))
+        .unwrap();
+    assert_eq!(proposed.1, "I keep a pet tortoise named Quillfeather");
+    assert_eq!(
+        files_holding(&d, "quillfeather"),
+        [format!("amr/nodes/{}.md", proposed.0)]
+    );
+    let ws = d.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    assert_eq!(crate::memory::wipe(&ws).unwrap().removed, 3);
+    assert_eq!(cards(&d), Vec::new());
+    assert_eq!(files_holding(&d, "quillfeather"), Vec::<String>::new());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn missing_preferences_are_proposed_even_with_no_user_md() {
     let seeded = |name: &str| {

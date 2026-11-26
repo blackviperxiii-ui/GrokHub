@@ -774,7 +774,7 @@ impl AmrStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::amr::{NodeDraft, Sealer, Sensitivity};
     use std::sync::Arc;
@@ -1608,10 +1608,12 @@ mod tests {
 
     /// Where a report writer is, for a test that lines two up.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(super) enum ReportStep {
+    pub(in crate::amr) enum ReportStep {
         /// A dream read the notes and holds the report lock.
         DreamRead,
-        /// A pause or Wipe found the report lock held and waits for it.
+        /// A wiki export read the nodes and holds the report lock.
+        WikiRead,
+        /// A pause, forget or Wipe found the report lock held and waits for it.
         Waiting,
     }
 
@@ -1621,7 +1623,7 @@ mod tests {
     static REPORT_HOOKS: std::sync::Mutex<Vec<(PathBuf, StepHook)>> =
         std::sync::Mutex::new(Vec::new());
 
-    pub(super) fn report_step(root: &Path, step: ReportStep) {
+    pub(in crate::amr) fn report_step(root: &Path, step: ReportStep) {
         let hook = REPORT_HOOKS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1653,6 +1655,27 @@ mod tests {
         root: &Path,
         act: impl FnOnce(&AmrStore) -> T + Send + 'static,
     ) -> (&'static str, Result<usize, AmrError>, T) {
+        beside(
+            root,
+            |store| {
+                store
+                    .dream_once(NOW, &DreamOpts::default())
+                    .map(|done| done.merges.len())
+            },
+            act,
+        )
+    }
+
+    /// Runs `act` on its own thread while `parked` on `root` (a dream or a
+    /// wiki export) has read what it writes from and not yet written, then
+    /// lets `parked` go on. Returns what `act` did first ("waits" when it
+    /// found the report lock held, "done" when it ran to its end), what
+    /// `parked` returned, and what `act` returned.
+    pub(in crate::amr) fn beside<P: Send + 'static, T: Send + 'static>(
+        root: &Path,
+        parked: impl FnOnce(&AmrStore) -> P + Send + 'static,
+        act: impl FnOnce(&AmrStore) -> T + Send + 'static,
+    ) -> (&'static str, P, T) {
         use std::sync::{mpsc, Mutex};
         let (event_tx, events) = mpsc::channel::<&'static str>();
         let (go_tx, go) = mpsc::channel::<()>();
@@ -1661,8 +1684,8 @@ mod tests {
         let hook: StepHook = Arc::new(move |step| {
             let tx = hook_tx.lock().unwrap().clone();
             match step {
-                ReportStep::DreamRead => {
-                    tx.send("dream read").unwrap();
+                ReportStep::DreamRead | ReportStep::WikiRead => {
+                    tx.send("read").unwrap();
                     go.lock().unwrap().recv().unwrap();
                 }
                 ReportStep::Waiting => tx.send("waits").unwrap(),
@@ -1673,11 +1696,11 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
             .push((root.to_path_buf(), hook));
         let _hook = HookGuard(root.to_path_buf());
-        let dream = {
+        let first_run = {
             let root = root.to_path_buf();
-            std::thread::spawn(move || AmrStore::at(&root).dream_once(NOW, &DreamOpts::default()))
+            std::thread::spawn(move || parked(&AmrStore::at(&root)))
         };
-        assert_eq!(events.recv().unwrap(), "dream read");
+        assert_eq!(events.recv().unwrap(), "read");
         let other = {
             let root = root.to_path_buf();
             std::thread::spawn(move || {
@@ -1687,11 +1710,11 @@ mod tests {
             })
         };
         // With no lock across both, `act` runs to its end right here,
-        // before the dream has written its report.
+        // before `parked` has written.
         let first = events.recv().unwrap();
         go_tx.send(()).unwrap();
-        let merges = dream.join().unwrap().map(|done| done.merges.len());
-        (first, merges, other.join().unwrap())
+        let parked = first_run.join().unwrap();
+        (first, parked, other.join().unwrap())
     }
 
     /// Two copies of a line the dream merges, quoted in its report.
@@ -1756,6 +1779,24 @@ mod tests {
         assert_eq!(quoting_lines(&text), Vec::<String>::new());
         assert!(text.contains("- Merged: 1\n"), "{text}");
         assert!(!text.to_lowercase().contains("composer"), "{text}");
+    }
+
+    /// Personal's Pause at the moment a wiki export has read the lines and
+    /// not yet written its pages: the pause waits for the export, then takes
+    /// the page it wrote for the line out again, and its index line.
+    #[test]
+    fn a_pause_beside_a_wiki_export_leaves_no_page_of_the_line() {
+        let tmp = Tmp::new("wiki-race");
+        remember_twins(&AmrStore::at(&tmp.0));
+        let (first, written, paused) = beside(
+            &tmp.0,
+            |store| store.export_wiki().map(|done| done.written),
+            |store| store.set_paused("dup-a", true),
+        );
+        assert_eq!((first, written, paused), ("waits", Ok(2), Ok(())));
+        let wiki = tmp.0.join("wiki");
+        assert!(wiki.join("dup-b.md").is_file());
+        assert_eq!(holding(&wiki, "dup-a"), Vec::<String>::new());
     }
 
     /// Wipe at the same moment: it waits for the dream to finish, then takes

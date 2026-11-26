@@ -168,7 +168,10 @@ pub fn remember(workspace: &Path, text: &str) -> Result<String, String> {
         workspace_memory_path(workspace)
     };
     ensure_allowed(&path, workspace)?;
-    append_line(&path, stored.trim())?;
+    {
+        let _one = lock_notes()?;
+        append_line(&path, stored.trim())?;
+    }
     let scope = if global { "global" } else { "workspace" };
     reindex_file(&path, scope)?;
     let where_ = if global { "global" } else { "workspace" };
@@ -237,7 +240,7 @@ pub fn flush_pending(workspace: &Path, history: &[InputItem]) -> Result<bool, St
     ensure_allowed(&path, workspace)?;
     // Held from the read of the forgotten lines through the write: a
     // `/forget` waits, then finds and takes out what this flush saved.
-    let _one = lock_forgotten()?;
+    let _one = lock_notes()?;
     let forgotten = forgotten_keys()?;
     #[cfg(test)]
     tests::session_step(tests::SessionStep::FlushReadForgotten);
@@ -262,8 +265,9 @@ pub fn flush_pending(workspace: &Path, history: &[InputItem]) -> Result<bool, St
 /// One low-effort model call that rewrites project and global `MEMORY.md`.
 /// Each file is copied to `MEMORY.md.dream.bak` before it is replaced.
 /// A model error, an empty rewrite, or a write error leaves the original bytes
-/// in place. Tokens the call reports are added to `usage`, even when the reply
-/// is rejected.
+/// in place, and so does a change to the file while the model was thinking.
+/// Tokens the call reports are added to `usage`, even when the reply is
+/// rejected.
 pub fn dream(
     client: &dyn ModelClient,
     cancel: &CancelToken,
@@ -316,18 +320,29 @@ pub fn dream(
     }
     let reply = parse_dream_reply(&turn.text)
         .ok_or_else(|| "Dream reply was not usable. MEMORY.md was left unchanged.".to_string())?;
-    let ws = judge_rewrite(&workspace_body, &reply.workspace, &reply.dropped);
-    let global = judge_rewrite(&global_body, &reply.global, &reply.dropped);
-    // The reply was written from the files as they were before the call: a
-    // line a `/forget` took out meanwhile stays out of what is written back.
-    let _one = lock_forgotten()?;
+    // The reply was written from the files as they were before the call. A
+    // file someone changed meanwhile (a `/forget`, a Wipe, an edit on the
+    // Memory page) is left as they left it: writing the reply over it would
+    // undo their change. Each of them holds the notes lock through its write,
+    // so the check and the write here see the same file.
+    let held = lock_notes()?;
+    let ws = still_as_read(
+        judge_rewrite(&workspace_body, &reply.workspace, &reply.dropped),
+        &read_capped(&workspace_path),
+        &workspace_body,
+    );
+    let global = still_as_read(
+        judge_rewrite(&global_body, &reply.global, &reply.dropped),
+        &read_capped(&global_path),
+        &global_body,
+    );
     if let DreamVerdict::Accept { .. } = ws {
-        let kept = without_forgotten_lines(&reply.workspace, &read_capped(&workspace_path))?;
+        let kept = without_forgotten_lines(&held, &reply.workspace, &workspace_body)?;
         replace_with_backup(&workspace_path, workspace, &kept)?;
         reindex_file(&workspace_path, "workspace")?;
     }
     if let DreamVerdict::Accept { .. } = global {
-        let kept = without_forgotten_lines(&reply.global, &read_capped(&global_path))?;
+        let kept = without_forgotten_lines(&held, &reply.global, &global_body)?;
         replace_with_backup(&global_path, workspace, &kept)?;
         reindex_file(&global_path, "global")?;
     }
@@ -390,6 +405,18 @@ enum DreamVerdict {
     },
     /// The old file stays, for this reason.
     Keep(String),
+    /// The file changed while the model was rewriting it, so it stays as it
+    /// is now.
+    Changed,
+}
+
+/// `verdict`, unless it would write a rewrite over a file that no longer
+/// holds what the dream read (`then`): that file stays as it is (`now`).
+fn still_as_read(verdict: DreamVerdict, now: &str, then: &str) -> DreamVerdict {
+    match verdict {
+        DreamVerdict::Accept { .. } if now != then => DreamVerdict::Changed,
+        verdict => verdict,
+    }
 }
 
 impl DreamVerdict {
@@ -420,6 +447,9 @@ impl DreamVerdict {
                 Some(line)
             }
             DreamVerdict::Keep(why) => Some(format!("{name} kept as it was: {why}.")),
+            DreamVerdict::Changed => Some(format!(
+                "{name} changed while the dream ran, so it was left as it is."
+            )),
         }
     }
 }
@@ -1488,10 +1518,21 @@ fn forgotten_path() -> PathBuf {
         .join("forgotten.txt")
 }
 
-/// Held while the record is read for a flush or changed, and through that
-/// flush's or forget's write, so the two never interleave. A lock file
-/// beside the record covers other processes too.
-fn lock_forgotten() -> Result<fs::File, String> {
+/// The notes lock: held by every writer that must not interleave with a
+/// `/forget` or a Wipe, from its read of the notes or of the record of
+/// forgotten lines through its write. A flush holds it from its read of the
+/// record through its save; a dream holds it while it checks the notes are as
+/// it read them and writes its rewrite back; `/forget`, Wipe, Restore and the
+/// Memory page's own writes hold it from their read through their write. A
+/// lock file beside the record covers other processes too. Functions that
+/// change the record or a copy of the notes take it as a parameter, so only a
+/// holder can call them.
+pub struct NotesLock {
+    _file: fs::File,
+}
+
+/// Take the [`NotesLock`], waiting for a holder to finish.
+pub fn lock_notes() -> Result<NotesLock, String> {
     let path = forgotten_path().with_extension("lock");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -1512,7 +1553,7 @@ fn lock_forgotten() -> Result<fs::File, String> {
         }
         Err(fs::TryLockError::Error(err)) => return Err(format!("{}: {err}", path.display())),
     }
-    Ok(file)
+    Ok(NotesLock { _file: file })
 }
 
 /// The key a forgotten line is kept under: its SHA-256, trimmed.
@@ -1540,7 +1581,7 @@ fn forgotten_keys() -> Result<std::collections::BTreeSet<String>, String> {
     }
 }
 
-/// Add `lines`' keys to the record. The caller holds [`lock_forgotten`].
+/// Add `lines`' keys to the record. The caller holds the [`NotesLock`].
 /// The file is replaced whole (a temp file renamed over it), so a reader
 /// that takes no lock never sees half of it.
 fn add_forgotten(lines: &[String]) -> Result<(), String> {
@@ -1558,20 +1599,21 @@ fn add_forgotten(lines: &[String]) -> Result<(), String> {
 }
 
 /// Keep `lines` (what `/forget` took out of the global or a project
-/// `MEMORY.md`) in the record of forgotten lines.
-pub fn note_forgotten_lines(lines: &[String]) -> Result<(), String> {
+/// `MEMORY.md`) in the record of forgotten lines. The caller holds the
+/// [`NotesLock`] through its write of the file without them.
+pub fn note_forgotten_lines(_held: &NotesLock, lines: &[String]) -> Result<(), String> {
     if lines.iter().all(|line| line.trim().is_empty()) {
         return Ok(());
     }
-    let _one = lock_forgotten()?;
     add_forgotten(lines)
 }
 
 /// `text` without the lines the record of forgotten lines holds, every
 /// other byte as it was: what a restore of an older copy of the notes, or a
 /// dream's rewrite of them, may write back over the file as it is now
-/// (`now`). A line `now` holds stays: someone put it back on purpose.
-pub fn without_forgotten_lines(text: &str, now: &str) -> Result<String, String> {
+/// (`now`). A line `now` holds stays: someone put it back on purpose. The
+/// caller holds the [`NotesLock`] from its read of `now` through its write.
+pub fn without_forgotten_lines(_held: &NotesLock, text: &str, now: &str) -> Result<String, String> {
     let keys = forgotten_keys()?;
     if keys.is_empty() {
         return Ok(text.to_string());
@@ -1622,13 +1664,12 @@ fn leave_out_forgotten(hits: Vec<Hit>) -> Vec<Hit> {
 /// `topic` from every workspace's flush file and reindex each file it
 /// changed, so recall stops finding them, and keep each line's key in the
 /// record of forgotten lines ([`forgotten_path`]) so no later flush saves it
-/// again. It holds [`lock_forgotten`] throughout, so a flush that started
-/// first finishes first and its lines are taken out too. Every file is read
-/// before any is written: one that can't be read stops it with nothing
-/// changed. The keys are written before the lines leave. Returns the lines
-/// it dropped.
-pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
-    let _one = lock_forgotten()?;
+/// again. The caller holds the [`NotesLock`] throughout, so a flush that
+/// started first finishes first and its lines are taken out too. Every file
+/// is read before any is written: one that can't be read stops it with
+/// nothing changed. The keys are written before the lines leave. Returns the
+/// lines it dropped.
+pub fn forget_session_topic(_held: &NotesLock, topic: &str) -> Result<Vec<String>, String> {
     let mut rewrites = Vec::new();
     for path in flush_files() {
         let (kept, gone) = without_session_topic(&read_for_rewrite(&path)?, topic);
@@ -1655,8 +1696,10 @@ pub fn forget_session_topic(topic: &str) -> Result<Vec<String>, String> {
 /// the global file and `index.sqlite` with its journal, which hold every
 /// indexed paragraph. Recall rebuilds the index from the files that are left,
 /// as it does whenever it is missing. A file already gone is fine, so a
-/// second Wipe after a failed one finishes the job.
-pub fn drop_global_copies() -> Result<(), String> {
+/// second Wipe after a failed one finishes the job. The caller holds the
+/// [`NotesLock`] from emptying the notes through this, so a dream's write-back
+/// lands before the Wipe or finds the notes changed and leaves them be.
+pub fn drop_global_copies(_held: &NotesLock) -> Result<(), String> {
     let index = index_path();
     let mut doomed = vec![dream_backup_path(&global_memory_path()), index.clone()];
     for side in ["-journal", "-wal", "-shm"] {
@@ -2701,7 +2744,7 @@ mod tests {
         )];
         assert!(flush_pending(&ws, &history).unwrap());
         assert_eq!(
-            forget_session_topic("Fabrikam").unwrap(),
+            forget_session_topic(&lock_notes().unwrap(), "Fabrikam").unwrap(),
             ["User: I am quietly leaving Contoso for Fabrikam in March"]
         );
         assert_eq!(bodies("Fabrikam"), Vec::<String>::new());
@@ -2831,7 +2874,7 @@ mod tests {
             let (cfg, done) = (cfg.clone(), event_tx.clone());
             std::thread::spawn(move || {
                 let _config = ConfigGuard::set(&cfg);
-                let out = forget_session_topic("Fabrikam");
+                let out = lock_notes().and_then(|held| forget_session_topic(&held, "Fabrikam"));
                 done.send("forget done").unwrap();
                 out
             })
@@ -2872,7 +2915,10 @@ mod tests {
         )];
         assert!(flush_pending(&ws, &history).unwrap());
         assert_eq!(session_lines_about("Fabrikam"), [pasted]);
-        assert_eq!(forget_session_topic("Fabrikam").unwrap(), [pasted]);
+        assert_eq!(
+            forget_session_topic(&lock_notes().unwrap(), "Fabrikam").unwrap(),
+            [pasted]
+        );
         assert_eq!(bodies_for(&ws, "Fabrikam"), Vec::<String>::new());
         assert_eq!(
             fs::read_to_string(flush_memory_path(&ws)).unwrap(),
@@ -2906,7 +2952,7 @@ mod tests {
         let path = flush_memory_path(&ws);
         let saved = fs::read_to_string(&path).unwrap();
         assert_eq!(
-            forget_session_topic("Fabrikam").unwrap(),
+            forget_session_topic(&lock_notes().unwrap(), "Fabrikam").unwrap(),
             ["User: I am quietly leaving Contoso for Fabrikam in March"]
         );
         fs::write(&path, &saved).unwrap();
@@ -3333,9 +3379,9 @@ mod tests {
     }
 
     /// A model that answers with the notes as they were, after a `/forget`
-    /// took a line out while it was thinking (the same two steps the shell's
-    /// forget takes: record the line, then write the file without it).
-    /// With `forget` false it only answers.
+    /// took a line out while it was thinking (the same steps the shell's
+    /// forget takes: under the notes lock, record the line, then write the
+    /// file without it). With `forget` false it only answers.
     struct ForgetMidCall {
         forget: bool,
     }
@@ -3348,7 +3394,8 @@ mod tests {
             _sink: &mut dyn FnMut(crate::client::StreamEvent),
         ) -> Result<TurnOutput, ClientError> {
             if self.forget {
-                note_forgotten_lines(&["user is leaving Contoso for Fabrikam".to_string()])
+                let held = lock_notes().unwrap();
+                note_forgotten_lines(&held, &["user is leaving Contoso for Fabrikam".to_string()])
                     .unwrap();
                 fs::write(global_memory_path(), "user likes quiet mornings\n").unwrap();
             }
@@ -3359,10 +3406,10 @@ mod tests {
         }
     }
 
-    /// The dream writes its rewrite back and leaves out the line forgotten
-    /// during its call, and its backup is the file as forget left it. A line
-    /// the user puts back by hand afterwards is theirs: the next dream keeps
-    /// it.
+    /// A file `/forget` changed during the dream's call stays as forget left
+    /// it, with no backup of the old notes beside it: the reply was written
+    /// from them. The file forget didn't touch takes the rewrite. A line the
+    /// user puts back by hand afterwards is theirs: the next dream keeps it.
     #[test]
     fn a_dream_does_not_write_back_a_line_forgotten_during_its_call() {
         let (_cfg, ws, _guard) = temp_pair("dream-forget");
@@ -3385,14 +3432,19 @@ mod tests {
             )
             .unwrap()
         };
-        let status = run(true);
-        assert!(status.starts_with("Consolidated MEMORY.md."), "{status}");
         assert_eq!(
-            [
-                fs::read_to_string(&global).unwrap(),
-                fs::read_to_string(dream_backup_path(&global)).unwrap(),
-            ],
-            ["user likes quiet mornings\n", "user likes quiet mornings\n"]
+            run(true),
+            "Consolidated MEMORY.md. Project memory: 1 lines to 1. Global memory changed while \
+             the dream ran, so it was left as it is."
+        );
+        assert_eq!(
+            fs::read_to_string(&global).unwrap(),
+            "user likes quiet mornings\n"
+        );
+        assert!(!dream_backup_path(&global).exists());
+        assert_eq!(
+            fs::read_to_string(workspace_memory_path(&ws)).unwrap(),
+            "prefer the harbor light"
         );
         assert_eq!(bodies_for(&ws, "Fabrikam"), Vec::<String>::new());
         fs::write(

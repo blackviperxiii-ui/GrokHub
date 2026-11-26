@@ -385,6 +385,7 @@ pub struct WipeReport {
 /// routines, needs and how they like things done, forgotten ones too. Other
 /// memory (projects, game scans, lessons) stays, and `index.sqlite` starts
 /// over from it, so no wiped line's text is left in the index's file. The
+/// wiki loses the page and index line of every node no longer on disk. The
 /// dream reports lose every Merged or Retired line that names a node no
 /// longer on disk, and every proposed USER.md line (each one quoted a
 /// preference, and those all go), so a second Wipe after one that stopped
@@ -400,6 +401,7 @@ pub fn wipe_user_model(store: &AmrStore, _ask: UserForget) -> Result<WipeReport,
     for id in &ids {
         store.purge(id)?;
     }
+    store.drop_wiki_pages(&|id| !store.has_node_file(id))?;
     store.drop_dream_lines(&|id| !store.has_node_file(id), &|_| true)?;
     store.start_index_over()?;
     Ok(WipeReport {

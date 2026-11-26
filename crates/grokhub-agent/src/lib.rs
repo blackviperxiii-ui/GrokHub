@@ -147,10 +147,10 @@ pub use mcp::{
 pub use memory::{
     amr_enabled, amr_store, dream, dream_model_enabled, drop_global_copies, first_turn_injection,
     flush_pending, forget_session_topic, global_memory_path, is_dream_command, is_flush_command,
-    memory_writes_enabled, note_forgotten_lines, queue_memory_status, remember, remember_note_text,
-    search as search_memory, session_lines_about, set_memory_writes, take_memory_status,
-    without_forgotten_lines, workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP,
-    INJECT_TOKEN_CAP,
+    lock_notes, memory_writes_enabled, note_forgotten_lines, queue_memory_status, remember,
+    remember_note_text, search as search_memory, session_lines_about, set_memory_writes,
+    take_memory_status, without_forgotten_lines, workspace_memory_path, Hit as MemoryHit,
+    NotesLock, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use memory_embed::embedder as text_embedder;
 pub use models::{

@@ -359,11 +359,13 @@ impl AmrStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        // A wiki export that read this line first writes its page first.
+        let _held = self.hold_reports()?;
         self.write_tombstone(&id, now, "")
     }
 
     /// `forgotten: <stamp>` plus `extra` lines, and the id leaves
-    /// `index.sqlite`. An existing tombstone stays as it is.
+    /// `index.sqlite` and the wiki. An existing tombstone stays as it is.
     pub(super) fn write_tombstone(
         &self,
         id: &NodeId,
@@ -375,6 +377,7 @@ impl AmrStore {
             let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
             fs::write(&marker, format!("forgotten: {stamp}\n{extra}")).map_err(io_err)?;
         }
+        self.drop_wiki_pages(&|named| named == id.as_str())?;
         self.unindex(id.as_str())
     }
 
@@ -444,6 +447,7 @@ impl AmrStore {
             self.drop_dream_lines(&|named| named == id.as_str(), &|line| {
                 quoted.as_deref() == Some(line)
             })?;
+            self.drop_wiki_pages(&|named| named == id.as_str())?;
             return self.unindex(id.as_str());
         }
         match fs::remove_file(&marker) {

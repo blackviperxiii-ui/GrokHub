@@ -160,11 +160,47 @@ pub fn reject_row(workspace: &Path, id: &str) -> Result<Notes, String> {
     load(workspace)
 }
 
-/// Keep a line but stop using it (`paused`), or use it again.
+/// Keep a line but stop using it (`paused`), or use it again. A paused line
+/// also leaves a Pulse card an earlier build's nightly dream posted quoting
+/// it.
 pub fn pause_row(workspace: &Path, id: &str, paused: bool) -> Result<Notes, String> {
     let store = open_store()?;
+    let text = paused
+        .then(|| learned_rows().into_iter().find(|row| row.id == id))
+        .flatten()
+        .map(|row| row.text);
     grokhub_core::amr::pause_node(&store, id, paused).map_err(|err| err.to_string())?;
+    if let Some(text) = text {
+        drop_dream_cards(Some(&text))?;
+    }
     load(workspace)
+}
+
+/// Take the nightly model dream's morning cards off Pulse: every one
+/// (`quoting` is `None`, for Wipe), or each that quotes `quoting` (for
+/// Pause). Those cards count what the dream proposed; one an earlier build
+/// posted quoted the line it proposed, maybe cut short.
+fn drop_dream_cards(quoting: Option<&str>) -> Result<(), String> {
+    let quotes = |body: &str, line: &str| {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        let Some(rest) = body.strip_prefix("Proposed ") else {
+            return false;
+        };
+        let rest = rest.strip_suffix('…').unwrap_or(rest);
+        !line.is_empty() && !rest.is_empty() && (rest.starts_with(&line) || line.starts_with(rest))
+    };
+    crate::pulse::edit_cards(&grokhub_agent::perm::config_dir(), &mut |cards| {
+        let before = cards.len();
+        cards.retain(|card| {
+            card.source_id != grokhub_core::amr::MORNING_CARD_SOURCE
+                || quoting.is_some_and(|line| {
+                    !card.body.as_deref().is_some_and(|body| quotes(body, line))
+                })
+        });
+        // Saved when a card went: the count is the number removed.
+        before - cards.len()
+    })
+    .map(|_| ())
 }
 
 /// Add a line about the user in their own words, under one group.
@@ -249,18 +285,23 @@ const WIPED_NOTES: [&str; 2] = ["USER.md", "MEMORY.md"];
 
 /// Delete every learned line about the user for good, and empty the global
 /// USER.md and MEMORY.md, leaving no copy of them: not the `.prev` copy a
-/// save keeps, dream's backup or the recall index. Project notes in the work
-/// folder are the project's, so they stay, and so does session memory, the
-/// chats' own words; `/forget <topic>` takes lines out of both. A running
-/// dream holds lines it read before the Wipe and would write them back after
-/// it (its report, its proposals), so Wipe doesn't run beside one: while a
-/// dream runs it says so and changes nothing.
+/// save keeps, dream's backup, the recall index, the wiki's pages or the
+/// nightly dream's Pulse cards. Project notes in the work folder are the
+/// project's, so they stay, and so does session memory, the chats' own words;
+/// `/forget <topic>` takes lines out of both. A running memory dream holds
+/// lines it read before the Wipe and would write them back after it (its
+/// report, its proposals), so Wipe doesn't run beside one: while a dream runs
+/// it says so and changes nothing. A dream of MEMORY.md (`/dream` reaching
+/// the engine) that read the notes before the Wipe finds them changed when it
+/// is done and leaves them as the Wipe left them.
 pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
     let _one = match DREAM.try_lock() {
         Ok(one) => one,
         Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => return Err(WIPE_WHILE_DREAMING.into()),
     };
+    // Held through emptying the notes and deleting their copies.
+    let held = grokhub_agent::lock_notes()?;
     let store = open_store()?;
     let report =
         grokhub_core::amr::wipe_user_model(&store, grokhub_core::amr::UserForget::from_click())
@@ -276,7 +317,9 @@ pub fn wipe(workspace: &Path) -> Result<Wiped, String> {
             std::fs::write(&path, format!("# {name}\n")).map_err(|e| e.to_string())?;
         }
     }
-    grokhub_agent::drop_global_copies()?;
+    grokhub_agent::drop_global_copies(&held)?;
+    drop(held);
+    drop_dream_cards(None)?;
     Ok(Wiped {
         removed: report.removed,
         locked: report.locked,
@@ -307,6 +350,9 @@ pub fn save(
     } else {
         grokhub_agent::workspace_memory_path(workspace)
     };
+    // Held from the stale-edit check through the write, so a dream's
+    // write-back can't land between them.
+    let _held = grokhub_agent::lock_notes()?;
     if read(&path)? != base {
         return Err(CHANGED.into());
     }
@@ -678,9 +724,13 @@ pub fn forget_plan(workspace: &Path, topic: Option<&str>) -> Result<Plan, String
 /// topic the global file is emptied.
 pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     let path = grokhub_agent::global_memory_path();
+    // Held from the first read of the notes through the last write, so a
+    // dream of MEMORY.md that read them before writes its rewrite first (and
+    // this reads that), or finds them changed and leaves them be.
+    let held = grokhub_agent::lock_notes()?;
     let Some(topic) = topic.map(str::trim).filter(|t| !t.is_empty()) else {
         let before = read(&path)?;
-        grokhub_agent::note_forgotten_lines(&dropped_lines(&before, ""))?;
+        grokhub_agent::note_forgotten_lines(&held, &dropped_lines(&before, ""))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -695,7 +745,7 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     let (local_after, local_gone) = without_topic(&local_before, topic);
     // Session memory reads all its files before it writes any, so one it
     // can't read also stops the command here with nothing changed.
-    let session_gone = grokhub_agent::forget_session_topic(topic)?;
+    let session_gone = grokhub_agent::forget_session_topic(&held, topic)?;
     let mut parts = Vec::new();
     if grokhub_agent::amr_enabled() {
         let store = open_store()?;
@@ -714,7 +764,9 @@ pub fn forget(workspace: &Path, topic: Option<&str>) -> Result<String, String> {
     // a Restore of an older copy (`MEMORY.md.prev`) then leaves them out.
     let mut gone = dropped_lines(&before, &after);
     gone.extend(dropped_lines(&local_before, &local_after));
-    grokhub_agent::note_forgotten_lines(&gone)?;
+    grokhub_agent::note_forgotten_lines(&held, &gone)?;
+    #[cfg(test)]
+    tests::forget_step();
     if after != before {
         std::fs::write(&path, after).map_err(|e| e.to_string())?;
     }
@@ -967,6 +1019,7 @@ pub fn load_files() -> Result<MemoryFiles, String> {
 /// Save one Memory tab. `base` is the editor's starting text (stale-edit check).
 pub fn save_file(name: &str, text: &str, base: &str) -> Result<(MemoryFiles, bool), String> {
     let path = tab_path(name)?;
+    let _held = grokhub_agent::lock_notes()?;
     if read(&path)? != base {
         return Err(CHANGED.into());
     }
@@ -991,11 +1044,12 @@ pub fn save_file(name: &str, text: &str, base: &str) -> Result<(MemoryFiles, boo
 pub fn restore_file(name: &str) -> Result<MemoryFiles, String> {
     let path = tab_path(name)?;
     let prev_path = memory_dir().join(format!("{name}.prev"));
+    let held = grokhub_agent::lock_notes()?;
     let prev = read(&prev_path)?;
     if prev.is_empty() {
         return Err(format!("no {name}.prev"));
     }
-    let prev = grokhub_agent::without_forgotten_lines(&prev, &read(&path)?)?;
+    let prev = grokhub_agent::without_forgotten_lines(&held, &prev, &read(&path)?)?;
     // Restore replaces the current body; keep a .prev of what was open first.
     write_notes_file(&path, &prev)?;
     load_files()
@@ -1017,6 +1071,7 @@ pub fn tidy_ledger() -> Result<MemoryFiles, String> {
     {
         return load_files();
     }
+    let _held = grokhub_agent::lock_notes()?;
     let memory = read(&memory_path)?;
     if !memory.contains("pulse:") {
         return load_files();
@@ -1056,6 +1111,7 @@ pub fn apply_raw_tidy() -> Result<MemoryFiles, String> {
     {
         return Err("MEMORY.md is too large to tidy here. Nothing was changed.".into());
     }
+    let _held = grokhub_agent::lock_notes()?;
     let body = read(&path)?;
     let lines = grokhub_core::learn_notes::raw_chat_lines(&body, MEMORY_SEED);
     patch_app(&[(RAW_TIDY_KEY, true.into())])?;
@@ -1167,6 +1223,7 @@ pub fn reflect(config_dir: &Path, chat_id: Option<&str>) -> Result<ReflectResult
         });
     }
     let mut diffs = Vec::new();
+    let held = grokhub_agent::lock_notes()?;
     for file in [
         grokhub_core::learn_notes::NoteFile::User,
         grokhub_core::learn_notes::NoteFile::Soul,
@@ -1185,6 +1242,7 @@ pub fn reflect(config_dir: &Path, chat_id: Option<&str>) -> Result<ReflectResult
         write_notes_file(&path, &edit.next)?;
         diffs.push(edit.diff);
     }
+    drop(held);
     let diff = diffs.join("\n");
     Ok(ReflectResult {
         status: if diff.is_empty() {
@@ -1917,6 +1975,364 @@ mod tests {
         drop(running);
         assert_eq!(wipe(&d.workspace).unwrap().removed, 1);
         assert_eq!(load(&d.workspace).unwrap().rows.len(), 0);
+    }
+
+    /// A model that calls Wipe while it is "thinking" about the notes, as a
+    /// person on the Memory page can while a `/dream` the engine got (an
+    /// automation's prompt) waits on its model, then answers with the notes
+    /// as they were.
+    struct WipeMidCall {
+        workspace: PathBuf,
+        said: std::sync::Mutex<Option<Result<String, String>>>,
+    }
+
+    impl grokhub_agent::ModelClient for WipeMidCall {
+        fn stream(
+            &self,
+            _req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            _sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            let wiped = wipe(&self.workspace).map(|w| w.notes.global);
+            *self.said.lock().unwrap() = Some(wiped);
+            Ok(grokhub_agent::TurnOutput {
+                text: "<<<GH_WORKSPACE>>>\n<<<GH_GLOBAL>>>\nI like short answers\nMy niece is called Brambleton\n<<<GH_END>>>\n".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// Wipe while the engine's own dream of MEMORY.md waits on its model: the
+    /// dream finds the notes changed and leaves them as the Wipe left them,
+    /// so no copy of a wiped line comes back, not in the notes, a backup or
+    /// the recall index.
+    #[test]
+    fn wipe_beside_a_dream_of_memory_md_stays_wiped() {
+        let d = dirs("wipe-mddream");
+        let config = grokhub_agent::perm::config_dir();
+        save(
+            &d.workspace,
+            true,
+            "I like short answers\nI like short answers\nMy niece is called Brambleton\n",
+            "",
+        )
+        .unwrap();
+        let model = WipeMidCall {
+            workspace: d.workspace.clone(),
+            said: std::sync::Mutex::new(None),
+        };
+        let dreamed = grokhub_agent::dream(
+            &model,
+            &grokhub_agent::CancelToken::new(),
+            "grok-4.7",
+            &d.workspace,
+            "conv",
+            &mut grokhub_agent::Usage::default(),
+        );
+        assert_eq!(
+            model.said.lock().unwrap().clone(),
+            Some(Ok("# MEMORY.md\n".to_string()))
+        );
+        assert_eq!(
+            dreamed,
+            Err(
+                "MEMORY.md was left unchanged. Global memory changed while the dream ran, so \
+                 it was left as it is."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap(),
+            "# MEMORY.md\n"
+        );
+        assert_eq!(files_holding(&config, "brambleton"), Vec::<String>::new());
+        assert_eq!(
+            grokhub_agent::search_memory(&d.workspace, "Brambleton").unwrap(),
+            Vec::new()
+        );
+    }
+
+    type ForgetHook = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+    /// One hook per config folder, so tests side by side never see each
+    /// other's.
+    static FORGET_HOOKS: std::sync::Mutex<Vec<(PathBuf, ForgetHook)>> =
+        std::sync::Mutex::new(Vec::new());
+
+    /// `/forget <topic>` has kept its lines in the record of forgotten lines
+    /// and not yet written the notes without them.
+    pub(super) fn forget_step() {
+        let here = grokhub_agent::perm::config_dir();
+        let hook = FORGET_HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(at, _)| *at == here)
+            .map(|(_, hook)| hook.clone());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    struct ForgetHookGuard(PathBuf);
+
+    impl Drop for ForgetHookGuard {
+        fn drop(&mut self) {
+            FORGET_HOOKS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|(at, _)| *at != self.0);
+        }
+    }
+
+    /// A model that says it was asked, then answers with the notes as they
+    /// were once the test says go.
+    struct AnswerOnGo {
+        asked: std::sync::Mutex<std::sync::mpsc::Sender<()>>,
+        go: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl grokhub_agent::ModelClient for AnswerOnGo {
+        fn stream(
+            &self,
+            _req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            _sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+        ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+            self.asked.lock().unwrap().send(()).unwrap();
+            self.go.lock().unwrap().recv().unwrap();
+            Ok(grokhub_agent::TurnOutput {
+                text: "<<<GH_WORKSPACE>>>\n<<<GH_GLOBAL>>>\nuser likes quiet mornings\nuser is leaving Contoso for Fabrikam\n<<<GH_END>>>\n".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// `/forget <topic>` part way through (the line kept in the record, the
+    /// notes not yet written) when a dream of MEMORY.md that read the line
+    /// gets its answer: the dream waits for the forget, finds the notes
+    /// changed and leaves them be, so neither the notes nor a backup or the
+    /// recall index keeps the line.
+    #[test]
+    fn forget_beside_a_dream_of_memory_md_leaves_no_copy_of_the_line() {
+        use std::sync::mpsc;
+        let d = dirs("forget-mddream");
+        let config = grokhub_agent::perm::config_dir();
+        save(
+            &d.workspace,
+            true,
+            "user likes quiet mornings\nuser likes quiet mornings\nuser is leaving Contoso for Fabrikam\n",
+            "",
+        )
+        .unwrap();
+        let (parked_tx, parked) = mpsc::channel::<()>();
+        let (release_tx, release) = mpsc::channel::<()>();
+        let (parked_tx, release) = (
+            std::sync::Mutex::new(parked_tx),
+            std::sync::Mutex::new(release),
+        );
+        FORGET_HOOKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((
+                config.clone(),
+                std::sync::Arc::new(move || {
+                    parked_tx.lock().unwrap().send(()).unwrap();
+                    release.lock().unwrap().recv().unwrap();
+                }),
+            ));
+        let _hook = ForgetHookGuard(config.clone());
+        let (asked_tx, asked) = mpsc::channel::<()>();
+        let (go_tx, go) = mpsc::channel::<()>();
+        let dream = {
+            let (config, workspace) = (config.clone(), d.workspace.clone());
+            std::thread::spawn(move || {
+                let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+                grokhub_agent::dream(
+                    &AnswerOnGo {
+                        asked: std::sync::Mutex::new(asked_tx),
+                        go: std::sync::Mutex::new(go),
+                    },
+                    &grokhub_agent::CancelToken::new(),
+                    "grok-4.7",
+                    &workspace,
+                    "conv",
+                    &mut grokhub_agent::Usage::default(),
+                )
+            })
+        };
+        asked.recv().unwrap();
+        let forgot = {
+            let (config, workspace) = (config.clone(), d.workspace.clone());
+            std::thread::spawn(move || {
+                let _config = grokhub_agent::perm::ConfigGuard::set(&config);
+                forget(&workspace, Some("Fabrikam"))
+            })
+        };
+        parked.recv().unwrap();
+        go_tx.send(()).unwrap();
+        // With nothing holding the dream back, it writes its answer here,
+        // with the line, while the forget is part way.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            forgot.join().unwrap(),
+            Ok("Forgot Fabrikam: 0 notes in the memory repo".to_string())
+        );
+        assert_eq!(
+            dream.join().unwrap(),
+            Err(
+                "MEMORY.md was left unchanged. Global memory changed while the dream ran, so \
+                 it was left as it is."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(grokhub_agent::global_memory_path()).unwrap(),
+            "user likes quiet mornings\nuser likes quiet mornings\n"
+        );
+        assert_eq!(files_holding(&config, "fabrikam"), Vec::<String>::new());
+        assert_eq!(
+            grokhub_agent::search_memory(&d.workspace, "Fabrikam").unwrap(),
+            Vec::new()
+        );
+    }
+
+    /// The Memory page's "Update wiki" writes a page per line and an index
+    /// into `amr/wiki/`. Pausing a line takes its page and index line out
+    /// right then, and Wipe takes out the rest: no byte of either line stays
+    /// in the config folder.
+    #[test]
+    fn pause_and_wipe_take_their_lines_out_of_the_wiki() {
+        let d = dirs("wiki-wipe");
+        let config = grokhub_agent::perm::config_dir();
+        add_fact(
+            &d.workspace,
+            "My sister lives on Quillfeather Lane",
+            "about",
+        )
+        .unwrap();
+        add_fact(&d.workspace, "I collect Brambleton stamps", "about").unwrap();
+        let wiki = grokhub_agent::amr_store().wiki_dir();
+        assert_eq!(
+            export_wiki().unwrap(),
+            format!(
+                "The wiki in {} has 2 pages (2 changed, 0 removed).",
+                wiki.display()
+            )
+        );
+        let rows = load(&d.workspace).unwrap().rows;
+        let id_of = |needle: &str| {
+            rows.iter()
+                .find(|r| r.text.contains(needle))
+                .map(|r| r.id.clone())
+                .unwrap()
+        };
+        let (lane, stamps) = (id_of("Quillfeather"), id_of("Brambleton"));
+        assert_eq!(
+            files_holding(&config, "brambleton"),
+            [
+                format!("amr/nodes/{stamps}.md"),
+                "amr/wiki/index.md".to_string(),
+                format!("amr/wiki/{stamps}.md")
+            ]
+        );
+        pause_row(&d.workspace, &stamps, true).unwrap();
+        assert_eq!(
+            files_holding(&config, "brambleton"),
+            [format!("amr/nodes/{stamps}.md")]
+        );
+        assert_eq!(
+            std::fs::read_to_string(wiki.join("index.md")).unwrap(),
+            format!(
+                "---\namr_export: 1\n---\n\n# Memory\n\n## fact\n\n- [[{lane}]] My sister lives on Quillfeather Lane\n"
+            )
+        );
+        assert_eq!(wipe(&d.workspace).unwrap().removed, 2);
+        assert_eq!(
+            (
+                files_holding(&config, "quillfeather"),
+                files_holding(&config, "brambleton")
+            ),
+            (Vec::<String>::new(), Vec::<String>::new())
+        );
+        assert_eq!(
+            std::fs::read_to_string(wiki.join("index.md")).unwrap(),
+            "---\namr_export: 1\n---\n\n# Memory\n"
+        );
+    }
+
+    /// The nightly model dream's morning card as an earlier build wrote it,
+    /// quoting the one line it proposed.
+    fn quoting_card(line: &str, at: u64) -> grokhub_core::UpdateCard {
+        grokhub_core::automation_done_card(
+            grokhub_core::amr::MORNING_CARD_SOURCE,
+            "Memory dream",
+            &format!("Proposed {line}. no lesson applied. reflect_min_confidence 0.70"),
+            at,
+        )
+    }
+
+    /// A card an earlier build posted quotes a proposed line. Pausing another
+    /// line leaves it; pausing that line takes it off Pulse. Wipe takes every
+    /// memory dream card off, and leaves the other cards.
+    #[test]
+    fn pause_and_wipe_take_the_dream_cards_that_quote_a_line_off_pulse() {
+        let d = dirs("dream-cards");
+        let config = grokhub_agent::perm::config_dir();
+        add_fact(
+            &d.workspace,
+            "I keep a pet tortoise named Quillfeather",
+            "about",
+        )
+        .unwrap();
+        add_fact(&d.workspace, "I collect Brambleton stamps", "about").unwrap();
+        let rows = load(&d.workspace).unwrap().rows;
+        let id_of = |needle: &str| {
+            rows.iter()
+                .find(|r| r.text.contains(needle))
+                .map(|r| r.id.clone())
+                .unwrap()
+        };
+        let (tortoise, stamps) = (id_of("Quillfeather"), id_of("Brambleton"));
+        let now = grokhub_core::now_ms();
+        for card in [
+            quoting_card("I collect Brambleton stamps", now),
+            grokhub_core::automation_done_card("night-review", "Night review", "All quiet", now),
+        ] {
+            assert!(crate::pulse::add_post(&config, card).unwrap());
+        }
+        let bodies = || -> Vec<String> {
+            let mut bodies: Vec<String> = crate::pulse::cards(&config)
+                .unwrap()
+                .into_iter()
+                .filter_map(|card| card.body)
+                .collect();
+            bodies.sort();
+            bodies
+        };
+        pause_row(&d.workspace, &tortoise, true).unwrap();
+        assert_eq!(
+            bodies(),
+            [
+                "All quiet",
+                "Proposed I collect Brambleton stamps. no lesson applied. reflect_min_confidence 0.70"
+            ]
+        );
+        pause_row(&d.workspace, &stamps, true).unwrap();
+        assert_eq!(bodies(), ["All quiet"]);
+        assert_eq!(
+            files_holding(&config, "brambleton"),
+            [format!("amr/nodes/{stamps}.md")]
+        );
+        assert!(crate::pulse::add_post(
+            &config,
+            quoting_card("I keep a pet tortoise named Quillfeather", now + 1)
+        )
+        .unwrap());
+        assert_eq!(wipe(&d.workspace).unwrap().removed, 2);
+        assert_eq!(bodies(), ["All quiet"]);
+        assert_eq!(files_holding(&config, "quillfeather"), Vec::<String>::new());
     }
 
     /// `/forget <topic>` takes a line out of MEMORY.md, but an older copy
