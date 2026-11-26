@@ -2358,7 +2358,11 @@ fn run_turn(
             if !refused && call.name == "run_terminal_command" {
                 if let Some(cmd) = serde_json::from_str::<serde_json::Value>(&call.arguments)
                     .ok()
-                    .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
+                    .and_then(|v| {
+                        v.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(str::to_string)
+                    })
                 {
                     edit_verify.note_manual_command(&cmd, !output.failed);
                 }
@@ -13221,7 +13225,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
         let input = LoopIn {
             client: &script,
             workspace: &dir,
-            model: "local:small",
+            model: "grok-4.7",
             effort: None,
             system: "",
             conversation_id: "conv-edit-verify-exhaust",
@@ -13244,6 +13248,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
+        let _on_device = crate::route::live::StepOnDeviceForTests::set(true);
         let out = run_loop(&input, &mut history, "fix bug", None, &mut |ev| {
             events.push(ev)
         });

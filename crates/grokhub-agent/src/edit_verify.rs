@@ -23,8 +23,8 @@ const NOTE_OUTPUT_MAX: usize = 3_000;
 
 /// Extensions treated as code/build inputs that warrant verification on edit.
 const CODE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "c", "cpp", "cc", "h", "hpp",
-    "java", "kt", "rb", "sh", "ps1",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "c", "cpp", "cc", "h", "hpp", "java",
+    "kt", "rb", "sh", "ps1",
 ];
 
 /// Manifest/config filenames whose edits affect build or test behavior.
@@ -329,7 +329,11 @@ fn single_workspace_crate(workspace: &Path, modified_paths: &[String]) -> Option
         let rest = trimmed.strip_prefix("crates/")?;
         let pkg = rest.split('/').next()?.trim();
         if pkg.is_empty()
-            || !workspace.join("crates").join(pkg).join("Cargo.toml").is_file()
+            || !workspace
+                .join("crates")
+                .join(pkg)
+                .join("Cargo.toml")
+                .is_file()
         {
             return None;
         }
@@ -363,9 +367,7 @@ fn has_real_npm_test(package_json: &Path) -> bool {
 fn has_ext(path: &str, ext: &str) -> bool {
     let norm = path.trim().replace('\\', "/").to_ascii_lowercase();
     let file_name = norm.rsplit('/').next().unwrap_or(norm.as_str());
-    file_name
-        .rsplit_once('.')
-        .is_some_and(|(_, e)| e == ext)
+    file_name.rsplit_once('.').is_some_and(|(_, e)| e == ext)
 }
 
 fn file_name_eq(path: &str, expected_lower: &str) -> bool {
@@ -481,9 +483,21 @@ mod tests {
         let dir = temp_ws("cargo");
         std::fs::create_dir_all(dir.join("crates/alpha/src")).unwrap();
         std::fs::create_dir_all(dir.join("crates/beta/src")).unwrap();
-        std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers=[\"crates/*\"]\n").unwrap();
-        std::fs::write(dir.join("crates/alpha/Cargo.toml"), "[package]\nname=\"alpha\"\n").unwrap();
-        std::fs::write(dir.join("crates/beta/Cargo.toml"), "[package]\nname=\"beta\"\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers=[\"crates/*\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("crates/alpha/Cargo.toml"),
+            "[package]\nname=\"alpha\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("crates/beta/Cargo.toml"),
+            "[package]\nname=\"beta\"\n",
+        )
+        .unwrap();
 
         let single = detect_command(&dir, &["crates/alpha/src/lib.rs".to_string()]).unwrap();
         assert_eq!(single.command, "cargo test -p alpha");
