@@ -2126,46 +2126,50 @@ async function noSidewaysScroll(s, when) {
   console.log(`no sideways scroll ${when}: ${wide}px in ${fits}px`);
 }
 
-/** A fresh profile opens on the first-run window (AutoSetup.tsx), which
- * covers the page until it's answered, and WebKit then refuses a click on
- * Send as "element click intercepted". Skip it the way a person would, then
- * wait out the corner note the launch pass may leave over the composer. */
+/** A fresh profile opens on first-run windows that cover the page until
+ * they're answered: setup (AutoSetup.tsx), get to know you
+ * (GetToKnowYou.tsx) and first run v2 (FirstRunV2.tsx). WebKit refuses a
+ * click on Send under them as "element click intercepted". Skip each the way
+ * a person would, topmost first, then wait out the corner note the launch
+ * pass may leave over the composer. */
+const FIRST_RUN_SKIP =
+  "//div[contains(@class,'first-run-backdrop')]//div[@role='dialog']" +
+  "//button[normalize-space()='Skip setup' or normalize-space()='Skip for now']";
+
 async function skipFirstRun(s) {
-  const skip = await waitFor(
-    "the first-run window",
-    () =>
-      wd("POST", `${s}/element`, {
-        using: "xpath",
-        value: "//div[@role='dialog' and contains(@class,'first-run')]//button[normalize-space()='Skip setup']",
-      }),
+  // The windows open one after another, so give the first one time to land.
+  await waitFor(
+    "a first-run window",
+    async () => (await wd("POST", `${s}/elements`, { using: "xpath", value: FIRST_RUN_SKIP })).length > 0,
     20000,
   ).catch(() => null);
-  if (skip) await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
-  // Get to know you (GetToKnowYou.tsx) is the next stage and uses the
-  // same backdrop; skip it too. With auto setup off it can open on its own.
-  const later = await waitFor(
-    "the get-to-know-you stage",
-    () =>
-      wd("POST", `${s}/element`, {
-        using: "xpath",
-        value: "//div[@role='dialog' and contains(@class,'onboard')]//button[normalize-space()='Skip for now']",
-      }),
-    10000,
-  ).catch(() => null);
-  if (later) await wd("POST", `${s}/element/${later[ELEMENT]}/click`, {});
-  if (!skip && !later) {
+  let skipped = 0;
+  for (let quiet = 0; quiet < 3 && skipped < 6; ) {
+    const skips = await wd("POST", `${s}/elements`, { using: "xpath", value: FIRST_RUN_SKIP });
+    if (skips.length === 0) {
+      // A later stage can open a moment after the last one closes.
+      quiet += 1;
+      await sleep(1500);
+      continue;
+    }
+    quiet = 0;
+    // A later window renders after an earlier one and sits on top of it.
+    await wd("POST", `${s}/element/${skips[skips.length - 1][ELEMENT]}/click`, {});
+    skipped += 1;
+    await sleep(500);
+  }
+  if (skipped === 0) {
     console.log("first run: no window (auto setup off)");
     return;
   }
-  await waitFor("the first-run window to close", async () => {
+  await waitFor("the first-run windows to close", async () => {
     const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
     return open.length === 0;
   });
   await sleep(1000);
   const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
   if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
-  const also = [later && "get to know you skipped", notes.length > 0 && "corner note closed"].filter(Boolean);
-  console.log(`first run: ${skip ? "skipped" : "no window (auto setup off)"}${also.map((a) => `, ${a}`).join("")}`);
+  console.log(`first run: ${skipped} window(s) skipped${notes.length > 0 ? ", corner note closed" : ""}`);
 }
 
 async function main() {
