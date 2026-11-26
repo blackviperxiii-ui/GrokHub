@@ -1170,27 +1170,29 @@ mod tests {
         let (config, workspace) = (temp_dir("export-cfg"), temp_dir("export-ws"));
         let out = temp_dir("export-out");
         let id = "shell-history-export";
+        // A file ask keeps its tools. A casual line like "pick a colour"
+        // answers as chat and never runs read_file.
         turn(
             id,
             &config,
             &workspace,
             Model::new("Blue suits it.", true),
-            "pick a colour",
+            "read the colour file",
         );
         let first = crate::export::export_into(&config, id, &out, 0, 0).expect("export");
         let again = crate::export::export_into(&config, id, &out, 0, 0).expect("export again");
         assert_eq!(
             first.file_name().and_then(|n| n.to_str()),
-            Some("pick a colour-19700101-0000.md")
+            Some("read the colour file-19700101-0000.md")
         );
         assert_eq!(
             again.file_name().and_then(|n| n.to_str()),
-            Some("pick a colour-19700101-0000-2.md")
+            Some("read the colour file-19700101-0000-2.md")
         );
         let md = std::fs::read_to_string(&first).expect("read");
         for part in [
-            "# pick a colour",
-            "pick a colour",
+            "# read the colour file",
+            "read the colour file",
             "Used read_file",
             "Blue suits it.",
         ] {

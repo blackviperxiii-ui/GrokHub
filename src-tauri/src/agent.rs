@@ -2089,8 +2089,10 @@ mod tests {
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
+            // A read-only question: a task ask also runs the close-check and
+            // done checks, which send this script's one reply back again.
             runner.prompt(
-                "do the thing",
+                "what does a.txt say?",
                 Vec::new(),
                 route,
                 Box::new(move |event| sink.lock().expect("events").push(event)),
