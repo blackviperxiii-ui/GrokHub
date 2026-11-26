@@ -2,6 +2,8 @@ import { useEffect, useEffectEvent, useRef, useState, type CSSProperties } from 
 import {
   battlenetOpenFolder,
   battlenetPlay,
+  chatMedia,
+  chatPicture,
   getBattlenet,
   getImagine,
   getLibrary,
@@ -10,8 +12,12 @@ import {
   imagineImage,
   libraryCover,
   libraryPlay,
+  listChatArtifacts,
   onWallNews,
+  openChatArtifact,
+  revealChatArtifact,
   type BattlenetGame,
+  type ChatArtifact,
   type CoverShape,
   type ImagineTile,
   type LibraryGame,
@@ -22,7 +28,13 @@ import { Lightbox } from "./FeedCard";
 import { GameCompanion, type CompanionTarget } from "./GameCompanion";
 import { companionScreen } from "./games";
 
-export type LibraryTab = "all" | "installed" | "backlog" | "onObjective" | "creations";
+export type LibraryTab =
+  | "all"
+  | "installed"
+  | "backlog"
+  | "onObjective"
+  | "creations"
+  | "artifacts";
 
 export const TAB_LABELS: Record<LibraryTab, string> = {
   all: "All",
@@ -30,8 +42,16 @@ export const TAB_LABELS: Record<LibraryTab, string> = {
   backlog: "Backlog",
   onObjective: "On objective",
   creations: "Creations",
+  artifacts: "Artifacts",
 };
-const TABS: LibraryTab[] = ["all", "installed", "backlog", "onObjective", "creations"];
+const TABS: LibraryTab[] = [
+  "all",
+  "installed",
+  "backlog",
+  "onObjective",
+  "creations",
+  "artifacts",
+];
 
 export const NO_STEAM = "Steam isn't installed on this computer, or its library folder wasn't found.";
 export const NO_GAMES = "No Steam or Battle.net games are installed yet.";
@@ -39,12 +59,40 @@ export const NO_MATCH = "No games match.";
 export const NO_OBJECTIVE = "No open mission names a game yet.";
 export const CREATIONS_EMPTY =
   "Nothing saved yet. Images and videos you save from Chat, and living wall covers, show up here.";
+export const ARTIFACTS_EMPTY =
+  "Nothing from chats yet. Images, videos, files and links from every chat show up here.";
 export const WALL_RETRY = "The wall cover didn't come. It tries again in 15 minutes.";
 export function wallLine(title: string): string {
   return `New cover on the wall: ${title}`;
 }
 export function paintingLine(title: string): string {
   return `Painting a wall cover: ${title}`;
+}
+
+/** Search Artifacts by file name or chat title. */
+export function filterArtifacts(items: ChatArtifact[], query: string): ChatArtifact[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return items;
+  return items.filter(
+    (item) => item.name.toLowerCase().includes(q) || item.chatTitle.toLowerCase().includes(q),
+  );
+}
+
+export function artifactKindLabel(kind: ChatArtifact["kind"]): string {
+  switch (kind) {
+    case "image":
+      return "Image";
+    case "video":
+      return "Video";
+    case "file":
+      return "File";
+    case "link":
+      return "Link";
+    default: {
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
 }
 
 export type LibraryTile =
@@ -291,6 +339,203 @@ function OpenedCreation({ tile, onClose }: { tile: ImagineTile; onClose: () => v
   return <Lightbox src={src} name={tile.name} video={tile.video} onClose={onClose} />;
 }
 
+function ArtifactThumb({
+  item,
+  onOpen,
+}: {
+  item: ChatArtifact;
+  onOpen: () => void;
+}) {
+  const [src, setSrc] = useState("");
+  useEffect(() => {
+    if (item.kind !== "image" || typeof chatPicture !== "function") return;
+    let live = true;
+    chatPicture(item.path).then(
+      (url) => {
+        if (live) setSrc(url);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [item.kind, item.path]);
+  return (
+    <button type="button" className="media-item" aria-label={`Open ${item.name}`} onClick={onOpen}>
+      {item.kind === "video" ? (
+        <span className="imagine-video" aria-hidden="true">
+          ▶ Video
+        </span>
+      ) : item.kind === "image" && src ? (
+        <img src={src} alt="" />
+      ) : (
+        <span className="imagine-video" aria-hidden="true">
+          {artifactKindLabel(item.kind)}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function ArtifactsGallery({
+  query,
+  onOpenChat,
+}: {
+  query: string;
+  onOpenChat?: (id: string) => void;
+}) {
+  const [items, setItems] = useState<ChatArtifact[] | null>(null);
+  const [open, setOpen] = useState<ChatArtifact | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof listChatArtifacts !== "function") return;
+    let live = true;
+    listChatArtifacts().then(
+      (list) => {
+        if (live) setItems(list);
+      },
+      (err) => {
+        if (live) setError(String(err));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open || (open.kind !== "image" && open.kind !== "video")) {
+      setPreview(null);
+      return;
+    }
+    let live = true;
+    const loader = open.kind === "video" ? chatMedia : chatPicture;
+    if (typeof loader !== "function") return;
+    loader(open.path).then(
+      (url) => {
+        if (live) setPreview(url);
+      },
+      (err) => {
+        if (live) setNote(String(err));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [open]);
+
+  const visible = filterArtifacts(items ?? [], query);
+
+  async function run(step: () => Promise<void>) {
+    setNote(null);
+    try {
+      await step();
+    } catch (err) {
+      setNote(String(err));
+    }
+  }
+
+  async function copyPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path);
+      setNote("Copied.");
+    } catch {
+      setNote("Couldn't copy.");
+    }
+  }
+
+  return (
+    <div className="library-creations library-artifacts">
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {note && (
+        <p className="note" role="status">
+          {note}
+        </p>
+      )}
+      {items === null && !error && <p className="empty">Loading chat artifacts…</p>}
+      {items !== null && items.length === 0 && <p className="empty">{ARTIFACTS_EMPTY}</p>}
+      {items !== null && items.length > 0 && visible.length === 0 && (
+        <p className="empty">No artifacts match.</p>
+      )}
+      {visible.length > 0 && (
+        <ul className="imagine-gallery" aria-label="Artifacts">
+          {visible.map((item) => (
+            <li key={item.id} className="imagine-tile artifact-tile">
+              <ArtifactThumb item={item} onOpen={() => setOpen(item)} />
+              <span className="imagine-caption">{item.name}</span>
+              <span className="card-status">
+                {artifactKindLabel(item.kind)}
+                {item.chatTitle ? ` · ${item.chatTitle}` : ""}
+              </span>
+              <div className="card-media-actions">
+                {onOpenChat && (
+                  <button type="button" className="quiet" onClick={() => onOpenChat(item.chatId)}>
+                    Open chat
+                  </button>
+                )}
+                <button type="button" className="quiet" onClick={() => setOpen(item)}>
+                  Open
+                </button>
+                {item.kind !== "link" && typeof revealChatArtifact === "function" && (
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => void run(() => revealChatArtifact(item.path))}
+                  >
+                    Show in folder
+                  </button>
+                )}
+                <button type="button" className="quiet" onClick={() => void copyPath(item.path)}>
+                  Copy
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && (open.kind === "image" || open.kind === "video") && preview && (
+        <Lightbox
+          src={preview}
+          name={open.name}
+          video={open.kind === "video"}
+          onClose={() => setOpen(null)}
+        />
+      )}
+      {open && open.kind !== "image" && open.kind !== "video" && (
+        <div className="lightbox" role="dialog" aria-modal="true" aria-label="Artifact">
+          <div className="lightbox-buttons" onClick={(e) => e.stopPropagation()}>
+            <p className="note">{open.name}</p>
+            <button
+              type="button"
+              onClick={() =>
+                void run(async () => {
+                  if (typeof openChatArtifact === "function") await openChatArtifact(open.path);
+                  else if (open.kind === "link") window.open(open.path, "_blank", "noopener");
+                })
+              }
+            >
+              Open
+            </button>
+            <button type="button" className="quiet" onClick={() => void copyPath(open.path)}>
+              Copy
+            </button>
+            <button type="button" className="quiet" onClick={() => setOpen(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreationsGallery({ query }: { query: string }) {
   const [tiles, setTiles] = useState<ImagineTile[] | null>(null);
   const [open, setOpen] = useState<ImagineTile | null>(null);
@@ -395,7 +640,7 @@ function CreationsGallery({ query }: { query: string }) {
 }
 
 /** The Library page: Steam and Battle.net covers, with a companion frame. */
-export function Library() {
+export function Library({ onOpenChat }: { onOpenChat?: (id: string) => void } = {}) {
   const [page, setPage] = useState<LibraryPage | null>(null);
   const [bnet, setBnet] = useState<BattlenetGame[]>([]);
   const [mission, setMission] = useState<Mission | null>(null);
@@ -500,14 +745,28 @@ export function Library() {
         </div>
         <input
           type="search"
-          aria-label={tab === "creations" ? "Search creations" : "Search games"}
-          placeholder={tab === "creations" ? "Search creations" : "Search games"}
+          aria-label={
+            tab === "creations"
+              ? "Search creations"
+              : tab === "artifacts"
+                ? "Search artifacts"
+                : "Search games"
+          }
+          placeholder={
+            tab === "creations"
+              ? "Search creations"
+              : tab === "artifacts"
+                ? "Search artifacts"
+                : "Search games"
+          }
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
       {tab === "creations" ? (
         <CreationsGallery query={query} />
+      ) : tab === "artifacts" ? (
+        <ArtifactsGallery query={query} onOpenChat={onOpenChat} />
       ) : (
         <>
           {note && (

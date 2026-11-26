@@ -938,7 +938,7 @@ export function App() {
       case "library":
         return opened.has("library") && caps.library ? (
           <Page key="library" shown={shown}>
-            <Library />
+            <Library onOpenChat={openSaved} />
           </Page>
         ) : null;
       case "mods":

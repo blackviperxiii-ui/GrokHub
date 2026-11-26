@@ -2114,6 +2114,35 @@ export function saveChatMediaToLibrary(path: string, prompt: string): Promise<Im
   return invoke<ImagineTile>("save_chat_media_to_library", { path, prompt });
 }
 
+/** One item in Library → Artifacts (src-tauri/src/artifacts.rs). */
+export type ArtifactKind = "image" | "video" | "file" | "link";
+
+export interface ChatArtifact {
+  id: string;
+  kind: ArtifactKind;
+  name: string;
+  /** Absolute file path, or the https URL for a link. */
+  path: string;
+  chatId: string;
+  chatTitle: string;
+  created: number;
+}
+
+/** Images, videos, files and links from every shell chat. */
+export function listChatArtifacts(): Promise<ChatArtifact[]> {
+  return invoke<ChatArtifact[]>("list_chat_artifacts");
+}
+
+/** Open a listed artifact: file in its app, or link in the browser. */
+export function openChatArtifact(path: string): Promise<void> {
+  return invoke<void>("open_chat_artifact", { path });
+}
+
+/** Show a listed file in the file manager. */
+export function revealChatArtifact(path: string): Promise<void> {
+  return invoke<void>("reveal_chat_artifact", { path });
+}
+
 /** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */
 export function imagineSignInStart(): Promise<GrokSignInStart> {
   return invoke<GrokSignInStart>("imagine_sign_in_start");
