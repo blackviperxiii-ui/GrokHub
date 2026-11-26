@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<script>
+// The frame an MCP App runs in. It tells the chat it is ready, takes the
+// app's HTML once, and becomes that page under this page's CSP.
+addEventListener("message", function load(ev) {
+  var msg = ev.data;
+  if (ev.source !== parent || !msg || msg.jsonrpc !== "2.0") return;
+  if (msg.method !== "ui/notifications/sandbox-resource-ready") return;
+  var html = msg.params && msg.params.html;
+  if (typeof html !== "string") return;
+  removeEventListener("message", load);
+  document.open();
+  document.write(html);
+  document.close();
+});
+parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} }, "*");
+</script>
+</body>
+</html>
