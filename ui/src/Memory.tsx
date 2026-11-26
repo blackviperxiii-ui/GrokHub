@@ -478,9 +478,20 @@ export function Memory() {
         What {PRODUCT_NAME} knows about you, and where it learned it. It all stays on this computer.
       </PageHead>
       {inShell() && (
-        <button type="button" className="chip" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
-          Get to know you
-        </button>
+        <>
+          <button type="button" className="chip" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
+            Get to know you
+          </button>
+          <button
+            type="button"
+            className="chip"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { firstRunV2: true } }))
+            }
+          >
+            First-run setup
+          </button>
+        </>
       )}
       <Toggle
         checked={notes.writesOn}

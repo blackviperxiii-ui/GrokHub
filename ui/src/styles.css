@@ -7599,6 +7599,11 @@ button.primary:not(.quick-chip) {
   align-self: flex-start;
 }
 
+/* First run v2 (FirstRunV2.tsx): layout, apps, skills, task, tour. */
+.first-run.first-run-v2 {
+  max-width: 640px;
+}
+
 .onboard-field {
   display: flex;
   flex-direction: column;

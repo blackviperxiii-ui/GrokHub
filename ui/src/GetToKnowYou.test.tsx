@@ -22,6 +22,7 @@ const BASE: OnboardReply = {
   drafts: null,
   amr: true,
   openclaw: false,
+  importSources: [],
   saved: null,
   note: null,
 };
