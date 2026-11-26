@@ -410,8 +410,8 @@ pub(crate) fn run_adoptable(
     let handover = handover
         .as_mut()
         .map(|f| f as &mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>);
-    // Snapshot referenced workspace files before potentially mutating shell
-    // commands so `/rewind step` can undo shell edits/deletions (Card 957).
+    // Snapshot the whole workspace before any command that isn't a plain
+    // read, so `/rewind step` can undo whatever it did to the tree.
     crate::file_checkpoint::before_shell(&cwd, &command);
     // Long output is cut here, where the workspace and whether the command
     // fetched anything are known, and saved whole first. Then it is fenced;
