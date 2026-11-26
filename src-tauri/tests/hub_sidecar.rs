@@ -49,13 +49,8 @@ fn only_windows_and_macos_declare_the_hub_sidecar() {
     }
 }
 
-/// The step both workflows run before any cargo or tauri step in `src-tauri`,
-/// as whole lines: its name, its condition and its command together.
-const STAGE_STEP: [&str; 3] = [
-    "      - name: Stage the grokhub-hub sidecar",
-    "        if: runner.os != 'Linux'",
-    "        run: node scripts/stage-hub-sidecar.mjs",
-];
+const STAGE_NAME: &str = "      - name: Stage the grokhub-hub sidecar";
+const STAGE_IF: &str = "        if: runner.os != 'Linux'";
 
 /// The lines of one job in a workflow: from its `  <job>:` line up to the next
 /// line indented two spaces or less that is not blank or a comment.
@@ -88,11 +83,13 @@ fn runs_cargo_or_tauri(line: &str) -> bool {
 fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
     let script = include_str!("../../scripts/stage-hub-sidecar.mjs");
     assert!(script.contains(r#"path.join(root, "src-tauri", `grokhub-hub-${host}${exe}`)"#));
-    // The build names the host triple and the copy reads that triple's folder,
-    // so CARGO_BUILD_TARGET or build.target cannot leave an older host binary
-    // in the path the script copies from.
+    // The release build names the host triple and the copy reads that triple's
+    // folder, so CARGO_BUILD_TARGET or build.target cannot leave an older host
+    // binary in the path the script copies from. The dev profile writes
+    // target/debug, which is the folder the workspace Windows cache holds.
     assert!(script.contains(r#""--target", host,"#));
     assert!(script.contains(r#"path.join(targetDir, host, "release", `grokhub-hub${exe}`)"#));
+    assert!(script.contains(r#"path.join(targetDir, "debug", `grokhub-hub${exe}`)"#));
     for (name, workflow, job, first_cargo) in [
         (
             "ci.yml",
@@ -108,14 +105,54 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
         ),
     ] {
         let lines = job_lines(workflow, job);
-        let stage: Vec<usize> = (0..lines.len())
-            .filter(|at| lines[*at..].starts_with(&STAGE_STEP))
+        let stage: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == STAGE_NAME)
+            .map(|(at, _)| at)
             .collect();
         assert_eq!(
             stage.len(),
             1,
-            "{name}: the `{job}` job stages the sidecar once, on Windows and macOS"
+            "{name}: the `{job}` job stages the sidecar once"
         );
+        let at = stage[0];
+        assert_eq!(
+            lines[at + 1],
+            STAGE_IF,
+            "{name}: sidecar staging runs on Windows and macOS"
+        );
+        let step_end = lines
+            .iter()
+            .enumerate()
+            .skip(at + 1)
+            .find(|(_, line)| {
+                line.starts_with("      - ")
+                    || (!line.starts_with("   ")
+                        && !line.trim().is_empty()
+                        && !line.trim_start().starts_with('#'))
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(lines.len());
+        let body = &lines[at..step_end];
+        assert!(
+            body.iter()
+                .any(|line| line.contains("node scripts/stage-hub-sidecar.mjs")),
+            "{name}: the stage step runs scripts/stage-hub-sidecar.mjs"
+        );
+        if name == "release.yml" {
+            assert!(
+                body.iter()
+                    .any(|line| *line == "        run: node scripts/stage-hub-sidecar.mjs"),
+                "release builds keep the optimized sidecar"
+            );
+        }
+        if name == "ci.yml" {
+            assert!(
+                body.iter().any(|line| line.contains("--profile dev")),
+                "beta Windows CI builds the dev sidecar that shares the workspace cache"
+            );
+        }
         let cargo = lines
             .iter()
             .position(|line| runs_cargo_or_tauri(line))
@@ -125,10 +162,24 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
             "{name}: the first cargo or tauri line of the `{job}` job"
         );
         assert!(
-            stage[0] + STAGE_STEP.len() <= cargo,
+            at < cargo,
             "{name}: the `{job}` job stages the sidecar before src-tauri cargo"
         );
     }
+}
+
+/// Beta still runs every workspace test. The Windows job is split so the
+/// two halves overlap; the `windows` job stays the required check.
+#[test]
+fn windows_nextest_on_beta_is_split_in_two_and_the_check_name_stays() {
+    let ci = include_str!("../../.github/workflows/ci.yml");
+    assert!(ci.contains("part: [1, 2]"));
+    assert!(ci.contains(
+        "cargo nextest run --workspace --locked --profile ci --partition count:${{ matrix.part }}/2"
+    ));
+    assert!(ci.contains("\n  windows:\n"));
+    assert!(ci.contains("needs: [changes, windows-parts]"));
+    assert!(ci.contains("shared-key: windows-test"));
 }
 
 /// The value of every `path = "…"` or `path = '…'` key in a Cargo manifest.
