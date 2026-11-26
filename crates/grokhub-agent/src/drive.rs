@@ -266,23 +266,62 @@ pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {
     {
         return None;
     }
-    let words: Vec<&str> = text
-        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .filter(|w| !w.is_empty())
-        .collect();
-    let claims = words
-        .iter()
-        .any(|w| ["done", "updated", "fixed", "completed", "finished"].contains(w))
-        || [
-            "all set",
-            "error gone",
-            "error is gone",
-            "works again",
-            "it works now",
-        ]
-        .iter()
-        .any(|p| text.contains(p));
+    // Only a statement claims: a question asks, and "it isn't done" or
+    // "nothing was updated" says the opposite.
+    let text = text.replace('\u{2019}', "'");
+    let claims = sentences(&text)
+        .into_iter()
+        .filter(|sentence| !sentence.ends_with('?'))
+        .flat_map(|sentence| sentence.split([',', ';', ':']))
+        .any(|clause| {
+            let words: Vec<&str> = clause
+                .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+                .filter(|w| !w.is_empty())
+                .collect();
+            (0..words.len()).any(|at| {
+                CLAIMS.iter().any(|claim| words[at..].starts_with(claim))
+                    && !words[at.saturating_sub(2)..at].iter().any(|w| {
+                        ["not", "never", "nothing", "no"].contains(w) || w.ends_with("n't")
+                    })
+            })
+        });
     claims.then_some("That isn't done yet: nothing ran this turn to make or check the change.")
+}
+
+/// The words that claim a change is made.
+const CLAIMS: &[&[&str]] = &[
+    &["done"],
+    &["updated"],
+    &["fixed"],
+    &["completed"],
+    &["finished"],
+    &["all", "set"],
+    &["error", "gone"],
+    &["error", "is", "gone"],
+    &["works", "again"],
+    &["it", "works", "now"],
+];
+
+/// `text`'s sentences, trimmed, each with its end mark: cut at `.`, `!` or
+/// `?` before a space or the end, and at line ends. A dot inside a word
+/// (`app.toml`) ends nothing.
+fn sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let ends = c == '\n'
+            || (matches!(c, '.' | '!' | '?')
+                && chars.peek().is_none_or(|(_, n)| n.is_whitespace()));
+        if ends {
+            let end = if c == '\n' { i } else { i + c.len_utf8() };
+            out.push(text[start..end].trim());
+            start = i + c.len_utf8();
+        }
+    }
+    out.push(text[start..].trim());
+    out.retain(|s| !s.is_empty());
+    out
 }
 
 fn list<'a>(items: impl Iterator<Item = &'a TodoItem>) -> String {
@@ -482,6 +521,27 @@ mod tests {
         );
         // "undone" is not "done".
         assert_eq!(unbacked_done("That change is undone.", 0), None);
+        // A question, or a claim word said in the negative, claims nothing.
+        for reply in [
+            "Which config file should be updated: app.toml or local.toml?",
+            "Understood, I left the file alone, so nothing was updated.",
+            "It isn't done: I could not reach the file.",
+            "It isn\u{2019}t done yet.",
+            "Not done. I need the folder first.",
+            "No files updated.",
+            "This was never fixed upstream.",
+        ] {
+            assert_eq!(unbacked_done(reply, 0), None, "{reply}");
+        }
+        // A claim next to a question or a negation elsewhere still claims.
+        for reply in [
+            "Updated the config. Want me to restart it?",
+            "No problem, done.",
+            "Done, but not tested.",
+            "Fixed app.toml for you.",
+        ] {
+            assert_eq!(unbacked_done(reply, 0), Some(line), "{reply}");
+        }
         // A Do all summary recaps earlier turns, and a no-op says nothing changed.
         let recap = "All four fixes are through.\n\nFinished\n- Done: Restart stopped services\n- Done: Clear temp files";
         assert!(grokhub_core::recap::split_recap(recap).is_some());
