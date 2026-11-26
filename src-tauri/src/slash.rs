@@ -314,7 +314,11 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
     },
     ShellCmd {
         desktop_only: true,
-        ..row("/learn", "Reflect this chat into memory", "/learn")
+        ..row(
+            "/learn",
+            "Reflect chat, or build a skill from a URL, folder, PDF, or chat",
+            "/learn",
+        )
     },
     ShellCmd {
         desktop_only: true,
@@ -323,6 +327,10 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
             "Reflect this chat into memory",
             "/learn reflect",
         )
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/learn chat", "Build a skill from this chat", "/learn chat")
     },
     row("/mcps", "Open Connectors", "/mcps"),
     ShellCmd {
@@ -510,6 +518,8 @@ pub enum Op {
     Learned(String),
     /// `/learn`: reflect this chat into memory.
     Learn,
+    /// `/learn <url|path|chat|--save N>`: draft or save a skill from a source.
+    LearnSkill(String),
     Skill(String),
     /// A skill bundle slash such as `/backend-dev …` (loads several skills).
     SkillBundle {
@@ -895,7 +905,14 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
             prompt: rest.to_string(),
         }),
         "/journal" => open("journal"),
-        "/learn" => mine(Op::Learn),
+        "/learn"
+            if rest.is_empty()
+                || rest.eq_ignore_ascii_case("reflect")
+                || rest.eq_ignore_ascii_case("now") =>
+        {
+            mine(Op::Learn)
+        }
+        "/learn" => mine(Op::LearnSkill(rest.to_string())),
         "/plugins" => fx(Effect::OpenSection { section: "labs" }),
         "/download" if rest.is_empty() => fx(Effect::OpenSection { section: "localAi" }),
         "/download" => Some(download_model(rest).map(Action::Effect)),
@@ -1985,10 +2002,25 @@ mod tests {
         let help = help();
         assert!(help.contains("/imagine — Make an image in chat"));
         assert!(help.contains("/journal — Open the decision journal"));
-        assert!(help.contains("/learn — Reflect this chat into memory"));
+        assert!(help
+            .contains("/learn — Reflect chat, or build a skill from a URL, folder, PDF, or chat"));
         assert!(help.contains("/mcps — Open Connectors"));
         assert!(help.contains("/plugins — Open Plugins"));
         assert!(help.contains("/resume — Open History"));
         assert!(!help.contains("/learn reflect"));
+        assert_eq!(
+            parse("/learn chat", false),
+            Ok(Action::Op(Op::LearnSkill("chat".into())))
+        );
+        assert_eq!(
+            parse("/learn https://example.com/docs", false),
+            Ok(Action::Op(Op::LearnSkill(
+                "https://example.com/docs".into()
+            )))
+        );
+        assert_eq!(
+            parse("/learn --save 2", false),
+            Ok(Action::Op(Op::LearnSkill("--save 2".into())))
+        );
     }
 }

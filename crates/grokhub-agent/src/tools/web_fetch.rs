@@ -200,6 +200,47 @@ pub(crate) fn run(
     }
 }
 
+/// User-initiated fetch for `/learn <url>`: public http(s) only, SSRF-checked,
+/// no permission-card loop (the person already typed the URL).
+pub fn fetch_public_markdown(url: &str) -> Result<String, String> {
+    let fetch = UreqFetch::new();
+    fetch_markdown_user(url, &fetch)
+}
+
+/// Like [`fetch_markdown`] but skips egress parking — the slash path already
+/// asked the person to name the URL.
+fn fetch_markdown_user(raw: &str, fetch: &dyn PageFetch) -> Result<String, String> {
+    let mut current = parse_public_url(raw)?;
+    let mut seen = HashSet::new();
+    let mut redirects = 0u32;
+    loop {
+        let url = current.display();
+        if !seen.insert(url.clone()) {
+            return Err("redirect loop".into());
+        }
+        check_ssrf(&current, fetch)?;
+        let resp = fetch.get(&url)?;
+        if is_redirect(resp.status) {
+            redirects = redirects.saturating_add(1);
+            if redirects > MAX_REDIRECTS {
+                return Err("too many redirects".into());
+            }
+            let loc = resp
+                .location
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "redirect missing location".to_string())?;
+            current = join_redirect(&current, loc)?;
+            continue;
+        }
+        if !(200..300).contains(&resp.status) {
+            return Err(format!("HTTP {}", resp.status));
+        }
+        return render_body(&resp.content_type, &resp.body);
+    }
+}
+
 /// EgressGuard (Spike-4c) before each hop: the URL is one the model picked, so
 /// it is chat, or personal when it carries a recall-pack line. A redirect to a
 /// new host asks again. A hard Send that is not approved sends nothing.
