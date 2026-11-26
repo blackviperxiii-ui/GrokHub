@@ -209,7 +209,10 @@ mod tests {
             "ZephyrPrompt9f3a",
             "ZephyrDetails9f3a",
         ] {
-            assert!(!text.contains(secret), "{secret} leaked into {text}");
+            assert!(
+                !text.contains(secret),
+                "a secret leaked into the signal text"
+            );
         }
         let allowed = [
             "ts",

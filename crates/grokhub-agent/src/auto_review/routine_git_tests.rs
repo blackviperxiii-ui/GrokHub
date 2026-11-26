@@ -253,6 +253,31 @@ fn fetch_and_pull_outside_the_closed_grammar_are_not_routine() {
     }
 }
 
+/// On Windows `//server/share` and `\\server\share` name a network share,
+/// which git reaches over SMB on another machine. Neither is a plain local
+/// path, however many slashes follow; one leading `/` still is.
+#[test]
+fn a_network_share_is_not_a_plain_repository() {
+    for cmd in [
+        "git fetch //server/share",
+        "git fetch //server/share/my-app.git main",
+        "git pull ///server/share",
+        "git pull //server/share main",
+        "git fetch \\\\server\\share",
+        "git pull \\\\server\\share main",
+    ] {
+        assert!(!git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+    for cmd in [
+        "git fetch /srv/my-app.git",
+        "git fetch /home/user/my-app",
+        "git pull ./vendor/hist main",
+        "git fetch vendor//hist",
+    ] {
+        assert!(git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+}
+
 #[test]
 fn everyday_fetch_and_pull_stay_routine() {
     for cmd in [

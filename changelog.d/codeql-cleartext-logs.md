@@ -1,0 +1,1 @@
+- Logs and test failures no longer print secrets, account names, or session ids, and a GitHub URL check uses the host instead of a substring.

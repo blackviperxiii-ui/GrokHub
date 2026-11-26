@@ -4,7 +4,7 @@
 //! restore point (file backups always, a system snapshot when there is one)
 //! and writes its span before anything else. [`ApplyRun::next_action`] walks the
 //! steps one at a time: each goes through `harness::decide` again; soft ones
-//! go to Grok Build (under the pill), hard ones park a hard card, and
+//! go to Grok Build (path B, under the pill), hard ones park a hard card, and
 //! hard-floor ones are never run. The cabin never runs a step itself and never
 //! types into a password, polkit or UAC prompt: the user does.
 //!

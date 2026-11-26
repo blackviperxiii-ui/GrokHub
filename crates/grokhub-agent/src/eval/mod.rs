@@ -31,6 +31,7 @@ mod scan;
 pub mod ab;
 pub mod care_first;
 pub mod close_check;
+pub mod coding;
 pub mod efficiency;
 pub mod live;
 pub mod live_guard;

@@ -13,6 +13,7 @@ mod claude;
 mod matchers;
 mod risk;
 mod rules;
+mod session;
 mod split;
 mod store;
 
@@ -27,6 +28,10 @@ pub use split::{analyze, bare_command, Facts, Seg};
 pub(crate) use risk::{
     git_words_are_read_only_query, git_words_have_unsafe_query_option, glob_may_add_option,
     program_name, trusted_head,
+};
+pub use session::{
+    clear_conversation, earlier_failure, earlier_image, note_failure, note_store_error,
+    remember_image, remember_session, session_covers, HeldImage, GRANT_NOT_SAVED,
 };
 pub use store::{
     add_grant_at, app_config_dir, config_dir, config_pinned, load_all_grants, load_grants,
@@ -114,7 +119,7 @@ pub fn govern(
     let paths = collect_paths(name, arguments);
     if paths
         .iter()
-        .any(|path| matchers::path_escapes(workspace, path))
+        .any(|path| matchers::path_escapes(workspace, path) && !saved_output(name, workspace, path))
     {
         return Decision::Refuse("path escapes the workspace".into());
     }
@@ -159,10 +164,38 @@ pub fn govern(
     base
 }
 
+/// Whether a shell call may be stored. Dangerous, unsplittable, and
+/// read-only commands are not. Other tools are not shell grants; the
+/// conversation holder decides those.
+pub fn session_may_stick(name: &str, arguments: &str) -> bool {
+    name == "run_terminal_command" && shell_grant_lines(arguments).is_some()
+}
+
+/// Commands of one shell call that a project grant may store, quoted so
+/// they read back as the same words ([`split::render`]).
+fn shell_grant_lines(arguments: &str) -> Option<Vec<String>> {
+    let command = command_arg(arguments)?;
+    let facts = split::analyze(&command);
+    let segs = facts.segments?;
+    if facts.dangerous || segs.iter().any(|seg| seg.dangerous || !seg.eligible) {
+        return None;
+    }
+    let lines: Vec<String> = segs
+        .iter()
+        .filter(|seg| !seg.readonly && !seg.command.trim().is_empty())
+        .map(|seg| split::render(&seg.words))
+        .collect();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
 /// Persist Allow-always for a shell call. Dangerous, unsplittable, and
 /// read-only commands are not stored. Each command of a chain is stored on
-/// its own, quoted so it reads back as the same words ([`split::render`]).
-/// Returns whether a grant was written.
+/// its own. Returns whether a grant was written. A write error is returned,
+/// never dropped.
 pub fn remember_allow_always(
     workspace: &Path,
     name: &str,
@@ -171,25 +204,13 @@ pub fn remember_allow_always(
     if name != "run_terminal_command" {
         return Ok(false);
     }
-    let Some(command) = command_arg(arguments) else {
+    let Some(lines) = shell_grant_lines(arguments) else {
         return Ok(false);
     };
-    let facts = split::analyze(&command);
-    let Some(segs) = facts.segments else {
-        return Ok(false);
-    };
-    if facts.dangerous || segs.iter().any(|seg| seg.dangerous || !seg.eligible) {
-        return Ok(false);
+    for line in &lines {
+        store::remember_grant(workspace, line)?;
     }
-    let mut wrote = false;
-    for seg in segs {
-        if seg.readonly || seg.command.trim().is_empty() {
-            continue;
-        }
-        store::remember_grant(workspace, &split::render(&seg.words))?;
-        wrote = true;
-    }
-    Ok(wrote)
+    Ok(true)
 }
 
 pub fn mcp_matches(rule: &Rule, tool_name: &str) -> bool {
@@ -428,6 +449,13 @@ fn tool_kind(name: &str) -> Option<Tool> {
 fn sandbox_holds(name: &str, arguments: &str, workspace: &Path) -> bool {
     serde_json::from_str::<serde_json::Value>(arguments)
         .is_ok_and(|args| crate::sandbox::auto_allows(&config_dir(), name, &args, workspace))
+}
+
+/// A long shell output this workspace's command saved in the config folder:
+/// the only path outside the workspace `read_file` reads, the one its cut
+/// marker names (`tools::spool::find`).
+fn saved_output(name: &str, workspace: &Path, path: &str) -> bool {
+    name == "read_file" && crate::tools::spool::find(workspace, path).is_some()
 }
 
 fn command_arg(arguments: &str) -> Option<String> {

@@ -522,7 +522,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(s.session_id(), Some("5d2c6b1e-0000-4000-8000-000000000001"));
+        assert!((s.session_id()) == (Some("5d2c6b1e-0000-4000-8000-000000000001")));
         assert_eq!(s.finish(), Ok(()));
     }
 

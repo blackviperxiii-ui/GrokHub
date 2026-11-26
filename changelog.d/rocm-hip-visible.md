@@ -1,0 +1,1 @@
+- ROCm local-server launches set `HIP_VISIBLE_DEVICES` to the discrete AMD GPU(s) so an iGPU cannot crash them; a user-set value is left alone.

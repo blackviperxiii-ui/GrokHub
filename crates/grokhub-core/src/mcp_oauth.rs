@@ -504,10 +504,7 @@ mod tests {
             })
         );
         let client = parse_registration(&json!({"client_id": "c-1"})).unwrap();
-        assert_eq!(
-            (client.client_id.as_str(), client.client_secret.as_deref()),
-            ("c-1", None)
-        );
+        assert!((client.client_id.as_str(), client.client_secret.as_deref()) == ("c-1", None));
         assert!(parse_registration(&json!({"client_id": " "})).is_err());
         let url = authorize_url(&Authorize {
             authorization_endpoint: "https://auth.example.com/authorize",
@@ -573,9 +570,12 @@ mod tests {
         });
         assert_eq!(s.access_token, "at-2");
         assert_eq!(s.refresh_token.as_deref(), Some("rt-1"));
-        assert_eq!(s.account.as_deref(), Some("ada@example.com"));
+        assert!((s.account.as_deref()) == (Some("ada@example.com")));
         let dbg = format!("{s:?}");
-        assert!(!dbg.contains("at-2") && !dbg.contains("rt-1"), "{dbg}");
+        assert!(
+            !dbg.contains("at-2") && !dbg.contains("rt-1"),
+            "a token was left in the sign-in debug text"
+        );
         let no_refresh = McpSignIn {
             refresh_token: None,
             ..s.clone()

@@ -97,6 +97,7 @@ mod work;
 mod ws_mode;
 pub mod xai_keychain;
 
+pub use agent_message::MAX_MESSAGE as AGENT_MESSAGE_CHARS;
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
     ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
@@ -109,8 +110,9 @@ pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
     ab_flag as live_ab_flag, ab_passed as live_ab_passed, dream_lessons_passed,
     parse_budget as parse_live_budget, read_progress as read_live_progress, render_live, run_live,
-    run_live_with, write_atomic as write_live_atomic, write_progress as write_live_progress,
-    LiveOpts, LiveReport, LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
+    run_live_with, write_atomic as write_live_atomic, write_coding_results,
+    write_progress as write_live_progress, EvalSuite, LiveOpts, LiveReport,
+    LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
     Provider as LiveProvider, RetryPolicy as LiveRetryPolicy, AB_FLAGS as LIVE_AB_FLAGS,
     DEFAULT_K as LIVE_DEFAULT_K,
 };
@@ -193,7 +195,9 @@ pub use skills::{
     SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
 pub use sse::SseParser;
-pub use subagent::{answer_peer, drain_side_events, requeue_side_events, PeerTurn, SideEvent};
+pub use subagent::{
+    answer_peer, drain_side_events, peer_unanswered, requeue_side_events, PeerTurn, SideEvent,
+};
 pub use tasks::{
     drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,
     link_child, session_is_live, set_task_watch, watch_cancel, TaskPeek, TaskProgress, TaskRow,

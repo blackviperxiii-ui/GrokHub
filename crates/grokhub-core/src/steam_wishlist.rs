@@ -505,11 +505,11 @@ mod tests {
         assert_eq!(most_recent_in_vdf(vdf), Some(76_561_197_960_265_730));
         assert_eq!(most_recent_in_vdf("\"users\"\n{\n}\n"), None);
         let both = [76_561_197_960_265_729, 76_561_197_960_265_730];
-        assert_eq!(pick_account(&both[..1], None), Some(both[0]));
-        assert_eq!(pick_account(&both, Some(both[1])), Some(both[1]));
+        assert!((pick_account(&both[..1], None)) == (Some(both[0])));
+        assert!((pick_account(&both, Some(both[1]))) == (Some(both[1])));
         // Steam's pick must be an account that signed in here.
-        assert_eq!(pick_account(&both, Some(7)), None);
-        assert_eq!(pick_account(&[], Some(both[0])), None);
+        assert!(pick_account(&both, Some(7)).is_none());
+        assert!(pick_account(&[], Some(both[0])).is_none());
     }
 
     use super::*;
@@ -542,9 +542,9 @@ mod tests {
             .unwrap_err()
             .starts_with("Custom profile links"));
         assert!(parse_steam_id("12345").is_err());
-        assert_eq!(id_from_account("12345"), Some(FAKE_ID));
-        assert_eq!(id_from_account("0"), None);
-        assert_eq!(id_from_account("anonymous"), None);
+        assert!((id_from_account("12345")) == (Some(FAKE_ID)));
+        assert!(id_from_account("0").is_none());
+        assert!(id_from_account("anonymous").is_none());
         assert_eq!(
             wishlist_url(FAKE_ID),
             "https://api.steampowered.com/IWishlistService/GetWishlist/v1/?steamid=76561197960278073"

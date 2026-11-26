@@ -17,16 +17,19 @@ on:
   # already green when auto-merge was asked for still merges.
   workflow_call:
 permissions: {}
-concurrency:
-  group: auto-merge-${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   auto-merge:
     # Bot reviews (Copilot) only comment; their runs need approval and fail.
+    # Concurrency is on the job, not the workflow: a skipped bot-review run
+    # still joins a workflow-level group and cancels a ready_for_review run
+    # before auto-merge can enable (#2189). A skipped job holds no group.
     if: >-
       github.event.pull_request.base.ref == 'beta' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event_name != 'pull_request_review' || github.event.review.user.type != 'Bot')
+    concurrency:
+      group: auto-merge-${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

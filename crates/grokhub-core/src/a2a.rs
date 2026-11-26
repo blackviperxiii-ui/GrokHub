@@ -380,13 +380,49 @@ pub enum Call {
         id: String,
         history_length: Option<usize>,
     },
-    ListTasks {
-        context_id: Option<String>,
-        page_size: usize,
-    },
+    ListTasks(ListQuery),
     CancelTask {
         id: String,
     },
+}
+
+/// A `ListTasks` request: newest first, filtered, one page at a time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListQuery {
+    pub context_id: Option<String>,
+    pub status: Option<TaskState>,
+    /// 1 to 100, 20 when unset.
+    pub page_size: usize,
+    /// The `nextPageToken` of the page before: the id of its last task.
+    pub page_token: Option<String>,
+    /// Each task's newest messages to keep; none when unset.
+    pub history_length: Option<usize>,
+    pub include_artifacts: bool,
+}
+
+impl Default for ListQuery {
+    fn default() -> ListQuery {
+        ListQuery {
+            context_id: None,
+            status: None,
+            page_size: 20,
+            page_token: None,
+            history_length: None,
+            include_artifacts: false,
+        }
+    }
+}
+
+/// One page of `ListTasks`, serialized as its result.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPage {
+    pub tasks: Vec<Task>,
+    /// Empty on the last page.
+    pub next_page_token: String,
+    pub page_size: usize,
+    /// Tasks that match the filters, on every page.
+    pub total_size: usize,
 }
 
 #[derive(Deserialize)]
@@ -418,10 +454,18 @@ struct TaskParams {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct ListParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_as_unset")]
     context_id: Option<String>,
     #[serde(default)]
+    status: Option<TaskState>,
+    #[serde(default)]
     page_size: Option<usize>,
+    #[serde(default, deserialize_with = "empty_as_unset")]
+    page_token: Option<String>,
+    #[serde(default)]
+    history_length: Option<usize>,
+    #[serde(default)]
+    include_artifacts: bool,
 }
 
 /// Read one JSON-RPC request. The error comes with the request id to answer
@@ -463,9 +507,15 @@ pub fn parse_call(body: &[u8]) -> Result<(Value, Call), (Value, A2aError)> {
             } else {
                 serde_json::from_value::<ListParams>(params).map_err(bad)
             };
-            p.map(|p| Call::ListTasks {
-                context_id: p.context_id,
-                page_size: p.page_size.unwrap_or(20).clamp(1, 100),
+            p.map(|p| {
+                Call::ListTasks(ListQuery {
+                    context_id: p.context_id,
+                    status: p.status,
+                    page_size: p.page_size.unwrap_or(20).clamp(1, 100),
+                    page_token: p.page_token,
+                    history_length: p.history_length,
+                    include_artifacts: p.include_artifacts,
+                })
             })
         }
         "CancelTask" => serde_json::from_value::<TaskParams>(params)
@@ -712,25 +762,69 @@ impl TaskBook {
             .ok_or_else(|| A2aError::TaskNotFound(id.to_string()))?;
         let mut task = task.clone();
         if let Some(n) = history_length {
-            let skip = task.history.len().saturating_sub(n);
-            task.history.drain(..skip);
+            keep_newest(&mut task.history, n);
         }
         Ok(task)
     }
 
-    /// Newest first, optionally in one context, without their history.
-    pub fn list(&self, context_id: Option<&str>, page_size: usize) -> Vec<Task> {
-        self.tasks
+    /// One page of the tasks that match `query`, newest first. A task's
+    /// history is left out unless `history_length` asks for some, and its
+    /// artifacts unless `include_artifacts`.
+    pub fn list(&self, query: &ListQuery) -> Result<TaskPage, A2aError> {
+        let matching: Vec<&Task> = self
+            .tasks
             .iter()
             .rev()
-            .filter(|t| context_id.is_none_or(|c| t.context_id == c))
-            .take(page_size)
-            .map(|t| Task {
-                history: Vec::new(),
-                ..t.clone()
+            .filter(|t| query.context_id.as_ref().is_none_or(|c| &t.context_id == c))
+            .filter(|t| query.status.is_none_or(|s| t.status.state == s))
+            .collect();
+        let start = match &query.page_token {
+            None => 0,
+            Some(token) => {
+                matching
+                    .iter()
+                    .position(|t| &t.id == token)
+                    .ok_or_else(|| {
+                        A2aError::InvalidParams(format!("pageToken `{token}` isn't a listed task"))
+                    })?
+                    + 1
+            }
+        };
+        let page: Vec<&Task> = matching
+            .iter()
+            .skip(start)
+            .take(query.page_size)
+            .copied()
+            .collect();
+        let more = start + page.len() < matching.len();
+        let next_page_token = match page.last() {
+            Some(last) if more => last.id.clone(),
+            _ => String::new(),
+        };
+        let tasks = page
+            .into_iter()
+            .map(|t| {
+                let mut task = t.clone();
+                keep_newest(&mut task.history, query.history_length.unwrap_or(0));
+                if !query.include_artifacts {
+                    task.artifacts.clear();
+                }
+                task
             })
-            .collect()
+            .collect();
+        Ok(TaskPage {
+            tasks,
+            next_page_token,
+            page_size: query.page_size,
+            total_size: matching.len(),
+        })
     }
+}
+
+/// Drops all but the newest `n` messages.
+fn keep_newest(history: &mut Vec<Message>, n: usize) {
+    let skip = history.len().saturating_sub(n);
+    history.drain(..skip);
 }
 
 /// `2026-11-25T01:02:03.004Z` for a Unix time in milliseconds.

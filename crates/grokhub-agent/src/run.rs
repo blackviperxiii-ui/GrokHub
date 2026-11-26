@@ -124,6 +124,11 @@ Reply to the greeting. Offer an automation only when they ask for one.";
 pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
 Re-read the goal, say in one line what you tried, then pick a different approach \
 (another tool, another route or a smaller sub-step) and go on.";
+/// Told to the user after two searches in one turn come back empty.
+pub const SEARCH_EMPTY_STOP: &str =
+    "I stopped searching. Two searches in this turn came back with nothing.";
+/// What a later tool call gets once the picture the user asked for is done.
+pub const REQUEST_DONE: &str = "not run: that request is already done.";
 /// Tool calls from a length-truncated model reply are failed unexecuted.
 pub const TRUNCATED_TOOL: &str =
     "not run: your reply was cut off at the output limit; resend smaller steps";
@@ -719,10 +724,14 @@ fn run_turn(
     let mut modified_paths: Vec<String> = Vec::new();
     let mut nested_agents = crate::prompt::NestedAgents::new(input.workspace);
     let mut repeats: HashMap<String, u32> = HashMap::new();
+    let mut empty_searches = 0u32;
     let mut breaker = crate::denials::Breaker::default();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
     let mut bad_args_streak = 0u32;
+    // Local schema misses sent back for one repair. The next miss in this
+    // turn is a plain error and the turn stops.
+    let mut schema_repairs = 0u32;
     // No token cap: a run goes on until the task is done. A run that stops
     // getting anywhere is caught by the stall check instead.
     let mut stall = crate::stall::Stall::default();
@@ -1533,6 +1542,21 @@ fn run_turn(
             .map(|call| repair_shell_lookup(input, call))
             .collect();
         let mut call_i = 0usize;
+        let schema_forced = {
+            #[cfg(test)]
+            {
+                crate::route::live::schema_check_forced()
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+        let local_turn = crate::route::live::step_on_device()
+            || crate::route::local::is_local(input.model)
+            || schema_forced;
+        let mut batch_schema_repair = false;
+        let mut batch_schema_plain = false;
         while call_i < calls.len() {
             let call = &calls[call_i];
             if input.cancel.is_cancelled() {
@@ -1547,6 +1571,28 @@ fn run_turn(
                 push_refusal(history, input.conversation_id, call, output);
                 call_i += 1;
                 continue;
+            }
+            if local_turn {
+                let malformed = tools::schema_miss(&last_tools, &call.name, &call.arguments);
+                crate::route::session_metrics::note_local_tool(
+                    &config_dir,
+                    input.conversation_id,
+                    malformed.is_some(),
+                    grokhub_core::now_ms(),
+                );
+                if let Some(why) = malformed {
+                    let msg = tools::schema_message(schema_repairs >= 1, &why);
+                    if schema_repairs >= 1 {
+                        batch_schema_plain = true;
+                    } else {
+                        batch_schema_repair = true;
+                    }
+                    let output = ToolOutput::err(msg);
+                    emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
+                    push_refusal(history, input.conversation_id, call, output);
+                    call_i += 1;
+                    continue;
+                }
             }
             if batched_tools_on {
                 let run_len = tools::batch::batch_run_len(&calls, call_i);
@@ -1598,6 +1644,39 @@ fn run_turn(
                     }
                 }
             }
+            if let Some(output) = replay_image(input.conversation_id, call) {
+                let id = tool_id(call);
+                let refused = output.failed;
+                emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+                emit_tool(
+                    on_event,
+                    &id,
+                    call,
+                    if refused { "failed" } else { "completed" },
+                    &output.text,
+                    output.image_data_url.clone(),
+                );
+                let stop = turn_should_stop(user_text, call, &output, &mut empty_searches);
+                if refused {
+                    push_refusal(history, input.conversation_id, call, output);
+                } else {
+                    push_output(history, input.conversation_id, call, output);
+                }
+                if let Some(reason) = stop {
+                    call_i += 1;
+                    abandon_calls(
+                        &calls,
+                        call_i,
+                        reason,
+                        history,
+                        input.conversation_id,
+                        on_event,
+                    );
+                    return finish(input, StopReason::EndTurn, usage, compacted_once, true);
+                }
+                call_i += 1;
+                continue;
+            }
             if input.depth == 0
                 && grokhub_core::small_talk::is_greeting(user_text)
                 && crate::harness::creates_automation(&call.name, &call.arguments)
@@ -1646,6 +1725,7 @@ fn run_turn(
                 input.workspace,
                 input.perms,
             );
+            let base = refuse_without_workspace(&call.name, input.workspace, base);
             // A Code tab session's own guard (its push guard) after the gate.
             let base = crate::code_guard::apply(
                 input.conversation_id,
@@ -1655,6 +1735,24 @@ fn run_turn(
                 input.perms,
                 base,
             );
+            // A conversation grant covers this exact call. It never turns a
+            // refusal or a hard-class ask into a run.
+            let base = if matches!(base, Decision::Ask)
+                && session_allows(input.conversation_id, &call.name, &call.arguments)
+            {
+                Decision::Run
+            } else {
+                base
+            };
+            // The person already allowed this exact call and it failed. The
+            // same ask does not come back. A hard class still asks.
+            let base = if matches!(base, Decision::Ask) {
+                held_failure(input.conversation_id, &call.name, &call.arguments)
+                    .map(Decision::Refuse)
+                    .unwrap_or(base)
+            } else {
+                base
+            };
             let base_kind = safety_events::Kind::of(&base);
             let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
                 client: input.client,
@@ -1707,6 +1805,7 @@ fn run_turn(
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
             let mut refused = false;
+            let mut permitted = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
                     refused = true;
@@ -1765,28 +1864,51 @@ fn run_turn(
                         &turn_request,
                     );
                     match waited {
-                        Waited::Answer(PermAnswer::Allow) => note_tool(
-                            input,
-                            &mut gate,
-                            base_readonly,
-                            plan_at_start,
-                            call,
-                            &id,
-                            on_event,
-                            &pre_context,
-                            &mut nested_agents,
-                        ),
+                        Waited::Answer(PermAnswer::Allow) => {
+                            permitted = true;
+                            note_tool(
+                                input,
+                                &mut gate,
+                                base_readonly,
+                                plan_at_start,
+                                call,
+                                &id,
+                                on_event,
+                                &pre_context,
+                                &mut nested_agents,
+                            )
+                        }
                         Waited::Answer(PermAnswer::Always) => {
                             if input.perms.is_some() {
-                                let _ = crate::perm::remember_allow_always(
+                                if let Err(err) = crate::perm::remember_allow_always(
                                     input.workspace,
                                     &call.name,
                                     &call.arguments,
+                                ) {
+                                    if let Some(msg) =
+                                        crate::perm::note_store_error(input.conversation_id, &err)
+                                    {
+                                        on_event(LoopEvent::Text(msg));
+                                    }
+                                }
+                            }
+                            if call.name != tools::control::MERGE_WORK
+                                && crate::harness::hard_class(&call.name, &call.arguments).is_none()
+                                && (call.name == "web_search"
+                                    || call.name != "run_terminal_command"
+                                    || crate::perm::session_may_stick(&call.name, &call.arguments))
+                            {
+                                crate::perm::remember_session(
+                                    input.conversation_id,
+                                    &call.name,
+                                    &call.arguments,
+                                    call.name == "web_search",
                                 );
                             }
                             // A yes to a merge is a yes to that merge: it
                             // never stops the asking for what comes after.
                             always |= call.name != tools::control::MERGE_WORK;
+                            permitted = true;
                             note_tool(
                                 input,
                                 &mut gate,
@@ -1850,7 +1972,7 @@ fn run_turn(
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
             if !refused {
-                note_repeat(&mut repeats, call, &output);
+                note_repeat(&mut repeats, input.workspace, call, &output);
             }
             crate::post_check::note_ran(&mut ran, call, &output);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
@@ -1881,10 +2003,40 @@ fn run_turn(
                     output.text
                 );
             }
+            if permitted && output.failed && failure_sticks(&output.text) {
+                crate::perm::note_failure(
+                    input.conversation_id,
+                    &call.name,
+                    &call.arguments,
+                    &output.text,
+                );
+            } else if !output.failed && call.name == "image_generate" {
+                crate::perm::remember_image(
+                    input.conversation_id,
+                    &call.arguments,
+                    &output.text,
+                    output.image_data_url.as_deref(),
+                );
+            }
+            let stop = turn_should_stop(user_text, call, &output, &mut empty_searches);
             if refused {
                 push_refusal(history, input.conversation_id, call, output);
             } else {
                 push_output(history, input.conversation_id, call, output);
+            }
+            if let Some(reason) = stop {
+                if !cancelled && !halted {
+                    call_i += 1;
+                    abandon_calls(
+                        &calls,
+                        call_i,
+                        reason,
+                        history,
+                        input.conversation_id,
+                        on_event,
+                    );
+                    return finish(input, StopReason::EndTurn, usage, compacted_once, true);
+                }
             }
             if cancelled {
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
@@ -1893,6 +2045,12 @@ fn run_turn(
                 return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             call_i += 1;
+        }
+        if batch_schema_repair {
+            schema_repairs = schema_repairs.saturating_add(1);
+        }
+        if batch_schema_plain {
+            return finish(input, StopReason::EndTurn, usage, compacted_once, true);
         }
         if let Some(trip) = breaker.record(denied_in_reply.is_some()) {
             if let Some(id) = &denied_in_reply {
@@ -2247,16 +2405,137 @@ fn repeat_key(call: &FunctionCall) -> String {
     format!("{}\n{}", call.name, call.arguments)
 }
 
+/// A folder tool with no folder fails closed. The card is not shown.
+fn refuse_without_workspace(name: &str, workspace: &Path, decision: Decision) -> Decision {
+    if tools::needs_workspace(name) && tools::workspace_missing(workspace) {
+        Decision::Refuse(gate::NO_WORKSPACE.to_string())
+    } else {
+        decision
+    }
+}
+
+/// Allow always for this conversation. Hard classes and dangerous shells
+/// still ask. A refusal is never turned into a run.
+fn session_allows(conversation: &str, name: &str, arguments: &str) -> bool {
+    if crate::harness::hard_class(name, arguments).is_some() {
+        return false;
+    }
+    if name == tools::control::MERGE_WORK {
+        return false;
+    }
+    if name == "run_terminal_command" && !crate::perm::session_may_stick(name, arguments) {
+        return false;
+    }
+    crate::perm::session_covers(conversation, name, arguments)
+}
+
+fn replay_image(conversation: &str, call: &FunctionCall) -> Option<ToolOutput> {
+    if call.name != "image_generate" {
+        return None;
+    }
+    let held = crate::perm::earlier_image(conversation, &call.arguments)?;
+    Some(ToolOutput {
+        text: held.text,
+        image_data_url: held.image,
+        failed: false,
+        mcp_app: None,
+    })
+}
+
+/// A failure from a call the person already allowed. Hard classes and merges
+/// still ask.
+fn held_failure(conversation: &str, name: &str, arguments: &str) -> Option<String> {
+    if crate::harness::hard_class(name, arguments).is_some() {
+        return None;
+    }
+    if name == tools::control::MERGE_WORK {
+        return None;
+    }
+    crate::perm::earlier_failure(conversation, name, arguments)
+}
+
+fn failure_sticks(text: &str) -> bool {
+    if text.starts_with("not run:") || text.starts_with("Not executed:") {
+        return false;
+    }
+    if text.starts_with("User rejected ") || text.starts_with("User cancelled ") {
+        return false;
+    }
+    text != SEARCH_EMPTY_STOP
+}
+
+fn turn_should_stop(
+    user_text: &str,
+    call: &FunctionCall,
+    output: &ToolOutput,
+    empty_searches: &mut u32,
+) -> Option<&'static str> {
+    if !output.failed && call.name == "image_generate" && crate::brain::is_picture_ask(user_text) {
+        return Some(REQUEST_DONE);
+    }
+    if call.name == "web_search" && !output.failed && output.text.contains("No results") {
+        *empty_searches = empty_searches.saturating_add(1);
+        if *empty_searches >= 2 {
+            return Some(SEARCH_EMPTY_STOP);
+        }
+    }
+    None
+}
+
+fn abandon_calls(
+    calls: &[FunctionCall],
+    from: usize,
+    reason: &str,
+    history: &mut Vec<InputItem>,
+    conversation_id: &str,
+    on_event: &mut dyn FnMut(LoopEvent),
+) {
+    if reason == SEARCH_EMPTY_STOP {
+        on_event(LoopEvent::Text(SEARCH_EMPTY_STOP.to_string()));
+    }
+    for call in calls.iter().skip(from) {
+        let output = ToolOutput::err(reason);
+        let id = tool_id(call);
+        emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
+        emit_tool(on_event, &id, call, "failed", &output.text, None);
+        push_refusal(history, conversation_id, call, output);
+    }
+}
+
 /// Count a call that ran. A successful edit clears every count: the next test
-/// run checks new code, so it isn't a repeat.
-fn note_repeat(repeats: &mut HashMap<String, u32>, call: &FunctionCall, output: &ToolOutput) {
-    if !output.failed && crate::compact::path_from_write_call(&call.name, &call.arguments).is_some()
-    {
+/// run checks new code, so it isn't a repeat. An edit refused because its
+/// file changed on disk drops the counts of that file's reads: the read it
+/// asks for sees new text.
+fn note_repeat(
+    repeats: &mut HashMap<String, u32>,
+    workspace: &Path,
+    call: &FunctionCall,
+    output: &ToolOutput,
+) {
+    let edited = crate::compact::path_from_write_call(&call.name, &call.arguments);
+    if !output.failed && edited.is_some() {
         repeats.clear();
         return;
     }
+    if let Some(raw) = edited.filter(|_| tools::seen::is_refusal(&output.text)) {
+        if let Ok(file) = tools::confine(workspace, &raw) {
+            repeats.retain(|key, _| !reads_file(key, workspace, &file));
+        }
+    }
     let seen = repeats.entry(repeat_key(call)).or_insert(0);
     *seen = seen.saturating_add(1);
+}
+
+/// Whether repeat key `key` is a `read_file` of `file`.
+fn reads_file(key: &str, workspace: &Path, file: &Path) -> bool {
+    let Some(arguments) = key.strip_prefix("read_file\n") else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|args| tools::tool_path_arg("read_file", &args))
+        .and_then(|raw| tools::confine(workspace, &raw).ok())
+        .is_some_and(|read| read == file)
 }
 
 fn push_result(
@@ -2645,6 +2924,7 @@ fn run_readonly_tool_batch(
             input.workspace,
             input.perms,
         );
+        let base = refuse_without_workspace(&call.name, input.workspace, base);
         let base = crate::code_guard::apply(
             input.conversation_id,
             &call.name,
@@ -2772,7 +3052,7 @@ fn run_readonly_tool_batch(
         if !output.failed && call.name == "report_findings" {
             fresh.note_findings();
         }
-        note_repeat(repeats, call, &output);
+        note_repeat(repeats, input.workspace, call, &output);
         push_output(history, input.conversation_id, call, output);
     }
 
@@ -3329,6 +3609,7 @@ mod tests {
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
+        crate::perm::clear_conversation("conv");
         let out = run_loop(&input, &mut history, "read the note", None, &mut |ev| {
             events.push(ev)
         });
@@ -4396,6 +4677,146 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn outputs_of(history: &[InputItem]) -> Vec<&str> {
+        history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn loop_on(
+        client: &dyn ModelClient,
+        dir: &std::path::Path,
+        model: &str,
+        max_turns: u32,
+        force_schema: bool,
+    ) -> (LoopOut, Vec<InputItem>) {
+        let cancel = CancelToken::new();
+        let steer = SteerQueue::new();
+        let halt = NeverHalt;
+        let _schema = force_schema.then(crate::route::live::ForceSchemaCheck::on);
+        let input = LoopIn {
+            client,
+            workspace: dir,
+            model,
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: "schema-repair",
+            max_turns,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &halt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "read note.txt", None, &mut |_| {});
+        (out, history)
+    }
+
+    #[test]
+    fn a_local_malformed_call_is_repaired_once_then_the_file_is_read() {
+        let dir = workspace("schema-repair");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("r1", "read_file", r#"{"limit":1}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::calls(
+                    vec![call("r2", "read_file", r#"{"target_file":"note.txt"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("The note says hello."),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history) = loop_on(&script, &dir, "grok-4.7", 4, true);
+        let outputs = outputs_of(&history);
+        assert!(outputs[0].contains("missing target_file"), "{}", outputs[0]);
+        assert!(outputs[0].contains("once more"), "{}", outputs[0]);
+        assert!(
+            outputs.iter().any(|o| o.contains("hello native")),
+            "{outputs:?}"
+        );
+        assert!(!outputs.contains(&tools::PLAIN_SCHEMA_ERROR), "{outputs:?}");
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_local_malformed_call_is_a_plain_error_and_the_turn_stops() {
+        let dir = workspace("schema-plain");
+        let bad = || {
+            ScriptTurn::calls(
+                vec![call("r", "read_file", r#"{"limit":1}"#)],
+                Usage::default(),
+            )
+        };
+        let script = Script {
+            turns: Mutex::new(vec![bad(), bad(), ScriptTurn::text("never")]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history) = loop_on(&script, &dir, "grok-4.7", 6, true);
+        let outputs = outputs_of(&history);
+        assert_eq!(outputs.len(), 2, "{outputs:?}");
+        assert!(outputs[0].contains("missing target_file"), "{}", outputs[0]);
+        assert!(outputs[0].contains("once more"), "{}", outputs[0]);
+        assert_eq!(outputs[1], tools::PLAIN_SCHEMA_ERROR);
+        assert_eq!(script.seen.lock().unwrap().len(), 2);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cloud_turn_still_runs_a_call_the_local_schema_would_refuse() {
+        let dir = workspace("schema-cloud");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("r1", "read_file", r#"{"limit":1}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history) = loop_on(&script, &dir, "grok-4.7", 4, false);
+        let outputs = outputs_of(&history);
+        assert!(
+            outputs[0].contains("target_file is required"),
+            "{}",
+            outputs[0]
+        );
+        assert!(
+            !outputs[0].contains("do not match the schema"),
+            "{}",
+            outputs[0]
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     struct RefusesASchemaOnce {
         tools: Mutex<Vec<Vec<serde_json::Value>>>,
     }
@@ -4664,6 +5085,121 @@ mod tests {
                 if name == "read_file" && status == "failed" && detail.contains("Stop repeating it")
         )));
         assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "v2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// [`Script`], with a file changed on disk just before request `at`.
+    struct ChangesFileAt {
+        script: Script,
+        at: usize,
+        path: std::path::PathBuf,
+        text: &'static str,
+    }
+
+    impl ModelClient for ChangesFileAt {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<crate::TurnOutput, ClientError> {
+            if self.script.seen.lock().unwrap().len() == self.at {
+                std::fs::write(&self.path, self.text).unwrap();
+            }
+            self.script.stream(req, cancel, sink)
+        }
+    }
+
+    #[test]
+    fn a_stale_edit_refusal_lets_the_read_it_asks_for_run_again() {
+        let dir = workspace("stale-repeat");
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one\n").unwrap();
+        let read = |id: &str| call(id, "read_file", r#"{"target_file":"a.txt"}"#);
+        let edit = |id: &str| {
+            call(
+                id,
+                "search_replace",
+                r#"{"file_path":"a.txt","old_string":"one","new_string":"ONE"}"#,
+            )
+        };
+        let turns = vec![
+            ScriptTurn::calls(vec![read("r1")], Usage::default()),
+            ScriptTurn::calls(vec![read("r2")], Usage::default()),
+            // The person edits a.txt before this reply's edit runs.
+            ScriptTurn::calls(vec![edit("e1")], Usage::default()),
+            ScriptTurn::calls(vec![read("r3")], Usage::default()),
+            ScriptTurn::calls(vec![edit("e2")], Usage::default()),
+            ScriptTurn::text("done"),
+        ];
+        let client = ChangesFileAt {
+            script: Script {
+                turns: Mutex::new(turns),
+                seen: Mutex::new(Vec::new()),
+                cancel_on_text: false,
+                steer: None,
+            },
+            at: 2,
+            path: file.clone(),
+            text: "one\nadded by the user\n",
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: "stale-repeat",
+            max_turns: 10,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &permits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let output_of = |id: &str| {
+            history
+                .iter()
+                .find_map(|item| match item {
+                    InputItem::FunctionCallOutput { call_id, output } if call_id == id => {
+                        Some(output.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert!(
+            output_of("e1").starts_with("a.txt changed since you last read it"),
+            "{}",
+            output_of("e1")
+        );
+        assert_eq!(output_of("r3"), "1|one\n2|added by the user\n");
+        assert!(
+            output_of("e2").starts_with("replaced 1 in a.txt\n"),
+            "{}",
+            output_of("e2")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "ONE\nadded by the user\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -5181,6 +5717,7 @@ mod tests {
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
+        crate::perm::clear_conversation("conv");
         let out = run_loop(&input, &mut history, "go", None, &mut |ev| events.push(ev));
         (out, history, events)
     }
@@ -6108,6 +6645,631 @@ mod tests {
         assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
         assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "b");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn script_calls(batches: Vec<Vec<FunctionCall>>) -> Script {
+        let mut turns: Vec<ScriptTurn> = batches
+            .into_iter()
+            .map(|calls| ScriptTurn {
+                text: String::new(),
+                calls,
+                usage: Usage::default(),
+                truncated: false,
+            })
+            .collect();
+        turns.push(ScriptTurn::text("done"));
+        Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        }
+    }
+
+    fn drive(
+        script: &Script,
+        dir: &std::path::Path,
+        conv: &str,
+        ask: &str,
+        gate: Gate,
+        desktop: Option<&dyn DesktopOps>,
+        permits: &dyn PermitWait,
+        perms: Option<&crate::perm::Policy>,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        let input = LoopIn {
+            client: script,
+            workspace: dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: conv,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate,
+            desktop,
+            permits,
+            perms,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, ask, None, &mut |ev| events.push(ev));
+        (out, history, events)
+    }
+
+    fn tool_outputs(history: &[InputItem]) -> Vec<(String, String)> {
+        history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } => {
+                    Some((call_id.clone(), output.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_missing_workspace_fails_once_and_the_same_call_does_not_ask_again() {
+        let dir = std::env::temp_dir().join(format!("gh-no-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let conv = "miss-ws-ac1";
+        crate::perm::clear_conversation(conv);
+        let args = r#"{"path":"a.txt","content":"a"}"#;
+        let script = script_calls(vec![vec![
+            call("miss-1", "write", args),
+            call("miss-2", "write", args),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "write a note",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 0);
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { .. })));
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs.len(), 2, "{outputs:?}");
+        assert_eq!(outputs[0].0, "miss-1");
+        assert_eq!(outputs[1].0, "miss-2");
+        assert_eq!(outputs[0].1, outputs[1].1);
+        assert!(
+            outputs[0].1.contains("No workspace in this chat"),
+            "{}",
+            outputs[0].1
+        );
+        assert!(outputs[0].1.contains("Pick a folder"), "{}", outputs[0].1);
+        crate::perm::clear_conversation(conv);
+    }
+
+    #[test]
+    fn allow_always_covers_the_same_write_on_the_next_turn() {
+        let dir = workspace("stick-write");
+        let conv = "stick-write-ac2";
+        crate::perm::clear_conversation(conv);
+        let same = r#"{"path":"a.txt","content":"a"}"#;
+        let other = r#"{"path":"b.txt","content":"b"}"#;
+        let first = script_calls(vec![vec![call("grant-a", "write", same)]]);
+        let always = Answer {
+            answer: PermAnswer::Always,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, _) = drive(
+            &first,
+            &dir,
+            conv,
+            "write a",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &always,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(always.asks.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
+        let second = script_calls(vec![vec![
+            call("grant-a2", "write", same),
+            call("grant-b", "write", other),
+        ]]);
+        let once = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = drive(
+            &second,
+            &dir,
+            conv,
+            "write both",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &once,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(once.asks.load(Ordering::SeqCst), 1);
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Permission { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, vec!["grant-b"]);
+        assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "b");
+        let outputs = tool_outputs(&history);
+        assert!(
+            outputs.iter().any(|(id, _)| id == "grant-a2"),
+            "{outputs:?}"
+        );
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allow_once_runs_each_literal_call_and_asks_again() {
+        let dir = workspace("allow-once");
+        let conv = "allow-once-ac5";
+        crate::perm::clear_conversation(conv);
+        let script = script_calls(vec![vec![
+            call("once-7", "write", r#"{"path":"once-7.txt","content":"7"}"#),
+            call("once-8", "write", r#"{"path":"once-8.txt","content":"8"}"#),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "write two files",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 2);
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Permission { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, vec!["once-7", "once-8"]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("once-7.txt")).unwrap(),
+            "7"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("once-8.txt")).unwrap(),
+            "8"
+        );
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_allow_comes_back_without_asking_again() {
+        let dir = workspace("fail-again");
+        let conv = "fail-again-ac4";
+        crate::perm::clear_conversation(conv);
+        let args = r#"{"command":"false"}"#;
+        let script = script_calls(vec![
+            vec![call("fail-1", "run_terminal_command", args)],
+            vec![call("fail-2", "run_terminal_command", args)],
+        ]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "run false",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Permission { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, vec!["fail-1"]);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs[0].1.contains("exit 1"), "{}", outputs[0].1);
+        assert_eq!(outputs[0].1, outputs[1].1);
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_grant_write_is_shown_once() {
+        let dir = workspace("grant-err");
+        let conv = "store-err-ac3";
+        crate::perm::clear_conversation(conv);
+        let blocked = dir.join("not-a-dir");
+        std::fs::write(&blocked, "x").unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&blocked);
+        let policy = crate::perm::Policy::empty();
+        let script = script_calls(vec![vec![call(
+            "echo-1",
+            "run_terminal_command",
+            r#"{"command":"echo stick-ac3"}"#,
+        )]]);
+        let permits = Answer {
+            answer: PermAnswer::Always,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "echo",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            Some(&policy),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
+        let shown = events
+            .iter()
+            .filter(|ev| {
+                matches!(
+                    ev,
+                    LoopEvent::Text(text) if text.starts_with(crate::perm::GRANT_NOT_SAVED)
+                )
+            })
+            .count();
+        assert_eq!(shown, 1, "{events:?}");
+        assert!(crate::perm::note_store_error(conv, "again").is_none());
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hard_class_still_asks_on_the_next_turn() {
+        let dir = workspace("hard-pay");
+        let conv = "hard-pay-ac2";
+        crate::perm::clear_conversation(conv);
+        let args = r#"{"x":30,"y":40,"label":"Pay now","role":"push button"}"#;
+        let spy = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
+        let first = script_calls(vec![vec![call("pay-1", "click", args)]]);
+        let always = Answer {
+            answer: PermAnswer::Always,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, _) = drive(
+            &first,
+            &dir,
+            conv,
+            "pay",
+            chat(gate::PermMode::Ask, true, true),
+            Some(&spy),
+            &always,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(always.asks.load(Ordering::SeqCst), 1);
+        assert_eq!(spy.calls.load(Ordering::SeqCst), 1);
+        assert!(!crate::perm::session_covers(conv, "click", args));
+        let second = script_calls(vec![vec![call("pay-2", "click", args)]]);
+        let again = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, events) = drive(
+            &second,
+            &dir,
+            conv,
+            "pay again",
+            chat(gate::PermMode::Ask, true, true),
+            Some(&spy),
+            &again,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(again.asks.load(Ordering::SeqCst), 1);
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Permission { id, .. } if id == "pay-2"
+        )));
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct HitFetch {
+        body: String,
+        calls: std::sync::Arc<AtomicUsize>,
+    }
+
+    impl crate::tools::PageFetch for HitFetch {
+        fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<std::net::IpAddr>, String> {
+            Ok(vec![std::net::IpAddr::from([93, 184, 216, 34])])
+        }
+        fn get(&self, _url: &str) -> Result<crate::tools::FetchResp, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::tools::FetchResp {
+                status: 200,
+                location: None,
+                content_type: "text/html".into(),
+                body: self.body.as_bytes().to_vec(),
+            })
+        }
+    }
+
+    struct FoxImagine {
+        posts: AtomicUsize,
+    }
+
+    impl crate::tools::media::ImagineApi for FoxImagine {
+        fn post_json(
+            &self,
+            _path: &str,
+            _body: &serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            self.posts.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({
+                "data": [{"url": "https://cdn.example/fox.png"}]
+            }))
+        }
+        fn get_json(&self, _path: &str) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({"status": "done"}))
+        }
+    }
+
+    #[test]
+    fn two_empty_searches_stop_the_turn() {
+        let dir = workspace("empty-search");
+        let conv = "empty-search-ac7";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fetch = std::sync::Arc::new(HitFetch {
+            body: "<html><body>nothing here</body></html>".into(),
+            calls: calls.clone(),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            fetch: Some(fetch as std::sync::Arc<dyn crate::tools::PageFetch>),
+            ..Default::default()
+        });
+        let script = script_calls(vec![vec![
+            call("search-1", "web_search", r#"{"query":"empty-query-one"}"#),
+            call("search-2", "web_search", r#"{"query":"empty-query-two"}"#),
+            call("search-3", "web_search", r#"{"query":"empty-query-three"}"#),
+        ]]);
+        let quiet = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "find something",
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &quiet,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(quiet.asks.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Text(text) if text == SEARCH_EMPTY_STOP
+        )));
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[2].0, "search-3");
+        assert_eq!(outputs[2].1, SEARCH_EMPTY_STOP);
+        assert!(outputs[0].1.contains("No results"), "{}", outputs[0].1);
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allow_always_on_web_search_covers_the_next_query() {
+        let dir = workspace("search-any");
+        let conv = "search-any-ac8";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let fetch = std::sync::Arc::new(HitFetch {
+            body: r#"<a class="result-link" href="https://example.org/rust">Rust</a>"#.into(),
+            calls: calls.clone(),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            fetch: Some(fetch as std::sync::Arc<dyn crate::tools::PageFetch>),
+            ..Default::default()
+        });
+        let first = script_calls(vec![vec![call(
+            "search-rust",
+            "web_search",
+            r#"{"query":"rust release"}"#,
+        )]]);
+        let always = Answer {
+            answer: PermAnswer::Always,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, _) = drive(
+            &first,
+            &dir,
+            conv,
+            "search rust",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &always,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(always.asks.load(Ordering::SeqCst), 1);
+        let second = script_calls(vec![vec![call(
+            "search-python",
+            "web_search",
+            r#"{"query":"python wheels"}"#,
+        )]]);
+        let again = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, _, events) = drive(
+            &second,
+            &dir,
+            conv,
+            "search python",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &again,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(again.asks.load(Ordering::SeqCst), 0);
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_finished_picture_stops_the_turn() {
+        let dir = workspace("picture-stop");
+        let conv = "picture-stop-ac6";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::media::IMAGE_RUNS.store(0, Ordering::SeqCst);
+        let imagine = std::sync::Arc::new(FoxImagine {
+            posts: AtomicUsize::new(0),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            imagine: Some(imagine as std::sync::Arc<dyn crate::tools::media::ImagineApi>),
+            ..Default::default()
+        });
+        let script = script_calls(vec![vec![
+            call(
+                "img-fox-1",
+                "image_generate",
+                r#"{"prompt":"a red fox in snow"}"#,
+            ),
+            call("search-after", "web_search", r#"{"query":"fox habitat"}"#),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = drive(
+            &script,
+            &dir,
+            conv,
+            "draw me a red fox",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
+        assert_eq!(script.turns.lock().unwrap().len(), 1);
+        assert_eq!(crate::tools::media::IMAGE_RUNS.load(Ordering::SeqCst), 1);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "img-fox-1");
+        assert!(
+            outputs[0].1.contains("https://cdn.example/fox.png"),
+            "{}",
+            outputs[0].1
+        );
+        assert_eq!(outputs[1].0, "search-after");
+        assert_eq!(outputs[1].1, REQUEST_DONE);
+        assert!(!events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Permission { id, .. } if id == "search-after"
+        )));
+        crate::perm::clear_conversation(conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_identical_image_generate_returns_the_earlier_image() {
+        let dir = workspace("image-again");
+        let conv = "image-again-ac9";
+        crate::perm::clear_conversation(conv);
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        crate::tools::media::IMAGE_RUNS.store(0, Ordering::SeqCst);
+        let imagine = std::sync::Arc::new(FoxImagine {
+            posts: AtomicUsize::new(0),
+        });
+        let _ports = crate::tools::ports::enter(crate::tools::ports::Ports {
+            imagine: Some(imagine as std::sync::Arc<dyn crate::tools::media::ImagineApi>),
+            ..Default::default()
+        });
+        let args = r#"{"prompt":"a red fox in snow"}"#;
+        let script = script_calls(vec![vec![
+            call("img-fox-1", "image_generate", args),
+            call("img-fox-2", "image_generate", args),
+        ]]);
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _) = drive(
+            &script,
+            &dir,
+            conv,
+            "go",
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+            None,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
+        assert_eq!(crate::tools::media::IMAGE_RUNS.load(Ordering::SeqCst), 1);
+        let outputs = tool_outputs(&history);
+        assert_eq!(outputs[0].0, "img-fox-1");
+        assert_eq!(outputs[1].0, "img-fox-2");
+        assert_eq!(outputs[0].1, outputs[1].1);
+        assert!(
+            outputs[1].1.contains("https://cdn.example/fox.png"),
+            "{}",
+            outputs[1].1
+        );
+        crate::perm::clear_conversation(conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -362,6 +362,9 @@ pub fn user_cancelled(name: &str) -> String {
 /// Spike-2b: what the steps after a denied hard step in the same batch return.
 pub const NOT_EXECUTED: &str = "Not executed: earlier action failed";
 
+/// A tool that needs a folder, and this chat has none.
+pub const NO_WORKSPACE: &str = "No workspace in this chat. Pick a folder, then try this again.";
+
 pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFlags>) -> Decision {
     if is_readonly(name) || crate::self_manage::is_read(name) {
         return Decision::Run;

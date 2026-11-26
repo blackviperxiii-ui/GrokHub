@@ -240,6 +240,9 @@ struct Run<'a, 'b> {
     /// A loop re-planned in this batch: 1a's `action_loop` finding on the
     /// same steps is already handled.
     looped: bool,
+    /// The next held output opens a new slot ([`Self::hold`]): set at the
+    /// start of a batch and of a park settle.
+    new_pass: bool,
 }
 
 /// Drive one turn of an episode. It returns when the episode ends, the
@@ -261,6 +264,7 @@ pub fn run_episode(
         obs: None,
         end_note: None,
         looped: false,
+        new_pass: false,
     };
     if run.ep.trail.is_empty() {
         let goal = format!(
@@ -432,9 +436,12 @@ impl Run<'_, '_> {
         }
         self.ep.last_ms = self.now();
         let failed = shape.decision == "deny" || shape.result.starts_with("failed");
-        let stalled = self
-            .ep
-            .note_progress(&shape.decision, shape.ui_changed, failed);
+        // Looking (a screenshot, look_at_screen, zoom) changes nothing: it
+        // neither counts toward a stall nor clears the re-plan count.
+        let stalled = !observes_only(&shape.tool)
+            && self
+                .ep
+                .note_progress(&shape.decision, shape.ui_changed, failed);
         let looped = (shape.decision != "park")
             .then(|| {
                 let outcome = match (failed, shape.ui_changed) {
@@ -550,12 +557,16 @@ impl Run<'_, '_> {
         for park in self.ep.parks.iter().filter(|p| p.waiting) {
             now.push_str(&waiting_line(park));
         }
-        // The latest read in full (head and tail), after the view: the view
+        // The latest pass's outputs (head and tail), after the view: the view
         // line keeps only STEP_RESULT_CAP, and this tail is never cached.
+        // They share OUTPUT_PROMPT_CAP.
+        let share = OUTPUT_PROMPT_CAP / self.ep.outputs.len().max(1);
         for o in &self.ep.outputs {
             now.push_str(&format!(
                 "Latest output of [{}] {}:\n{}\n",
-                o.view_ref, o.tool, o.text
+                o.view_ref,
+                o.tool,
+                clipped(&o.text, share)
             ));
         }
         let (step_text, image) = match &self.obs {
@@ -886,6 +897,7 @@ impl Run<'_, '_> {
     /// screen long gone.
     fn settle_parks(&mut self, on_event: &mut dyn FnMut(LoopEvent)) {
         let now = self.now();
+        self.new_pass = true;
         for mut park in std::mem::take(&mut self.ep.parks) {
             let age = self.k.parks.answer_age(&park.id);
             let answer = self.k.parks.answer(&park.id);
@@ -957,9 +969,7 @@ impl Run<'_, '_> {
                         out.image_data_url.clone(),
                         out.mcp_app.as_deref().cloned(),
                     );
-                    if !gate::is_desktop(&call.name) {
-                        self.ep.outputs = vec![self.kept(&id, &call.name, &out, OUTPUT_PROMPT_CAP)];
-                    }
+                    self.hold(&id, &call.name, &out);
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
                         tool: park.tool.clone(),
@@ -1025,6 +1035,7 @@ impl Run<'_, '_> {
     /// One model turn's calls. Independent reads fan out; everything else
     /// runs in order. A parked or denied hard step stops the rest.
     fn batch(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) {
+        self.new_pass = true;
         // Only reads every gate allows fan out; a denied or asked read takes
         // the one-at-a-time path, which answers it.
         let reads = calls.len() > 1
@@ -1077,7 +1088,6 @@ impl Run<'_, '_> {
         }
         let outs = fan_out(jobs);
         let returned = outs.iter().filter(|o| o.text != DEAD_WORKER).count();
-        self.ep.outputs.clear();
         for (c, out) in calls[..take].iter().zip(outs) {
             self.ep.steps += 1;
             if out.failed {
@@ -1098,8 +1108,7 @@ impl Run<'_, '_> {
                 result: format!("{} (fan-out {returned}/{take} returned)", result_text(&out)),
             };
             let id = format!("s{}", self.ep.steps);
-            let kept = self.kept(&id, &c.name, &out, OUTPUT_PROMPT_CAP / take);
-            self.ep.outputs.push(kept);
+            self.hold(&id, &c.name, &out);
             self.record(&shape, &arg_line(&c.name, &c.arguments), "soft", &id);
         }
         for c in &calls[take..] {
@@ -1198,9 +1207,7 @@ impl Run<'_, '_> {
             out.mcp_app.as_deref().cloned(),
         );
         // Zoom counts as a read here, so what it opens is readable.
-        if !gate::is_desktop(&call.name) {
-            self.ep.outputs = vec![self.kept(id, &call.name, &out, OUTPUT_PROMPT_CAP)];
-        }
+        self.hold(id, &call.name, &out);
         self.record(
             &shape("allow", ui, result_text(&out)),
             args_redacted,
@@ -1209,29 +1216,26 @@ impl Run<'_, '_> {
         );
     }
 
-    /// A result as the worker's next steps see it: redacted (held secrets
-    /// too), and over `share` chars its head and tail with the middle
-    /// clipped, so a fenced result keeps its close marker and a command its
-    /// exit line.
-    fn kept(&self, view_ref: &str, tool: &str, out: &ToolOutput, share: usize) -> StepOutput {
+    /// Keep a result for the worker's next steps, redacted (held secrets
+    /// too). One pass (a batch, or a park settle) is one slot: its first
+    /// held output replaces the last pass's, the rest join it. A desktop
+    /// or look-only step holds nothing and leaves the slot as it is.
+    fn hold(&mut self, view_ref: &str, tool: &str, out: &ToolOutput) {
+        if gate::is_desktop(tool) || gate::is_look(tool) {
+            return;
+        }
+        if std::mem::take(&mut self.new_pass) {
+            self.ep.outputs.clear();
+        }
         let clean = grokhub_core::redact_held_secrets(
             &grokhub_core::redact_secrets(&out.text),
             self.k.held,
         );
-        let clean = clean.trim_end();
-        let text = if clean.chars().count() > share {
-            format!(
-                "{}\n(Read a smaller part to see what was clipped.)",
-                crate::auto_review::clip_middle(clean, share)
-            )
-        } else {
-            clean.to_string()
-        };
-        StepOutput {
+        self.ep.outputs.push(StepOutput {
             view_ref: view_ref.into(),
             tool: tool.into(),
-            text,
-        }
+            text: clean.trim_end().to_string(),
+        });
     }
 
     /// `harness::decide` first (the only hard gate; a desktop call is also
@@ -1436,6 +1440,24 @@ fn parked_reply(said: &str, parks: &[OpenPark]) -> String {
 
 fn is_read(name: &str) -> bool {
     name == ZOOM_TOOL || gate::is_readonly(name)
+}
+
+/// A step that only looks: it changes nothing on screen or on disk.
+fn observes_only(name: &str) -> bool {
+    name == "screenshot" || name == ZOOM_TOOL || gate::is_look(name)
+}
+
+/// A held result at its share of [`OUTPUT_PROMPT_CAP`]: over it, the head
+/// and tail with the middle clipped, so a fenced result keeps its close
+/// marker and a command its exit line.
+fn clipped(text: &str, share: usize) -> String {
+    if text.chars().count() <= share {
+        return text.to_string();
+    }
+    format!(
+        "{}\n(Read a smaller part to see what was clipped.)",
+        crate::auto_review::clip_middle(text, share)
+    )
 }
 
 fn zoom(view: &EpisodeView, arguments: &str) -> ToolOutput {

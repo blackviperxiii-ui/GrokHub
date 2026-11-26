@@ -79,7 +79,7 @@ pub const GOAL_CAP: usize = 200;
 /// instruction must not reach them cut mid-sentence.
 pub const GOAL_PROMPT_CAP: usize = 4_000;
 /// How much of the latest non-desktop results the worker's next steps see,
-/// in all (head and tail; a fan-out splits it between its reads).
+/// in all (head and tail; one batch's results split it).
 pub const OUTPUT_PROMPT_CAP: usize = 4_000;
 
 /// A fresh episode id: `ep-<ms hex>-<n>`.
@@ -180,8 +180,8 @@ impl StepShape {
     }
 }
 
-/// What a non-desktop step returned, as the worker's next steps see it:
-/// redacted, head and tail kept.
+/// What a non-desktop step returned, redacted, for the worker's next steps.
+/// The step text clips it to its share of [`OUTPUT_PROMPT_CAP`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StepOutput {
     /// The step's id in the view (`s3`, `s3r`).
@@ -229,8 +229,8 @@ pub struct Episode {
     pub(crate) replan_unheard: bool,
     /// The `episode_id`s of the past lessons this episode started with.
     pub used_lessons: Vec<String>,
-    /// The latest non-desktop results (one step, or every read of a
-    /// fan-out). A desktop step, a park or a deny leaves them as they are.
+    /// The latest batch's non-desktop results (or a park settle's). A
+    /// desktop or look-only step, a park or a deny leaves them as they are.
     pub(crate) outputs: Vec<StepOutput>,
 }
 

@@ -613,6 +613,10 @@ pub fn after_tool(
             }
         }
     }
+    // A formatter hook may have rewritten the file the edit wrote.
+    if !failed {
+        crate::tools::seen::after_hook(session, workspace, name, arguments);
+    }
     extra
 }
 
@@ -1893,7 +1897,7 @@ mod tests {
         set_folder_trust(&repo, true).unwrap();
         let trusted = attachable(&repo, None, std::slice::from_ref(&plugin_file));
         assert_eq!(trusted.len(), 1);
-        assert_eq!(trusted[0].origin, HookOrigin::Project);
+        assert!((trusted[0].origin) == (HookOrigin::Project));
         let _ = fs::remove_dir_all(&dir);
     }
 
