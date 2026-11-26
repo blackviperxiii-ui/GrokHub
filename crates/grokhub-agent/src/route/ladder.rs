@@ -191,8 +191,6 @@ pub struct Obs {
     pub verify_ok: bool,
     /// The newest user text reads as a correction or an undo.
     pub correction: bool,
-    /// A low self-check / verify score before claiming done. `None` when no source reports one.
-    pub low_check: Option<bool>,
     /// Spend budget used, percent. `None` while no budget exists.
     pub budget_pct: Option<u8>,
     /// DE2: the rung this task's signature is known to succeed at ([`routine_rung`]).
@@ -204,7 +202,8 @@ pub struct Obs {
 }
 
 /// A4 and E14: the agent loop's own signals between two routed calls, typed.
-/// Built by [`note_tool_run`] and [`note_out_of_budget`]; a new turn starts empty.
+/// Built by [`note_tool_run`], [`note_out_of_budget`] and [`note_low_check`];
+/// a new turn starts empty.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Stage {
     /// Every tool that ran since the last call was a read or a search and it
@@ -222,6 +221,8 @@ pub struct Stage {
     pub progress: bool,
     /// E14: the reasoning used up the output budget and left no answer.
     pub out_of_budget: bool,
+    /// E4: one of the run's own checks sent the model back since the last call.
+    pub low_check: bool,
 }
 
 /// A4: read or search calls in one turn, with no edit, that count as a long exploration.
@@ -420,7 +421,7 @@ pub fn advance_holding(
         if obs.verify_ok {
             st.hold = false;
         }
-        if obs.low_check == Some(true) {
+        if obs.stage.low_check {
             up(&mut st, &mut rules, "E4");
         }
     }
@@ -671,6 +672,13 @@ pub fn note_out_of_budget() {
     STAGE.with(|t| t.borrow_mut().pending.out_of_budget = true);
 }
 
+/// E4: one of the run's own checks (a reply that doesn't match its results,
+/// an unchecked change, a done claim with nothing run, the close check) sent
+/// the model back for another step.
+pub fn note_low_check() {
+    STAGE.with(|t| t.borrow_mut().pending.low_check = true);
+}
+
 /// The stage signals for this thread's next routed call. A new turn starts the
 /// turn's history over and reads nothing from the turn before.
 pub fn take_stage(new_turn: bool) -> Stage {
@@ -874,7 +882,10 @@ mod tests {
             chat,
             start.clone(),
             &Obs {
-                low_check: Some(true),
+                stage: Stage {
+                    low_check: true,
+                    ..Stage::default()
+                },
                 ..step_obs()
             },
             true,
@@ -1109,7 +1120,10 @@ mod tests {
             Some(&s0),
             "chat:default",
             Obs {
-                low_check: Some(true),
+                stage: Stage {
+                    low_check: true,
+                    ..Stage::default()
+                },
                 ..step_obs()
             },
         );
@@ -1121,7 +1135,7 @@ mod tests {
             Some(&s0),
             "chat:default",
             Obs {
-                low_check: None,
+                stage: Stage::default(),
                 ..step_obs()
             },
         );
@@ -2008,6 +2022,20 @@ mod tests {
                 out_of_budget: true,
                 ..Stage::default()
             }
+        );
+        note_low_check();
+        assert_eq!(
+            take_stage(false),
+            Stage {
+                low_check: true,
+                ..Stage::default()
+            }
+        );
+        note_low_check();
+        assert_eq!(
+            take_stage(true),
+            Stage::default(),
+            "a self-check sends back only within its turn"
         );
         note_tool_run("read_file", r#"{"path":"a.rs"}"#, true);
         assert_eq!(take_tool_errors(), 1, "a failed run is also E1");

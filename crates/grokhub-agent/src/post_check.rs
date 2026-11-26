@@ -93,16 +93,22 @@ impl Ran {
         } else {
             Vec::new()
         };
-        // Only a command's output is read (test summaries, git's lines).
-        let output = if command.is_empty() {
+        // Only a command's output is read (test summaries, git's lines), and
+        // a background read's or a subagent's, for how its task ended.
+        let output = if command.is_empty() && name != BACKGROUND_READ && name != "spawn_subagent" {
             String::new()
         } else {
             head_and_tail(output)
         };
+        let mut args: String = arguments.chars().take(HEAD_KEEP).collect();
+        if name == "use_tool" && args.len() < arguments.len() {
+            // Clipped arguments are no JSON: the connector tool's name is kept whole.
+            args = serde_json::json!({ "name": value.get("name"), "clipped": args }).to_string();
+        }
         Self {
             name: name.to_string(),
             command,
-            args: arguments.chars().take(HEAD_KEEP).collect(),
+            args,
             ok,
             output,
             urls,
@@ -112,14 +118,146 @@ impl Ran {
     /// Work the checks can't see into: a subagent, or a command left running
     /// in the background.
     fn opaque(&self) -> bool {
-        self.name == "spawn_subagent"
-            || self.name == "get_command_or_subagent_output"
-            || (self.name == "run_terminal_command"
-                && self
-                    .args
-                    .split_whitespace()
-                    .collect::<String>()
-                    .contains("\"is_background\":true"))
+        self.name == "spawn_subagent" || self.name == BACKGROUND_READ || self.background()
+    }
+
+    /// A command left running in the background.
+    fn background(&self) -> bool {
+        self.name == "run_terminal_command"
+            && self
+                .args
+                .split_whitespace()
+                .collect::<String>()
+                .contains("\"is_background\":true")
+    }
+
+    /// How this command ended, in the compaction ledger's words (`exit 0`,
+    /// `timed out after 120000ms`, `killed`, `started in the background`). A
+    /// failed call whose result says no such thing never ran (a refusal, a
+    /// denial, bad arguments): `not run`.
+    pub fn ended(&self) -> String {
+        let status = crate::compact::shell_status(Some(&self.output), self.background());
+        // A refused or failed background start never ran either.
+        if !self.ok && (self.background() || status == crate::compact::NOT_KEPT) {
+            "not run".into()
+        } else {
+            status
+        }
+    }
+
+    /// The background task this command went on as: started with
+    /// `is_background` (`task id: t1`), or handed over at its timeout
+    /// (`… moved to the background as task t1`). Read only from the result's
+    /// first line that the tool wrote; a line after it is the command's own.
+    fn task(&self) -> Option<&str> {
+        if self.name != "run_terminal_command" {
+            return None;
+        }
+        let line = crate::compact::head_line(&self.output)?;
+        let id = if self.background() {
+            line.strip_prefix("task id: ")
+        } else {
+            line.strip_prefix("still running after ")
+                .and_then(|rest| rest.split_once(": moved to the background as task "))
+                .map(|(_, id)| id)
+        };
+        id.map(str::trim)
+            .filter(|id| !id.is_empty() && !id.contains(char::is_whitespace))
+    }
+
+    /// How background task `id` ended, by this read of it: `exit N` or
+    /// `killed`; `None` while it runs, or when this read is not of it.
+    fn task_ended(&self, id: &str) -> Option<String> {
+        if self.name != BACKGROUND_READ || !self.ok {
+            return None;
+        }
+        let args: serde_json::Value = serde_json::from_str(&self.args).unwrap_or_default();
+        // The ids as the read tool takes them: an empty one names no task.
+        let ids: Vec<&str> = match args.get("task_id").and_then(serde_json::Value::as_str) {
+            Some(list) => list.split(',').collect(),
+            None => args
+                .get("task_ids")
+                .and_then(serde_json::Value::as_array)
+                .map(|ids| ids.iter().filter_map(serde_json::Value::as_str).collect())
+                .unwrap_or_default(),
+        };
+        let ids: Vec<&str> = ids
+            .into_iter()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        if !ids.contains(&id) {
+            return None;
+        }
+        // One task's read starts with its status; several are each under
+        // `id:`. Only the read's own lines count, never a task's output.
+        let mut lines = crate::compact::read_head(&self.output).into_iter();
+        if ids.len() > 1 {
+            lines.find(|line| line.strip_suffix(':') == Some(id))?;
+        }
+        match lines.next()? {
+            "status: killed" => Some("killed".into()),
+            "status: exited" => lines
+                .next()?
+                .strip_prefix("exit_code: ")?
+                .parse::<i64>()
+                .ok()
+                .map(|code| format!("exit {code}")),
+            _ => None,
+        }
+    }
+}
+
+/// The tool that reads a background task's output and how it ended.
+const BACKGROUND_READ: &str = "get_command_or_subagent_output";
+
+/// How the command at `ran[at]` ended. One that went on in the background
+/// ends where a later read of its task says it did (`exit 0`), and until one
+/// does it is `still running (task t1)`.
+pub(crate) fn outcome(ran: &[Ran], at: usize) -> String {
+    let r = &ran[at];
+    let Some(id) = r.task() else {
+        return r.ended();
+    };
+    ran[at + 1..]
+        .iter()
+        .rev()
+        .find_map(|later| later.task_ended(id))
+        .unwrap_or_else(|| format!("still running (task {id})"))
+}
+
+/// How the subagent call at `ran[at]` ended: the `status:` its result
+/// closes with (`done`, `partial`, `stopped`, `failed`). One started in the
+/// background ends where a later read of its task says it did (`finished`,
+/// `stopped`), and until one does it is `still running, task s1`.
+pub(crate) fn helper_outcome(ran: &[Ran], at: usize) -> String {
+    let r = &ran[at];
+    if !r.ok {
+        return "failed".into();
+    }
+    let own: Vec<&str> = crate::compact::outside_fences(&r.output).collect();
+    let status = own
+        .iter()
+        .rev()
+        .find_map(|line| line.strip_prefix("status: "));
+    match status.and_then(|s| s.split_whitespace().next()) {
+        Some("running") => {
+            let Some(id) = own.iter().find_map(|line| line.strip_prefix("task id: ")) else {
+                return "still running".into();
+            };
+            let id = id.trim();
+            match ran[at + 1..]
+                .iter()
+                .rev()
+                .find_map(|later| later.task_ended(id))
+            {
+                Some(ended) if ended == "killed" => "stopped".into(),
+                Some(_) => "finished".into(),
+                None => format!("still running, task {id}"),
+            }
+        }
+        Some(word @ ("done" | "partial" | "stopped" | "failed")) => word.into(),
+        _ => "ok".into(),
     }
 }
 
@@ -560,7 +698,7 @@ fn evaluate(expr: &str) -> Option<(f64, usize, u32)> {
 
 // --- Counts --------------------------------------------------------------
 
-fn is_test_command(command: &str) -> bool {
+pub(crate) fn is_test_command(command: &str) -> bool {
     let c = command.to_lowercase();
     [
         "cargo test",

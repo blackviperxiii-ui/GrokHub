@@ -753,6 +753,11 @@ fn run_turn(
     // already sent back for taking thanks anyway.
     let after_empty = input.depth == 0 && crate::voice_session::after_empty(input.conversation_id);
     let mut credit_noted = false;
+    // A change request's reply claimed done with nothing run, and was sent back once.
+    let mut unbacked_noted = false;
+    // The unchecked changes the last drive push named: naming them again is
+    // the same failed check, not a new one.
+    let mut pushed_unchecked: Vec<String> = Vec::new();
     // Small talk shows no thought that narrates the app's tools or rules.
     let casual = input.depth == 0 && crate::route::intent::casual_turn(user_text);
     // Where `ran` stood at the last check, and how many notes it sent.
@@ -1368,6 +1373,7 @@ fn run_turn(
                     }
                     if let Some(note) = crate::post_check::note(&findings) {
                         post_notes += 1;
+                        crate::route::ladder::note_low_check();
                         history.push(cabin_note(&note));
                         continue;
                     }
@@ -1382,6 +1388,21 @@ fn run_turn(
                         crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
                     match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
+                            // A push that only lists open todos is the checklist, not a
+                            // failed check; one that names no new unchecked change
+                            // repeats a check that already climbed.
+                            let unchecked: Vec<String> = gaps
+                                .unchecked
+                                .iter()
+                                .map(|(what, _)| what.clone())
+                                .collect();
+                            if unchecked
+                                .iter()
+                                .any(|what| !pushed_unchecked.contains(what))
+                            {
+                                crate::route::ladder::note_low_check();
+                            }
+                            pushed_unchecked = unchecked;
                             history.push(cabin_note(&note));
                             continue;
                         }
@@ -1412,7 +1433,16 @@ fn run_turn(
                                 .then(|| crate::drive::unbacked_done(&last_assistant, evidence))
                                 .flatten()
                             {
-                                // The app's check, shown as status: it doesn't
+                                // The first time, the model is told (as the app's
+                                // note) and gets one more step, unless a call was
+                                // refused or failed: it knows nothing ran.
+                                if !unbacked_noted && ran.iter().all(|r| r.ok) {
+                                    unbacked_noted = true;
+                                    crate::route::ladder::note_low_check();
+                                    history.push(cabin_note(crate::drive::UNBACKED_DONE_NOTE));
+                                    continue;
+                                }
+                                // Again: the app's check, shown as status. It doesn't
                                 // speak in the model's voice or join its words.
                                 on_event(LoopEvent::Thought(text.into()));
                             }
@@ -1440,6 +1470,8 @@ fn run_turn(
                             cancel: input.cancel,
                             drive: drive.as_ref(),
                             last_assistant: &last_assistant,
+                            ran: &ran,
+                            written: &modified_paths,
                             usage: &mut usage,
                         };
                         crate::close_check::before_end(&mut close_in)
@@ -1457,6 +1489,7 @@ fn run_turn(
                         crate::close_check::CloseGate::Continue { note, steps } => {
                             close_continued = true;
                             close_steps = steps;
+                            crate::route::ladder::note_low_check();
                             history.push(cabin_note(&note));
                             continue;
                         }
@@ -4265,6 +4298,300 @@ mod tests {
             vec![Some("medium"), Some("medium"), Some("high"), Some("xhigh")]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// E4 in the real loop: a reply the run's own check sends back (a sum
+    /// that doesn't add up) makes the next step think one rung harder.
+    #[test]
+    fn a_reply_a_check_sends_back_climbs_the_next_step_one_rung() {
+        let dir = workspace("stage-low-check");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let _ = crate::route::ladder::take_stage(true);
+        let _ = crate::route::ladder::take_tool_errors();
+        let conv = (0..)
+            .map(|i| format!("conv-low-check-{i}"))
+            .find(|s| !crate::route::guard::in_holdout(s))
+            .unwrap();
+        let client = EffortScript {
+            turns: Mutex::new(vec![
+                crate::TurnOutput {
+                    text: "Total: 2 + 2 = 5.".into(),
+                    ..Default::default()
+                },
+                crate::TurnOutput {
+                    text: "Total: 2 + 2 = 4.".into(),
+                    ..Default::default()
+                },
+            ]),
+            efforts: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(
+            &input,
+            &mut history,
+            "explain what the note file says",
+            None,
+            &mut |_| {},
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(
+            user_texts(&history)
+                .iter()
+                .any(|t| t.starts_with("Before this turn ends")),
+            "{:?}",
+            user_texts(&history)
+        );
+        let efforts = client.efforts.lock().unwrap().clone();
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("medium"), Some("high")],
+            "the step after the check's note climbs one rung (E4)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One chat turn on `turns` that may write files, with a fresh ladder
+    /// stage, in a conversation the router's holdout leaves alone; `setup`
+    /// runs first with the conversation id and the config folder.
+    fn effort_run(
+        tag: &str,
+        turns: Vec<crate::TurnOutput>,
+        setup: impl FnOnce(&str, &std::path::Path),
+    ) -> (LoopOut, Vec<InputItem>, Vec<Option<String>>) {
+        let dir = workspace(tag);
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let _ = crate::route::ladder::take_stage(true);
+        let _ = crate::route::ladder::take_tool_errors();
+        let conv = (0..)
+            .map(|i| format!("conv-{tag}-{i}"))
+            .find(|s| !crate::route::guard::in_holdout(s))
+            .unwrap();
+        setup(&conv, &config);
+        let client = EffortScript {
+            turns: Mutex::new(turns),
+            efforts: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: &conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "fix the handler", None, &mut |_| {});
+        crate::session_tools::invalidate_todos(&conv);
+        let efforts = client.efforts.lock().unwrap().clone();
+        let _ = std::fs::remove_dir_all(&dir);
+        (out, history, efforts)
+    }
+
+    fn calls_turn(calls: Vec<FunctionCall>) -> crate::TurnOutput {
+        crate::TurnOutput {
+            calls,
+            ..Default::default()
+        }
+    }
+
+    fn text_turn(text: &str) -> crate::TurnOutput {
+        crate::TurnOutput {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    fn task_brief(care: crate::brain::Care) -> impl FnOnce(&str, &std::path::Path) {
+        move |conv, _| {
+            crate::checkpoint::set_turn_brief(conv, brief(crate::brain::Intent::Task, care, &[]))
+        }
+    }
+
+    /// E4 in the real loop: a drive push that only lists open todos keeps the
+    /// effort, and one naming an unchecked change climbs once, not again when
+    /// the next push names the same change.
+    #[test]
+    fn a_checklist_push_keeps_effort_and_a_repeated_unchecked_change_climbs_once() {
+        let todos = r#"{"todos":[{"id":"a","content":"step a","status":"pending"},{"id":"b","content":"step b","status":"pending"}]}"#;
+        let done = |id: &str| {
+            format!(r#"{{"merge":true,"todos":[{{"id":"{id}","status":"completed"}}]}}"#)
+        };
+        let sh = |id: &str, cmd: &str| {
+            call(
+                id,
+                "run_terminal_command",
+                &serde_json::json!({ "command": cmd }).to_string(),
+            )
+        };
+        let (out, history, efforts) = effort_run(
+            "push-todos",
+            vec![
+                calls_turn(vec![call("t1", "todo_write", todos)]),
+                text_turn("Working on it."),
+                calls_turn(vec![
+                    call("t2", "todo_write", &done("a")),
+                    sh("s1", "echo step-a"),
+                ]),
+                text_turn("Still on step b."),
+                calls_turn(vec![
+                    call("t3", "todo_write", &done("b")),
+                    sh("s2", "echo step-b"),
+                ]),
+                text_turn("Both steps are complete."),
+            ],
+            task_brief(crate::brain::Care::Casual),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let pushes = user_texts(&history);
+        assert_eq!(pushes.len(), 3, "{pushes:?}");
+        assert!(pushes[1].starts_with("Not done yet: \"step a\", \"step b\"."));
+        assert!(!pushes[1].contains("Not verified"));
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("low"); 6],
+            "a checklist push is no failed check"
+        );
+        let write = call(
+            "w1",
+            "write",
+            r#"{"path":"src/a.rs","content":"pub fn a() {}"}"#,
+        );
+        let (out, history, efforts) = effort_run(
+            "push-unchecked",
+            vec![
+                calls_turn(vec![call("t1", "todo_write", todos), write]),
+                text_turn("Working on it."),
+                calls_turn(vec![call("t2", "todo_write", &done("a")), sh("s1", "cd .")]),
+                text_turn("Still on step b."),
+                calls_turn(vec![
+                    call("t3", "todo_write", &done("b")),
+                    sh("s2", "rustc --crate-type lib src/a.rs"),
+                ]),
+                text_turn("Both steps are complete, and it builds."),
+            ],
+            task_brief(crate::brain::Care::Casual),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let pushes = user_texts(&history);
+        assert_eq!(pushes.len(), 3, "{pushes:?}");
+        let unchecked = "Not verified since your last change to src/a.rs.";
+        assert!(pushes[1].contains(unchecked) && pushes[2].contains(unchecked));
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![
+                Some("low"),
+                Some("low"),
+                Some("medium"),
+                Some("medium"),
+                Some("medium"),
+                Some("low"),
+            ],
+            "the first push naming src/a.rs climbs one rung; the second, naming it again, does not"
+        );
+    }
+
+    /// E4 in the real loop: the note sent back for a done claim with nothing
+    /// run climbs the next step one rung.
+    #[test]
+    fn an_unbacked_done_note_climbs_the_next_step_one_rung() {
+        let (out, history, efforts) = effort_run(
+            "unbacked-done",
+            vec![
+                text_turn("Done."),
+                text_turn("It isn't done: I need the handler's file name first."),
+            ],
+            task_brief(crate::brain::Care::Careful),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(user_texts(&history)[1], crate::drive::UNBACKED_DONE_NOTE);
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("low"), Some("medium")]
+        );
+    }
+
+    /// E4 in the real loop: a close check that finds the need not met sends
+    /// the model back, and that step climbs one rung.
+    #[test]
+    fn a_close_check_that_sends_the_model_back_climbs_the_next_step_one_rung() {
+        let (out, history, efforts) = effort_run(
+            "close-continue",
+            vec![
+                text_turn("The handler looks right to me."),
+                text_turn(
+                    r#"{"need_met":false,"open":["fix"],"next_steps":["run the handler's tests"],"status_updates":[]}"#,
+                ),
+                text_turn("Still open: I need the test command."),
+            ],
+            |conv, config| {
+                grokhub_core::save_intentions(
+                    config,
+                    conv,
+                    &grokhub_core::Intentions {
+                        items: vec![grokhub_core::Intention {
+                            id: "fix".into(),
+                            text: "fix the handler".into(),
+                            status: grokhub_core::IntentionStatus::Open,
+                        }],
+                    },
+                )
+                .unwrap();
+            },
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(
+            user_texts(&history)[1],
+            "Not done yet. Still open: \"fix the handler\". Next: run the handler's tests. Continue with the next open item."
+        );
+        // The work step, the judge's own low call, then the step it sent back one rung up.
+        assert_eq!(
+            efforts.iter().map(Option::as_deref).collect::<Vec<_>>(),
+            vec![Some("low"), Some("low"), Some("medium")]
+        );
     }
 
     #[test]
@@ -8399,6 +8726,161 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The close check in the real loop: the judge's request carries the
+    /// run's own work (the file it wrote, the red test and its exit code),
+    /// not only the reply's words.
+    #[test]
+    fn a_close_check_judges_the_runs_work_not_its_words() {
+        let dir = workspace("close-work");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let conv = format!("close-work-{}", std::process::id());
+        grokhub_core::save_intentions(
+            &config,
+            &conv,
+            &grokhub_core::Intentions {
+                items: vec![grokhub_core::Intention {
+                    id: "fix".into(),
+                    text: "fix the handler".into(),
+                    status: grokhub_core::IntentionStatus::Open,
+                }],
+            },
+        )
+        .unwrap();
+        // A real test run that fails: there is no project here, and `exit 1`
+        // fixes the code in every shell.
+        let red = "cargo test --manifest-path missing/Cargo.toml; exit 1";
+        let script = scripted(vec![
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"src/handler.rs","content":"fn handler() {}"}"#,
+                )],
+            ),
+            turn(
+                "",
+                vec![call(
+                    "s1",
+                    "run_terminal_command",
+                    &serde_json::json!({ "command": red }).to_string(),
+                )],
+            ),
+            turn("Updated the handler.", Vec::new()),
+            turn(
+                r#"{"need_met":false,"open":["fix"],"next_steps":["make the failing test pass"],"status_updates":[]}"#,
+                Vec::new(),
+            ),
+            turn("The test still fails.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = script.seen.lock().unwrap().clone();
+        let judge: Vec<String> = seen
+            .iter()
+            .filter_map(|input| {
+                let text = |item: &InputItem| match item {
+                    InputItem::Message { content, .. } => match content.first() {
+                        Some(ContentPart::InputText(t)) => t.clone(),
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                };
+                (input.len() == 2 && text(&input[0]) == crate::close_check::CLOSE_SYSTEM)
+                    .then(|| text(&input[1]))
+            })
+            .collect();
+        assert_eq!(judge.len(), 1, "{seen:?}");
+        let work = format!(
+            "Files written: src/handler.rs\nCommands, newest last:\n- `{red}` → exit 1\nLast test run: `{red}` → exit 1\nOther calls: (none)\nLast assistant reply:\nUpdated the handler."
+        );
+        assert!(judge[0].contains(&work), "{}", judge[0]);
+        // The judge said not done: the model got its next step and answered again.
+        assert!(
+            user_texts(&history)
+                .iter()
+                .any(|t| t.contains("make the failing test pass")),
+            "{:?}",
+            user_texts(&history)
+        );
+        assert_eq!(seen.len(), 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// In the real loop: a source edit is pushed back after a re-read and
+    /// after an `echo` that only names a test, and only a command that runs
+    /// (here a build of the changed file) lets the turn end.
+    #[test]
+    fn a_code_edit_is_pushed_back_until_a_command_runs_it_not_a_reread() {
+        let dir = workspace("verify-code");
+        let conv = format!("verify-code-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]),
+        );
+        let script = scripted(vec![
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"src/handler.rs","content":"pub fn handler() {}"}"#,
+                )],
+            ),
+            turn("Done.", Vec::new()),
+            turn(
+                "",
+                vec![call(
+                    "r1",
+                    "read_file",
+                    r#"{"target_file":"src/handler.rs"}"#,
+                )],
+            ),
+            turn("I re-read it.", Vec::new()),
+            turn(
+                "",
+                vec![call(
+                    "e1",
+                    "run_terminal_command",
+                    r#"{"command":"echo test ok"}"#,
+                )],
+            ),
+            turn("The tests are ok.", Vec::new()),
+            turn(
+                "",
+                vec![call(
+                    "s1",
+                    "run_terminal_command",
+                    r#"{"command":"rustc --crate-type lib src/handler.rs"}"#,
+                )],
+            ),
+            turn("Done, and it builds.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 8);
+        let code_note = "Not verified since your last change to src/handler.rs. Run the tests, a build or a linter (or run the changed file) before you finish: a re-read or git status doesn't check code.";
+        assert_eq!(
+            user_texts(&history),
+            ["scan my computer", code_note, code_note, code_note]
+        );
+        assert!(dir.join("libhandler.rlib").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_search_typed_into_the_shell_runs_as_the_search_tool() {
         let dir = workspace("shell-search");
@@ -8537,7 +9019,9 @@ mod tests {
                 vec![call(
                     "s1",
                     "run_terminal_command",
-                    r#"{"command":"echo test ok"}"#,
+                    // A test runner at the program position that passes with no
+                    // project (`echo test ok` only prints a word).
+                    r#"{"command":"cargo test --help"}"#,
                 )],
             ),
             turn("Done, and the test run passed.", Vec::new()),
@@ -8738,7 +9222,8 @@ mod tests {
     }
 
     #[test]
-    fn a_change_request_that_claims_done_with_no_tool_run_says_it_is_not_done() {
+    fn a_change_request_that_claims_done_with_no_tool_run_is_sent_back_once_then_says_it_is_not_done(
+    ) {
         let dir = workspace("claim-done");
         let conv = format!("claim-done-{}", std::process::id());
         crate::checkpoint::set_turn_brief(
@@ -8747,11 +9232,21 @@ mod tests {
         );
         let script = scripted(vec![
             turn("Pulse feed updated. Done. ✨", Vec::new()),
+            turn("Pulse feed updated. Done.", Vec::new()),
             turn("unused", Vec::new()),
         ]);
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
-        assert_eq!(script.seen.lock().unwrap().len(), 1);
+        // Sent back once as the app's note, then the second claim ends the turn.
+        assert_eq!(script.seen.lock().unwrap().len(), 2);
+        let texts = user_texts(&history);
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert_eq!(texts[1], crate::drive::UNBACKED_DONE_NOTE);
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::Message { role, content } if role == "user"
+                && matches!(content.first(), Some(ContentPart::InputText(t)) if t.starts_with("<cabin-note>\nYou said this is done"))
+        )));
         let line = "That isn't done yet: nothing ran this turn to make or check the change.";
         // The app's check shows as status, once, and never as the model's words.
         assert_eq!(
@@ -8769,6 +9264,30 @@ mod tests {
             InputItem::Message { content, .. } if content.first() == Some(&ContentPart::InputText(line.into()))
         )));
         crate::session_tools::invalidate_todos(&conv);
+        // Sent back, the model runs a tool: the turn ends on its checked reply, with no status line.
+        let conv = format!("claim-done-then-ran-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let script = scripted(vec![
+            turn("Done.", Vec::new()),
+            turn("", vec![call("l1", "list_dir", "{}")]),
+            turn("Checked: the feed is updated.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert_eq!(user_texts(&history)[1], crate::drive::UNBACKED_DONE_NOTE);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, LoopEvent::Thought(t) if t == line))
+                .count(),
+            0
+        );
+        crate::session_tools::invalidate_todos(&conv);
         // A plain question with the same words gets no extra line.
         let conv = format!("claim-done-q-{}", std::process::id());
         crate::checkpoint::set_turn_brief(
@@ -8779,11 +9298,78 @@ mod tests {
                 &[],
             ),
         );
-        let script = scripted(vec![turn("Done: it is 4 pm.", Vec::new())]);
+        let script = scripted(vec![
+            turn("Done: it is 4 pm.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
         let (_, _, events) = run_drive(&script, &dir, &conv);
         assert!(!events
             .iter()
             .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains("isn't done yet"))));
+        // ...and no note: the model is asked once.
+        assert_eq!(script.seen.lock().unwrap().len(), 1);
+        // A clarifying question, or a reply saying nothing changed, claims nothing:
+        // no note and no status line, and the model is asked once.
+        for (tag, reply) in [
+            (
+                "ask",
+                "Which config file should be updated: app.toml or local.toml?",
+            ),
+            (
+                "none",
+                "Understood, I left the file alone, so nothing was updated.",
+            ),
+        ] {
+            let conv = format!("claim-done-{tag}-{}", std::process::id());
+            crate::checkpoint::set_turn_brief(
+                &conv,
+                brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+            );
+            let script = scripted(vec![turn(reply, Vec::new()), turn("unused", Vec::new())]);
+            let (out, history, events) = run_drive(&script, &dir, &conv);
+            assert_eq!(out.stop, StopReason::EndTurn, "{reply}");
+            assert_eq!(script.seen.lock().unwrap().len(), 1, "{reply}");
+            assert_eq!(user_texts(&history), ["scan my computer"], "{reply}");
+            assert!(
+                !events
+                    .iter()
+                    .any(|ev| matches!(ev, LoopEvent::Thought(t) if t == line)),
+                "{reply}"
+            );
+            crate::session_tools::invalidate_todos(&conv);
+        }
+        // The write was refused: the model already knows nothing ran, so there is
+        // no note, and its claim gets the status line.
+        let conv = format!("claim-done-refused-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let script = scripted(vec![
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"app.toml","content":"x = 1"}"#,
+                )],
+            ),
+            turn("Updated app.toml.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 2);
+        assert_eq!(user_texts(&history), ["scan my computer"]);
+        assert!(!dir.join("app.toml").exists());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, LoopEvent::Thought(t) if t == line))
+                .count(),
+            1
+        );
+        crate::session_tools::invalidate_todos(&conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
