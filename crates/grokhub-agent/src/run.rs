@@ -2689,7 +2689,7 @@ fn turn_is_chat_only(conversation_id: &str, user_text: &str) -> bool {
     // A Code tab turn is never small talk.
     !crate::code_guard::is_set(conversation_id)
         && crate::checkpoint::turn_brief(conversation_id)
-        .is_some_and(|brief| tools::hangout::chat_only(&brief, user_text))
+            .is_some_and(|brief| tools::hangout::chat_only(&brief, user_text))
 }
 
 /// A failure from a call the person already allowed. Hard classes and merges
