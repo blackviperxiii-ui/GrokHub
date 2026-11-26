@@ -134,32 +134,31 @@ fn cabin_row_from_dir(
     } else {
         grokhub_core::verify_and_record_skill(skills_dir, &name, &raw).summary()
     };
-    let (views, uses, patches, last_used_ms, pinned, locked, lifecycle) =
-        if let Some(c) = curator {
-            (
-                c.views,
-                c.uses,
-                c.patches,
-                c.last_used_ms,
-                c.pinned,
-                c.locked,
-                c.lifecycle.as_str().to_string(),
-            )
-        } else {
-            (
-                0,
-                0,
-                0,
-                meta.last_used_at,
-                false,
-                false,
-                if archived {
-                    "archived".into()
-                } else {
-                    String::new()
-                },
-            )
-        };
+    let (views, uses, patches, last_used_ms, pinned, locked, lifecycle) = if let Some(c) = curator {
+        (
+            c.views,
+            c.uses,
+            c.patches,
+            c.last_used_ms,
+            c.pinned,
+            c.locked,
+            c.lifecycle.as_str().to_string(),
+        )
+    } else {
+        (
+            0,
+            0,
+            0,
+            meta.last_used_at,
+            false,
+            false,
+            if archived {
+                "archived".into()
+            } else {
+                String::new()
+            },
+        )
+    };
     Some((
         Row {
             on: !archived

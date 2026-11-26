@@ -5767,20 +5767,14 @@ fn take_skill_install_offer() -> Option<grokhub_core::SkillInstallPreview> {
 }
 
 #[tauri::command]
-async fn archive_skill(
-    state: State<'_, ShellState>,
-    name: String,
-) -> Result<skills::Page, String> {
+async fn archive_skill(state: State<'_, ShellState>, name: String) -> Result<skills::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     let home = grokhub_core::user_home();
     off_main(move || skills::archive(&dir, &workspace, home.as_deref(), &name)).await?
 }
 
 #[tauri::command]
-async fn restore_skill(
-    state: State<'_, ShellState>,
-    name: String,
-) -> Result<skills::Page, String> {
+async fn restore_skill(state: State<'_, ShellState>, name: String) -> Result<skills::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     let home = grokhub_core::user_home();
     off_main(move || skills::restore(&dir, &workspace, home.as_deref(), &name)).await?
@@ -5815,10 +5809,8 @@ async fn set_skill_curator_enabled(
 ) -> Result<skills::Page, String> {
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
     let home = grokhub_core::user_home();
-    off_main(move || {
-        skills::set_curator_enabled(&dir, &workspace, home.as_deref(), enabled)
-    })
-    .await?
+    off_main(move || skills::set_curator_enabled(&dir, &workspace, home.as_deref(), enabled))
+        .await?
 }
 
 #[tauri::command]

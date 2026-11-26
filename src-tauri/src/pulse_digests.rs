@@ -430,11 +430,9 @@ fn skill_curator_weekly(ctx: &Ctx, sw: &Switches) -> usize {
     ) {
         return 0;
     }
-    let Some(report) = grokhub_agent::skill_curator::weekly_pass(
-        &ctx.config_dir,
-        &ctx.day,
-        ctx.now,
-    ) else {
+    let Some(report) =
+        grokhub_agent::skill_curator::weekly_pass(&ctx.config_dir, &ctx.day, ctx.now)
+    else {
         return 0;
     };
     let md = report.render();
