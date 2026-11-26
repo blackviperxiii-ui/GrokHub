@@ -13,8 +13,8 @@ use crate::route::table::RoutingTable;
 use crate::route::{RouteInput, Router};
 
 fn scratch_dir(label: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/code-panel-tests")
+    let dir = std::env::temp_dir()
+        .join("grokhub-code-panel-tests")
         .join(format!(
             "{label}-{}-{}",
             std::process::id(),

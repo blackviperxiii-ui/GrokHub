@@ -273,7 +273,7 @@ export function Code({
   }, []);
 
   const onPanelState = useCallback((next: CodePanelState) => {
-    setLocalOnlyRoute(next.settings.localOnlyNonstop);
+    setLocalOnlyRoute(Boolean(next?.settings?.localOnlyNonstop));
   }, []);
 
   // Refresh the active project's route chip whenever the project switches or a turn ends.
@@ -281,7 +281,7 @@ export function Code({
     let active = true;
     codePanelState().then(
       (next) => {
-        if (active) setLocalOnlyRoute(next.settings.localOnlyNonstop);
+        if (active && next?.settings) setLocalOnlyRoute(next.settings.localOnlyNonstop);
       },
       () => {},
     );

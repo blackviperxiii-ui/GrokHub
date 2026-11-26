@@ -66,6 +66,7 @@ export function CodePanelSettings({ refresh = 0, onState, onRestored }: Props) {
     setError(null);
     try {
       const next = await codePanelState();
+      if (!next?.settings) return;
       setState(next);
       onState?.(next);
     } catch (err) {
@@ -79,7 +80,7 @@ export function CodePanelSettings({ refresh = 0, onState, onRestored }: Props) {
     let active = true;
     codePanelState().then(
       (next) => {
-        if (!active) return;
+        if (!active || !next?.settings) return;
         setState(next);
         setError(null);
         onState?.(next);
