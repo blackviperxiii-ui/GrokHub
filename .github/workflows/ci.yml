@@ -575,8 +575,10 @@ jobs:
       # Beta Windows builds the hub sidecar from the same dev artifacts the
       # `windows-parts` job caches (shared-key windows-test). That cache also
       # holds the workspace cargo home, so park the shell's cargo home first
-      # and put it back before src-tauri compiles. save-if false: this job
-      # must not overwrite the workspace test cache with a hub-only target.
+      # and put it back before src-tauri compiles. The rename takes rustup off
+      # PATH, so the parked bin goes back on PATH for the restore (`rustc -vV`)
+      # and the sidecar stage. save-if false: this job must not overwrite the
+      # workspace test cache with a hub-only target.
       - name: Park the shell toolchain home
         if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
         shell: pwsh
@@ -585,6 +587,7 @@ jobs:
           $backup = Join-Path $env:USERPROFILE '.cargo-shell'
           if (Test-Path $backup) { Remove-Item -Recurse -Force $backup }
           Rename-Item $cargo $backup
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $backup 'bin')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: runner.os == 'Windows' && github.event_name == 'push' && github.ref == 'refs/heads/beta'
         with:

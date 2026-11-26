@@ -241,9 +241,6 @@ struct ShellState {
     /// A Pulse card's report, by its chat, for that chat's next message to
     /// carry unseen.
     card_carry: Mutex<HashMap<String, String>>,
-    /// Messages the window sends back for the app, with what of them the
-    /// person typed.
-    send_back: turns::SendBack,
     /// The folder each Code tab session works in.
     code_sessions: code_sessions::Folders,
     /// Focus help: the app the user was just in (chip + one context line).
@@ -1104,6 +1101,7 @@ fn maybe_handle_bench_turn_to_disk(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn send_chat(
     app: AppHandle,
     state: State<'_, ShellState>,
@@ -1112,6 +1110,7 @@ async fn send_chat(
     mode: Option<agent::SessionMode>,
     attachments: Option<Vec<String>>,
     clock: Option<automations::Clock>,
+    untyped: Option<Vec<String>>,
 ) -> Result<String, String> {
     set_last_chat(&state, &conversation_id);
     // A message you send ends a Halt's hold on the background passes.
@@ -1130,8 +1129,12 @@ async fn send_chat(
         );
     });
     // Only the words the window sent can hold the person's typing; what is
-    // put before them below can't.
-    let typed = state.send_back.typed(&conversation_id, &text);
+    // put before them below can't. What the window put in its box for the
+    // app, a card or a model (`untyped`) isn't typed, and the same message
+    // sent again in this chat (`/retry`, after a restart) keeps the typed
+    // words it had.
+    let untyped = untyped.unwrap_or_default();
+    let typed = turns::typed_of(&state.config_dir, &conversation_id, &text, &untyped);
     // A chat opened from a Pulse card: its first message carries the card.
     let carry = state
         .card_carry
@@ -1218,6 +1221,9 @@ async fn chat_turn(
         attachments,
         clock,
     } = turn;
+    // Kept with the chat when some of the message isn't the person's, so it
+    // reads no more than this when it is sent again.
+    turns::note_sent(&state.config_dir, &conversation_id, &text, &typed)?;
     let files = state.trays.take(&conversation_id, &attachments)?;
     let own_folder = state.code_sessions.of(&conversation_id);
     if files.is_empty() {
@@ -1252,7 +1258,6 @@ async fn chat_turn(
         }
     }
     let asked = text.clone();
-    let asked_typed = typed.clone();
     // A card's chat shows Stop on its card while this turn runs.
     card_chat::turn_began(&conversation_id);
     let (ended_dir, ended_chat) = (state.config_dir.clone(), conversation_id.clone());
@@ -1369,13 +1374,10 @@ async fn chat_turn(
     // A card's run settles on its card, however the turn ended.
     let card = card_chat::turn_ended(&ended_dir, &ended_chat, &stop);
     // No model in your plan answered: the chat waits and sends again on its
-    // own. A card's chat does not: its card settled already.
-    // The window sends the ask back as it was, and only what the person
-    // typed in it counts as typed again.
+    // own. A card's chat does not: its card settled already. The window
+    // sends the ask back as it was, so its note above keeps its typed words.
     if let (Err(err), false) = (&stop, card) {
-        if model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms()) {
-            state.send_back.expect(&ended_chat, &asked, asked_typed);
-        }
+        model_wait::turn_failed(&ended_dir, &ended_chat, &asked, err, grokhub_core::now_ms());
     }
     if coding {
         let why = match &stop {
@@ -3742,21 +3744,22 @@ fn code_session_resume(
     state: State<'_, ShellState>,
     conversation_id: String,
 ) -> Result<String, String> {
-    code_resume_noted(&state.send_back, &state.config_dir, &conversation_id)
+    code_resume_noted(&state.config_dir, &conversation_id)
 }
 
-/// The Code tab's resume prompt for `conversation_id`, noted for
-/// `send_chat` as typed by no one: it is built from the session's plan and
-/// to-dos, which the model wrote.
-fn code_resume_noted(
-    back: &turns::SendBack,
-    config_dir: &Path,
-    conversation_id: &str,
-) -> Result<String, String> {
+/// The Code tab's resume prompt for `conversation_id`, noted with the chat
+/// as typed by no one: it is built from the session's plan and to-dos,
+/// which the model wrote.
+fn code_resume_noted(config_dir: &Path, conversation_id: &str) -> Result<String, String> {
     let left = code_keep::read(config_dir, conversation_id)
         .ok_or("This session has no checkpoint to resume.")?;
     let prompt = code_keep::resume_prompt(&left);
-    back.expect(conversation_id, &prompt, grokhub_core::Typed::nothing());
+    turns::note_sent(
+        config_dir,
+        conversation_id,
+        &prompt,
+        &grokhub_core::Typed::nothing(),
+    )?;
     Ok(prompt)
 }
 
@@ -4514,21 +4517,25 @@ async fn workboard_resume(
         })
     })
     .await??;
-    Ok(noted_resume(&state.send_back, resumed))
+    noted_resume(&state.config_dir, resumed)
 }
 
-/// A resume the page sends at once in its chat, noted for `send_chat` as
+/// A resume the page sends at once in its chat, noted with the chat as
 /// typed by no one: its block is the card's checkpoint and steps, which the
 /// model wrote.
-fn noted_resume(back: &turns::SendBack, resumed: workboard::Resume) -> workboard::Resume {
+fn noted_resume(
+    config_dir: &Path,
+    resumed: workboard::Resume,
+) -> Result<workboard::Resume, String> {
     if !resumed.background {
-        back.expect(
+        turns::note_sent(
+            config_dir,
             &resumed.conversation_id,
             &resumed.prompt,
-            grokhub_core::Typed::nothing(),
-        );
+            &grokhub_core::Typed::nothing(),
+        )?;
     }
-    resumed
+    Ok(resumed)
 }
 
 /// Start an unattended resume of card `id`: the card goes to Doing now, and
@@ -4614,11 +4621,17 @@ async fn workboard_say(
     let typed = text.clone();
     let said =
         off_main(move || card_chat::say(&dir, &id, text.as_str(), &conversation_id)).await??;
-    // The message holds the card's work prompt and notes: of it, the person
-    // typed only `text`.
-    state
-        .send_back
-        .expect(&said.conversation_id, &said.message, typed);
+    noted_say(&state.config_dir, said, &typed)
+}
+
+/// A card chat's message, noted with its chat: it holds the card's work
+/// prompt and notes, and of it the person typed only `typed`.
+fn noted_say(
+    config_dir: &Path,
+    said: card_chat::Say,
+    typed: &grokhub_core::Typed,
+) -> Result<card_chat::Say, String> {
+    turns::note_sent(config_dir, &said.conversation_id, &said.message, typed)?;
     Ok(said)
 }
 
@@ -8137,9 +8150,10 @@ fn web_send(
     let conversation_id: String = arg(args, "conversationId")?;
     web_may_take(web, config_dir, open_here, &conversation_id)?;
     let text: grokhub_core::Typed = arg(args, "text")?;
+    let untyped = arg::<Option<Vec<String>>>(args, "untyped")?.unwrap_or_default();
     let turn = Turn {
         text: text.as_str().to_string(),
-        typed: turns::typed_words(&text),
+        typed: turns::typed_of(config_dir, &conversation_id, &text, &untyped),
         mode: arg::<Option<agent::SessionMode>>(args, "mode")?,
         attachments: arg::<Option<Vec<String>>>(args, "attachments")?.unwrap_or_default(),
         clock: arg::<Option<automations::Clock>>(args, "clock")?,
@@ -9275,7 +9289,6 @@ pub fn run() {
                 notified: os_extras::Pending::default(),
                 auto: Mutex::default(),
                 card_carry: Mutex::default(),
-                send_back: turns::SendBack::default(),
                 code_sessions,
                 #[cfg(desktop)]
                 focus_help: Mutex::new(focus_help::FocusHelp::default()),
@@ -10229,6 +10242,37 @@ mod command_tests {
         code.split_whitespace().collect()
     }
 
+    /// Every turn (the window's, a browser's, a queued card's) keeps its
+    /// message's typed mark before it runs, and the window's and a
+    /// browser's sends look the mark up, so a message sent again reads no
+    /// more than it did. A source check: the commands need the running app.
+    #[test]
+    fn every_turn_keeps_its_typed_mark_and_every_send_reads_it() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let turn = item_after(&src, "async fn chat_turn(");
+        let noted = turn
+            .find(&squeeze(
+                "turns::note_sent(&state.config_dir, &conversation_id, &text, &typed)?;",
+            ))
+            .expect("chat_turn notes the message");
+        let runs = turn.find("session.prompt_typed(").expect("the turn runs");
+        assert!(noted < runs, "{turn}");
+        let send = item_after(&src, "async fn send_chat(");
+        assert!(
+            send.contains(&squeeze(
+                "let typed = turns::typed_of(&state.config_dir, &conversation_id, &text, &untyped);"
+            )),
+            "{send}"
+        );
+        let web = item_after(&src, "fn web_send(");
+        assert!(
+            web.contains(&squeeze(
+                "typed: turns::typed_of(config_dir, &conversation_id, &text, &untyped),"
+            )),
+            "{web}"
+        );
+    }
+
     #[test]
     fn saving_or_removing_an_agent_rechecks_the_agent_door() {
         // A turn for a computer the agent is no longer shared with stops now,
@@ -10704,6 +10748,31 @@ mod web_command_tests {
         }
     }
 
+    /// A browser's box says what in a message it put there for the app, a
+    /// card or a model, as the desktop window's does: that text and the
+    /// references it names aren't typed, and the person's words after it
+    /// are.
+    #[test]
+    fn a_browser_send_keeps_what_its_box_put_there_untyped() {
+        use serde_json::json;
+        let web = crate::remote::WebAccess::default();
+        let dir = temp_dir("untyped");
+        let fix = "Fix the config: read @file:/home/user/private-notes.txt";
+        let args = json!({
+            "conversationId": "a3",
+            "text": format!("{fix} and @file:mine.txt"),
+            "untyped": [fix],
+        });
+        let (_, turn) = super::web_send(&web, &dir, |_| false, &args).expect("a message sends");
+        let typed: grokhub_core::Typed =
+            serde_json::from_value(json!("and @file:mine.txt")).expect("typed");
+        assert_eq!(turn.text, format!("{fix} and @file:mine.txt"));
+        assert_eq!(turn.typed, typed);
+        // The send only reads the chat's typed marks; the turn notes its own
+        // when it runs.
+        assert!(!dir.join("typed-marks").exists());
+    }
+
     /// A send that is refused takes no chat: the browser's chats grow only
     /// by sends that go on to run.
     #[test]
@@ -10831,7 +10900,6 @@ mod web_command_tests {
             notified: crate::os_extras::Pending::default(),
             auto: Mutex::default(),
             card_carry: Mutex::default(),
-            send_back: crate::turns::SendBack::default(),
             code_sessions: crate::code_sessions::Folders::open(dir.to_path_buf()),
             #[cfg(desktop)]
             focus_help: Mutex::new(crate::focus_help::FocusHelp::default()),

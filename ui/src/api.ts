@@ -420,12 +420,16 @@ export function clearApiKey(): Promise<Settings> {
 /** Runs one prompt through the agent loop; resolves with the stop reason.
  * `attachments`: paths from `stageAttachment`, in the chips' order. */
 /** Sends one message. With no `mode` the app reads the message and picks:
- * a big multi-step job plans first, anything else is answered. */
+ * a big multi-step job plans first, anything else is answered. `untyped`:
+ * texts the window put in its box for the app, a card or a model (a fix
+ * button's prompt, a Pulse card's offer), which the person didn't type, so
+ * their `@` references stay text. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode?: SessionMode,
   attachments: string[] = [],
+  untyped: string[] = [],
 ): Promise<string> {
   return invoke<string>("send_chat", {
     conversationId,
@@ -433,6 +437,7 @@ export function sendChat(
     mode,
     attachments,
     clock: wallClock(),
+    ...(untyped.length ? { untyped } : {}),
   });
 }
 
@@ -463,6 +468,8 @@ export function sideChat(
   question: string,
   ask: string,
   soFar: string,
+  /** What of `question` the window put in its box for the app (see `sendChat`). */
+  untyped: string[] = [],
 ): Promise<string> {
   return invoke<string>("side_chat", {
     conversationId,
@@ -470,6 +477,7 @@ export function sideChat(
     question,
     ask,
     soFar,
+    ...(untyped.length ? { untyped } : {}),
   });
 }
 

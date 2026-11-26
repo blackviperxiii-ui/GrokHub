@@ -1,0 +1,1 @@
+- CI: the Windows shell job keeps rustup on PATH while it borrows the shared dev cache.

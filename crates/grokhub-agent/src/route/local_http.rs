@@ -1319,16 +1319,32 @@ mod tests {
 
     #[test]
     fn embeddings_endpoint_parses_vectors_in_index_order() {
-        use std::io::{Read, Write};
+        use std::io::{BufRead, Read, Write};
         use std::net::TcpListener;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf).unwrap();
-            let req = String::from_utf8_lossy(&buf[..n]);
+            // Read the whole request, body included. A server that closes
+            // with bytes unread resets the connection on Windows before the
+            // client reads the reply.
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut req = String::new();
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap();
+                }
+                req.push_str(&line);
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body).unwrap();
             assert!(req.starts_with("POST /v1/embeddings HTTP/1.1"), "{req}");
             assert!(
                 req.to_ascii_lowercase()
