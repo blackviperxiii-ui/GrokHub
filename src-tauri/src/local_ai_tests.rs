@@ -656,7 +656,7 @@ fn saving_the_local_ai_page_keeps_a_file_the_library_just_added_to_auto() {
     .unwrap();
     // The page opens and reads one added file.
     let page = view(&dir).config;
-    assert_eq!(page.own_files, [mine.clone()]);
+    assert_eq!(page.own_files, std::slice::from_ref(&mine));
     // While it is open, a library download adds its file to Auto.
     let mut now = load(&dir);
     now.own_files.push(pulled.clone());

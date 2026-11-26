@@ -4751,9 +4751,10 @@ fn an_anthropic_reply_is_priced_at_its_whole_input() {
     assert_eq!(
         (
             ledger.anthropic.spend.day_input_tokens,
-            ledger.anthropic.spend.day_output_tokens
+            ledger.anthropic.spend.day_output_tokens,
+            ledger.anthropic.spend.day_ticks
         ),
-        (165, 7)
+        (165, 7, CLAUDE_CACHED_TICKS)
     );
     let _ = std::fs::remove_dir_all(dir);
 }
