@@ -1,8 +1,12 @@
 //! Per-step copy-before-write for agent file edits.
 //!
 //! Store layout: `<config>/checkpoints/<conversation>/<step>/` with a
-//! `manifest.json` and opaque blobs. Shell writes are not covered in v1.
-//! Sensitive `$HOME` leaves (via [`grokhub_core::rewind_sensitive`]) are never
+//! `manifest.json` and opaque blobs. Before the first shell command of a
+//! step that may write, the whole workspace (minus ignored folders, `.git`
+//! and big files) is snapshotted into a content-addressed `objects/` store
+//! shared by the conversation's steps, so `/rewind step` can put back every
+//! file a shell command changed or deleted and move aside the ones it made.
+//! Unchanged files are found by size and mtime and cost no copy. Sensitive `$HOME` leaves (via [`grokhub_core::rewind_sensitive`]) are never
 //! copied. Retention keeps the last [`MAX_RUNS`] conversation runs or
 //! [`MAX_BYTES`] of store, whichever bound hits first.
 
@@ -21,10 +25,19 @@ use crate::perm;
 pub const MAX_RUNS: usize = 20;
 /// Soft size cap for the whole checkpoints tree (200 MB).
 pub const MAX_BYTES: u64 = 200 * 1024 * 1024;
-/// Maximum workspace files snapshotted before a single mutating shell command.
-const MAX_SHELL_SNAPSHOT_FILES: usize = 32;
-/// Skip individual files larger than 4 MB during pre-shell auto-snapshotting.
-const MAX_SHELL_SNAPSHOT_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// Most files a workspace snapshot walks. Past it the snapshot is partial,
+/// and a restore of it moves no new files aside, since it can't tell them
+/// from files it never saw.
+const SNAPSHOT_MAX_FILES: usize = 20_000;
+/// Most new bytes one workspace snapshot copies into the store. Files past it
+/// are left out (and a restore leaves them alone).
+const SNAPSHOT_MAX_NEW_BYTES: u64 = 64 * 1024 * 1024;
+/// Files larger than this are left out of a workspace snapshot.
+const SNAPSHOT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// A cached object is reused only for a file whose mtime is at least this
+/// much older than when it was hashed, so a write in the same clock tick as
+/// the hash can't hide behind an unchanged size and mtime (git's "racy" rule).
+const RACY_NANOS: u128 = 2_000_000_000;
 
 thread_local! {
     static ACTIVE: RefCell<Option<Active>> = const { RefCell::new(None) };
@@ -42,6 +55,47 @@ struct Manifest {
     step: u64,
     created_at: u64,
     files: Vec<FileEntry>,
+    /// The workspace as it stood before the step's first shell command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot: Option<Snapshot>,
+}
+
+/// The workspace before a shell command: every walked file, by path under
+/// `root`, with its object in the conversation's `objects/` store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct Snapshot {
+    /// Canonical workspace root with `/` separators.
+    root: String,
+    /// The command it was taken before, redacted and cut, for the listing.
+    command: String,
+    files: Vec<SnapFile>,
+    /// Files walked but not copied (too big, over budget, unreadable or
+    /// sensitive): a restore neither writes them nor moves them aside.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    left_out: Vec<String>,
+    /// The walk saw the whole workspace; only then may a restore move aside
+    /// files the snapshot doesn't hold.
+    complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SnapFile {
+    /// Path under the snapshot root, `/` separated.
+    path: String,
+    /// SHA-256 hex of the bytes, the file's name under `objects/`.
+    object: String,
+}
+
+/// Last known object for a path, so an unchanged file isn't read again.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexEntry {
+    len: u64,
+    mtime: u128,
+    hashed_at: u128,
+    object: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +142,7 @@ pub fn begin_step(conversation_id: &str) -> Option<u64> {
         step,
         created_at: now_secs(),
         files: Vec::new(),
+        snapshot: None,
     };
     if let Err(err) = save_manifest(&dir, &manifest) {
         eprintln!("file_checkpoint: could not write manifest: {err}");
@@ -130,8 +185,9 @@ pub fn before_write(path: &Path) {
         step: active.step,
         created_at: now_secs(),
         files: Vec::new(),
+        snapshot: None,
     });
-    if manifest.files.iter().any(|f| f.path == key) {
+    if manifest.files.iter().any(|f| f.path == key) || in_snapshot(&manifest, &key) {
         return;
     }
     let entry = if path.is_file() {
@@ -233,49 +289,6 @@ const PACKAGE_WRITERS: &[(&str, &[&str])] = &[
 ];
 /// Shell words that come before the command they start: `then rm a.txt`.
 const KEYWORDS: &[&str] = &["if", "then", "else", "elif", "do", "while", "until", "!"];
-/// Commands that may write, depending on their arguments or script: an
-/// interpreter, `chmod`, `install`, a `sed` or `perl` without `-i`.
-const MAY_WRITE: &[&str] = &[
-    "chmod",
-    "install",
-    "sed",
-    "perl",
-    "python",
-    "python3",
-    "node",
-    "ruby",
-    "sh",
-    "bash",
-    "zsh",
-    "pwsh",
-    "powershell",
-];
-
-/// True when `command` looks like it may create, modify, or delete workspace
-/// files (Card 957), for a snapshot before it runs. Wider than
-/// [`changes_files`] on purpose: any `>` and any command that may write
-/// counts, quoted words too (`bash -c "rm a.txt"` runs them). Pure read-only
-/// inspection commands return `false`.
-pub fn is_potentially_mutating_shell(command: &str) -> bool {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    if trimmed.contains('>') || changes_files(trimmed) {
-        return true;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    lower.split_whitespace().any(|raw| {
-        let tok = raw
-            .trim_matches(|c: char| matches!(c, '\'' | '"' | ';' | '(' | ')' | '{' | '}'))
-            .rsplit('/')
-            .next()
-            .unwrap_or("");
-        WRITERS.contains(&tok) || MAY_WRITE.contains(&tok)
-    }) || GIT_WRITERS
-        .iter()
-        .any(|sub| lower.contains(&format!("git {sub}")))
-}
 
 /// True when `command` clearly changes files: a redirect that writes a file
 /// (not `2>&1` or `> /dev/null`), or a command whose program writes
@@ -501,50 +514,421 @@ fn commands(command: &str) -> Vec<Vec<&str>> {
     out
 }
 
-/// Snapshot workspace files referenced by a potentially mutating shell command
-/// (Card 957) so shell mutations can be undone via `/rewind step`.
+/// Snapshot the whole workspace before a shell command that may write
+/// (Card 957), so `/rewind step` can undo anything it did to the tree:
+/// changed and deleted files come back, new ones are moved aside.
 ///
-/// No-op when there is no active step or when the command is read-only.
-/// Returns the number of existing workspace files snapshotted.
+/// No-op when there is no active step, the command is read-only, or the step
+/// already holds a snapshot (the first one is the state before the step).
+/// Returns the number of files the step's snapshot holds.
 pub fn before_shell(workspace: &Path, command: &str) -> usize {
-    let has_active = ACTIVE.with(|slot| slot.borrow().is_some());
-    if !has_active || !is_potentially_mutating_shell(command) {
-        return 0;
-    }
-    let Ok(ws_canon) = workspace.canonicalize() else {
+    let Some(active) = ACTIVE.with(|slot| slot.borrow().clone()) else {
         return 0;
     };
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    for raw in command.split_whitespace() {
-        let cleaned = raw
-            .trim_start_matches(['>', '<', '&', '|', ';'])
-            .trim_matches(|c: char| matches!(c, '\'' | '"' | ';' | ',' | ')' | '('));
-        if cleaned.is_empty() || cleaned.starts_with('-') {
+    if reads_only(command) {
+        return 0;
+    }
+    let Ok(root) = workspace.canonicalize() else {
+        return 0;
+    };
+    let dir = step_dir(&active.conversation, active.step);
+    let mut manifest = load_manifest(&dir).unwrap_or_else(|| Manifest {
+        step: active.step,
+        created_at: now_secs(),
+        files: Vec::new(),
+        snapshot: None,
+    });
+    if let Some(snap) = &manifest.snapshot {
+        return snap.files.len();
+    }
+    let Some(snap) = take_snapshot(&active.conversation, &root, command) else {
+        return 0;
+    };
+    let count = snap.files.len();
+    manifest.snapshot = Some(snap);
+    if let Err(err) = save_manifest(&dir, &manifest) {
+        eprintln!("file_checkpoint: could not write manifest: {err}");
+        return 0;
+    }
+    prune_keeping(Some(&active.conversation));
+    count
+}
+
+/// Programs that only read the tree whatever their arguments, lowercased.
+const READERS: &[&str] = &[
+    "ls",
+    "dir",
+    "cat",
+    "type",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "wc",
+    "pwd",
+    "echo",
+    "printf",
+    "which",
+    "where",
+    "whereis",
+    "stat",
+    "file",
+    "du",
+    "df",
+    "tree",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "jq",
+    "diff",
+    "cmp",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "date",
+    "env",
+    "printenv",
+    "true",
+    "false",
+    "test",
+    "uname",
+    "whoami",
+    "hostname",
+    "get-content",
+    "gc",
+    "get-childitem",
+    "gci",
+    "select-string",
+    "sls",
+    "get-item",
+    "gi",
+    "get-location",
+    "gl",
+    "test-path",
+    "resolve-path",
+    "measure-object",
+    "write-output",
+    "write-host",
+];
+
+/// `git` subcommands that only read the tree.
+const GIT_READERS: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "blame",
+    "ls-files",
+    "ls-tree",
+    "rev-parse",
+    "rev-list",
+    "describe",
+    "shortlog",
+    "grep",
+    "cat-file",
+    "whatchanged",
+];
+
+/// True when every command in `command` plainly only reads (`git status`,
+/// `cat a | grep b`); anything else, a build or test runner included, gets a
+/// workspace snapshot first. `sort -o`, `find`, and git with `-c` or
+/// `--output` may write, so they don't count as reads.
+fn reads_only(command: &str) -> bool {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed.contains('>') || changes_files(trimmed) {
+        return false;
+    }
+    let body = without_heredoc_bodies(trimmed);
+    let cmds = commands(&body);
+    !cmds.is_empty()
+        && cmds.iter().all(|words| {
+            let Some((name, args)) = program(words) else {
+                return true;
+            };
+            if name == "git" {
+                let risky = args
+                    .iter()
+                    .any(|a| matches!(*a, "-c" | "--config-env") || a.starts_with("--output"));
+                return !risky
+                    && git_subcommand(args)
+                        .is_some_and(|(sub, _)| GIT_READERS.contains(&sub.as_str()));
+            }
+            let writes_out = name == "sort"
+                && args
+                    .iter()
+                    .any(|a| a.starts_with("-o") || a.starts_with("--output"));
+            READERS.contains(&name.as_str()) && !writes_out
+        })
+}
+
+/// `key` is a file the step's workspace snapshot already holds, so its
+/// earlier bytes are kept and a later copy-before-write would only keep a
+/// newer state.
+fn in_snapshot(manifest: &Manifest, key: &str) -> bool {
+    let Some(snap) = &manifest.snapshot else {
+        return false;
+    };
+    key.strip_prefix(snap.root.as_str())
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|rel| snap.files.iter().any(|f| f.path == rel))
+}
+
+/// A root a snapshot may walk: not a drive or filesystem root, not `$HOME`
+/// itself and not a sensitive leaf under it.
+fn snapshot_root_ok(key: &str, home: &str) -> bool {
+    let plain = key
+        .strip_prefix("//?/")
+        .unwrap_or(key)
+        .trim_end_matches('/');
+    let home = home.trim_end_matches('/');
+    let drive_root = plain.len() <= 2 && plain.ends_with(':');
+    !(plain.is_empty()
+        || drive_root
+        || (!home.is_empty() && plain.eq_ignore_ascii_case(home))
+        || grokhub_core::rewind_sensitive(plain, home))
+}
+
+/// The workspace's regular files, as the grep tool walks it: `.gitignore`d
+/// and `.git` left out, dotfiles in, links not followed. The flag is false
+/// when the walk stopped at `limit` files.
+fn walk_files(root: &Path, limit: usize) -> (Vec<(PathBuf, String)>, bool) {
+    let walker = ignore::WalkBuilder::new(root)
+        .standard_filters(false)
+        .follow_links(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .require_git(false)
+        .hidden(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .filter_entry(|ent| ent.file_name() != ".git")
+        .build();
+    let mut out = Vec::new();
+    for ent in walker.flatten() {
+        if !ent.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let path = if Path::new(cleaned).is_absolute() {
-            PathBuf::from(cleaned)
-        } else {
-            ws_canon.join(cleaned)
+        let Ok(rel) = ent.path().strip_prefix(root) else {
+            continue;
         };
-        if let Ok(canon) = path.canonicalize()
-            && canon.starts_with(&ws_canon)
-            && canon.is_file()
-            && fs::metadata(&canon)
-                .map(|m| m.len() <= MAX_SHELL_SNAPSHOT_FILE_BYTES)
-                .unwrap_or(false)
-            && !candidates.contains(&canon)
-        {
-            candidates.push(canon);
-            if candidates.len() >= MAX_SHELL_SNAPSHOT_FILES {
-                break;
-            }
+        if out.len() >= limit {
+            return (out, false);
         }
+        let rel = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        out.push((ent.path().to_path_buf(), rel));
     }
-    for path in &candidates {
-        before_write(path);
+    (out, true)
+}
+
+fn take_snapshot(conv: &str, root: &Path, command: &str) -> Option<Snapshot> {
+    let home = grokhub_core::user_home()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let root_key = path_key(root);
+    if !snapshot_root_ok(&root_key, &home) {
+        return None;
     }
-    candidates.len()
+    let objects = conv_dir(conv).join("objects");
+    if let Err(err) = fs::create_dir_all(&objects) {
+        eprintln!("file_checkpoint: could not create object store: {err}");
+        return None;
+    }
+    let mut index = load_index(conv);
+    let (walked, complete) = walk_files(root, SNAPSHOT_MAX_FILES);
+    let mut files = Vec::new();
+    let mut left_out = Vec::new();
+    let mut new_bytes = 0u64;
+    for (path, rel) in walked {
+        let key = path_key(&path);
+        let meta = fs::metadata(&path).ok();
+        let len = meta.as_ref().map(|m| m.len());
+        if grokhub_core::rewind_sensitive(&key, &home)
+            || len.is_none_or(|n| n > SNAPSHOT_MAX_FILE_BYTES)
+        {
+            left_out.push(rel);
+            continue;
+        }
+        let len = len.unwrap_or(0);
+        let mtime = meta.as_ref().map(mtime_nanos).unwrap_or(0);
+        let cached = index.get(&key).filter(|e| {
+            e.len == len
+                && e.mtime == mtime
+                && e.hashed_at >= mtime.saturating_add(RACY_NANOS)
+                && objects.join(&e.object).is_file()
+        });
+        if let Some(hit) = cached {
+            files.push(SnapFile {
+                path: rel,
+                object: hit.object.clone(),
+            });
+            continue;
+        }
+        if new_bytes.saturating_add(len) > SNAPSHOT_MAX_NEW_BYTES {
+            left_out.push(rel);
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            left_out.push(rel);
+            continue;
+        };
+        let object = sha_hex(&bytes);
+        let dest = objects.join(&object);
+        if !dest.is_file() {
+            if let Err(err) = write_object(&dest, &bytes) {
+                eprintln!("file_checkpoint: could not store {}: {err}", path.display());
+                left_out.push(rel);
+                continue;
+            }
+            new_bytes = new_bytes.saturating_add(bytes.len() as u64);
+        }
+        index.insert(
+            key,
+            IndexEntry {
+                len: bytes.len() as u64,
+                mtime,
+                hashed_at: now_nanos(),
+                object: object.clone(),
+            },
+        );
+        files.push(SnapFile { path: rel, object });
+    }
+    save_index(conv, &index);
+    let command = grokhub_core::redact_secrets(command.trim());
+    let mut shown: String = command.chars().take(60).collect();
+    if shown.len() < command.len() {
+        shown.push('…');
+    }
+    Some(Snapshot {
+        root: root_key,
+        command: shown,
+        files,
+        left_out,
+        complete,
+    })
+}
+
+/// Put the workspace back as `snap` holds it. Files it holds are rewritten
+/// when they differ; when the walk was complete, files it never saw are moved
+/// into `stash`. Returns (written, moved aside).
+fn restore_snapshot(
+    conv: &str,
+    snap: &Snapshot,
+    stash: &Path,
+    home: &str,
+) -> Result<(usize, usize), String> {
+    let root = PathBuf::from(snap.root.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let objects = conv_dir(conv).join("objects");
+    let mut written = 0usize;
+    for f in &snap.files {
+        let path = root.join(f.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if grokhub_core::rewind_sensitive(&path_key(&path), home) {
+            continue;
+        }
+        let bytes = fs::read(objects.join(&f.object))
+            .map_err(|e| format!("missing snapshot bytes for {}: {e}", f.path))?;
+        if fs::read(&path).is_ok_and(|now| now == bytes) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create parent: {e}"))?;
+        }
+        fs::write(&path, &bytes).map_err(|e| format!("restore {}: {e}", f.path))?;
+        written += 1;
+    }
+    let mut moved = 0usize;
+    if !snap.complete {
+        return Ok((written, moved));
+    }
+    let known: std::collections::HashSet<&str> = snap
+        .files
+        .iter()
+        .map(|f| f.path.as_str())
+        .chain(snap.left_out.iter().map(String::as_str))
+        .collect();
+    let (now, _) = walk_files(&root, SNAPSHOT_MAX_FILES.saturating_mul(2));
+    for (path, rel) in now {
+        let key = path_key(&path);
+        if known.contains(rel.as_str()) || grokhub_core::rewind_sensitive(&key, home) {
+            continue;
+        }
+        // A big new file stays where it is: the undo snapshot can't hold it.
+        if fs::metadata(&path).is_ok_and(|m| m.len() > SNAPSHOT_MAX_FILE_BYTES) {
+            continue;
+        }
+        let dest = stash.join(blob_name(&key));
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if fs::rename(&path, &dest).is_err() {
+            copy_file_bytes(&path, &dest)?;
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+        moved += 1;
+    }
+    Ok((written, moved))
+}
+
+fn index_path(conv: &str) -> PathBuf {
+    conv_dir(conv).join("objects").join("index.json")
+}
+
+fn load_index(conv: &str) -> std::collections::HashMap<String, IndexEntry> {
+    fs::read(index_path(conv))
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_index(conv: &str, index: &std::collections::HashMap<String, IndexEntry>) {
+    if let Ok(raw) = serde_json::to_vec(index) {
+        let _ = fs::write(index_path(conv), raw);
+    }
+}
+
+/// Write an object whole or not at all, so a crash can't leave a torn one
+/// under its hash.
+fn write_object(dest: &Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp = dest.with_extension(format!("tmp{}", std::process::id()));
+    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, dest).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+fn sha_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn mtime_nanos(meta: &fs::Metadata) -> u128 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 /// Steps for a conversation, oldest first.
@@ -567,13 +951,24 @@ pub fn list_steps(conversation_id: &str) -> Vec<StepInfo> {
         .filter_map(|step| {
             let dir = step_dir(&conv, step);
             let m = load_manifest(&dir)?;
-            if m.files.is_empty() {
+            if m.files.is_empty() && m.snapshot.is_none() {
                 return None;
+            }
+            let mut files: Vec<String> = m.files.iter().map(|f| display_path(&f.path)).collect();
+            if let Some(snap) = &m.snapshot {
+                files.insert(
+                    0,
+                    format!(
+                        "workspace before `{}` ({} files)",
+                        snap.command,
+                        snap.files.len()
+                    ),
+                );
             }
             Some(StepInfo {
                 step: m.step,
                 created_at: m.created_at,
-                files: m.files.iter().map(|f| display_path(&f.path)).collect(),
+                files,
             })
         })
         .collect()
@@ -610,14 +1005,25 @@ pub fn restore_step(conversation_id: &str, step: u64) -> Result<String, String> 
     let src_dir = step_dir(&conv, step);
     let manifest =
         load_manifest(&src_dir).ok_or_else(|| format!("No checkpoint for step {step}"))?;
-    if manifest.files.is_empty() {
+    if manifest.files.is_empty() && manifest.snapshot.is_none() {
         return Err(format!("Step {step} has no files"));
     }
-    // Undo step: snapshot current bytes for every path we are about to change.
+    // Undo step: snapshot current bytes for every path we are about to change,
+    // and the whole workspace when the step holds a workspace snapshot.
     let undo = begin_step(&conv).ok_or_else(|| "Could not open undo step".to_string())?;
     for entry in &manifest.files {
         let path = PathBuf::from(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
         before_write(&path);
+    }
+    if let Some(snap) = &manifest.snapshot {
+        let root = PathBuf::from(snap.root.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let undo_dir = step_dir(&conv, undo);
+        if let Some(mut undo_manifest) = load_manifest(&undo_dir)
+            && let Some(now) = take_snapshot(&conv, &root, "/rewind step")
+        {
+            undo_manifest.snapshot = Some(now);
+            save_manifest(&undo_dir, &undo_manifest)?;
+        }
     }
     ACTIVE.with(|slot| *slot.borrow_mut() = None);
 
@@ -626,6 +1032,13 @@ pub fn restore_step(conversation_id: &str, step: u64) -> Result<String, String> 
         .unwrap_or_default();
     let mut restored = 0usize;
     let mut removed = 0usize;
+    // The snapshot is the state before the step's first shell command; a
+    // file's own copy, taken before any edit, is older still, so it goes last.
+    if let Some(snap) = &manifest.snapshot {
+        let (written, moved) = restore_snapshot(&conv, snap, &src_dir.join("removed"), &home)?;
+        restored += written;
+        removed += moved;
+    }
     for entry in &manifest.files {
         if grokhub_core::rewind_sensitive(&entry.path, &home) {
             continue;
@@ -995,11 +1408,11 @@ mod tests {
         let step = begin_step("conv-shell").unwrap();
 
         // Read-only command does not snapshot.
-        assert!(!is_potentially_mutating_shell("git status"));
+        assert!(reads_only("git status"));
         assert_eq!(before_shell(&ws, "cat notes.txt"), 0);
 
         // Mutating shell command snapshots referenced workspace file.
-        assert!(is_potentially_mutating_shell("rm -f notes.txt"));
+        assert!(!reads_only("rm -f notes.txt"));
         assert_eq!(before_shell(&ws, "rm -f notes.txt"), 1);
 
         // Simulate shell mutation (deletion) and rewind.
@@ -1014,22 +1427,22 @@ mod tests {
 
     #[test]
     fn powershell_writers_and_any_case_get_a_snapshot() {
-        assert!(is_potentially_mutating_shell("Set-Content a.txt x"));
-        assert!(is_potentially_mutating_shell(
+        assert!(!reads_only("Set-Content a.txt x"));
+        assert!(!reads_only(
             "(Get-Content a.rs) -replace 'a','b' | Set-Content a.rs"
         ));
-        assert!(is_potentially_mutating_shell("Remove-Item -Recurse build"));
-        assert!(is_potentially_mutating_shell("RM -f notes.txt"));
+        assert!(!reads_only("Remove-Item -Recurse build"));
+        assert!(!reads_only("RM -f notes.txt"));
         // Windows PowerShell 5.1's short names.
-        assert!(is_potentially_mutating_shell("del a.txt"));
-        assert!(is_potentially_mutating_shell("copy a b"));
-        assert!(is_potentially_mutating_shell("Clear-Content a.txt"));
-        assert!(is_potentially_mutating_shell("Tee-Object -FilePath a.txt"));
-        assert!(!is_potentially_mutating_shell("Get-Content a.txt"));
-        assert!(!is_potentially_mutating_shell("git status"));
+        assert!(!reads_only("del a.txt"));
+        assert!(!reads_only("copy a b"));
+        assert!(!reads_only("Clear-Content a.txt"));
+        assert!(!reads_only("Tee-Object -FilePath a.txt"));
+        assert!(reads_only("Get-Content a.txt"));
+        assert!(reads_only("git status"));
         // Still as wide as before: an interpreter, or any `>`.
-        assert!(is_potentially_mutating_shell("python -m pytest"));
-        assert!(is_potentially_mutating_shell("cargo test 2>&1 | tail -5"));
+        assert!(!reads_only("python -m pytest"));
+        assert!(!reads_only("cargo test 2>&1 | tail -5"));
     }
 
     #[test]
@@ -1093,7 +1506,7 @@ mod tests {
             "Clear-Content a.txt",
         ] {
             assert!(changes_files(cmd), "{cmd}");
-            assert!(is_potentially_mutating_shell(cmd), "{cmd}");
+            assert!(!reads_only(cmd), "{cmd}");
         }
         for cmd in [
             "cargo test 2>&1 | tail -5",
@@ -1128,5 +1541,157 @@ mod tests {
         ] {
             assert!(!changes_files(cmd), "{cmd}");
         }
+    }
+
+    #[test]
+    fn a_shell_step_rewinds_the_whole_workspace_and_undoes_cleanly() {
+        let (base, ws, _guard) = scratch("wsnap");
+        fs::write(ws.join(".gitignore"), "build/\n").unwrap();
+        fs::create_dir_all(ws.join("src")).unwrap();
+        fs::create_dir_all(ws.join("build")).unwrap();
+        fs::write(ws.join("src/lib.rs"), b"fn old() {}").unwrap();
+        fs::write(ws.join("keep.txt"), b"keep me").unwrap();
+        fs::write(ws.join("build/out.bin"), b"ignored output").unwrap();
+
+        let step = begin_step("conv-ws").unwrap();
+        // The command names no file: the snapshot doesn't guess from it.
+        assert_eq!(before_shell(&ws, "python tool.py"), 3);
+        // What the command did: changed one file, deleted one, made two
+        // (one in a new folder), and rebuilt the ignored output.
+        fs::write(ws.join("src/lib.rs"), b"fn new() {}").unwrap();
+        fs::remove_file(ws.join("keep.txt")).unwrap();
+        fs::write(ws.join("made.txt"), b"made").unwrap();
+        fs::create_dir_all(ws.join("gen")).unwrap();
+        fs::write(ws.join("gen/x.rs"), b"generated").unwrap();
+        fs::write(ws.join("build/out.bin"), b"rebuilt").unwrap();
+
+        let shown = format_steps("conv-ws");
+        assert!(
+            shown.contains("workspace before `python tool.py` (3 files)"),
+            "{shown}"
+        );
+        let msg = restore_step("conv-ws", step).unwrap();
+        assert!(
+            msg.contains("2 file(s), 2 new file(s) moved aside"),
+            "{msg}"
+        );
+        assert_eq!(fs::read(ws.join("src/lib.rs")).unwrap(), b"fn old() {}");
+        assert_eq!(fs::read(ws.join("keep.txt")).unwrap(), b"keep me");
+        assert!(!ws.join("made.txt").exists());
+        assert!(!ws.join("gen/x.rs").exists());
+        // Ignored folders are neither snapshotted nor touched.
+        assert_eq!(fs::read(ws.join("build/out.bin")).unwrap(), b"rebuilt");
+
+        // The restore's own undo step puts the command's result back.
+        let undo = list_steps("conv-ws").last().unwrap().step;
+        assert_ne!(undo, step);
+        restore_step("conv-ws", undo).unwrap();
+        assert_eq!(fs::read(ws.join("src/lib.rs")).unwrap(), b"fn new() {}");
+        assert!(!ws.join("keep.txt").exists());
+        assert_eq!(fs::read(ws.join("made.txt")).unwrap(), b"made");
+        assert_eq!(fs::read(ws.join("gen/x.rs")).unwrap(), b"generated");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_step_keeps_its_first_snapshot_and_its_earliest_bytes() {
+        let (base, ws, _guard) = scratch("wfirst");
+        let path = ws.join("a.txt");
+        fs::write(&path, b"v1").unwrap();
+        let step = begin_step("conv-first").unwrap();
+        assert_eq!(before_shell(&ws, "rm -f b.txt"), 1);
+        fs::write(&path, b"v2").unwrap();
+        fs::write(ws.join("b.txt"), b"later").unwrap();
+        // A second shell command and an edit in the same step keep v1.
+        assert_eq!(before_shell(&ws, "rm -f a.txt"), 1);
+        before_write(&path);
+        fs::write(&path, b"v3").unwrap();
+        let m = load_manifest(&step_dir("conv-first", step)).unwrap();
+        assert!(m.files.is_empty(), "{:?}", m.files);
+        restore_step("conv-first", step).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"v1");
+        assert!(!ws.join("b.txt").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unchanged_files_add_no_bytes_to_the_store() {
+        let (base, ws, _guard) = scratch("wdedupe");
+        fs::write(ws.join("a.txt"), b"same").unwrap();
+        fs::write(ws.join("b.txt"), b"same").unwrap();
+        let objects = conv_dir("conv-dedupe").join("objects");
+        let count = || {
+            fs::read_dir(&objects)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name() != "index.json")
+                .count()
+        };
+        begin_step("conv-dedupe").unwrap();
+        assert_eq!(before_shell(&ws, "make"), 2);
+        assert_eq!(count(), 1);
+        begin_step("conv-dedupe").unwrap();
+        assert_eq!(before_shell(&ws, "make"), 2);
+        assert_eq!(count(), 1);
+        fs::write(ws.join("a.txt"), b"changed").unwrap();
+        begin_step("conv-dedupe").unwrap();
+        before_shell(&ws, "make");
+        assert_eq!(count(), 2);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_big_file_is_left_out_and_left_alone() {
+        let (base, ws, _guard) = scratch("wbig");
+        let big = vec![b'x'; (SNAPSHOT_MAX_FILE_BYTES + 1) as usize];
+        fs::write(ws.join("big.bin"), &big).unwrap();
+        fs::write(ws.join("small.txt"), b"s").unwrap();
+        let step = begin_step("conv-big").unwrap();
+        assert_eq!(before_shell(&ws, "make"), 1);
+        fs::write(ws.join("big.bin"), b"shrunk").unwrap();
+        restore_step("conv-big", step).unwrap();
+        // Not in the snapshot, so not moved aside as new either.
+        assert_eq!(fs::read(ws.join("big.bin")).unwrap(), b"shrunk");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn only_a_plain_read_skips_the_snapshot() {
+        for cmd in [
+            "git status",
+            "cat a.txt | grep x",
+            "ls -la && git diff HEAD~1",
+            "Get-Content a.txt",
+            "rg foo src",
+            "",
+        ] {
+            assert!(reads_only(cmd), "{cmd}");
+        }
+        for cmd in [
+            "make",
+            "cargo build",
+            "npm run build",
+            "./gen.sh",
+            "cat a > b",
+            "git checkout -- a.txt",
+            "git -c diff.external=x diff",
+            "git diff --output=patch.txt",
+            "sort -o a.txt a.txt",
+            "find . -delete",
+            "ls && rm a",
+        ] {
+            assert!(!reads_only(cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_snapshot_never_walks_home_or_a_filesystem_root() {
+        assert!(!snapshot_root_ok("/", "/home/v"));
+        assert!(!snapshot_root_ok("/home/v", "/home/v"));
+        assert!(!snapshot_root_ok("C:", "C:/Users/v"));
+        assert!(!snapshot_root_ok("//?/C:/Users/V", "C:/Users/v"));
+        assert!(!snapshot_root_ok("/home/v/.ssh", "/home/v"));
+        assert!(snapshot_root_ok("/home/v/code/app", "/home/v"));
+        assert!(snapshot_root_ok("//?/C:/Users/v/code", "C:/Users/v"));
     }
 }
