@@ -18,7 +18,11 @@ import {
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
+import { RAIL_SECTIONS, type RailMode, type RailPrefs, type RailSectionDef, type RailSectionId } from "./railPrefs";
 import { useModalFocus } from "./ui";
+
+export type { RailMode, RailPrefs, RailSectionDef, RailSectionId };
+export { RAIL_SECTIONS };
 
 export type View =
   | "home"
@@ -170,19 +174,50 @@ export function hasPage(caps: Capabilities, view: View): boolean {
   return pageViews(caps).includes(view);
 }
 
-/** The pages on the left rail, top to bottom; Settings sits at the rail's foot. */
+/** Simple-mode rail, top to bottom; Settings sits at the rail's foot. */
 export const RAIL: readonly View[] = ["home", "chat", "code", "pulse", "library", "settings"];
 
-/** The rail pages this platform has. */
-export function railViews(caps: Capabilities): View[] {
-  const shown = views(caps);
-  return RAIL.filter((view) => shown.includes(view));
+/** Optional Sidebar v2 prefs; omitted means Simple with no pins. */
+export type RailNavOpts = Pick<RailPrefs, "mode" | "pinned">;
+
+/** Pages available on this platform, minus Settings (foot) and already listed. */
+function availablePages(caps: Capabilities, skip: ReadonlySet<string>): View[] {
+  return pageViews(caps).filter((view) => view !== "settings" && !skip.has(view));
+}
+
+/** The rail pages this platform has. Simple keeps the chat-first set plus pins;
+ * Advanced puts every page on the rail (Settings still at the foot). */
+export function railViews(caps: Capabilities, opts: RailNavOpts = { mode: "simple", pinned: [] }): View[] {
+  const shown = new Set<string>(pageViews(caps));
+  const pinned: View[] = opts.pinned.filter((view) => shown.has(view) && view !== "settings");
+  if (opts.mode === "advanced") {
+    const rest = availablePages(caps, new Set(pinned));
+    return shown.has("settings") ? [...pinned, ...rest, "settings"] : [...pinned, ...rest];
+  }
+  const core = RAIL.filter((view) => shown.has(view));
+  const top: View[] = core.filter((view) => view !== "settings");
+  const extra = pinned.filter((view) => !top.includes(view));
+  return core.includes("settings") ? [...top, ...extra, "settings"] : [...top, ...extra];
 }
 
 /** The pages the rail's More opens: every page that is not on the rail. */
-export function moreViews(caps: Capabilities): View[] {
-  const rail = railViews(caps);
-  return pageViews(caps).filter((view) => !rail.includes(view));
+export function moreViews(caps: Capabilities, opts: RailNavOpts = { mode: "simple", pinned: [] }): View[] {
+  const rail = new Set<string>(railViews(caps, opts));
+  return pageViews(caps).filter((view) => !rail.has(view));
+}
+
+/** Advanced-mode groups with only the pages this platform has, pins omitted
+ * (they sit above the groups). Empty groups are dropped. */
+export function railSections(
+  caps: Capabilities,
+  opts: RailNavOpts = { mode: "advanced", pinned: [] },
+): RailSectionDef[] {
+  const pinned = new Set<string>(opts.pinned);
+  const shown = new Set<string>(pageViews(caps));
+  return RAIL_SECTIONS.map((section) => ({
+    ...section,
+    views: section.views.filter((view) => shown.has(view) && !pinned.has(view)),
+  })).filter((section) => section.views.length > 0);
 }
 
 /** Words a Settings section answers to beyond its name, so "dark" or "theme"
