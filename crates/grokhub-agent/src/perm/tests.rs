@@ -2064,6 +2064,7 @@ fn a_rendered_command_reads_back_as_the_same_words() {
 }
 
 /// The file a long shell output's cut marker names, as the model reads it.
+#[cfg(unix)]
 fn marker_path(output: &str) -> Option<String> {
     let rest = output.split("The whole output is in `").nth(1)?;
     rest.split('`').next().map(str::to_string)
@@ -2121,10 +2122,12 @@ fn the_gate_lets_read_file_reach_a_saved_output_of_its_own_workspace_only() {
 }
 
 /// Runs a long command, then reads back the lines its cut marker names.
+#[cfg(unix)]
 struct ReadsTheMarker {
     requests: AtomicUsize,
 }
 
+#[cfg(unix)]
 impl ModelClient for ReadsTheMarker {
     fn stream(
         &self,
