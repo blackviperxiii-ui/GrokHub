@@ -285,17 +285,25 @@ pub fn plan(n: Now<'_>) -> Plan {
         || stays_big(&n, running, why, stand_in);
     // A chat's ask is the person's own word: it skips the cooldown, the wait
     // for a quiet chat and the app's own background requests, but never
-    // swaps a model mid-reply.
+    // swaps a model mid-reply. Entering or leaving the 18+ specialist swaps
+    // right away too so explicit chat never sticks to coding, file or casual
+    // turns.
     let asked = n.chat.is_some();
+    let leaving_adult =
+        why == Some(StandIn::BestFor(TaskKind::Adult)) && n.task != Some(TaskKind::Adult);
+    let entering_adult = stand_in == Some(StandIn::BestFor(TaskKind::Adult))
+        && why != Some(StandIn::BestFor(TaskKind::Adult));
+    let adult_boundary = leaving_adult || entering_adult;
     let busy = if asked {
         replies_in_flight(&n)
     } else {
         n.in_flight
     };
-    if settled || busy > 0 || (!asked && n.secs_since_swap < SWAP_COOLDOWN_SECS) {
+    if settled || busy > 0 || (!asked && !adult_boundary && n.secs_since_swap < SWAP_COOLDOWN_SECS)
+    {
         return Plan::Keep;
     }
-    if asked {
+    if asked || adult_boundary {
         return Plan::Load {
             model: target,
             stand_in,
@@ -337,7 +345,14 @@ fn stays_big(
     if n.chat.is_some() || target_why.is_some() || n.scale.gaming {
         return false;
     }
-    if let Some(StandIn::BestFor(_)) = why {
+    if let Some(StandIn::BestFor(prev)) = why {
+        // An 18+ specialist never lingers once the turn is no longer explicit,
+        // and any task specialist yields when a different non-chat task arrives
+        // (such as coding when `home` itself is the coding pick).
+        if prev == TaskKind::Adult || matches!(n.task, Some(k) if k != TaskKind::Chat && k != prev)
+        {
+            return false;
+        }
         // A model picked for the last task stays for everyday chat in
         // between, while it still fits: back and forth would cost two loads.
         let (Some(m), Some(home)) = (catalog_for(running), catalog_for(n.home)) else {

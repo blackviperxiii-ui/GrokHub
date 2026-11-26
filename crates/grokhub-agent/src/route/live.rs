@@ -1123,7 +1123,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     if let Some(a) = &ask {
         route.rule_ids.splice(0..0, a.rules.iter().cloned());
         super::ask::remember(key, a.kind);
-        if !route.no_route && !key.is_empty() {
+        if !route.no_route && !key.is_empty() && !call.adult {
             keep_session_model(key, turn, route.base.as_deref().unwrap_or(&route.model));
         }
     }
@@ -1945,6 +1945,17 @@ pub fn stream_routed(
         return Ok(held);
     }
     let (text, needs_image) = last_user_text(&sent.input);
+    // Classify each user turn fresh: only an explicit newest ask or an active
+    // 18+ voice keeps a chat turn local. Background work still checks the full
+    // history so summaries never send explicit history online.
+    let ask_adult = super::adult::ask_explicit(&sent.input);
+    let must_stay = super::adult::voice_on(&sent.input);
+    let background = class.trim().starts_with("background:");
+    let turn_adult = if background {
+        super::adult::explicit(&sent.input)
+    } else {
+        ask_adult || must_stay
+    };
     let mut call = RouteCall {
         provider: super::PROVIDER_XAI,
         class,
@@ -1956,9 +1967,7 @@ pub fn stream_routed(
         needs_image,
         needs_tools: !req.tools.is_empty() || req.hosted_search,
         providers: true,
-        // Failover PR 6: the router hears the turn is explicit up
-        // front, from the same scrubbed input the guard below reads.
-        adult: super::adult::explicit(&sent.input),
+        adult: turn_adult,
         ..RouteCall::default()
     };
     let now = grokhub_core::now_ms();
@@ -1979,32 +1988,29 @@ pub fn stream_routed(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
-    // An 18+ voice keeps every turn of the chat here, so its voice stays here too.
-    let must_stay = super::adult::voice_on(&sent.input);
-    // 18+ chat runs on this computer's model only, never online. With none
-    // ready and an 18+ voice on, every turn gets the notice (with the
-    // self-check's reason) and nothing is sent: a clean ask in that voice is
-    // an 18+ turn too. With the voice off, it's decided per message: a clean
-    // ask still goes online with the chat's older 18+ parts left out; an 18+
-    // ask gets the notice. The app's own background work never goes online with it.
+    // 18+ asks and 18+ voices run on this computer's model only, never online.
+    // A clean turn in a normal chat that had older explicit turns strips those
+    // turns before going online so explicit content never leaves the machine
+    // and the explicit flag never sticks to later turns.
     let mut forced_adult_local = false;
     if super::adult::to_local(&sent.input, dest) {
-        match super::adult::no_local_notice() {
-            None => {
-                if user_bench.blocks_local() {
-                    return Err(ClientError::Protocol(
-                        "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
-                            .into(),
-                    ));
+        let stripped = !background
+            && !must_stay
+            && !ask_adult
+            && super::adult::leave_adult_out(&mut sent.input);
+        if !stripped {
+            match super::adult::no_local_notice() {
+                None => {
+                    if user_bench.blocks_local() {
+                        return Err(ClientError::Protocol(
+                            "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
+                                .into(),
+                        ));
+                    }
+                    on_device = true;
+                    forced_adult_local = true;
                 }
-                on_device = true;
-                forced_adult_local = true;
-            }
-            Some(notice) => {
-                let online = !class.trim().starts_with("background:")
-                    && !must_stay
-                    && super::adult::leave_adult_out(&mut sent.input);
-                if !online {
+                Some(notice) => {
                     note_here(class, &req.conversation_id, false, must_stay);
                     let out = super::adult::notice_answer(class, &notice)?;
                     sink(StreamEvent::TextDelta(out.text.clone()));
@@ -2017,6 +2023,16 @@ pub fn stream_routed(
     // the right voice.
     note_here(class, &req.conversation_id, on_device, must_stay);
     let mut active_decision = decision;
+    if forced_adult_local {
+        let rule = if ask_adult {
+            "adult:local_only"
+        } else {
+            "adult:voice_local"
+        };
+        if !active_decision.route.rule_ids.iter().any(|r| r == rule) {
+            active_decision.route.rule_ids.push(rule.into());
+        }
+    }
     let mut active_on_device = on_device;
     let mut active_on_provider = active_decision.on_provider() && !active_on_device;
     let mut active_model = if active_on_device && !active_decision.on_device() {
@@ -2112,11 +2128,13 @@ pub fn stream_routed(
     let mut out = Err(ClientError::Protocol("no route".into()));
     for attempt in 0..5 {
         if active_on_device {
-            let reason = if forced_adult_local {
-                "keeping explicit content on this computer"
-            } else {
-                super::local_live::routing_reason(&active_decision.route.rule_ids, last_fail_rule)
-            };
+            let reason = super::local_live::local_reason(
+                &active_decision.route.rule_ids,
+                last_fail_rule,
+                forced_adult_local,
+                ask_adult,
+                must_stay,
+            );
             super::local_live::note_route_reason(&req.conversation_id, reason);
             if !emitted_fallback_msg
                 && !class.trim().starts_with("background:")
