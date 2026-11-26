@@ -119,9 +119,9 @@ pub use eval::live::{
 };
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
 pub use eval::skills::{
-    render_report as render_skill_ablation, run_skill_ablation, run_skill_ablation_with,
-    write_results as write_skill_ablation_results, SkillAblationOpts, SkillAblationReport,
-    SkillArm, SkillAttempt,
+    fixtures as skill_ablation_fixtures, render_report as render_skill_ablation, run_skill_ablation,
+    run_skill_ablation_with, write_results as write_skill_ablation_results, SkillAblationOpts,
+    SkillAblationReport, SkillArm, SkillAttempt,
 };
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{

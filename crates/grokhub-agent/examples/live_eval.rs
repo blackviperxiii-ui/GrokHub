@@ -297,7 +297,8 @@ fn main() {
                     let _ = grokhub_agent::write_live_atomic(md, body.as_bytes());
                     let _ = grokhub_agent::write_skill_ablation_results(so_far, md);
                 }
-            });
+            },
+        );
         if let Some(why) = &report.stopped {
             eprintln!("stopped early: {why}");
         }

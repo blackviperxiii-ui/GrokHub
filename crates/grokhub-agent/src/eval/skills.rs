@@ -838,14 +838,38 @@ mod tests {
             })
         }
 
+        fn system_text(input: &[InputItem]) -> String {
+            input
+                .iter()
+                .filter_map(|item| match item {
+                    InputItem::Message { role, content }
+                        if role == "system" || role == "developer" =>
+                    {
+                        let parts: Vec<&str> = content
+                            .iter()
+                            .filter_map(|p| match p {
+                                ContentPart::InputText(t) => Some(t.as_str()),
+                                ContentPart::InputImage(_) => None,
+                            })
+                            .collect();
+                        Some(parts.join("\n"))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
         fn prompt_text(input: &[InputItem]) -> String {
             input
                 .iter()
                 .find_map(|item| match item {
-                    InputItem::Message { content, .. } => content.iter().find_map(|p| match p {
-                        ContentPart::InputText(t) => Some(t.clone()),
-                        ContentPart::InputImage(_) => None,
-                    }),
+                    InputItem::Message { role, content } if role == "user" => {
+                        content.iter().find_map(|p| match p {
+                            ContentPart::InputText(t) => Some(t.clone()),
+                            ContentPart::InputImage(_) => None,
+                        })
+                    }
                     _ => None,
                 })
                 .unwrap_or_default()
@@ -865,8 +889,9 @@ mod tests {
             _cancel: &CancelToken,
             sink: &mut dyn FnMut(StreamEvent),
         ) -> Result<TurnOutput, ClientError> {
+            let system = Self::system_text(&req.input);
             let prompt = Self::prompt_text(&req.input);
-            let fix = Self::active_fixture(&req.system, &prompt);
+            let fix = Self::active_fixture(&system, &prompt);
             let skill_loaded = Self::last_skill_output(&req.input);
 
             if let Some(body) = skill_loaded {
@@ -899,14 +924,13 @@ mod tests {
             }
 
             if let Some(case) = fix {
-                if req.system.contains(case.skill_name) {
+                if system.contains(case.skill_name) {
                     let call_id = format!("call-{}", case.skill_name);
                     return Ok(TurnOutput {
                         calls: vec![FunctionCall {
                             call_id,
                             name: "skill".to_string(),
                             arguments: format!("{{\"name\":\"{}\"}}", case.skill_name),
-                            thought_signature: None,
                         }],
                         usage: Usage {
                             input_tokens: 150,
@@ -965,7 +989,10 @@ mod tests {
         assert_eq!((full.input_tokens, full.output_tokens), (2_100, 540));
         assert!((full.cost_usd - 0.00030).abs() < 1e-12);
 
-        assert_eq!((trimmed.tries, trimmed.passed, trimmed.pass_rate), (6, 6, 1.0));
+        assert_eq!(
+            (trimmed.tries, trimmed.passed, trimmed.pass_rate),
+            (6, 6, 1.0)
+        );
         assert_eq!((trimmed.avg_turns, trimmed.avg_tool_calls), (2.0, 1.0));
         assert_eq!((trimmed.input_tokens, trimmed.output_tokens), (1_620, 420));
         assert!((trimmed.cost_usd - 0.00018).abs() < 1e-12);
@@ -1000,7 +1027,10 @@ mod tests {
         assert_eq!(parsed["suite"], "skills-v1");
         assert_eq!(parsed["arms"]["full"]["pass_rate"], 1.0);
         assert_eq!(parsed["arms"]["trimmed"]["input_tokens"], 1_620);
-        assert_eq!(parsed["deltas"]["full_vs_baseline"]["input_tokens_delta"], 1_500);
+        assert_eq!(
+            parsed["deltas"]["full_vs_baseline"]["input_tokens_delta"],
+            1_500
+        );
         assert_eq!(parsed["net_value"]["verdict"], "trim_recommended");
         assert!(parsed["arms"]["full"]["avg_turns"].is_number());
         assert!(parsed["arms"]["full"]["avg_tool_calls"].is_number());
@@ -1008,9 +1038,18 @@ mod tests {
         assert!(parsed["arms"]["full"]["wall_ms"].is_number());
 
         let md = render_report(&report);
-        assert!(md.contains("| baseline | 6 | 0.0% (0/6) | 1.00 | 0.00 | 600 | 120 |"), "{md}");
-        assert!(md.contains("| full | 6 | 100.0% (6/6) | 2.00 | 1.00 | 2100 | 540 |"), "{md}");
-        assert!(md.contains("| trimmed | 6 | 100.0% (6/6) | 2.00 | 1.00 | 1620 | 420 |"), "{md}");
+        assert!(
+            md.contains("| baseline | 6 | 0.0% (0/6) | 1.00 | 0.00 | 600 | 120 |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| full | 6 | 100.0% (6/6) | 2.00 | 1.00 | 2100 | 540 |"),
+            "{md}"
+        );
+        assert!(
+            md.contains("| trimmed | 6 | 100.0% (6/6) | 2.00 | 1.00 | 1620 | 420 |"),
+            "{md}"
+        );
         assert!(
             md.contains("| full_vs_baseline | +100.0% | +1.00 | +1.00 | +1500 | +420 |"),
             "{md}"
@@ -1067,13 +1106,13 @@ mod tests {
                         ..Default::default()
                     });
                 }
-                if req.system.contains("checklist-release") {
+                let system = ScriptedSkillClient::system_text(&req.input);
+                if system.contains("checklist-release") {
                     return Ok(TurnOutput {
                         calls: vec![FunctionCall {
                             call_id: "c1".into(),
                             name: "skill".into(),
                             arguments: r#"{"name":"checklist-release"}"#.into(),
-                            thought_signature: None,
                         }],
                         usage: Usage {
                             input_tokens: 40,

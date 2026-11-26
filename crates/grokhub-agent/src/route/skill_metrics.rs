@@ -301,8 +301,14 @@ mod tests {
                 100 + i,
             );
         }
-        m.note(&fact("skill-000", 1, 1, 10, 5, 100, "end_turn", true), 1_000);
-        m.note(&fact("skill-new", 1, 1, 10, 5, 100, "end_turn", true), 1_001);
+        m.note(
+            &fact("skill-000", 1, 1, 10, 5, 100, "end_turn", true),
+            1_000,
+        );
+        m.note(
+            &fact("skill-new", 1, 1, 10, 5, 100, "end_turn", true),
+            1_001,
+        );
         assert_eq!(m.skills.len(), SKILL_METRICS_CAP);
         assert!(m.skills.contains_key("skill-000"));
         assert!(!m.skills.contains_key("skill-001"));
