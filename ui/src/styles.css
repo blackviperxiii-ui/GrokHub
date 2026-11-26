@@ -5893,7 +5893,8 @@ button.primary:not(.quick-chip) {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  font-size: 0.9em;
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
 }
 
 /* Settings → Account: Sign in with Grok. */
