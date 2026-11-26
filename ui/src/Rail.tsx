@@ -21,13 +21,21 @@ const NARROW = "(max-width: 600px)";
 
 const STEP: Record<string, 1 | -1> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
 
-/** Arrow keys move between the rail's buttons, wrapping; Home and End jump to
- * either end. Tab still walks them in order too. */
+/** Page buttons on the rail; mode and section chrome stay on Tab, not arrows. */
+function pageButtons(nav: HTMLElement): HTMLButtonElement[] {
+  return [...nav.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (b) =>
+      getComputedStyle(b).display !== "none" &&
+      !b.classList.contains("rail-mode-btn") &&
+      !b.classList.contains("rail-section-toggle"),
+  );
+}
+
+/** Arrow keys move between the rail's page buttons, wrapping; Home and End
+ * jump to either end. Tab still walks mode and section chrome too. */
 function onArrows(event: KeyboardEvent<HTMLElement>) {
   // A button the layout hides (the avatar in the phone tab bar) is skipped.
-  const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button")].filter(
-    (b) => getComputedStyle(b).display !== "none",
-  );
+  const buttons = pageButtons(event.currentTarget);
   const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
   if (at < 0) return;
   let next: number;
@@ -105,15 +113,18 @@ export function Rail({
       event.preventDefault();
       onPin(name, !pinnedSet.has(name));
     }
+    const pinHint =
+      name === "settings"
+        ? undefined
+        : pinnedSet.has(name)
+          ? "Pinned. Right-click to unpin."
+          : "Right-click to pin.";
     return (
       <button
         key={name}
         type="button"
-        title={
-          name === "settings"
-            ? VIEW_LABELS[name]
-            : `${VIEW_LABELS[name]}${pinnedSet.has(name) ? " (pinned)" : ""} — right-click to ${pinnedSet.has(name) ? "unpin" : "pin"}`
-        }
+        title={VIEW_LABELS[name]}
+        aria-description={pinHint}
         aria-current={view === name ? "page" : undefined}
         onClick={() => onOpen(name)}
         onContextMenu={onContext}
@@ -140,7 +151,8 @@ export function Rail({
           type="button"
           className="rail-mode-btn"
           aria-pressed={mode === "simple"}
-          title="Simple: core pages"
+          title="Simple"
+          aria-description="Core pages on the rail"
           onClick={() => onMode("simple")}
         >
           Simple
@@ -149,7 +161,8 @@ export function Rail({
           type="button"
           className="rail-mode-btn"
           aria-pressed={mode === "advanced"}
-          title="Advanced: every page grouped"
+          title="Advanced"
+          aria-description="Every page grouped on the rail"
           onClick={() => onMode("advanced")}
         >
           Advanced
@@ -180,10 +193,10 @@ export function Rail({
           <button
             type="button"
             className="rail-more"
-            title={`More · ${overflow.length} page${overflow.length === 1 ? "" : "s"}`}
+            title="More"
+            aria-description={`${overflow.length} page${overflow.length === 1 ? "" : "s"} not on the rail`}
             aria-haspopup="dialog"
             aria-expanded={moreOpen}
-            aria-label={`More pages, ${overflow.length} available`}
             onClick={onMore}
           >
             <TabIcon view="more" size={20} />

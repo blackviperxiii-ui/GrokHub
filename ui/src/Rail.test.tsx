@@ -38,7 +38,7 @@ describe("Rail", () => {
     );
     expect(screen.getByRole("navigation", { name: "Views" })).toHaveAttribute("data-rail-mode", "simple");
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: /More pages/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
   });
 
@@ -61,7 +61,7 @@ describe("Rail", () => {
       />,
     );
     expect(screen.getByRole("navigation", { name: "Views" })).toHaveClass("rail-advanced");
-    expect(screen.queryByRole("button", { name: /More pages/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Automations" }));
     await userEvent.click(screen.getByRole("button", { name: "Skills" }));
     await userEvent.click(screen.getByRole("button", { name: "Workboard" }));

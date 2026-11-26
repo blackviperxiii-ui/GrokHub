@@ -225,8 +225,15 @@ async function run() {
           const labels = await rail
             .getByRole("button")
             .evaluateAll((buttons) =>
-              // The profile avatar is not a page: it opens Settings › Account, swept below.
-              buttons.filter((b) => !b.classList.contains("rail-avatar")).map((b) => b.getAttribute("title") || b.textContent.trim()),
+              // Avatar, mode switch and section headers are not pages.
+              buttons
+                .filter(
+                  (b) =>
+                    !b.classList.contains("rail-avatar") &&
+                    !b.classList.contains("rail-mode-btn") &&
+                    !b.classList.contains("rail-section-toggle"),
+                )
+                .map((b) => b.getAttribute("title") || b.textContent.trim()),
             );
           for (const label of labels.filter((l) => !shot.has(l) && l !== "More")) {
             at = label;

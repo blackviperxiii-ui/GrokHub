@@ -312,10 +312,18 @@ const DESKTOP: Capabilities = {
   library: true,
 };
 
+/** Page buttons on the rail (mode / section chrome stay out of this list). */
+function isPageRailButton(item: HTMLElement) {
+  return !item.classList.contains("rail-mode-btn") && !item.classList.contains("rail-section-toggle");
+}
+
 /** The rail's items, top to bottom, by their (visually hidden) labels. */
 function rail() {
   const nav = screen.getByRole("navigation", { name: "Views" });
-  return within(nav).getAllByRole("button").map((item) => item.textContent);
+  return within(nav)
+    .getAllByRole("button")
+    .filter(isPageRailButton)
+    .map((item) => item.textContent);
 }
 
 /** One rail item. */
@@ -504,7 +512,7 @@ describe("App", () => {
     expect(bar?.querySelector(".brand-mark img")).toHaveAttribute("alt", "");
     await screen.findByRole("button", { name: "Pulse" });
     const nav = screen.getByRole("navigation", { name: "Views" });
-    for (const tab of within(nav).getAllByRole("button")) {
+    for (const tab of within(nav).getAllByRole("button").filter(isPageRailButton)) {
       expect(tab.querySelector("svg.tab-icon")).not.toBeNull();
       expect(tab).toHaveAttribute("title", tab.textContent);
     }
