@@ -418,7 +418,11 @@ pub struct LibraryInstall {
     pub note: String,
 }
 
-fn installed_skill_keys(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> BTreeSet<String> {
+fn installed_skill_keys(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+) -> BTreeSet<String> {
     load(config_dir, workspace, home)
         .rows
         .into_iter()
