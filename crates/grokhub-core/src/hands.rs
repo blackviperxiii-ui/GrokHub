@@ -308,7 +308,7 @@ mod tests {
     /// running binary, so both PKGBUILDs must rewrite the relative Exec.
     #[test]
     fn pkgbuilds_install_desktop_entry_with_absolute_exec() {
-        let rewrite = "sed -e 's|^Exec=grokhub-shell$|Exec=/usr/bin/grokhub-shell|' \\\n      -e 's|^TryExec=grokhub-shell$|TryExec=/usr/bin/grokhub-shell|' \\\n      packaging/grokhub-shell.desktop >";
+        let rewrite = "sed -e 's|^Exec=grokhub-shell\\( %u\\)\\?$|Exec=/usr/bin/grokhub-shell %u|' \\\n      -e 's|^TryExec=grokhub-shell$|TryExec=/usr/bin/grokhub-shell|' \\\n      packaging/grokhub-shell.desktop >";
         for (name, pkg, dest) in [
             (
                 "packaging/PKGBUILD",
@@ -324,7 +324,7 @@ mod tests {
             let pkg = pkg.replace("\r\n", "\n");
             assert!(
                 pkg.contains(&format!("{rewrite}{dest}\n")),
-                "{name} must write Exec=/usr/bin/grokhub-shell"
+                "{name} must write Exec=/usr/bin/grokhub-shell %u"
             );
             assert!(
                 !pkg.contains("install -Dm644 packaging/grokhub-shell.desktop"),
@@ -336,9 +336,10 @@ mod tests {
         let lines: Vec<&str> = desktop.lines().collect();
         assert!(lines.contains(&"X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
         assert!(
-            lines.contains(&"Exec=grokhub-shell"),
+            lines.contains(&"Exec=grokhub-shell %u"),
             "the PKGBUILD sed matches this exact line"
         );
+        assert!(lines.contains(&"MimeType=x-scheme-handler/loadout;"));
         assert!(lines.contains(&"TryExec=grokhub-shell"));
     }
 
@@ -384,7 +385,7 @@ mod tests {
             .lines()
             .find_map(|line| line.strip_prefix("Exec="))
             .expect("Exec line");
-        assert_eq!(exec, bin.display().to_string());
+        assert_eq!(exec, format!("{} %u", bin.display()));
         assert_eq!(
             Path::new(exec.split_whitespace().next().unwrap())
                 .canonicalize()

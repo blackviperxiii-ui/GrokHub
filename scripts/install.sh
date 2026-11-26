@@ -383,7 +383,7 @@ install_desktop_entry() {
   local name tmp
   name="$(basename "$bin")"
   tmp="$(mktemp)"
-  sed -e "s|^Exec=${name}\$|Exec=${bin}|" \
+  sed -e "s|^Exec=${name}\\( %u\\)\\?\$|Exec=${bin} %u|" \
       -e "s|^TryExec=${name}\$|TryExec=${bin}|" \
       "$src" >"$tmp"
   install -Dm644 "$tmp" "$dst"

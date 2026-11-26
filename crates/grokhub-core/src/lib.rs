@@ -221,6 +221,8 @@ pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;
+pub mod skill_bundles;
+pub mod skill_install_link;
 pub mod skill_pack;
 pub mod skills_hub;
 pub mod slash;
@@ -700,6 +702,14 @@ pub use skill::{
     skill_safe, skill_use_in_chat_prompt, validate_skill_md_text, verify_and_record_skill,
     SkillLockEntry, SkillLockfile, SkillMd, SkillMeta, SkillScan, SkillThreat, AUTO_SKILL_PITFALL,
     SKILL_LOCK_FILE,
+};
+pub use skill_bundles::{
+    bundle_by_slug, bundle_load_prompt, builtin_bundles, list_bundles, parse_bundle_yaml,
+    skill_bundles_dir, write_bundle_yaml, SkillBundle,
+};
+pub use skill_install_link::{
+    bundles_dir, is_skill_install_url, parse_skill_install_url, preview_skill_install,
+    resolve_skill_install_identifier, skills_install_dir, SkillInstallPreview, SkillInstallTarget,
 };
 pub use skill_pack::{
     install_library_skill, install_library_skill_text, library_pack_by_id, library_packs,

@@ -555,6 +555,113 @@ pub fn install_library_pack(
     })
 }
 
+/// Confirm-dialog payload for a `loadout://skill/install?identifier=` link.
+pub fn preview_install(
+    config_dir: &Path,
+    identifier: &str,
+) -> Result<grokhub_core::SkillInstallPreview, String> {
+    grokhub_core::preview_skill_install(config_dir, identifier)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkInstall {
+    pub page: Page,
+    pub note: String,
+    pub preview: grokhub_core::SkillInstallPreview,
+}
+
+/// Install after the user approved the confirm dialog. Every path runs the
+/// skill safety scanner; quarantined skills stay off until cleaned up.
+pub fn confirm_install(
+    config_dir: &Path,
+    workspace: &Path,
+    home: Option<&Path>,
+    identifier: &str,
+) -> Result<LinkInstall, String> {
+    let preview = grokhub_core::preview_skill_install(config_dir, identifier)?;
+    let target = grokhub_core::resolve_skill_install_identifier(config_dir, identifier)?;
+    let note = match target {
+        grokhub_core::SkillInstallTarget::Hub(hit) => {
+            let skills_dir = config_dir.join("skills");
+            let done = grokhub_core::install_hub_skill(&skills_dir, &hit)?;
+            grokhub_agent::invalidate_discover_cache();
+            match &done.quarantined {
+                Some(reason) => format!(
+                    "Installed {} — quarantined ({reason}). Chat won't use it until the skill is cleaned up.",
+                    done.name
+                ),
+                None => format!("Installed {}. Chat can use it.", done.name),
+            }
+        }
+        grokhub_core::SkillInstallTarget::Library { id, .. } => {
+            let item = grokhub_core::library_skill_by_id(&id)
+                .ok_or_else(|| format!("Unknown library skill `{id}`"))?;
+            let skills_dir = config_dir.join("skills");
+            grokhub_agent::harness::record_skill_change(
+                config_dir,
+                &skills_dir,
+                item.id,
+                grokhub_agent::harness::Origin::User,
+                "installed from loadout://skill/install link",
+                || grokhub_core::install_library_skill(&skills_dir, item).map(|_| ()),
+            )?;
+            grokhub_agent::invalidate_discover_cache();
+            format!("Installed {}. Chat can use it.", item.name)
+        }
+        grokhub_core::SkillInstallTarget::Bundle(bundle) => {
+            grokhub_core::write_bundle_yaml(config_dir, &bundle)?;
+            // Bundles that list library skills install each through the scanner.
+            let skills_dir = config_dir.join("skills");
+            let mut added = 0usize;
+            for skill_name in &bundle.skills {
+                if let Some(item) = grokhub_core::library_skill_by_id(skill_name).or_else(|| {
+                    grokhub_core::library_skills().iter().find(|s| {
+                        grokhub_agent::skill_name_key(s.name)
+                            == grokhub_agent::skill_name_key(skill_name)
+                            || grokhub_agent::skill_name_key(s.id)
+                                == grokhub_agent::skill_name_key(skill_name)
+                    })
+                }) {
+                    let existing = installed_skill_keys(config_dir, workspace, home);
+                    if is_library_skill_installed(&skills_dir, &existing, item) {
+                        continue;
+                    }
+                    grokhub_agent::harness::record_skill_change(
+                        config_dir,
+                        &skills_dir,
+                        item.id,
+                        grokhub_agent::harness::Origin::User,
+                        "installed from skill bundle link",
+                        || grokhub_core::install_library_skill(&skills_dir, item).map(|_| ()),
+                    )?;
+                    added += 1;
+                }
+            }
+            grokhub_agent::invalidate_discover_cache();
+            if added == 0 {
+                format!(
+                    "Saved bundle {}. /{} loads its {} skills.",
+                    bundle.name,
+                    bundle.slug(),
+                    bundle.skills.len()
+                )
+            } else {
+                format!(
+                    "Saved bundle {} and installed {added} library skills. /{} loads them together.",
+                    bundle.name,
+                    bundle.slug()
+                )
+            }
+        }
+    };
+    Ok(LinkInstall {
+        page: load(config_dir, workspace, home),
+        note,
+        preview,
+    })
+}
+
 /// Edit a cabin skill's description, trigger and steps — the cabin tab's
 /// three fields, trimmed the same way, saved through the ChangeLedger so
 /// Undo can put the old version back. Everything else (slash, pitfalls,
@@ -1073,6 +1180,38 @@ mod tests {
         assert_eq!(again.note, "Everyday Life Pack is already installed.");
         assert!(install_library_item(&cfg, &ws, Some(&home), "no-such-skill").is_err());
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn loadout_skill_install_link_confirms_through_scanner() {
+        let root = scratch("skill-install-link");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        let preview = preview_install(&cfg, "library/weekly-meal-plan").expect("preview");
+        assert_eq!(preview.source, "Skills Library");
+        assert!(
+            preview.destination.ends_with("skills/weekly-meal-plan"),
+            "{}",
+            preview.destination
+        );
+        let done = confirm_install(&cfg, &ws, Some(&home), "library/weekly-meal-plan")
+            .expect("confirm install");
+        assert_eq!(done.note, "Installed Weekly Meal Plan. Chat can use it.");
+        assert!(cfg.join("skills/weekly-meal-plan/SKILL.md").is_file());
+        let lock = grokhub_core::load_skill_lock(&cfg.join("skills"));
+        assert!(
+            lock.entries.contains_key("weekly-meal-plan"),
+            "scanner lock records the installed skill"
+        );
+
+        let bundle = confirm_install(&cfg, &ws, Some(&home), "bundle/backend-dev")
+            .expect("bundle install");
+        assert!(
+            bundle.note.contains("Saved bundle backend-dev"),
+            "{}",
+            bundle.note
+        );
+        assert!(cfg.join("skill-bundles/backend-dev.yaml").is_file());
         let _ = fs::remove_dir_all(&root);
     }
 }
