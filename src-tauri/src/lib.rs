@@ -3456,6 +3456,17 @@ async fn set_connector_enabled(
     off_main(move || connectors::set_enabled(&workspace, &name, on)).await?
 }
 
+#[tauri::command]
+async fn set_connector_tool_enabled(
+    state: State<'_, ShellState>,
+    name: String,
+    tool: String,
+    on: bool,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::set_tool_enabled(&workspace, &name, &tool, on)).await?
+}
+
 /// Opens the server's https sign-in page and waits for the browser to come back.
 #[tauri::command]
 async fn sign_in_connector(
@@ -9757,6 +9768,7 @@ pub fn run() {
             add_catalog_connector,
             add_connector_config,
             set_connector_enabled,
+            set_connector_tool_enabled,
             sign_in_connector,
             save_connector_key,
             answer_connector_key,

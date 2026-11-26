@@ -117,7 +117,7 @@ export const VIEW_LABELS: Record<View, string> = {
   team: "Team",
   memory: "Personal",
   skills: "Skills",
-  connectors: "Connectors",
+  connectors: "MCPs & Connectors",
   settings: "Settings",
   workboard: "Workboard",
   devices: "Devices",
@@ -174,8 +174,18 @@ export function hasPage(caps: Capabilities, view: View): boolean {
   return pageViews(caps).includes(view);
 }
 
-/** Simple-mode rail, top to bottom; Settings sits at the rail's foot. */
-export const RAIL: readonly View[] = ["home", "chat", "code", "pulse", "library", "settings"];
+/** Simple-mode rail, top to bottom; Settings sits at the rail's foot.
+ * MCPs & Connectors stays on the rail (not under More) so connect and
+ * reconnect are one click away. */
+export const RAIL: readonly View[] = [
+  "home",
+  "chat",
+  "code",
+  "pulse",
+  "library",
+  "connectors",
+  "settings",
+];
 
 /** Optional Sidebar v2 prefs; omitted means Simple with no pins. */
 export type RailNavOpts = Pick<RailPrefs, "mode" | "pinned">;

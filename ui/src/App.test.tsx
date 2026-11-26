@@ -362,7 +362,7 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
-    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "More", "Settings"]);
+    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "MCPs & Connectors", "More", "Settings"]);
     expect(await morePages()).toEqual([
       "Objectives",
       "History",
@@ -373,7 +373,6 @@ describe("App", () => {
       "Team",
       "Personal",
       "Skills",
-      "Connectors",
       "Workboard",
       "Devices",
       "Fleet",
@@ -411,12 +410,12 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
     await openPage("Workboard");
-    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "Workboard", "More", "Settings"]);
+    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "MCPs & Connectors", "Workboard", "More", "Settings"]);
     expect(view("Workboard")).toHaveAttribute("aria-current", "page");
     const nav = screen.getByRole("navigation", { name: "Views" });
     expect(nav.querySelectorAll("[aria-current]")).toHaveLength(1);
     await userEvent.click(view("Chat"));
-    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "More", "Settings"]);
+    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "MCPs & Connectors", "More", "Settings"]);
     expect(view("Chat")).toHaveAttribute("aria-current", "page");
     expect(nav.querySelectorAll("[aria-current]")).toHaveLength(1);
   });
@@ -547,7 +546,7 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(rail()).toEqual(["Home", "Chat", "More", "Settings"]);
+    expect(rail()).toEqual(["Home", "Chat", "MCPs & Connectors", "More", "Settings"]);
     expect(await morePages()).toEqual([
       "Objectives",
       "History",
@@ -558,7 +557,6 @@ describe("App", () => {
       "Team",
       "Personal",
       "Skills",
-      "Connectors",
       "Workboard",
       "Updates & Drivers",
     ]);
@@ -568,8 +566,8 @@ describe("App", () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(api.getCapabilities).toHaveBeenCalled());
-    expect(rail()).toEqual(["Home", "Chat", "More", "Settings"]);
-    expect(await morePages()).toEqual(["Objectives", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard"]);
+    expect(rail()).toEqual(["Home", "Chat", "MCPs & Connectors", "More", "Settings"]);
+    expect(await morePages()).toEqual(["Objectives", "Automations", "Agents", "Personal", "Skills", "Workboard"]);
     await openPage("Workboard");
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });

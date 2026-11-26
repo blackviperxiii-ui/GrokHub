@@ -159,12 +159,12 @@ describe("Labs", () => {
     expect(card("odd-kit").queryByText("Remove the installed copy.")).toBeNull();
   });
 
-  it("opens the Connectors page from the MCP note", async () => {
+  it("opens the MCPs & Connectors page from the MCP note", async () => {
     api.getPlugins.mockResolvedValue(page([]));
     const open = vi.fn();
     render(<Labs onOpenConnectors={open} />);
     await screen.findByText(PLUGINS_EMPTY);
-    await userEvent.click(screen.getByRole("button", { name: "Connectors" }));
+    await userEvent.click(screen.getByRole("button", { name: "MCPs & Connectors" }));
     expect(open).toHaveBeenCalledTimes(1);
   });
 

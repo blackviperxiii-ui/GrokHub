@@ -3,7 +3,7 @@
 //! Native MCP server file. Only `mcpServers` / `mcp_servers` definitions are kept.
 //! A credential-looking file name is refused before it is opened.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -31,6 +31,8 @@ pub struct ServerDef {
     /// A stdio server's env var that gets the sealed `tokenRef` token at
     /// start (`tokenEnv`, e.g. `BRAVE_API_KEY`). The entry never holds it.
     pub token_env: Option<String>,
+    /// Raw tool names the Connectors page turned off. Chat never sees them.
+    pub disabled_tools: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,6 +239,12 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
     if !def.enabled {
         spec.insert("enabled".into(), json!(false));
     }
+    if !def.disabled_tools.is_empty() {
+        spec.insert(
+            "disabledTools".into(),
+            json!(def.disabled_tools.iter().cloned().collect::<Vec<_>>()),
+        );
+    }
     // A timeout the entry set is kept; the default is left out.
     for (key, value, default) in [
         (
@@ -332,6 +340,10 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
     };
     let token_ref = text_field("tokenRef");
     let token_env = text_field("tokenEnv");
+    let disabled_tools = string_set(
+        kept.get("disabledTools")
+            .or_else(|| kept.get("disabled_tools")),
+    );
     Some(ServerDef {
         transport,
         enabled,
@@ -340,7 +352,22 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         headers,
         token_ref,
         token_env,
+        disabled_tools,
     })
+}
+
+fn string_set(value: Option<&Value>) -> BTreeSet<String> {
+    value
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
@@ -362,6 +389,8 @@ fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
         "bearer_token",
         "tokenRef",
         "tokenEnv",
+        "disabledTools",
+        "disabled_tools",
     ];
     let mut out = Map::new();
     for key in KEYS {
@@ -521,6 +550,29 @@ mod tests {
         assert!(is_desktop_server("grokhub-desktop"));
         assert!(is_desktop_server(" GROKHUB_DESKTOP "));
         assert!(!is_desktop_server("grokhub-desktop-extra"));
+    }
+
+    #[test]
+    fn disabled_tools_round_trip_in_mcp_json() {
+        let dir = crate::harness::test_dir("mcp-disabled-tools");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers":{
+            "box":{"command":"box-mcp","disabledTools":["create","delete"]}
+        }}"#;
+        import_documents(&[doc.to_string()]).unwrap();
+        let saved = load_servers();
+        let def = saved.get("box").expect("box");
+        assert_eq!(
+            def.disabled_tools.iter().cloned().collect::<Vec<_>>(),
+            vec!["create".to_string(), "delete".to_string()]
+        );
+        let text = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            file["mcpServers"]["box"]["disabledTools"],
+            json!(["create", "delete"])
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

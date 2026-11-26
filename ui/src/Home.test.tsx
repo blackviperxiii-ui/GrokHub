@@ -233,7 +233,7 @@ describe("Home", () => {
     expect(bar).toHaveAttribute("aria-valuenow", "48");
     expect(screen.getByText("1,240 / 1,500 XP")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Memory · 12 (2 to review)" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connectors · 2 / 3 connected · 1 failing" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "MCPs & Connectors · 2 / 3 connected · 1 failing" })).toBeInTheDocument();
     expect(screen.getByText(/Mission Control layout\./)).toBeInTheDocument();
   });
 
@@ -661,7 +661,7 @@ describe("Home", () => {
     expect(api.pulseAct).toHaveBeenCalledWith("i1", "accept");
     await userEvent.click(screen.getByRole("button", { name: /^Memory/ }));
     expect(go.onOpen).toHaveBeenLastCalledWith("memory");
-    await userEvent.click(screen.getByRole("button", { name: /^Connectors/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^MCPs & Connectors/ }));
     expect(go.onOpen).toHaveBeenLastCalledWith("connectors");
   });
 

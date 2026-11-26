@@ -41,6 +41,7 @@ function row(name: string): ConnectorRow {
     needsSignIn: false,
     canDisconnect: true,
     enabled: true,
+    toolRows: [],
   };
 }
 
