@@ -386,7 +386,7 @@ function ArtifactsGallery({
 }) {
   const [items, setItems] = useState<ChatArtifact[] | null>(null);
   const [open, setOpen] = useState<ChatArtifact | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -406,17 +406,19 @@ function ArtifactsGallery({
     };
   }, []);
 
+  const openId = open?.id;
+  const openPath = open?.path;
+  const openKind = open?.kind;
   useEffect(() => {
-    if (!open || (open.kind !== "image" && open.kind !== "video")) {
-      setPreview(null);
+    if (!openId || !openPath || (openKind !== "image" && openKind !== "video")) {
       return;
     }
     let live = true;
-    const loader = open.kind === "video" ? chatMedia : chatPicture;
+    const loader = openKind === "video" ? chatMedia : chatPicture;
     if (typeof loader !== "function") return;
-    loader(open.path).then(
+    loader(openPath).then(
       (url) => {
-        if (live) setPreview(url);
+        if (live) setPreview({ id: openId, url });
       },
       (err) => {
         if (live) setNote(String(err));
@@ -425,8 +427,9 @@ function ArtifactsGallery({
     return () => {
       live = false;
     };
-  }, [open]);
+  }, [openId, openPath, openKind]);
 
+  const previewUrl = open && preview?.id === open.id ? preview.url : null;
   const visible = filterArtifacts(items ?? [], query);
 
   async function run(step: () => Promise<void>) {
@@ -500,9 +503,9 @@ function ArtifactsGallery({
           ))}
         </ul>
       )}
-      {open && (open.kind === "image" || open.kind === "video") && preview && (
+      {open && (open.kind === "image" || open.kind === "video") && previewUrl && (
         <Lightbox
-          src={preview}
+          src={previewUrl}
           name={open.name}
           video={open.kind === "video"}
           onClose={() => setOpen(null)}
