@@ -107,7 +107,6 @@ fn read_capped(path: &Path) -> Option<String> {
 }
 
 fn cabin_row_from_dir(
-    config_dir: &Path,
     skills_dir: &Path,
     dir: &Path,
     archived: bool,
@@ -211,14 +210,9 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
                 .as_deref()
                 .map(grokhub_core::skill_dir_name)
                 .unwrap_or_default();
-            if let Some(row) = cabin_row_from_dir(
-                config_dir,
-                &skills_dir,
-                &dir,
-                false,
-                by_id.get(&key),
-                curator_enabled,
-            ) {
+            if let Some(row) =
+                cabin_row_from_dir(&skills_dir, &dir, false, by_id.get(&key), curator_enabled)
+            {
                 out.push(row);
             }
         }
@@ -231,14 +225,9 @@ fn cabin_rows(config_dir: &Path) -> Vec<(Row, PathBuf)> {
                 .file_name()
                 .map(|n| grokhub_core::skill_dir_name(&n.to_string_lossy()))
                 .unwrap_or_default();
-            if let Some(row) = cabin_row_from_dir(
-                config_dir,
-                &skills_dir,
-                &dir,
-                true,
-                by_id.get(&key),
-                curator_enabled,
-            ) {
+            if let Some(row) =
+                cabin_row_from_dir(&skills_dir, &dir, true, by_id.get(&key), curator_enabled)
+            {
                 out.push(row);
             }
         }
