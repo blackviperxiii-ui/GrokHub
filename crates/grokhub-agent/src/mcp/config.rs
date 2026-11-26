@@ -13,6 +13,10 @@ use serde_json::{json, Map, Value};
 use crate::perm::config_dir;
 
 const FILE_NAME: &str = "mcp.json";
+/// How long a server may take to start, and one tool call to answer, when
+/// its entry does not say.
+const STARTUP_TIMEOUT_SECS: u64 = 15;
+const TOOL_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerDef {
@@ -233,6 +237,19 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
     if !def.enabled {
         spec.insert("enabled".into(), json!(false));
     }
+    // A timeout the entry set is kept; the default is left out.
+    for (key, value, default) in [
+        (
+            "startup_timeout_sec",
+            def.startup_timeout,
+            STARTUP_TIMEOUT_SECS,
+        ),
+        ("tool_timeout_sec", def.tool_timeout, TOOL_TIMEOUT_SECS),
+    ] {
+        if value.as_secs() != default {
+            spec.insert(key.into(), json!(value.as_secs()));
+        }
+    }
     Some(Value::Object(spec))
 }
 
@@ -243,8 +260,18 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         .get("enabled")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let startup_timeout = secs_field(&kept, "startup_timeout_sec", "startupTimeoutSec", 15);
-    let tool_timeout = secs_field(&kept, "tool_timeout_sec", "toolTimeoutSec", 60);
+    let startup_timeout = secs_field(
+        &kept,
+        "startup_timeout_sec",
+        "startupTimeoutSec",
+        STARTUP_TIMEOUT_SECS,
+    );
+    let tool_timeout = secs_field(
+        &kept,
+        "tool_timeout_sec",
+        "toolTimeoutSec",
+        TOOL_TIMEOUT_SECS,
+    );
     let mut headers = string_map(kept.get("headers"));
     if let Some(token) = kept
         .get("bearerToken")
@@ -494,5 +521,29 @@ mod tests {
         assert!(is_desktop_server("grokhub-desktop"));
         assert!(is_desktop_server(" GROKHUB_DESKTOP "));
         assert!(!is_desktop_server("grokhub-desktop-extra"));
+    }
+
+    #[test]
+    fn an_imported_entry_keeps_its_timeouts() {
+        let dir = crate::harness::test_dir("mcp-import-timeouts");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers":{
+            "slow":{"command":"slow-mcp","tool_timeout_sec":3,"startupTimeoutSec":20},
+            "web":{"url":"http://127.0.0.1:9/mcp","toolTimeoutSec":90},
+            "plain":{"command":"plain-mcp"}
+        }}"#;
+        import_documents(&[doc.to_string()]).unwrap();
+        let saved = load_servers();
+        let timeouts = |name: &str| {
+            let def = &saved[name];
+            (def.startup_timeout.as_secs(), def.tool_timeout.as_secs())
+        };
+        assert_eq!(timeouts("slow"), (20, 3));
+        assert_eq!(timeouts("web"), (15, 90));
+        assert_eq!(timeouts("plain"), (15, 60));
+        let text = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(file["mcpServers"]["plain"], json!({"command": "plain-mcp"}));
+        let _ = fs::remove_dir_all(dir);
     }
 }
