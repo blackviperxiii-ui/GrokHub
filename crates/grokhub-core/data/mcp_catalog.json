@@ -1,30 +1,1302 @@
 {
   "entries": [
-    {"id": "github", "name": "GitHub", "publisher": "GitHub", "category": "Developer", "description": "Work with repos, issues, pull requests and Actions on GitHub", "logo": "GH", "transport": "http", "url": "https://api.githubcopilot.com/mcp/", "auth": "key", "key_hint": "Create a fine-grained personal access token at github.com/settings/personal-access-tokens.", "registry_id": "io.github.github/github-mcp-server", "source": "https://github.com/github/github-mcp-server", "capabilities": ["Manage issues and pull requests", "Read and search code", "Actions and CI status", "Security alerts"], "permissions": "Reaches GitHub with your token, so it can do what that token allows on your repositories."},
-    {"id": "context7", "name": "Context7", "publisher": "Upstash", "category": "Developer", "description": "Up-to-date library docs and code examples for prompts", "logo": "C7", "transport": "http", "url": "https://mcp.context7.com/mcp", "auth": "none", "registry_id": "io.github.upstash/context7", "source": "https://github.com/upstash/context7", "capabilities": ["Resolve library names", "Fetch version-specific docs", "Code examples"], "permissions": "Sends library names and questions to Context7. It can't reach your files or accounts."},
-    {"id": "sentry", "name": "Sentry", "publisher": "Sentry", "category": "Developer", "description": "Look up Sentry issues, errors and traces and get fix help", "logo": "S", "transport": "http", "url": "https://mcp.sentry.dev/mcp", "auth": "oauth", "registry_id": "io.github.getsentry/sentry-mcp", "source": "https://github.com/getsentry/sentry-mcp", "capabilities": ["Search issues and events", "Inspect stack traces", "Project and release info", "Seer root-cause analysis"], "permissions": "Reads and updates the Sentry organizations your account can see."},
-    {"id": "filesystem", "name": "Filesystem", "publisher": "Model Context Protocol", "category": "Developer", "description": "Read, write and search files in the folder the chat works in", "logo": "FS", "transport": "stdio", "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."], "auth": "none", "registry_id": "", "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem", "capabilities": ["Read and write files", "List and search folders", "Edit files", "File details"], "permissions": "Reads and writes files inside the chat's working folder only, on this computer."},
-    {"id": "markitdown", "name": "MarkItDown", "publisher": "Microsoft", "category": "Developer", "description": "Convert files and links (PDF, Office, HTML and more) to Markdown", "logo": "MD", "transport": "stdio", "command": ["uvx", "markitdown-mcp"], "auth": "none", "registry_id": "", "source": "https://github.com/microsoft/markitdown/tree/main/packages/markitdown-mcp", "capabilities": ["Convert PDF and Office files", "Convert web pages", "Read data and file links"], "permissions": "Reads the files and links you give it, on this computer. Needs uv installed."},
-    {"id": "playwright", "name": "Playwright", "publisher": "Microsoft", "category": "Browser", "description": "Drive a real browser through Playwright page snapshots", "logo": "PW", "transport": "stdio", "command": ["npx", "-y", "@playwright/mcp@latest"], "auth": "none", "registry_id": "io.github.microsoft/playwright-mcp", "source": "https://github.com/microsoft/playwright-mcp", "capabilities": ["Open and click pages", "Fill forms", "Take screenshots", "Read page snapshots"], "permissions": "Opens its own browser on this computer and visits the sites the chat asks for."},
-    {"id": "chrome-devtools", "name": "Chrome DevTools", "publisher": "Google", "category": "Browser", "description": "Control and inspect a live Chrome browser through DevTools", "logo": "CD", "transport": "stdio", "command": ["npx", "-y", "chrome-devtools-mcp@latest"], "auth": "none", "registry_id": "io.github.ChromeDevTools/chrome-devtools-mcp", "source": "https://github.com/ChromeDevTools/chrome-devtools-mcp", "capabilities": ["Performance traces", "Network and console inspection", "Page automation", "Screenshots"], "permissions": "Starts Chrome on this computer and can read anything open in that browser."},
-    {"id": "browser-use", "name": "Browser Use", "publisher": "Browser Use", "category": "Browser", "description": "Control a real Chrome browser to finish web tasks", "logo": "BU", "transport": "stdio", "command": ["uvx", "browser-use", "--cli-mcp"], "auth": "none", "registry_id": "com.browser-use/browser-use", "source": "https://github.com/browser-use/browser-use", "capabilities": ["Fill forms", "Extract data", "Multi-step web tasks"], "permissions": "Opens a browser on this computer and visits the sites the chat asks for. Needs uv installed."},
-    {"id": "supabase", "name": "Supabase", "publisher": "Supabase", "category": "Data", "description": "Manage Supabase projects, databases, migrations and edge functions", "logo": "SB", "transport": "http", "url": "https://mcp.supabase.com/mcp", "auth": "oauth", "registry_id": "com.supabase/mcp", "source": "https://github.com/supabase-community/supabase-mcp", "capabilities": ["Run SQL", "Manage tables and migrations", "Edge functions", "Logs and advisors"], "permissions": "Reads and changes the Supabase projects your account can reach, including their databases."},
-    {"id": "mongodb", "name": "MongoDB", "publisher": "MongoDB", "category": "Data", "description": "Query MongoDB databases, read-only", "logo": "MG", "transport": "stdio", "command": ["npx", "-y", "mongodb-mcp-server@latest", "--readOnly"], "auth": "key", "key_env": "MDB_MCP_CONNECTION_STRING", "key_hint": "Paste your connection string (mongodb+srv://…), from Connect in Atlas.", "registry_id": "io.github.mongodb-js/mongodb-mcp-server", "source": "https://github.com/mongodb-js/mongodb-mcp-server", "capabilities": ["Query and aggregate collections", "Inspect schemas", "List databases"], "permissions": "Reads the database your connection string opens. It starts read-only."},
-    {"id": "prisma", "name": "Prisma", "publisher": "Prisma", "category": "Data", "description": "Manage Prisma Postgres databases, migrations and backups", "logo": "PR", "transport": "http", "url": "https://mcp.prisma.io/mcp", "auth": "oauth", "registry_id": "io.prisma/mcp", "source": "https://www.prisma.io/docs/postgres/mcp-server", "capabilities": ["Create and manage databases", "Migrations", "Backups", "Run SQL"], "permissions": "Reads and changes the Prisma Postgres databases in your Prisma account."},
-    {"id": "apify", "name": "Apify", "publisher": "Apify", "category": "Data", "description": "Run Apify Actors to scrape websites and extract data", "logo": "AP", "transport": "http", "url": "https://mcp.apify.com", "auth": "oauth", "registry_id": "com.apify/apify-mcp-server", "source": "https://github.com/apify/apify-mcp-server", "capabilities": ["Search and run Actors", "Scrape websites", "Get datasets"], "permissions": "Runs Actors in your Apify account, which can use its paid credits."},
-    {"id": "notion", "name": "Notion", "publisher": "Notion", "category": "Productivity", "description": "Search, read and edit Notion pages and databases", "logo": "N", "transport": "http", "url": "https://mcp.notion.com/mcp", "auth": "oauth", "registry_id": "com.notion/mcp", "source": "https://developers.notion.com/docs/mcp", "capabilities": ["Search your workspace", "Create and update pages", "Query databases", "Comments"], "permissions": "Reads and edits the Notion pages you share with it when you sign in."},
-    {"id": "linear", "name": "Linear", "publisher": "Linear", "category": "Productivity", "description": "Find, create and update Linear issues, projects and comments", "logo": "L", "transport": "http", "url": "https://mcp.linear.app/mcp", "auth": "oauth", "registry_id": "app.linear/linear", "source": "https://linear.app/docs/mcp", "capabilities": ["Search issues", "Create and update issues", "Projects and cycles", "Comments"], "permissions": "Reads and edits issues in the Linear workspaces your account belongs to."},
-    {"id": "atlassian", "name": "Atlassian", "publisher": "Atlassian", "category": "Productivity", "description": "Work with Jira issues and Confluence pages", "logo": "A", "transport": "http", "url": "https://mcp.atlassian.com/v2/mcp", "auth": "oauth", "registry_id": "com.atlassian/atlassian-mcp-server", "source": "https://github.com/atlassian/atlassian-mcp-server", "capabilities": ["Search and edit Jira issues", "Read and write Confluence", "Compass and Bitbucket"], "permissions": "Reads and edits the Jira and Confluence sites your Atlassian account can reach."},
-    {"id": "microsoft-365", "name": "Microsoft 365", "publisher": "Microsoft", "category": "Productivity", "description": "Work with Microsoft 365 mail, calendar, files, Teams and people", "logo": "M", "transport": "stdio", "command": ["npx", "-y", "@microsoft/workiq@latest", "mcp"], "auth": "own", "registry_id": "", "source": "https://github.com/microsoft/work-iq", "capabilities": ["Outlook mail and calendar", "OneDrive and SharePoint files", "Teams messages", "Work search"], "permissions": "Reads your Microsoft 365 data with your work account. Some access needs your admin's consent."},
-    {"id": "figma", "name": "Figma", "publisher": "Figma", "category": "Design", "description": "Pull Figma design context, variables and code", "logo": "F", "transport": "http", "url": "https://mcp.figma.com/mcp", "auth": "oauth", "registry_id": "com.figma.mcp/mcp", "source": "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server", "capabilities": ["Design context from links", "Variables and components", "Code from designs", "Screenshots"], "permissions": "Reads the Figma files your account can open."},
-    {"id": "stripe", "name": "Stripe", "publisher": "Stripe", "category": "Payments", "description": "Use the Stripe API and search Stripe docs", "logo": "ST", "transport": "http", "url": "https://mcp.stripe.com", "auth": "oauth", "registry_id": "com.stripe/mcp", "source": "https://github.com/stripe/agent-toolkit/tree/main/tools/modelcontextprotocol", "capabilities": ["Customers and payments", "Invoices and subscriptions", "Refunds", "Docs search"], "permissions": "Reaches your Stripe account. Charges, refunds and payouts still stop for your approval in chat."},
-    {"id": "brave-search", "name": "Brave Search", "publisher": "Brave", "category": "Search", "description": "Web, news, image and local search through the Brave Search API", "logo": "B", "transport": "stdio", "command": ["npx", "-y", "@brave/brave-search-mcp-server", "--transport", "stdio"], "auth": "key", "key_env": "BRAVE_API_KEY", "key_hint": "Get one at api-dashboard.search.brave.com.", "registry_id": "io.github.brave/brave-search-mcp-server", "source": "https://github.com/brave/brave-search-mcp-server", "capabilities": ["Web search", "News and images", "Local search", "Summaries"], "permissions": "Sends search queries to Brave with your API key."},
-    {"id": "exa", "name": "Exa", "publisher": "Exa Labs", "category": "Search", "description": "AI web search, code search and page crawling", "logo": "EX", "transport": "http", "url": "https://mcp.exa.ai/mcp", "auth": "key", "key_hint": "Get one at dashboard.exa.ai/api-keys.", "registry_id": "ai.exa/exa", "source": "https://github.com/exa-labs/exa-mcp-server", "capabilities": ["Web search", "Code search", "Crawl pages", "Company research"], "permissions": "Sends search queries and page links to Exa with your API key."},
-    {"id": "cloudflare", "name": "Cloudflare", "publisher": "Cloudflare", "category": "Cloud", "description": "Manage Cloudflare accounts, Workers and services", "logo": "CF", "transport": "http", "url": "https://mcp.cloudflare.com/mcp", "auth": "oauth", "registry_id": "com.cloudflare.mcp/mcp", "source": "https://github.com/cloudflare/mcp-server-cloudflare", "capabilities": ["Cloudflare API", "Workers and bindings", "DNS and zones", "Docs search"], "permissions": "Reads and changes the Cloudflare accounts you sign in to."},
-    {"id": "cloudflare-docs", "name": "Cloudflare Docs", "publisher": "Cloudflare", "category": "Cloud", "description": "Search Cloudflare's developer documentation", "logo": "CD", "transport": "http", "url": "https://docs.mcp.cloudflare.com/mcp", "auth": "none", "registry_id": "", "source": "https://github.com/cloudflare/mcp-server-cloudflare", "capabilities": ["Search Cloudflare docs", "Workers and Pages guides", "API reference"], "permissions": "Sends your questions to Cloudflare's docs search. It can't reach your account."},
-    {"id": "firebase", "name": "Firebase", "publisher": "Google", "category": "Cloud", "description": "Manage Firebase projects, Auth, Firestore and more", "logo": "FB", "transport": "stdio", "command": ["npx", "-y", "firebase-tools@latest", "mcp"], "auth": "own", "registry_id": "io.github.firebase/firebase-mcp", "source": "https://github.com/firebase/firebase-tools/blob/main/src/mcp/README.md", "capabilities": ["Projects and apps", "Firestore and Auth", "Security rules", "Remote Config"], "permissions": "Uses your Firebase CLI sign-in on this computer and can change those projects."},
-    {"id": "google-drive", "name": "Google Drive", "publisher": "Google", "category": "Google", "description": "Search, read, create and share files in Google Drive", "logo": "D", "transport": "http", "url": "https://drivemcp.googleapis.com/mcp/v1", "auth": "google", "registry_id": "", "source": "https://developers.google.com/workspace/drive/api/reference/mcp", "capabilities": ["Search files", "Read file content", "Create and update files", "Share files"], "permissions": "Reads and changes the Drive files your Google account can open."},
-    {"id": "gmail", "name": "Gmail", "publisher": "Google", "category": "Google", "description": "Search threads, read mail and draft Gmail messages", "logo": "G", "transport": "http", "url": "https://gmailmcp.googleapis.com/mcp/v1", "auth": "google", "registry_id": "", "source": "https://developers.google.com/workspace/gmail/api/reference/mcp", "capabilities": ["Search threads", "Read messages", "Create drafts", "Labels"], "permissions": "Reads your mail and writes drafts. Sending still stops for your approval in chat."},
-    {"id": "google-calendar", "name": "Google Calendar", "publisher": "Google", "category": "Google", "description": "List, search, create and update Google Calendar events", "logo": "GC", "transport": "http", "url": "https://calendarmcp.googleapis.com/mcp/v1", "auth": "google", "registry_id": "", "source": "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server", "capabilities": ["List and search events", "Create and update events", "Suggest times", "Answer invites"], "permissions": "Reads and changes events on the calendars your Google account can open."}
+    {
+      "id": "github",
+      "name": "GitHub",
+      "publisher": "GitHub",
+      "category": "Developer",
+      "description": "Work with repos, issues, pull requests and Actions on GitHub",
+      "logo": "GH",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": "key",
+      "key_hint": "Create a fine-grained personal access token at github.com/settings/personal-access-tokens.",
+      "registry_id": "io.github.github/github-mcp-server",
+      "source": "https://github.com/github/github-mcp-server",
+      "capabilities": [
+        "Manage issues and pull requests",
+        "Read and search code",
+        "Actions and CI status",
+        "Security alerts"
+      ],
+      "permissions": "Reaches GitHub with your token, so it can do what that token allows on your repositories."
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "publisher": "Upstash",
+      "category": "Developer",
+      "description": "Up-to-date library docs and code examples for prompts",
+      "logo": "C7",
+      "transport": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "auth": "none",
+      "registry_id": "io.github.upstash/context7",
+      "source": "https://github.com/upstash/context7",
+      "capabilities": [
+        "Resolve library names",
+        "Fetch version-specific docs",
+        "Code examples"
+      ],
+      "permissions": "Sends library names and questions to Context7. It can't reach your files or accounts.",
+      "tools": [
+        "resolve-library-id",
+        "query-docs"
+      ]
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "publisher": "Sentry",
+      "category": "Developer",
+      "description": "Look up Sentry issues, errors and traces and get fix help",
+      "logo": "S",
+      "transport": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "auth": "oauth",
+      "registry_id": "io.github.getsentry/sentry-mcp",
+      "source": "https://github.com/getsentry/sentry-mcp",
+      "capabilities": [
+        "Search issues and events",
+        "Inspect stack traces",
+        "Project and release info",
+        "Seer root-cause analysis"
+      ],
+      "permissions": "Reads and updates the Sentry organizations your account can see."
+    },
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "publisher": "Model Context Protocol",
+      "category": "Developer",
+      "description": "Read, write and search files in the folder the chat works in",
+      "logo": "FS",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ],
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+      "capabilities": [
+        "Read and write files",
+        "List and search folders",
+        "Edit files",
+        "File details"
+      ],
+      "permissions": "Reads and writes files inside the chat's working folder only, on this computer."
+    },
+    {
+      "id": "markitdown",
+      "name": "MarkItDown",
+      "publisher": "Microsoft",
+      "category": "Developer",
+      "description": "Convert files and links (PDF, Office, HTML and more) to Markdown",
+      "logo": "MD",
+      "transport": "stdio",
+      "command": [
+        "uvx",
+        "markitdown-mcp"
+      ],
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://github.com/microsoft/markitdown/tree/main/packages/markitdown-mcp",
+      "capabilities": [
+        "Convert PDF and Office files",
+        "Convert web pages",
+        "Read data and file links"
+      ],
+      "permissions": "Reads the files and links you give it, on this computer. Needs uv installed."
+    },
+    {
+      "id": "playwright",
+      "name": "Playwright",
+      "publisher": "Microsoft",
+      "category": "Browser",
+      "description": "Drive a real browser through Playwright page snapshots",
+      "logo": "PW",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
+      "auth": "none",
+      "registry_id": "io.github.microsoft/playwright-mcp",
+      "source": "https://github.com/microsoft/playwright-mcp",
+      "capabilities": [
+        "Open and click pages",
+        "Fill forms",
+        "Take screenshots",
+        "Read page snapshots"
+      ],
+      "permissions": "Opens its own browser on this computer and visits the sites the chat asks for."
+    },
+    {
+      "id": "chrome-devtools",
+      "name": "Chrome DevTools",
+      "publisher": "Google",
+      "category": "Browser",
+      "description": "Control and inspect a live Chrome browser through DevTools",
+      "logo": "CD",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ],
+      "auth": "none",
+      "registry_id": "io.github.ChromeDevTools/chrome-devtools-mcp",
+      "source": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+      "capabilities": [
+        "Performance traces",
+        "Network and console inspection",
+        "Page automation",
+        "Screenshots"
+      ],
+      "permissions": "Starts Chrome on this computer and can read anything open in that browser."
+    },
+    {
+      "id": "browser-use",
+      "name": "Browser Use",
+      "publisher": "Browser Use",
+      "category": "Browser",
+      "description": "Control a real Chrome browser to finish web tasks",
+      "logo": "BU",
+      "transport": "stdio",
+      "command": [
+        "uvx",
+        "browser-use",
+        "--cli-mcp"
+      ],
+      "auth": "none",
+      "registry_id": "com.browser-use/browser-use",
+      "source": "https://github.com/browser-use/browser-use",
+      "capabilities": [
+        "Fill forms",
+        "Extract data",
+        "Multi-step web tasks"
+      ],
+      "permissions": "Opens a browser on this computer and visits the sites the chat asks for. Needs uv installed."
+    },
+    {
+      "id": "supabase",
+      "name": "Supabase",
+      "publisher": "Supabase",
+      "category": "Data",
+      "description": "Manage Supabase projects, databases, migrations and edge functions",
+      "logo": "SB",
+      "transport": "http",
+      "url": "https://mcp.supabase.com/mcp",
+      "auth": "oauth",
+      "registry_id": "com.supabase/mcp",
+      "source": "https://github.com/supabase-community/supabase-mcp",
+      "capabilities": [
+        "Run SQL",
+        "Manage tables and migrations",
+        "Edge functions",
+        "Logs and advisors"
+      ],
+      "permissions": "Reads and changes the Supabase projects your account can reach, including their databases."
+    },
+    {
+      "id": "mongodb",
+      "name": "MongoDB",
+      "publisher": "MongoDB",
+      "category": "Data",
+      "description": "Query MongoDB databases, read-only",
+      "logo": "MG",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "mongodb-mcp-server@latest",
+        "--readOnly"
+      ],
+      "auth": "key",
+      "key_env": "MDB_MCP_CONNECTION_STRING",
+      "key_hint": "Paste your connection string (mongodb+srv://\u2026), from Connect in Atlas.",
+      "registry_id": "io.github.mongodb-js/mongodb-mcp-server",
+      "source": "https://github.com/mongodb-js/mongodb-mcp-server",
+      "capabilities": [
+        "Query and aggregate collections",
+        "Inspect schemas",
+        "List databases"
+      ],
+      "permissions": "Reads the database your connection string opens. It starts read-only."
+    },
+    {
+      "id": "prisma",
+      "name": "Prisma",
+      "publisher": "Prisma",
+      "category": "Data",
+      "description": "Manage Prisma Postgres databases, migrations and backups",
+      "logo": "PR",
+      "transport": "http",
+      "url": "https://mcp.prisma.io/mcp",
+      "auth": "oauth",
+      "registry_id": "io.prisma/mcp",
+      "source": "https://www.prisma.io/docs/postgres/mcp-server",
+      "capabilities": [
+        "Create and manage databases",
+        "Migrations",
+        "Backups",
+        "Run SQL"
+      ],
+      "permissions": "Reads and changes the Prisma Postgres databases in your Prisma account."
+    },
+    {
+      "id": "apify",
+      "name": "Apify",
+      "publisher": "Apify",
+      "category": "Data",
+      "description": "Run Apify Actors to scrape websites and extract data",
+      "logo": "AP",
+      "transport": "http",
+      "url": "https://mcp.apify.com",
+      "auth": "oauth",
+      "registry_id": "com.apify/apify-mcp-server",
+      "source": "https://github.com/apify/apify-mcp-server",
+      "capabilities": [
+        "Search and run Actors",
+        "Scrape websites",
+        "Get datasets"
+      ],
+      "permissions": "Runs Actors in your Apify account, which can use its paid credits."
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "publisher": "Notion",
+      "category": "Productivity",
+      "description": "Search, read and edit Notion pages and databases",
+      "logo": "N",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": "oauth",
+      "registry_id": "com.notion/mcp",
+      "source": "https://developers.notion.com/docs/mcp",
+      "capabilities": [
+        "Search your workspace",
+        "Create and update pages",
+        "Query databases",
+        "Comments"
+      ],
+      "permissions": "Reads and edits the Notion pages you share with it when you sign in."
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "publisher": "Linear",
+      "category": "Productivity",
+      "description": "Find, create and update Linear issues, projects and comments",
+      "logo": "L",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": "oauth",
+      "registry_id": "app.linear/linear",
+      "source": "https://linear.app/docs/mcp",
+      "capabilities": [
+        "Search issues",
+        "Create and update issues",
+        "Projects and cycles",
+        "Comments"
+      ],
+      "permissions": "Reads and edits issues in the Linear workspaces your account belongs to."
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian",
+      "publisher": "Atlassian",
+      "category": "Productivity",
+      "description": "Work with Jira issues and Confluence pages",
+      "logo": "A",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "auth": "oauth",
+      "registry_id": "com.atlassian/atlassian-mcp-server",
+      "source": "https://github.com/atlassian/atlassian-mcp-server",
+      "capabilities": [
+        "Search and edit Jira issues",
+        "Read and write Confluence",
+        "Compass and Bitbucket"
+      ],
+      "permissions": "Reads and edits the Jira and Confluence sites your Atlassian account can reach."
+    },
+    {
+      "id": "microsoft-365",
+      "name": "Microsoft 365",
+      "publisher": "Microsoft",
+      "category": "Productivity",
+      "description": "Work with Microsoft 365 mail, calendar, files, Teams and people",
+      "logo": "M",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "@microsoft/workiq@latest",
+        "mcp"
+      ],
+      "auth": "own",
+      "registry_id": "",
+      "source": "https://github.com/microsoft/work-iq",
+      "capabilities": [
+        "Outlook mail and calendar",
+        "OneDrive and SharePoint files",
+        "Teams messages",
+        "Work search"
+      ],
+      "permissions": "Reads your Microsoft 365 data with your work account. Some access needs your admin's consent."
+    },
+    {
+      "id": "figma",
+      "name": "Figma",
+      "publisher": "Figma",
+      "category": "Design",
+      "description": "Pull Figma design context, variables and code",
+      "logo": "F",
+      "transport": "http",
+      "url": "https://mcp.figma.com/mcp",
+      "auth": "oauth",
+      "registry_id": "com.figma.mcp/mcp",
+      "source": "https://help.figma.com/hc/en-us/articles/32132100833559-Guide-to-the-Figma-MCP-server",
+      "capabilities": [
+        "Design context from links",
+        "Variables and components",
+        "Code from designs",
+        "Screenshots"
+      ],
+      "permissions": "Reads the Figma files your account can open."
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "publisher": "Stripe",
+      "category": "Payments",
+      "description": "Use the Stripe API and search Stripe docs",
+      "logo": "ST",
+      "transport": "http",
+      "url": "https://mcp.stripe.com",
+      "auth": "oauth",
+      "registry_id": "com.stripe/mcp",
+      "source": "https://github.com/stripe/agent-toolkit/tree/main/tools/modelcontextprotocol",
+      "capabilities": [
+        "Customers and payments",
+        "Invoices and subscriptions",
+        "Refunds",
+        "Docs search"
+      ],
+      "permissions": "Reaches your Stripe account. Charges, refunds and payouts still stop for your approval in chat."
+    },
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "publisher": "Brave",
+      "category": "Search",
+      "description": "Web, news, image and local search through the Brave Search API",
+      "logo": "B",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "@brave/brave-search-mcp-server",
+        "--transport",
+        "stdio"
+      ],
+      "auth": "key",
+      "key_env": "BRAVE_API_KEY",
+      "key_hint": "Get one at api-dashboard.search.brave.com.",
+      "registry_id": "io.github.brave/brave-search-mcp-server",
+      "source": "https://github.com/brave/brave-search-mcp-server",
+      "capabilities": [
+        "Web search",
+        "News and images",
+        "Local search",
+        "Summaries"
+      ],
+      "permissions": "Sends search queries to Brave with your API key."
+    },
+    {
+      "id": "exa",
+      "name": "Exa",
+      "publisher": "Exa Labs",
+      "category": "Search",
+      "description": "AI web search, code search and page crawling",
+      "logo": "EX",
+      "transport": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "auth": "key",
+      "key_hint": "Get one at dashboard.exa.ai/api-keys.",
+      "registry_id": "ai.exa/exa",
+      "source": "https://github.com/exa-labs/exa-mcp-server",
+      "capabilities": [
+        "Web search",
+        "Code search",
+        "Crawl pages",
+        "Company research"
+      ],
+      "permissions": "Sends search queries and page links to Exa with your API key."
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "publisher": "Cloudflare",
+      "category": "Cloud",
+      "description": "Manage Cloudflare accounts, Workers and services",
+      "logo": "CF",
+      "transport": "http",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "auth": "oauth",
+      "registry_id": "com.cloudflare.mcp/mcp",
+      "source": "https://github.com/cloudflare/mcp-server-cloudflare",
+      "capabilities": [
+        "Cloudflare API",
+        "Workers and bindings",
+        "DNS and zones",
+        "Docs search"
+      ],
+      "permissions": "Reads and changes the Cloudflare accounts you sign in to."
+    },
+    {
+      "id": "cloudflare-docs",
+      "name": "Cloudflare Docs",
+      "publisher": "Cloudflare",
+      "category": "Cloud",
+      "description": "Search Cloudflare's developer documentation",
+      "logo": "CD",
+      "transport": "http",
+      "url": "https://docs.mcp.cloudflare.com/mcp",
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://github.com/cloudflare/mcp-server-cloudflare",
+      "capabilities": [
+        "Search Cloudflare docs",
+        "Workers and Pages guides",
+        "API reference"
+      ],
+      "permissions": "Sends your questions to Cloudflare's docs search. It can't reach your account."
+    },
+    {
+      "id": "firebase",
+      "name": "Firebase",
+      "publisher": "Google",
+      "category": "Cloud",
+      "description": "Manage Firebase projects, Auth, Firestore and more",
+      "logo": "FB",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "firebase-tools@latest",
+        "mcp"
+      ],
+      "auth": "own",
+      "registry_id": "io.github.firebase/firebase-mcp",
+      "source": "https://github.com/firebase/firebase-tools/blob/main/src/mcp/README.md",
+      "capabilities": [
+        "Projects and apps",
+        "Firestore and Auth",
+        "Security rules",
+        "Remote Config"
+      ],
+      "permissions": "Uses your Firebase CLI sign-in on this computer and can change those projects."
+    },
+    {
+      "id": "google-drive",
+      "name": "Google Drive",
+      "publisher": "Google",
+      "category": "Google",
+      "description": "Search, read, create and share files in Google Drive",
+      "logo": "D",
+      "transport": "http",
+      "url": "https://drivemcp.googleapis.com/mcp/v1",
+      "auth": "google",
+      "registry_id": "",
+      "source": "https://developers.google.com/workspace/drive/api/reference/mcp",
+      "capabilities": [
+        "Search files",
+        "Read file content",
+        "Create and update files",
+        "Share files"
+      ],
+      "permissions": "Reads and changes the Drive files your Google account can open."
+    },
+    {
+      "id": "gmail",
+      "name": "Gmail",
+      "publisher": "Google",
+      "category": "Google",
+      "description": "Search threads, read mail and draft Gmail messages",
+      "logo": "G",
+      "transport": "http",
+      "url": "https://gmailmcp.googleapis.com/mcp/v1",
+      "auth": "google",
+      "registry_id": "",
+      "source": "https://developers.google.com/workspace/gmail/api/reference/mcp",
+      "capabilities": [
+        "Search threads",
+        "Read messages",
+        "Create drafts",
+        "Labels"
+      ],
+      "permissions": "Reads your mail and writes drafts. Sending still stops for your approval in chat."
+    },
+    {
+      "id": "google-calendar",
+      "name": "Google Calendar",
+      "publisher": "Google",
+      "category": "Google",
+      "description": "List, search, create and update Google Calendar events",
+      "logo": "GC",
+      "transport": "http",
+      "url": "https://calendarmcp.googleapis.com/mcp/v1",
+      "auth": "google",
+      "registry_id": "",
+      "source": "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server",
+      "capabilities": [
+        "List and search events",
+        "Create and update events",
+        "Suggest times",
+        "Answer invites"
+      ],
+      "permissions": "Reads and changes events on the calendars your Google account can open."
+    },
+    {
+      "id": "clickup",
+      "name": "ClickUp",
+      "publisher": "ClickUp",
+      "category": "Productivity",
+      "description": "Tasks, docs and workspaces in ClickUp",
+      "logo": "CU",
+      "transport": "http",
+      "url": "https://mcp.clickup.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server",
+      "capabilities": [
+        "Search and manage tasks",
+        "Docs and pages",
+        "Workspaces and spaces",
+        "Comments"
+      ],
+      "permissions": "Reads and edits the ClickUp workspaces your account can open."
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "publisher": "Doist",
+      "category": "Productivity",
+      "description": "Manage Todoist tasks and projects",
+      "logo": "TD",
+      "transport": "http",
+      "url": "https://ai.todoist.net/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://www.todoist.com/help/articles/todoist-mcp-server",
+      "capabilities": [
+        "Find and create tasks",
+        "Projects and sections",
+        "Comments and labels",
+        "Complete tasks"
+      ],
+      "permissions": "Reads and edits tasks in the Todoist account you sign in with."
+    },
+    {
+      "id": "monday",
+      "name": "monday.com",
+      "publisher": "monday.com",
+      "category": "Productivity",
+      "description": "Boards, items, docs and workflows in monday.com",
+      "logo": "M",
+      "transport": "http",
+      "url": "https://mcp.monday.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://developer.monday.com/apps/docs/mondaycom-mcp-integration",
+      "capabilities": [
+        "Boards and items",
+        "Updates and docs",
+        "Create and move work",
+        "Search the workspace"
+      ],
+      "permissions": "Reads and changes the monday.com boards and items your account can reach."
+    },
+    {
+      "id": "dropbox",
+      "name": "Dropbox",
+      "publisher": "Dropbox",
+      "category": "Productivity",
+      "description": "Search, read and manage files in Dropbox",
+      "logo": "DB",
+      "transport": "http",
+      "url": "https://mcp.dropbox.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://help.dropbox.com/integrations/connect-dropbox-mcp-server",
+      "capabilities": [
+        "Search files",
+        "Read file content",
+        "Upload and move files",
+        "Shared links"
+      ],
+      "permissions": "Reads and changes the Dropbox files your account can open."
+    },
+    {
+      "id": "canva",
+      "name": "Canva",
+      "publisher": "Canva",
+      "category": "Design",
+      "description": "Create, search and manage Canva designs",
+      "logo": "CV",
+      "transport": "http",
+      "url": "https://mcp.canva.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://www.canva.dev/docs/mcp/",
+      "capabilities": [
+        "Search designs",
+        "Create designs",
+        "Export and resize",
+        "Brand kits"
+      ],
+      "permissions": "Reads and changes the Canva designs and brand kits your account can open."
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "publisher": "Slack",
+      "category": "Messaging",
+      "description": "Search Slack, send messages, manage canvases and lists",
+      "logo": "SL",
+      "transport": "http",
+      "url": "https://mcp.slack.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://docs.slack.dev/ai/slack-mcp-server",
+      "capabilities": [
+        "Search messages and channels",
+        "Send and schedule messages",
+        "Canvases and lists",
+        "Users and reactions"
+      ],
+      "permissions": "Reads and posts in the Slack workspaces your account can open, within the app's scopes.",
+      "tools": [
+        "slack_search_public",
+        "slack_search_channels",
+        "slack_search_users",
+        "slack_read_channel",
+        "slack_read_thread",
+        "slack_send_message",
+        "slack_schedule_message",
+        "slack_create_canvas",
+        "slack_update_canvas",
+        "slack_read_canvas",
+        "slack_read_user_profile",
+        "slack_list_channel_members",
+        "slack_list_user_channels",
+        "slack_get_reactions",
+        "slack_create_list"
+      ]
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "publisher": "Community",
+      "category": "Messaging",
+      "description": "Read and send Discord messages with a bot you add to your servers",
+      "logo": "DC",
+      "transport": "stdio",
+      "command": [
+        "npx",
+        "-y",
+        "mcp-discord"
+      ],
+      "auth": "key",
+      "key_env": "DISCORD_TOKEN",
+      "key_hint": "Create a bot at discord.com/developers/applications, enable Message Content Intent, invite it to your server, then paste the bot token.",
+      "registry_id": "",
+      "source": "https://github.com/barryyip0625/mcp-discord",
+      "capabilities": [
+        "Send and read messages",
+        "Channels and threads",
+        "Roles and members",
+        "Reactions and webhooks"
+      ],
+      "permissions": "Uses your Discord bot token. It can only reach servers you add the bot to."
+    },
+    {
+      "id": "home-assistant",
+      "name": "Home Assistant",
+      "publisher": "Home Assistant AI",
+      "category": "Smart home",
+      "description": "Control devices, automations and dashboards in Home Assistant",
+      "logo": "HA",
+      "transport": "stdio",
+      "command": [
+        "uvx",
+        "--python",
+        "3.14",
+        "ha-mcp@latest"
+      ],
+      "auth": "key",
+      "key_env": "HOMEASSISTANT_TOKEN",
+      "key_hint": "Create a long-lived access token in Home Assistant (Profile \u2192 Security). Set HOMEASSISTANT_URL in your environment to your instance (for example http://homeassistant.local:8123) before reconnecting.",
+      "registry_id": "io.github.homeassistant-ai/ha-mcp",
+      "source": "https://github.com/homeassistant-ai/ha-mcp",
+      "capabilities": [
+        "Search entities",
+        "Call services",
+        "Manage automations",
+        "Dashboards and helpers"
+      ],
+      "permissions": "Talks to your Home Assistant with the token you paste. Needs uv and HOMEASSISTANT_URL in the environment.",
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123"
+      }
+    },
+    {
+      "id": "hugging-face",
+      "name": "Hugging Face",
+      "publisher": "Hugging Face",
+      "category": "AI",
+      "description": "Models, datasets, Spaces and papers on the Hugging Face Hub",
+      "logo": "HF",
+      "transport": "http",
+      "url": "https://huggingface.co/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://huggingface.co/docs/hub/agents-mcp",
+      "capabilities": [
+        "Search models and datasets",
+        "Spaces and papers",
+        "Hub docs",
+        "Run Hub tools"
+      ],
+      "permissions": "Reads and uses Hub resources your Hugging Face account can open."
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel",
+      "publisher": "Vercel",
+      "category": "Cloud",
+      "description": "Deployments, logs and projects on Vercel",
+      "logo": "V",
+      "transport": "http",
+      "url": "https://mcp.vercel.com",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://vercel.com/docs/mcp",
+      "capabilities": [
+        "List projects",
+        "Deployments and logs",
+        "Environment variables",
+        "Domains"
+      ],
+      "permissions": "Reads and changes the Vercel projects your account can reach."
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "publisher": "Netlify",
+      "category": "Cloud",
+      "description": "Sites, deploys and env vars on Netlify",
+      "logo": "NT",
+      "transport": "http",
+      "url": "https://netlify-mcp.netlify.app/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://docs.netlify.com/build/build-with-ai/agent-setup-guides/agent-setup-overview/",
+      "capabilities": [
+        "Sites and deploys",
+        "Environment variables",
+        "Build status",
+        "Forms and functions"
+      ],
+      "permissions": "Reads and changes the Netlify sites your account can reach."
+    },
+    {
+      "id": "postman",
+      "name": "Postman",
+      "publisher": "Postman",
+      "category": "Developer",
+      "description": "Postman workspaces, collections, environments and APIs",
+      "logo": "PM",
+      "transport": "http",
+      "url": "https://mcp.postman.com/minimal",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server/",
+      "capabilities": [
+        "Workspaces and collections",
+        "Environments",
+        "Run requests",
+        "API definitions"
+      ],
+      "permissions": "Reads and changes the Postman workspaces your account can open."
+    },
+    {
+      "id": "semgrep",
+      "name": "Semgrep",
+      "publisher": "Semgrep",
+      "category": "Developer",
+      "description": "Scan code for security issues with Semgrep",
+      "logo": "SG",
+      "transport": "http",
+      "url": "https://mcp.semgrep.ai/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://semgrep.dev/docs/mcp",
+      "capabilities": [
+        "Scan code",
+        "Security findings",
+        "Rule search",
+        "Project status"
+      ],
+      "permissions": "Scans the code you send and reads Semgrep projects your account can open."
+    },
+    {
+      "id": "deepwiki",
+      "name": "DeepWiki",
+      "publisher": "Cognition",
+      "category": "Developer",
+      "description": "Ask questions about any public GitHub repo through DeepWiki",
+      "logo": "DW",
+      "transport": "http",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
+      "capabilities": [
+        "Ask wiki questions",
+        "Read wiki pages",
+        "Repo structure"
+      ],
+      "permissions": "Sends public GitHub repo questions to DeepWiki. It can't reach private repos or your accounts.",
+      "tools": [
+        "ask_wiki_question",
+        "read_wiki_contents",
+        "read_wiki_structure"
+      ]
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "publisher": "GitLab",
+      "category": "Developer",
+      "description": "Issues, merge requests, pipelines and repo context on GitLab",
+      "logo": "GL",
+      "transport": "http",
+      "url": "https://gitlab.com/api/v4/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      "capabilities": [
+        "Issues and merge requests",
+        "Pipelines",
+        "Search code",
+        "Project info"
+      ],
+      "permissions": "Reads and edits the GitLab projects your account can reach."
+    },
+    {
+      "id": "neon",
+      "name": "Neon",
+      "publisher": "Neon",
+      "category": "Data",
+      "description": "Neon serverless Postgres: projects, branches and SQL",
+      "logo": "NE",
+      "transport": "http",
+      "url": "https://mcp.neon.tech/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://neon.com/docs/ai/neon-mcp-server",
+      "capabilities": [
+        "Projects and branches",
+        "Run SQL",
+        "Migrations",
+        "Connection strings"
+      ],
+      "permissions": "Reads and changes the Neon projects your account can reach, including their databases."
+    },
+    {
+      "id": "railway",
+      "name": "Railway",
+      "publisher": "Railway",
+      "category": "Cloud",
+      "description": "Projects, services, deployments and environments on Railway",
+      "logo": "RW",
+      "transport": "http",
+      "url": "https://mcp.railway.com",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://docs.railway.com/guides/mcp-server",
+      "capabilities": [
+        "Projects and services",
+        "Deployments",
+        "Variables",
+        "Logs"
+      ],
+      "permissions": "Reads and changes the Railway projects your account can reach."
+    },
+    {
+      "id": "calendly",
+      "name": "Calendly",
+      "publisher": "Calendly",
+      "category": "Productivity",
+      "description": "Scheduling links, events and invitees from Calendly",
+      "logo": "CL",
+      "transport": "http",
+      "url": "https://mcp.calendly.com",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://developer.calendly.com/calendly-mcp-server",
+      "capabilities": [
+        "Event types",
+        "Scheduled events",
+        "Invitees",
+        "Availability"
+      ],
+      "permissions": "Reads and changes the Calendly scheduling data your account can open."
+    },
+    {
+      "id": "miro",
+      "name": "Miro",
+      "publisher": "Miro",
+      "category": "Design",
+      "description": "Read and edit Miro boards, diagrams and frames",
+      "logo": "MI",
+      "transport": "http",
+      "url": "https://mcp.miro.com/",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://developers.miro.com/docs/connecting-to-miro-mcp",
+      "capabilities": [
+        "Read boards",
+        "Create and update items",
+        "Frames and sticky notes",
+        "Board search"
+      ],
+      "permissions": "Reads and edits the Miro boards your account can open."
+    },
+    {
+      "id": "airtable",
+      "name": "Airtable",
+      "publisher": "Airtable",
+      "category": "Data",
+      "description": "Bases, tables and records in your Airtable workspace",
+      "logo": "AT",
+      "transport": "http",
+      "url": "https://mcp.airtable.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://support.airtable.com/articles/9897799762-using-the-airtable-mcp-server",
+      "capabilities": [
+        "List bases and tables",
+        "Read and write records",
+        "Search",
+        "Schema"
+      ],
+      "permissions": "Reads and changes the Airtable bases your account can open."
+    },
+    {
+      "id": "webflow",
+      "name": "Webflow",
+      "publisher": "Webflow",
+      "category": "Cloud",
+      "description": "Sites, CMS collections and pages on Webflow",
+      "logo": "WF",
+      "transport": "http",
+      "url": "https://mcp.webflow.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://developers.webflow.com/mcp/reference/getting-started",
+      "capabilities": [
+        "Sites and pages",
+        "CMS collections",
+        "Publish",
+        "Assets"
+      ],
+      "permissions": "Reads and changes the Webflow sites your account can reach."
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "publisher": "Grafana Labs",
+      "category": "Cloud",
+      "description": "Query metrics, logs, dashboards and alerts in Grafana Cloud",
+      "logo": "GF",
+      "transport": "http",
+      "url": "https://mcp.grafana.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://grafana.com/docs/grafana-cloud/ai-tools/mcp-servers/cloud-mcp/",
+      "capabilities": [
+        "Query metrics and logs",
+        "Dashboards",
+        "Alerts and incidents",
+        "Explore"
+      ],
+      "permissions": "Reads and changes the Grafana Cloud stacks your account can reach."
+    },
+    {
+      "id": "aws-knowledge",
+      "name": "AWS Knowledge",
+      "publisher": "Amazon Web Services",
+      "category": "Cloud",
+      "description": "Authoritative AWS docs, API references and best practices",
+      "logo": "AK",
+      "transport": "http",
+      "url": "https://knowledge-mcp.global.api.aws",
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server/",
+      "capabilities": [
+        "Search AWS docs",
+        "Read documentation",
+        "Regions and availability",
+        "Best practices"
+      ],
+      "permissions": "Sends documentation questions to AWS. It can't reach your AWS account.",
+      "tools": [
+        "aws___read_documentation",
+        "aws___search_documentation",
+        "aws___list_regions",
+        "aws___get_regional_availability",
+        "aws___retrieve_skill"
+      ]
+    },
+    {
+      "id": "microsoft-learn",
+      "name": "Microsoft Learn",
+      "publisher": "Microsoft",
+      "category": "Developer",
+      "description": "Official Microsoft, Azure and .NET docs and code samples",
+      "logo": "ML",
+      "transport": "http",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://learn.microsoft.com/en-us/training/support/mcp-get-started",
+      "capabilities": [
+        "Search docs",
+        "Fetch articles",
+        "Code samples"
+      ],
+      "permissions": "Sends documentation questions to Microsoft Learn. It can't reach your accounts.",
+      "tools": [
+        "microsoft_docs_search",
+        "microsoft_code_sample_search",
+        "microsoft_docs_fetch"
+      ]
+    },
+    {
+      "id": "wolfram",
+      "name": "Wolfram",
+      "publisher": "Wolfram",
+      "category": "Search",
+      "description": "Wolfram|Alpha computation, math and curated knowledge",
+      "logo": "W",
+      "transport": "http",
+      "url": "https://agenttools.wolfram.com/mcp",
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://www.wolfram.com/agent-tools/",
+      "capabilities": [
+        "Wolfram|Alpha queries",
+        "Language evaluation",
+        "Context lookup"
+      ],
+      "permissions": "Sends computation questions to Wolfram. It can't reach your files or accounts.",
+      "tools": [
+        "WolframContext",
+        "WolframLanguageEvaluator",
+        "WolframAlpha"
+      ]
+    },
+    {
+      "id": "twilio-docs",
+      "name": "Twilio Docs",
+      "publisher": "Twilio",
+      "category": "Developer",
+      "description": "Search Twilio developer documentation",
+      "logo": "TW",
+      "transport": "http",
+      "url": "https://mcp.twilio.com/docs",
+      "auth": "none",
+      "registry_id": "",
+      "source": "https://www.twilio.com/docs/ai/mcp",
+      "capabilities": [
+        "Search Twilio docs",
+        "Retrieve doc pages"
+      ],
+      "permissions": "Sends documentation questions to Twilio. It can't reach your Twilio account.",
+      "tools": [
+        "twilio__retrieve",
+        "twilio__search"
+      ]
+    },
+    {
+      "id": "circleci",
+      "name": "CircleCI",
+      "publisher": "CircleCI",
+      "category": "Developer",
+      "description": "Pipelines, jobs and build status on CircleCI",
+      "logo": "CI",
+      "transport": "http",
+      "url": "https://mcp.circleci.com/v1/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://circleci.com/docs/guides/toolkit/circleci-mcp-overview/",
+      "capabilities": [
+        "Pipelines and jobs",
+        "Build status",
+        "Logs",
+        "Projects"
+      ],
+      "permissions": "Reads and triggers builds in the CircleCI projects your account can reach."
+    },
+    {
+      "id": "buildkite",
+      "name": "Buildkite",
+      "publisher": "Buildkite",
+      "category": "Developer",
+      "description": "Pipelines, builds and artifacts on Buildkite",
+      "logo": "BK",
+      "transport": "http",
+      "url": "https://mcp.buildkite.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://buildkite.com/docs/apis/mcp-server",
+      "capabilities": [
+        "Pipelines and builds",
+        "Artifacts",
+        "Annotations",
+        "Agents"
+      ],
+      "permissions": "Reads and changes the Buildkite pipelines your account can reach."
+    },
+    {
+      "id": "fireflies",
+      "name": "Fireflies",
+      "publisher": "Fireflies.ai",
+      "category": "Productivity",
+      "description": "Meeting transcripts and notes from Fireflies",
+      "logo": "FF",
+      "transport": "http",
+      "url": "https://api.fireflies.ai/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://docs.fireflies.ai/getting-started/mcp-configuration",
+      "capabilities": [
+        "Search transcripts",
+        "Meeting summaries",
+        "Action items",
+        "Channels"
+      ],
+      "permissions": "Reads the Fireflies meeting data your account can open."
+    },
+    {
+      "id": "gamma",
+      "name": "Gamma",
+      "publisher": "Gamma",
+      "category": "Design",
+      "description": "Create and edit Gamma presentations and docs",
+      "logo": "GA",
+      "transport": "http",
+      "url": "https://mcp.gamma.app/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://developers.gamma.app/docs/gamma-mcp-server",
+      "capabilities": [
+        "Create presentations",
+        "Edit docs",
+        "Export",
+        "Themes"
+      ],
+      "permissions": "Reads and changes the Gamma content your account can open."
+    },
+    {
+      "id": "motherduck",
+      "name": "MotherDuck",
+      "publisher": "MotherDuck",
+      "category": "Data",
+      "description": "Query and manage MotherDuck / DuckDB cloud data",
+      "logo": "MD",
+      "transport": "http",
+      "url": "https://api.motherduck.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://motherduck.com/docs/key-tasks/ai-and-motherduck/mcp-setup/",
+      "capabilities": [
+        "Run SQL",
+        "List databases",
+        "Schemas",
+        "Shares"
+      ],
+      "permissions": "Reads and changes the MotherDuck databases your account can reach."
+    },
+    {
+      "id": "globalping",
+      "name": "Globalping",
+      "publisher": "jsDelivr",
+      "category": "Developer",
+      "description": "Run network checks from probes around the world",
+      "logo": "GP",
+      "transport": "http",
+      "url": "https://mcp.globalping.dev/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://github.com/jsdelivr/globalping-mcp-server",
+      "capabilities": [
+        "Ping and traceroute",
+        "DNS lookup",
+        "HTTP checks",
+        "Probe locations"
+      ],
+      "permissions": "Runs network checks through Globalping with your account's limits."
+    },
+    {
+      "id": "datadog",
+      "name": "Datadog",
+      "publisher": "Datadog",
+      "category": "Cloud",
+      "description": "Logs, monitors, dashboards and incidents from Datadog",
+      "logo": "DD",
+      "transport": "http",
+      "url": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://docs.datadoghq.com/bits_ai/mcp_server/",
+      "capabilities": [
+        "Search logs",
+        "Monitors and dashboards",
+        "Incidents",
+        "Metrics"
+      ],
+      "permissions": "Reads and changes the Datadog organization your account can reach."
+    },
+    {
+      "id": "cloudinary",
+      "name": "Cloudinary",
+      "publisher": "Cloudinary",
+      "category": "Cloud",
+      "description": "Manage media assets in Cloudinary",
+      "logo": "CD",
+      "transport": "http",
+      "url": "https://asset-management.mcp.cloudinary.com/mcp",
+      "auth": "oauth",
+      "registry_id": "",
+      "source": "https://cloudinary.com/documentation/cloudinary_llm_mcp",
+      "capabilities": [
+        "Search assets",
+        "Upload and transform",
+        "Folders",
+        "Tags"
+      ],
+      "permissions": "Reads and changes the Cloudinary media your account can reach."
+    }
   ]
 }

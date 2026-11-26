@@ -1643,6 +1643,10 @@ export interface CatalogRow {
   keyHint: string;
   target: string;
   installed: boolean;
+  source: string;
+  permissions: string;
+  /** Known tool names for the install picker (may be empty). */
+  tools: string[];
 }
 
 export interface CatalogView {
@@ -1663,8 +1667,14 @@ export function connectorCatalog(refresh = false): Promise<CatalogView> {
   return invoke<CatalogView>("connector_catalog", { refresh });
 }
 
-export function addCatalogConnector(id: string): Promise<ConnectorsChanged> {
-  return invoke<ConnectorsChanged>("add_catalog_connector", { id });
+export function addCatalogConnector(
+  id: string,
+  includeTools?: string[] | null,
+): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_catalog_connector", {
+    id,
+    includeTools: includeTools ?? null,
+  });
 }
 
 /** A pasted `mcpServers` config; names already set up are kept. */

@@ -33,6 +33,10 @@ pub struct ServerDef {
     pub token_env: Option<String>,
     /// Raw tool names the Connectors page turned off. Chat never sees them.
     pub disabled_tools: BTreeSet<String>,
+    /// When `Some`, only these raw tool names are offered to chat (minus
+    /// `disabled_tools`). `None` means no allowlist. An empty set means no
+    /// tools. Written by the catalog install picker.
+    pub include_tools: Option<BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,6 +249,12 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
             json!(def.disabled_tools.iter().cloned().collect::<Vec<_>>()),
         );
     }
+    if let Some(include) = &def.include_tools {
+        spec.insert(
+            "includeTools".into(),
+            json!(include.iter().cloned().collect::<Vec<_>>()),
+        );
+    }
     // A timeout the entry set is kept; the default is left out.
     for (key, value, default) in [
         (
@@ -344,6 +354,10 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         kept.get("disabledTools")
             .or_else(|| kept.get("disabled_tools")),
     );
+    let include_tools = kept
+        .get("includeTools")
+        .or_else(|| kept.get("include_tools"))
+        .map(|v| string_set(Some(v)));
     Some(ServerDef {
         transport,
         enabled,
@@ -353,6 +367,7 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         token_ref,
         token_env,
         disabled_tools,
+        include_tools,
     })
 }
 
@@ -391,6 +406,8 @@ fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
         "tokenEnv",
         "disabledTools",
         "disabled_tools",
+        "includeTools",
+        "include_tools",
     ];
     let mut out = Map::new();
     for key in KEYS {
@@ -571,6 +588,31 @@ mod tests {
         assert_eq!(
             file["mcpServers"]["box"]["disabledTools"],
             json!(["create", "delete"])
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_tools_round_trip_in_mcp_json() {
+        let dir = crate::harness::test_dir("mcp-include-tools");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers":{
+            "wiki":{"url":"https://mcp.example.com/mcp","type":"http","includeTools":["ask","read"]}
+        }}"#;
+        import_documents(&[doc.to_string()]).unwrap();
+        let saved = load_servers();
+        let def = saved.get("wiki").expect("wiki");
+        assert_eq!(
+            def.include_tools
+                .as_ref()
+                .map(|s| s.iter().cloned().collect::<Vec<_>>()),
+            Some(vec!["ask".to_string(), "read".to_string()])
+        );
+        let text = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            file["mcpServers"]["wiki"]["includeTools"],
+            json!(["ask", "read"])
         );
         let _ = fs::remove_dir_all(dir);
     }
