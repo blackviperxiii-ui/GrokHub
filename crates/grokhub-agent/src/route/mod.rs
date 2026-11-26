@@ -22,6 +22,7 @@ pub mod coaching;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
+pub mod frontier_usage;
 pub mod goal;
 pub mod guard;
 pub mod handoff;

@@ -1659,6 +1659,17 @@ pub fn route_log(
                 now,
             )
         });
+        // Frontier usage meter: local vs frontier turns for Home and training.
+        let project = super::frontier_usage::project_for_session(call.session, call.episode);
+        let cost_usd = if done.usage.cost_in_usd_ticks > 0 {
+            done.usage.cost_in_usd_ticks as f64 / TICKS_PER_USD
+        } else {
+            rec.outcome.as_ref().map(|o| o.cost_usd).unwrap_or(0.0)
+        };
+        let event = super::frontier_usage::event_from(&rec, &project, now, cost_usd);
+        timing::time("route:log_frontier", || {
+            super::frontier_usage::note(config_dir, &event)
+        });
         // Failover PR 5: what the call wrote and whether a free or on-device
         // model carried it, for the turn's mid-flight size upgrade.
         if done.ok {

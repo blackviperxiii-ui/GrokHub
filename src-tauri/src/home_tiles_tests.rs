@@ -89,10 +89,20 @@ fn connection_and_usage_read_like_the_desktop_app() {
     let v = connection_from(NetLink::Online, true, &facts);
     assert_eq!(v.text.big, "3 sends");
     assert_eq!(v.text.caption, "Online · local AI ready");
-    let u = usage_from(3.5, Some(42), 80);
+    let u = usage_from(3.5, Some(42), 80, None);
     assert_eq!(u.text.big, "$3.50");
     assert_eq!(u.text.detail.as_deref(), Some("Prompt cache 42% (low)"));
-    assert_eq!(usage_from(0.0, None, 80).text.tone, Tone::Quiet);
+    assert_eq!(usage_from(0.0, None, 80, None).text.tone, Tone::Quiet);
+    let with_share = usage_from(
+        1.25,
+        Some(90),
+        80,
+        Some("Local 72% · frontier escalations 8% this week".into()),
+    );
+    assert_eq!(
+        with_share.text.detail.as_deref(),
+        Some("Local 72% · frontier escalations 8% this week · Prompt cache 90%")
+    );
 }
 
 #[test]
