@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Version=1.5
-Name=GrokHub Shell
+Name=Loadout
 GenericName=Gaming and PC companion
 Comment=Loadout: built with Tauri
 Exec=grokhub-shell
