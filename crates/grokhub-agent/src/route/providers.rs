@@ -2513,20 +2513,13 @@ pub fn call_model(
         ProviderKind::Anthropic => parse_anthropic_reply(&r.body),
     }?;
     if ready.p.kind == ProviderKind::Anthropic {
-        // Claude's account state rides on its replies: rate-limit headers
-        // and usage for the local spend ledger (quota.rs).
-        let prices = ready
-            .reg
-            .get(model)
-            .map(|rec| rec.meta.prices.clone())
-            .filter(|p| !p.is_empty());
-        super::quota::note_anthropic_reply(
+        note_anthropic_turn(
             config_dir,
-            prices.as_ref(),
-            &turn.usage,
+            &ready,
+            model,
+            &mut turn,
             anthropic_cache_write(&r.body),
             &r.headers,
-            grokhub_core::now_ms(),
         );
     }
     // The next request names the model as the provider does ([`openai_body`]):
@@ -2623,23 +2616,49 @@ pub fn stream_model(
     if ready.p.kind == ProviderKind::OpenAiCompatible {
         return read_openrouter_reply(config_dir, model, &ready, s.reader, &headers, cancel, sink);
     }
-    let (turn, cache_write) = read_anthropic_stream(s.reader, cancel, sink)?;
-    // Claude's account state rides on its replies, streamed ones too:
-    // rate-limit headers and usage for the local spend ledger (quota.rs).
+    let (mut turn, cache_write) = read_anthropic_stream(s.reader, cancel, sink)?;
+    note_anthropic_turn(config_dir, &ready, model, &mut turn, cache_write, &headers);
+    Ok(turn)
+}
+
+/// Claude's account state rides on its replies, streamed or whole:
+/// rate-limit headers and usage for the local spend ledger (quota.rs).
+/// The turn is priced at its whole input too, since Anthropic's
+/// `input_tokens` leaves out cache reads and writes, which the cost
+/// meter and the weekly cap would otherwise read as a cached subset.
+fn note_anthropic_turn(
+    config_dir: &Path,
+    ready: &ReadyCall,
+    model: &str,
+    turn: &mut TurnOutput,
+    cache_write: u64,
+    headers: &[(String, String)],
+) {
     let prices = ready
         .reg
         .get(model)
         .map(|rec| rec.meta.prices.clone())
         .filter(|p| !p.is_empty());
+    let u = &turn.usage;
+    if let Some(ticks) = prices.as_ref().and_then(|p| {
+        grokhub_core::model_registry::quota::anthropic_call_ticks(
+            p,
+            u.input_tokens,
+            u.output_tokens,
+            u.cached_tokens,
+            cache_write,
+        )
+    }) {
+        turn.usage.cost_in_usd_ticks = ticks;
+    }
     super::quota::note_anthropic_reply(
         config_dir,
         prices.as_ref(),
         &turn.usage,
         cache_write,
-        &headers,
+        headers,
         grokhub_core::now_ms(),
     );
-    Ok(turn)
 }
 
 /// A streamed OpenRouter reply read to its end. A host that answered

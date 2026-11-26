@@ -107,7 +107,7 @@ fn a_budget_pause_or_other_failure_is_not_a_wait() {
         "network error: timed out",
         NOW
     ));
-    assert!(waiter().paused.is_none());
+    assert!(waiter().paused.is_empty());
     assert!(wait_cards(&dir.0).is_empty());
 }
 
@@ -144,4 +144,48 @@ fn the_waiting_card_shows_in_pulse_with_retry_now() {
         .find(|p| p.title == "Waiting for xAI")
         .expect("the waiting card is on the feed");
     assert_eq!(post.review, RETRY_LABEL);
+}
+
+#[test]
+fn two_paused_chats_both_resume() {
+    let (_g, dir) = fresh("two-chats");
+    let err = format!("protocol error: {}", *NO_ROUTE_MSG);
+    assert!(turn_failed(&dir.0, "chat-1", "Summarize inbox", &err, NOW));
+    start(&dir.0, "chat:default", "grok-4.7", NOW, "3:05 PM");
+    // A second chat pauses on the same wait.
+    assert!(turn_failed(
+        &dir.0,
+        "chat-2",
+        "Plan the trip",
+        &err,
+        NOW + 1_000
+    ));
+    // The first chat asks again while it waits: its newest ask goes out.
+    assert!(turn_failed(
+        &dir.0,
+        "chat-1",
+        "Summarize inbox today",
+        &err,
+        NOW + 2_000
+    ));
+    assert_eq!(due_check(NOW + 15_000), Some("grok-4.7".to_string()));
+    assert!(checked(&dir.0, Some("grok-4.7"), NOW + 15_500).is_some());
+    assert_eq!(
+        take_resume("chat-1"),
+        Some(Resume {
+            conversation_id: "chat-1".into(),
+            ask: "Summarize inbox today".into(),
+            note: "xAI is answering again; resumed: Summarize inbox today".into(),
+        })
+    );
+    assert_eq!(
+        take_resume("chat-2"),
+        Some(Resume {
+            conversation_id: "chat-2".into(),
+            ask: "Plan the trip".into(),
+            note: "xAI is answering again; resumed: Plan the trip".into(),
+        })
+    );
+    assert_eq!(take_resume("chat-1"), None);
+    assert_eq!(take_resume("chat-2"), None);
 }

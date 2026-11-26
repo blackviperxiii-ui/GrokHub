@@ -43,6 +43,9 @@ pub struct Approvals {
 const STDERR_TAIL: usize = 4_096;
 /// How often a running turn looks at Stop.
 const STOP_POLL: Duration = Duration::from_millis(100);
+/// Why a Claude plan turn doesn't start while Offline only is on: Claude
+/// Code is its own process and sends the message to Anthropic's servers.
+pub const OFFLINE_PLAN: &str = "Offline only is on, and a Claude plan chat sends each message to Anthropic's servers, so this message wasn't sent. Turn off Offline only in Settings → Privacy & data, or say \"stop using Claude\" to answer on this computer.";
 
 pub struct ClaudePlanEngine {
     cli: PathBuf,
@@ -236,6 +239,10 @@ impl ClaudePlanEngine {
     }
 
     fn run(&mut self, text: &str, image: Option<&str>, emit: &mut dyn FnMut(AcpEvent)) {
+        // The app's egress guards can't see inside Claude Code, so it never starts.
+        if grokhub_core::offline::enabled() {
+            return fail(emit, OFFLINE_PLAN.into());
+        }
         let mut cmd = Command::new(&self.cli);
         cmd.args(self.args())
             .current_dir(&self.workspace)
@@ -1065,6 +1072,26 @@ mod tests {
                     stop_reason: "error".into()
                 }
             );
+        }
+
+        #[test]
+        fn offline_only_never_starts_claude_code() {
+            let _off = grokhub_core::offline::force_for_thread(true);
+            let dir = scratch("offline");
+            let cli = fake_cli(&dir, &lines_of(&[&init(SID), OK]));
+            let mut e = engine(&cli, &dir);
+            let seen = run(&mut e, "secret question");
+            assert_eq!(
+                seen,
+                vec![
+                    AcpEvent::Err(OFFLINE_PLAN.to_string()),
+                    AcpEvent::Done {
+                        stop_reason: "error".into()
+                    },
+                ]
+            );
+            assert!(!dir.join("stdin").exists(), "Claude Code started");
+            assert!(!dir.join("args").exists(), "Claude Code started");
         }
 
         #[test]

@@ -790,9 +790,37 @@ pub fn max_threads() -> u32 {
         .unwrap_or(1)
 }
 
+/// The added files each config dir's page was last shown: a save merges
+/// against it, so a file added elsewhere meanwhile (a library download)
+/// isn't dropped by a page that never showed it.
+static SHOWN_FILES: std::sync::Mutex<Vec<(PathBuf, Vec<String>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn note_shown(config_dir: &Path, files: &[String]) {
+    let mut shown = SHOWN_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    shown.retain(|(dir, _)| dir != config_dir);
+    shown.push((config_dir.to_path_buf(), files.to_vec()));
+}
+
+/// `page` with the added files the page never saw put back: in the saved
+/// file now, but not in what the page was last shown.
+fn with_files_added_since(config_dir: &Path, mut page: LocalAiConfig) -> LocalAiConfig {
+    let shown = SHOWN_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_, seen)) = shown.iter().find(|(dir, _)| dir == config_dir) else {
+        return page;
+    };
+    for f in load(config_dir).own_files {
+        if !seen.contains(&f) && !page.own_files.contains(&f) {
+            page.own_files.push(f);
+        }
+    }
+    page
+}
+
 /// Everything the page shows. Runs the hardware readers.
 pub fn view(config_dir: &Path) -> LocalAiView {
     let config = load(config_dir).clamped(max_threads());
+    note_shown(config_dir, &config.own_files);
     // A restart must still honor Advanced: apply before the page is painted.
     apply(&config);
     let machine = read_machine(config_dir);
@@ -863,6 +891,7 @@ pub const SPEED_TEST_LOCAL_OFF: &str =
 /// Saves the page's choices, clamped, and reads the page again.
 pub fn save_view(config_dir: &Path, config: LocalAiConfig) -> Result<LocalAiView, String> {
     let before = local_sidecar::find_model(config_dir);
+    let config = with_files_added_since(config_dir, config);
     save(config_dir, &config.clamped(max_threads()))?;
     // A newly added (or removed) model file loads on the next request, not
     // after a restart.

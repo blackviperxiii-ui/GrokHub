@@ -4684,3 +4684,77 @@ fn multi_turn_local_sequence_uses_exact_reason_and_task_kind_per_turn() {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// fleet() with a priced Claude model: $3/M in, $0.30/M cache read,
+/// $3.75/M cache write and $15/M out, in ticks per token.
+fn priced_claude_fleet() -> Registry {
+    let mut reg = fleet();
+    let an = ModelMeta {
+        id: AN_MODEL.into(),
+        context_length: Some(200_000),
+        prices: Prices {
+            prompt: Some(30_000),
+            cached: Some(3_000),
+            cache_write: Some(37_500),
+            completion: Some(150_000),
+            ..Prices::default()
+        },
+        ..ModelMeta::default()
+    };
+    reg.apply_refresh(&[Listing::new(SourceKind::Anthropic, vec![an])], &[], 2);
+    reg
+}
+
+/// 100 fresh, 40 cache-read and 25 cache-write input tokens and 7 out:
+/// 100×30_000 + 40×3_000 + 25×37_500 + 7×150_000 ticks.
+const CLAUDE_CACHED_TICKS: i64 = 5_107_500;
+
+/// A Claude reply that used the prompt cache is priced at its whole
+/// input (fresh, cache reads and cache writes), so the cost meter and
+/// the weekly cap count what the call cost, streamed or whole.
+#[test]
+fn an_anthropic_reply_is_priced_at_its_whole_input() {
+    let whole = r#"{"content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"cache_creation_input_tokens":25,"cache_read_input_tokens":40,"output_tokens":7}}"#;
+    let (dir, _wire) = sse_setup("anthropic-priced-whole", whole);
+    save_registry(&dir, &priced_claude_fleet()).unwrap();
+    let out = providers::call_model(
+        &dir,
+        "chat:default",
+        AN_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:12",
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(out.text, "Hi");
+    assert_eq!(out.usage.cost_in_usd_ticks, CLAUDE_CACHED_TICKS);
+    let _ = std::fs::remove_dir_all(dir);
+
+    let sse = concat!(
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":25,\"cache_read_input_tokens\":40,\"output_tokens\":1}}}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (dir, _wire) = sse_setup("anthropic-priced-stream", sse);
+    save_registry(&dir, &priced_claude_fleet()).unwrap();
+    let mut shown = Vec::new();
+    let out = stream_call(&dir, &mut shown).unwrap();
+    assert_eq!(out.text, "Hi");
+    assert_eq!(out.usage.cost_in_usd_ticks, CLAUDE_CACHED_TICKS);
+    // The spend ledger prices the same call the same way.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert_eq!(
+        (
+            ledger.anthropic.spend.day_input_tokens,
+            ledger.anthropic.spend.day_output_tokens,
+            ledger.anthropic.spend.day_ticks
+        ),
+        (165, 7, CLAUDE_CACHED_TICKS)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
