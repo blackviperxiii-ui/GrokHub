@@ -1,4 +1,4 @@
-# Install GrokHub Shell on Windows from the prebuilt GitHub release, with
+# Install Loadout on Windows from the prebuilt GitHub release, with
 # nothing to compile.
 #
 # It downloads SHA256SUMS and SHA256SUMS.minisig, checks the signature
@@ -140,7 +140,7 @@ try {
     New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
     [IO.File]::WriteAllText($Receipt, "$Channel`n")
     if ($Switch) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $ConfigDir 'channel.beta-since') }
-    Write-Host "installed GrokHub Shell (channel $Channel, $Tag)"
+    Write-Host "installed Loadout (channel $Channel, $Tag)"
 } finally {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath $Work
 }

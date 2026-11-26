@@ -316,7 +316,7 @@ place_appimage() {
     install_desktop_entry "$ROOT/packaging/grokhub-shell.desktop" "$entry" "$bin"
   else
     mkdir -p "$(dirname "$entry")"
-    printf '[Desktop Entry]\nType=Application\nName=GrokHub Shell\nExec=%s\nTryExec=%s\nIcon=grokhub\nCategories=Utility;\nTerminal=false\n' \
+    printf '[Desktop Entry]\nType=Application\nName=Loadout\nExec=%s\nTryExec=%s\nIcon=grokhub\nCategories=Utility;\nTerminal=false\n' \
       "$bin" "$bin" >"$entry"
   fi
   if [[ -n "$ROOT" && -f "$ROOT/packaging/grokhub.svg" ]]; then

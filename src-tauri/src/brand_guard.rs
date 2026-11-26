@@ -73,3 +73,16 @@ fn tray_and_errors_use_the_brand_name() {
     );
     assert_eq!(crate::credential::SERVICE, "GrokHub");
 }
+
+#[test]
+fn tauri_conf_product_name_matches_brand() {
+    let conf =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
+            .expect("read tauri.conf.json");
+    let v: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
+    let product = v
+        .get("productName")
+        .and_then(|n| n.as_str())
+        .expect("productName string");
+    assert_eq!(product, grokhub_core::brand::product_name());
+}
