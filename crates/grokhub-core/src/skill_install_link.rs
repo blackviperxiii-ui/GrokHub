@@ -360,9 +360,8 @@ mod tests {
             ]
         );
         assert!(
-            std::path::Path::new(&preview.destination).ends_with(
-                std::path::Path::new("skill-bundles").join("backend-dev.yaml")
-            ),
+            std::path::Path::new(&preview.destination)
+                .ends_with(std::path::Path::new("skill-bundles").join("backend-dev.yaml")),
             "{}",
             preview.destination
         );
