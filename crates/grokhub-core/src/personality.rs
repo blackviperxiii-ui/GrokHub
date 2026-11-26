@@ -470,12 +470,43 @@ pub fn save_custom(dir: &std::path::Path, p: &Personality) -> Result<std::path::
     Ok(path)
 }
 
-/// Remove a custom preset's file. Built-ins have none, so this never touches them.
+/// Remove a custom preset from the file it was loaded from, whatever that file
+/// is called: the file goes when the preset was its only one, else the file
+/// keeps its other presets. Built-ins have no file, so this never touches them.
 pub fn delete_custom(dir: &std::path::Path, id: &str) -> Result<(), String> {
     if builtins_cached().iter().any(|b| b.id == id) {
         return Err("Built-in personalities can't be deleted.".into());
     }
-    std::fs::remove_file(custom_path(dir, id)).map_err(|e| e.to_string())
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .collect()
+        })
+        .unwrap_or_default();
+    // The same order `load_all` reads them in, so the copy it shows goes.
+    files.sort();
+    for path in files {
+        let Ok(mut presets) = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| parse(&text))
+        else {
+            continue;
+        };
+        let before = presets.len();
+        presets.retain(|p| p.id != id);
+        if presets.len() == before {
+            continue;
+        }
+        if presets.is_empty() {
+            return std::fs::remove_file(&path).map_err(|e| e.to_string());
+        }
+        let text = toml::to_string(&PresetFile { preset: presets })
+            .map_err(|e| format!("Personalities: {e}"))?;
+        return std::fs::write(&path, text).map_err(|e| e.to_string());
+    }
+    Err(format!("No custom personality called {id}."))
 }
 
 fn builtins_cached() -> &'static [Personality] {
@@ -936,6 +967,42 @@ mod tests {
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
             "a deleted preset falls back to the default"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_loaded_custom_preset_can_be_deleted() {
+        let dir = scratch("loaded-delete");
+        std::fs::create_dir_all(&dir).unwrap();
+        let preset = |id: &str| {
+            format!("[[preset]]\nid = \"{id}\"\nname = \"N {id}\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n")
+        };
+        // A file named for something else, and one file holding two presets.
+        std::fs::write(dir.join("mine.toml"), preset("deckhand")).unwrap();
+        std::fs::write(
+            dir.join("pair.toml"),
+            format!("{}\n{}", preset("left"), preset("right")),
+        )
+        .unwrap();
+        let (all, problems) = load_all(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(all.len(), 27);
+
+        delete_custom(&dir, "deckhand").expect("deletes the preset in mine.toml");
+        assert!(!dir.join("mine.toml").exists());
+        delete_custom(&dir, "left").expect("deletes one of two presets in a file");
+        let (all, problems) = load_all(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        let ids: Vec<&str> = all
+            .iter()
+            .filter(|p| p.custom)
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["right"]);
+        assert_eq!(
+            delete_custom(&dir, "nobody"),
+            Err("No custom personality called nobody.".to_string())
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

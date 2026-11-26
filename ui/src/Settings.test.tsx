@@ -83,6 +83,12 @@ vi.mock("./Privacy", () => ({
   Privacy: ({ readOnly }: { readOnly?: boolean }) => <p>{readOnly ? "Privacy read-only" : "Privacy panel"}</p>,
 }));
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
+// Auto setup has its own tests (AutoSetup.test.tsx); here it stands for a page
+// that saves settings on its own.
+vi.mock(import("./AutoSetup"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  AutoSetupPage: () => <p>Auto setup panel</p>,
+}));
 
 import {
   ABOUT_STACK,
@@ -179,6 +185,22 @@ describe("Settings", () => {
     await openSection("General");
     await userEvent.click(screen.getByLabelText("Let Loadout control the desktop"));
     expect(api.saveSettings).toHaveBeenCalledWith(false, "/work", "always", true);
+  });
+
+  it("after Auto setup changes approvals, desktop control saves the new approvals", async () => {
+    api.getSettings.mockResolvedValue(shape({ approvals: "auto" }));
+    api.saveSettings.mockResolvedValue(shape({ approvals: "ask", desktopControl: true }));
+    render(<Settings caps={DESKTOP} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+
+    await openSection("Auto setup");
+    expect(screen.getByText("Auto setup panel")).toBeInTheDocument();
+    // Auto setup's Undo puts approvals back to Ask on disk.
+    api.getSettings.mockResolvedValue(shape({ approvals: "ask" }));
+    await openSection("General");
+    await userEvent.click(screen.getByLabelText("Let Loadout control the desktop"));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    expect(api.saveSettings).toHaveBeenCalledWith(true, "", "ask", true);
   });
 
   it("a Pulse model card opens Local AI on its model; the palette opens it plain", async () => {
