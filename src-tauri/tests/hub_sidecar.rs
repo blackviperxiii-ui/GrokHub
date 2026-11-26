@@ -142,8 +142,7 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
         );
         if name == "release.yml" {
             assert!(
-                body.iter()
-                    .any(|line| *line == "        run: node scripts/stage-hub-sidecar.mjs"),
+                body.contains(&"        run: node scripts/stage-hub-sidecar.mjs"),
                 "release builds keep the optimized sidecar"
             );
         }
@@ -180,6 +179,10 @@ fn windows_nextest_on_beta_is_split_in_two_and_the_check_name_stays() {
     assert!(ci.contains("\n  windows:\n"));
     assert!(ci.contains("needs: [changes, windows-parts]"));
     assert!(ci.contains("shared-key: windows-test"));
+    assert!(
+        ci.contains("Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $backup 'bin')"),
+        "parked rustup shims stay on PATH for the windows-test restore and the sidecar stage"
+    );
 }
 
 /// The value of every `path = "…"` or `path = '…'` key in a Cargo manifest.
