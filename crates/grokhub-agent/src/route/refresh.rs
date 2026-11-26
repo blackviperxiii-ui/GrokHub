@@ -157,9 +157,14 @@ fn onboard(
             to_probe.push(id);
         }
     }
-    // A quarantined model whose backoff ran out gets its one half-open check here.
+    // A quarantined model whose backoff ran out gets its one half-open check
+    // here: a probe on a plan, its next real call on an API key (no paid check).
     for id in reg.half_open_due(now_ms) {
-        if cred == Credential::Plan && !to_probe.contains(&id) {
+        if cred != Credential::Plan {
+            if let Some(ev) = reg.start_trial(&id, now_ms) {
+                let _ = append_span(config_dir, &event_span(&ev));
+            }
+        } else if !to_probe.contains(&id) {
             reg.mark_half_open(&id);
             to_probe.push(id);
         }
@@ -509,6 +514,64 @@ mod tests {
             .filter(|i| reg.get(i).unwrap().state == ModelState::Live)
             .count();
         assert_eq!((live, ids.len() - live), (5, 1));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_api_key_models_rest_ends_on_a_timer_and_its_next_call_decides() {
+        use grokhub_core::model_registry::{CallStatus, ModelState, Observation};
+        let dir = test_dir("route-refresh-api-key-trial");
+        let call = |id: &str, ts_ms: u64, status: CallStatus, http: u16| Observation {
+            model: id.into(),
+            ts_ms,
+            status,
+            latency_ms: 0,
+            served_model: None,
+            endpoint_ok: true,
+            reasoning_tokens: 0,
+            cost_ticks: 0,
+            http,
+        };
+        let mut reg = Registry::default();
+        reg.apply_refresh(
+            &[Listing::new(
+                SourceKind::XaiApi,
+                vec![meta("grok-4.1"), meta("grok-4.2")],
+            )],
+            &[],
+            1,
+        );
+        for id in ["grok-4.1", "grok-4.2"] {
+            let fails: Vec<Observation> = (0..3)
+                .map(|t| call(id, 10 + t, CallStatus::Error, 503))
+                .collect();
+            reg.fold(&fails);
+            assert_eq!(reg.get(id).unwrap().state, ModelState::Quarantined);
+        }
+        let now = 1 + grokhub_core::model_registry::probe::DAY_MS;
+        onboard(&dir, &mut reg, &[], Credential::ApiKey, "", now);
+        save_registry(&dir, &reg).unwrap();
+        // No paid probe on the key: nothing is queued.
+        let mut probed = 0;
+        while probe_next(&dir, Credential::ApiKey, now, &mut |_, _| {
+            probed += 1;
+            ProbeResult::default()
+        })
+        .is_some()
+        {}
+        assert_eq!(probed, 0, "an API key never pays for a check");
+        let mut reg = load_registry(&dir);
+        for id in ["grok-4.1", "grok-4.2"] {
+            assert!(
+                reg.get(id).unwrap().state.routable(),
+                "{id} routes again after its rest"
+            );
+        }
+        reg.fold(&[call("grok-4.1", now + 1, CallStatus::Ok, 200)]);
+        reg.fold(&[call("grok-4.2", now + 1, CallStatus::Error, 503)]);
+        let (ok, bad) = (reg.get("grok-4.1").unwrap(), reg.get("grok-4.2").unwrap());
+        assert_eq!((ok.state, ok.breaker.half_open), (ModelState::Live, false));
+        assert_eq!((bad.state, bad.breaker.opens), (ModelState::Quarantined, 2));
         let _ = std::fs::remove_dir_all(dir);
     }
 
