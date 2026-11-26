@@ -1129,6 +1129,11 @@ fn try_work_branch_commit(
     })
 }
 
+/// A backup stash keeps and puts back the exact bytes: with the user's
+/// `core.autocrlf=true` (Git for Windows' default) the re-apply would turn an
+/// LF file into CRLF before the tool even runs.
+const STASH_RAW_BYTES: &str = "core.autocrlf=false";
+
 fn try_git_stash_snapshot(
     workspace: &Path,
     id: &str,
@@ -1148,6 +1153,8 @@ fn try_git_stash_snapshot(
             "user.name=Loadout Backup",
             "-c",
             "user.email=backup@local",
+            "-c",
+            STASH_RAW_BYTES,
             "stash",
             "push",
             "--include-untracked",
@@ -1164,7 +1171,7 @@ fn try_git_stash_snapshot(
     let ref_name = format!("refs/loadout-backups/{id}");
     let _ = run_git(workspace, &["update-ref", &ref_name, &sha]);
     // Immediately re-apply so the working tree is unchanged before the tool runs.
-    let _ = run_git(workspace, &["stash", "apply", "--quiet", &sha]);
+    let _ = run_git(workspace, &["-c", STASH_RAW_BYTES, "stash", "apply", "--quiet", &sha]);
     Some(BackupEntry {
         id: id.to_string(),
         created_at_ms: now_ms,
@@ -1318,9 +1325,11 @@ pub fn restore_backup(
             // Restore tracked files from the stash tree first, then apply the
             // stash (including untracked files via `^3` if present) without
             // dropping the stash.
-            let (code, out) = run_git(workspace, &["checkout", &sha, "--", "."])?;
+            let (code, out) =
+                run_git(workspace, &["-c", STASH_RAW_BYTES, "checkout", &sha, "--", "."])?;
             if code != 0 {
-                let (apply_code, apply_out) = run_git(workspace, &["stash", "apply", &sha])?;
+                let (apply_code, apply_out) =
+                    run_git(workspace, &["-c", STASH_RAW_BYTES, "stash", "apply", &sha])?;
                 if apply_code != 0 {
                     return Err(format!(
                         "Could not restore git stash {sha}: {out} / {apply_out}"
@@ -1330,7 +1339,10 @@ pub fn restore_backup(
                 // Also restore untracked files stored in the 3rd parent of a `-u` stash.
                 let untracked_parent = format!("{sha}^3");
                 if git_ok(workspace, &["rev-parse", "--verify", &untracked_parent]).is_some() {
-                    let _ = run_git(workspace, &["checkout", &untracked_parent, "--", "."]);
+                    let _ = run_git(
+                        workspace,
+                        &["-c", STASH_RAW_BYTES, "checkout", &untracked_parent, "--", "."],
+                    );
                 }
             }
             let short: String = sha.chars().take(7).collect();
