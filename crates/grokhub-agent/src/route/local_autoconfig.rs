@@ -35,10 +35,6 @@ impl GovState {
         }
     }
 
-    fn ctx_cap(self) -> u32 {
-        self.ctx_cap_for(false)
-    }
-
     fn ctx_cap_for(self, coding: bool) -> u32 {
         match self {
             GovState::RampUp => u32::MAX,

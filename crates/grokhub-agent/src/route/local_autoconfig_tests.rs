@@ -1340,6 +1340,7 @@ fn a_projector_comes_out_of_the_room_before_the_layers_and_the_context() {
             Beside {
                 drafter,
                 projector_mb,
+                coding: false,
             },
         )
     };
@@ -1545,7 +1546,10 @@ fn coding_model_on_16gb_normal_reaches_64k_with_q4_kv_and_flash_attn() {
     let o = Overrides::default();
 
     let non_coding = autoconfig(&p, &m, Backend::Cuda, GovState::Normal, &o, None);
-    assert_eq!((non_coding.ngl, non_coding.ctx, non_coding.kv), (37, 32_768, KvType::Q8));
+    assert_eq!(
+        (non_coding.ngl, non_coding.ctx, non_coding.kv),
+        (37, 32_768, KvType::Q8)
+    );
 
     let coding = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &o, None);
     assert_eq!(coding.ngl, 37);
@@ -1576,7 +1580,14 @@ fn coding_model_on_16gb_normal_reaches_64k_with_q4_kv_and_flash_attn() {
 fn coding_model_on_16gb_keeps_q8_when_64k_fits_in_q8() {
     let p = gpu_16gb_profile();
     let m = coding_36l(9_500);
-    let a = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &Overrides::default(), None);
+    let a = autoconfig_coding(
+        &p,
+        &m,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        None,
+    );
     assert_eq!((a.ngl, a.ctx, a.kv), (37, 65_536, KvType::Q8));
 }
 
@@ -1587,7 +1598,14 @@ fn coding_model_drops_to_single_slot_to_fit_64k_on_16gb() {
         file_mb: 10_750,
         ..swa_12b()
     };
-    let a = autoconfig_coding(&p, &m, Backend::Cuda, GovState::Normal, &Overrides::default(), None);
+    let a = autoconfig_coding(
+        &p,
+        &m,
+        Backend::Cuda,
+        GovState::Normal,
+        &Overrides::default(),
+        None,
+    );
     assert_eq!((a.ngl, a.ctx, a.kv), (49, 65_536, KvType::Q4));
     assert_eq!(a.run.seqs(), 1);
 }
