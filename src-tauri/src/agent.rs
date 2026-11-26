@@ -2744,10 +2744,7 @@ mod tests {
             picture(card("image_generate", "in_progress", done.clone())),
             None
         );
-        assert_eq!(
-            picture(card("image_edit", "failed", done.clone())),
-            None
-        );
+        assert_eq!(picture(card("image_edit", "failed", done.clone())), None);
         assert_eq!(picture(card("read_file", "completed", done)), None);
         for detail in [
             "IMAGINE: https://imgen.x.ai/a.png",

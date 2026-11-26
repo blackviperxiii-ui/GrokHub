@@ -2801,7 +2801,11 @@ fn is_image_shell_command(call: &FunctionCall) -> bool {
     }
     let cmd = serde_json::from_str::<serde_json::Value>(&call.arguments)
         .ok()
-        .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("command")
+                .and_then(|c| c.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_default()
         .to_ascii_lowercase();
     const IMAGE_BINS: &[&str] = &[
