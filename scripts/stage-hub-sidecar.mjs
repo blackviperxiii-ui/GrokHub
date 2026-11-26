@@ -9,7 +9,17 @@
 // It always builds for the host triple; cross and universal builds are not
 // staged.
 //
-//   node scripts/stage-hub-sidecar.mjs [--force]
+//   node scripts/stage-hub-sidecar.mjs [--force] [--profile dev|release]
+//
+// release (the default) is the optimized binary installers ship. It names
+// the host triple, so cargo writes to target/hub/<host>/release whatever
+// CARGO_BUILD_TARGET or build.target in a cargo config says. Left to those,
+// cargo writes to their triple's folder, and a copy from target/hub/release
+// would stage a binary from an earlier run.
+//
+// dev writes target/debug, the same folder the workspace Windows job caches.
+// A beta push can restore that cache and skip a cold optimized build. The
+// smoke test only needs a binary that runs; bundles stay on the release profile.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, chmodSync } from "node:fs";
 import path from "node:path";
@@ -19,6 +29,12 @@ const force = process.argv.includes("--force");
 if (process.platform === "linux" && !force) {
   console.log("stage-hub-sidecar: Linux bundles ship grokhub-hub as a package file; nothing to stage");
   process.exit(0);
+}
+
+const profileAt = process.argv.indexOf("--profile");
+const profile = profileAt === -1 ? "release" : process.argv[profileAt + 1];
+if (profile !== "dev" && profile !== "release") {
+  throw new Error(`stage-hub-sidecar: --profile must be dev or release, got ${profile}`);
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,26 +47,24 @@ if (!host) {
   throw new Error("stage-hub-sidecar: rustc -vV printed no host triple");
 }
 
-// The build names the host triple, so cargo writes to target/hub/<host>/release
-// whatever CARGO_BUILD_TARGET or build.target in a cargo config says. Left to
-// those, cargo writes to their triple's folder, and a copy from
-// target/hub/release would stage a binary from an earlier run.
-const targetDir = path.join(root, "target", "hub");
-execFileSync(
-  "cargo",
-  [
-    "build", "--release", "--locked", "-p", "grokhub-hub",
-    "--target", host,
-    "--target-dir", targetDir,
-  ],
-  { cwd: root, stdio: "inherit" },
-);
+const dev = profile === "dev";
+const targetDir = dev ? path.join(root, "target") : path.join(root, "target", "hub");
+const cargoArgs = dev
+  ? ["build", "--locked", "-p", "grokhub-hub", "--target-dir", targetDir]
+  : [
+      "build", "--release", "--locked", "-p", "grokhub-hub",
+      "--target", host,
+      "--target-dir", targetDir,
+    ];
+execFileSync("cargo", cargoArgs, { cwd: root, stdio: "inherit" });
 
 const exe = host.includes("windows") ? ".exe" : "";
-const from = path.join(targetDir, host, "release", `grokhub-hub${exe}`);
+const from = dev
+  ? path.join(targetDir, "debug", `grokhub-hub${exe}`)
+  : path.join(targetDir, host, "release", `grokhub-hub${exe}`);
 const to = path.join(root, "src-tauri", `grokhub-hub-${host}${exe}`);
 copyFileSync(from, to);
 if (!exe) {
   chmodSync(to, 0o755);
 }
-console.log(`stage-hub-sidecar: ${path.relative(root, from)} -> ${path.relative(root, to)}`);
+console.log(`stage-hub-sidecar: profile ${profile}: ${path.relative(root, from)} -> ${path.relative(root, to)}`);
