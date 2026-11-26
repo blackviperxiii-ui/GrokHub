@@ -318,6 +318,8 @@ pub fn routing_reason(rules: &[String], handoff_rule: Option<&str>) -> &'static 
         "keeping sensitive content on this computer"
     } else if has("adult:local_only") {
         "keeping explicit content on this computer"
+    } else if has("adult:voice_local") {
+        "18+ voice stays on this computer"
     } else if has("offline:local") {
         "offline mode is on"
     } else if has("local:no_keys") {

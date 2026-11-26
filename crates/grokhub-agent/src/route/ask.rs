@@ -1854,7 +1854,7 @@ mod tests {
             prior: Some(AskKind::CodeSmall),
             ..AskContext::default()
         };
-        let casual = read("What should I make for dinner?", &after_file);
+        let casual = read("Grabbing some coffee, what a long day", &after_file);
         assert_eq!(casual.kind, AskKind::Chat);
         assert_eq!(casual.lane(), "chat:default");
     }

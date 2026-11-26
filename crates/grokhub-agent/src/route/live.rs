@@ -2023,6 +2023,16 @@ pub fn stream_routed(
     // the right voice.
     note_here(class, &req.conversation_id, on_device, must_stay);
     let mut active_decision = decision;
+    if forced_adult_local {
+        let rule = if ask_adult {
+            "adult:local_only"
+        } else {
+            "adult:voice_local"
+        };
+        if !active_decision.route.rule_ids.iter().any(|r| r == rule) {
+            active_decision.route.rule_ids.push(rule.into());
+        }
+    }
     let mut active_on_device = on_device;
     let mut active_on_provider = active_decision.on_provider() && !active_on_device;
     let mut active_model = if active_on_device && !active_decision.on_device() {

@@ -357,6 +357,16 @@ pub fn call_model(
     };
     let mut active_provider = decision.route.provider.clone();
     let mut active_decision = decision;
+    if forced_adult_local {
+        let rule = if ask_adult {
+            "adult:local_only"
+        } else {
+            "adult:voice_local"
+        };
+        if !active_decision.route.rule_ids.iter().any(|r| r == rule) {
+            active_decision.route.rule_ids.push(rule.into());
+        }
+    }
     let mut tried: Vec<String> = Vec::new();
     let mut short_retried = false;
     let mut out = Err(ClientError::Protocol("no route".into()));

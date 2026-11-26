@@ -1694,7 +1694,10 @@ fn explicit_adult_specialist_never_sticks_for_code_file_or_casual_turns() {
     const HERMES_ADULT: &str = "nous-hermes4-14b-abliterated-q4_k_m";
     let qwen = file(QWEN_CODER);
     let hermes = file(HERMES_ADULT);
-    let on_disk = vec![(m(QWEN_CODER), qwen.clone()), (m(HERMES_ADULT), hermes.clone())];
+    let on_disk = vec![
+        (m(QWEN_CODER), qwen.clone()),
+        (m(HERMES_ADULT), hermes.clone()),
+    ];
 
     // Turn 1 (explicit): swaps immediately from Qwen3.6 35B to Hermes 4 14B.
     let turn1 = Now {

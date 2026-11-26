@@ -4331,7 +4331,19 @@ fn multi_turn_sequence_classifies_every_turn_fresh_without_sticky_explicit() {
     let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
     let (dir, wire) = setup("route-per-turn-online");
     let _cfg = crate::perm::ConfigGuard::set(&dir);
-    save_registry(&dir, &fleet()).unwrap();
+    let mut reg = fleet();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::Local,
+            super::local::TIERS
+                .iter()
+                .map(|t| super::local::tier_meta(t))
+                .collect(),
+        )],
+        &[],
+        2,
+    );
+    save_registry(&dir, &reg).unwrap();
     add_provider(&dir, OR_URL, KEY, NOW).unwrap();
     grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
     let mut table = table_with("chat:default", OR_MODEL);
@@ -4367,42 +4379,81 @@ fn multi_turn_sequence_classifies_every_turn_fresh_without_sticky_explicit() {
     let (t1_text, t1) = send("talk dirty to me, I'm horny");
     assert_eq!(t1_text, "local here");
     assert_eq!(t1.used.model, super::local::live_tier());
-    assert!(t1.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t1.rule_ids);
+    assert!(
+        t1.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t1.rule_ids
+    );
     assert_eq!(
         super::local_live::local_reason(&t1.rule_ids, None, false, true, false),
         "keeping explicit content on this computer"
     );
     assert_eq!(wire.n(), 0);
 
-    // Turn 2 (code): explicit flag does not stick; routes to the coding pick online with explicit history stripped.
+    // Turn 2 (code): explicit flag does not stick; routes to the coding pick online
+    // with explicit history stripped.
     let (t2_text, t2) = send("Fix the borrow error in src/main.rs");
     assert_eq!(t2_text, "hello from the provider");
     assert_eq!(t2.used.model, OR_MODEL);
-    assert!(t2.rule_ids.iter().any(|r| r == "ask:debug"), "{:?}", t2.rule_ids);
-    assert!(!t2.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t2.rule_ids);
+    assert!(
+        t2.rule_ids.iter().any(|r| r == "ask:debug"),
+        "{:?}",
+        t2.rule_ids
+    );
+    assert!(
+        !t2.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t2.rule_ids
+    );
     assert_eq!(wire.n(), 1);
     let b2 = wire.bodies().pop().unwrap();
     assert!(b2.contains("Fix the borrow error in src/main.rs"), "{b2}");
-    assert!(!b2.contains("horny"), "explicit turn must not leak online: {b2}");
+    assert!(
+        !b2.contains("horny"),
+        "explicit turn must not leak online: {b2}"
+    );
 
     // Turn 3 (file task): routes to the coding pick even mid-Hangout, never explicit.
     let (t3_text, t3) = send("List the files in my folder and read notes.txt");
     assert_eq!(t3_text, "hello from the provider");
     assert_eq!(t3.used.model, OR_MODEL);
-    assert!(t3.rule_ids.iter().any(|r| r == "ask:code_small"), "{:?}", t3.rule_ids);
-    assert!(!t3.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t3.rule_ids);
+    assert!(
+        t3.rule_ids.iter().any(|r| r == "ask:code_small"),
+        "{:?}",
+        t3.rule_ids
+    );
+    assert!(
+        !t3.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t3.rule_ids
+    );
     assert_eq!(wire.n(), 2);
     let b3 = wire.bodies().pop().unwrap();
     assert!(b3.contains("notes.txt"), "{b3}");
-    assert!(!b3.contains("horny"), "explicit turn must not leak online: {b3}");
+    assert!(
+        !b3.contains("horny"),
+        "explicit turn must not leak online: {b3}"
+    );
 
-    // Turn 4 (casual): classified fresh as chat, served by warm local with the real warm-local reason.
-    let (t4_text, t4) = send("What should I make for dinner tonight?");
+    // Turn 4 (casual): classified fresh as chat, served by warm local with the real reason.
+    let (t4_text, t4) = send("Grabbing some coffee, what a long day");
     assert_eq!(t4_text, "local here");
     assert_eq!(t4.used.model, super::local::live_tier());
-    assert!(t4.rule_ids.iter().any(|r| r == "ask:chat"), "{:?}", t4.rule_ids);
-    assert!(t4.rule_ids.iter().any(|r| r == "size:warm_local"), "{:?}", t4.rule_ids);
-    assert!(!t4.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t4.rule_ids);
+    assert!(
+        t4.rule_ids.iter().any(|r| r == "ask:chat"),
+        "{:?}",
+        t4.rule_ids
+    );
+    assert!(
+        t4.rule_ids.iter().any(|r| r == "size:warm_local"),
+        "{:?}",
+        t4.rule_ids
+    );
+    assert!(
+        !t4.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t4.rule_ids
+    );
     assert_eq!(
         super::local_live::local_reason(&t4.rule_ids, None, false, false, false),
         "already warm on this computer"
@@ -4421,6 +4472,17 @@ fn multi_turn_local_sequence_uses_exact_reason_and_task_kind_per_turn() {
     let _cfg = crate::perm::ConfigGuard::set(&dir);
     let mut reg = fleet();
     reg.entitlement.credential = Credential::None;
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::Local,
+            super::local::TIERS
+                .iter()
+                .map(|t| super::local::tier_meta(t))
+                .collect(),
+        )],
+        &[],
+        2,
+    );
     save_registry(&dir, &reg).unwrap();
     let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
     let say = |role: &str, text: &str| InputItem::Message {
@@ -4459,7 +4521,11 @@ fn multi_turn_local_sequence_uses_exact_reason_and_task_kind_per_turn() {
     let (t2, k2) = send("Fix the borrow error in src/main.rs");
     assert_eq!(t2.used.model, super::local::live_tier());
     assert_eq!(k2, Some(TaskKind::Code));
-    assert!(!t2.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t2.rule_ids);
+    assert!(
+        !t2.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t2.rule_ids
+    );
     assert_eq!(
         super::local_live::local_reason(&t2.rule_ids, None, false, false, false),
         "no online sign-in or API key is configured"
@@ -4468,23 +4534,31 @@ fn multi_turn_local_sequence_uses_exact_reason_and_task_kind_per_turn() {
     let (t3, k3) = send("List the files in my folder and read notes.txt");
     assert_eq!(t3.used.model, super::local::live_tier());
     assert_eq!(k3, Some(TaskKind::Code));
-    assert!(!t3.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t3.rule_ids);
+    assert!(
+        !t3.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t3.rule_ids
+    );
     assert_eq!(
         super::local_live::local_reason(&t3.rule_ids, None, false, false, false),
         "no online sign-in or API key is configured"
     );
 
-    let (t4, k4) = send("What should I make for dinner tonight?");
+    let (t4, k4) = send("Grabbing some coffee, what a long day");
     assert_eq!(t4.used.model, super::local::live_tier());
     assert_eq!(k4, Some(TaskKind::Chat));
-    assert!(!t4.rule_ids.iter().any(|r| r == "adult:local_only"), "{:?}", t4.rule_ids);
+    assert!(
+        !t4.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t4.rule_ids
+    );
     assert_eq!(
         super::local_live::local_reason(&t4.rule_ids, None, false, false, false),
         "no online sign-in or API key is configured"
     );
 
-    // With an 18+ voice active, a clean coding turn stays local for the 18+ voice (not explicit content)
-    // and still classifies as TaskKind::Code for the local coding model.
+    // With an 18+ voice active, a clean coding turn stays local for the 18+ voice
+    // (not explicit content) and still classifies as TaskKind::Code.
     let mut voice_req = chat("route-seq-voice-1", &[]);
     voice_req.input = vec![
         say("system", &format!("Personality: Viper. {ADULT_VOICE}")),
@@ -4501,7 +4575,12 @@ fn multi_turn_local_sequence_uses_exact_reason_and_task_kind_per_turn() {
     let (_, tv) = route_records(&dir, ROUTE_TAIL_LINES).pop().unwrap();
     assert_eq!(tv.used.model, super::local::live_tier());
     assert_eq!(
-        super::local::turn_kind("chat:default", 20, "Fix the borrow error in src/main.rs", false),
+        super::local::turn_kind(
+            "chat:default",
+            20,
+            "Fix the borrow error in src/main.rs",
+            false
+        ),
         Some(TaskKind::Code)
     );
     assert_eq!(
