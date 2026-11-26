@@ -1938,6 +1938,15 @@ fn run_turn(
             let mut permitted = false;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
+                    let text = if input.depth == 0 && text == "path escapes the workspace" {
+                        let req_path = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                            .ok()
+                            .and_then(|v| tools::tool_path_arg(&call.name, &v))
+                            .unwrap_or_default();
+                        tools::path_escape_guidance(input.workspace, &req_path)
+                    } else {
+                        text
+                    };
                     refused = true;
                     if crate::denials::is_denial(&text) {
                         note_safety(
@@ -2603,7 +2612,18 @@ fn repeat_key(call: &FunctionCall) -> String {
 /// A folder tool with no folder fails closed. The card is not shown.
 fn refuse_without_workspace(name: &str, workspace: &Path, decision: Decision) -> Decision {
     if tools::needs_workspace(name) && tools::workspace_missing(workspace) {
-        Decision::Refuse(gate::NO_WORKSPACE.to_string())
+        if workspace.as_os_str().is_empty() {
+            Decision::Refuse(gate::NO_WORKSPACE.to_string())
+        } else {
+            let raw = workspace.to_string_lossy();
+            let windows = cfg!(windows)
+                || raw.starts_with(r"\\?\")
+                || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+            let shown = grokhub_core::canonical_session_cwd(&raw, windows);
+            Decision::Refuse(format!(
+                "No workspace in this chat: folder `{shown}` does not exist on disk. Pick a folder in Chat or Settings → Workspace (or create it), then try again."
+            ))
+        }
     } else {
         decision
     }
@@ -3149,6 +3169,13 @@ fn finish_tool_output(
     mut output: ToolOutput,
     mut usage: Usage,
 ) -> (ToolOutput, Usage) {
+    if input.depth == 0 && output.failed && output.text == "path escapes the workspace" {
+        let req_path = serde_json::from_str::<serde_json::Value>(&call.arguments)
+            .ok()
+            .and_then(|v| tools::tool_path_arg(&call.name, &v))
+            .unwrap_or_default();
+        output.text = tools::path_escape_guidance(input.workspace, &req_path);
+    }
     if !pre_context.is_empty() {
         if !output.text.is_empty() && !output.text.ends_with('\n') {
             output.text.push('\n');
