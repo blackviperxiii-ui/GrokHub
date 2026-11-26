@@ -221,6 +221,7 @@ pub mod shell_line;
 pub mod shortcuts;
 pub mod situation;
 pub mod skill;
+pub mod skill_curator;
 pub mod skill_pack;
 pub mod skills_hub;
 pub mod slash;
@@ -700,6 +701,14 @@ pub use skill::{
     skill_safe, skill_use_in_chat_prompt, validate_skill_md_text, verify_and_record_skill,
     SkillLockEntry, SkillLockfile, SkillMd, SkillMeta, SkillScan, SkillThreat, AUTO_SKILL_PITFALL,
     SKILL_LOCK_FILE,
+};
+pub use skill_curator::{
+    archived_dir, build_report, build_row, curator_report_due, is_self_made, lifecycle, load_store,
+    note_view, save_store, set_locked, set_pinned, should_archive, CuratorReport, CuratorRow,
+    CuratorSkillEntry, CuratorSkillInput, CuratorStore, SkillCuratorSettings, SkillLifecycle,
+    CARD_SOURCE_PREFIX as SKILL_CURATOR_CARD_PREFIX, CARD_TITLE as SKILL_CURATOR_CARD_TITLE,
+    CURATOR_FILE, DAY_MS as SKILL_CURATOR_DAY_MS, DEFAULT_STALE_DAYS, LIBRARY_ORIGIN,
+    SETTINGS_KEY as SKILL_CURATOR_SETTINGS_KEY,
 };
 pub use skill_pack::{
     install_library_skill, install_library_skill_text, library_pack_by_id, library_packs,

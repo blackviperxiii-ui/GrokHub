@@ -48,6 +48,7 @@ struct Switches {
     helper_dismissed: Vec<String>,
     downloads_tidy: bool,
     dream_hour: u32,
+    skill_curator: grokhub_core::SkillCuratorSettings,
 }
 
 fn switches(config_dir: &Path) -> Switches {
@@ -73,6 +74,9 @@ fn switches(config_dir: &Path) -> Switches {
             .and_then(|v| v.as_u64())
             .map(|h| h.min(23) as u32)
             .unwrap_or(3),
+        skill_curator: grokhub_core::SkillCuratorSettings::from_app_value(
+            map.get(grokhub_core::SKILL_CURATOR_SETTINGS_KEY),
+        ),
     };
     if map.get("dreamHour").is_none() {
         out.dream_hour = 3;
@@ -171,6 +175,7 @@ pub fn run_due(config_dir: &Path, now: u64) -> usize {
     let mut posted = 0;
     posted += day_brief(&ctx);
     posted += systems_brief(&ctx, &sw);
+    posted += skill_curator_weekly(&ctx, &sw);
     posted += week_recap(&ctx);
     posted += daily_drop(&ctx, &sw);
     posted += release_radar(&ctx);
@@ -407,6 +412,47 @@ fn systems_brief(ctx: &Ctx, sw: &Switches) -> usize {
     card.pulse.report = Some(brief.card_report());
     grokhub_core::hold_if_quiet(&mut card, ctx.quiet);
     post_digest(ctx, card, None, Some(&brief.source_id())) as usize
+}
+
+// ---------------------------------------------------------------------------
+// Weekly skill curator report (archive stale self-made skills when enabled).
+
+fn skill_curator_weekly(ctx: &Ctx, sw: &Switches) -> usize {
+    if !sw.skill_curator.enabled {
+        return 0;
+    }
+    let store = grokhub_core::load_store(&ctx.config_dir);
+    if !grokhub_core::curator_report_due(
+        (!store.last_report_day.is_empty()).then_some(store.last_report_day.as_str()),
+        &ctx.day,
+        &ctx.clock,
+        sw.dream_hour,
+    ) {
+        return 0;
+    }
+    let Some(report) = grokhub_agent::skill_curator::weekly_pass(
+        &ctx.config_dir,
+        &ctx.day,
+        ctx.now,
+    ) else {
+        return 0;
+    };
+    let md = report.render();
+    let mut card = feed::digest_card(
+        &report.source_id(),
+        grokhub_core::SKILL_CURATOR_CARD_TITLE,
+        &report.card_body(),
+        ctx.now,
+    );
+    card.details = Some(md);
+    card.body = Some(report.card_body());
+    grokhub_core::hold_if_quiet(&mut card, ctx.quiet);
+    post_digest(
+        ctx,
+        card,
+        Some(grokhub_core::SKILL_CURATOR_CARD_PREFIX),
+        None,
+    ) as usize
 }
 
 // ---------------------------------------------------------------------------

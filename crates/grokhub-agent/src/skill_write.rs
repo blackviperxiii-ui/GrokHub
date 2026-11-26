@@ -17,7 +17,10 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use grokhub_core::{render_skill_md, skill_dir_name, skill_safe, SkillMd};
+use grokhub_core::{
+    parse_skill_meta, render_skill_md, render_skill_md_with_meta, skill_dir_name, skill_safe,
+    SkillMd, SkillMeta,
+};
 
 use crate::harness::{self as hx, Origin};
 
@@ -58,13 +61,33 @@ pub fn new_skill(config_dir: &Path, name: &str, what: &str) -> Result<SkillMd, S
 }
 
 pub fn save_skill(config_dir: &Path, s: &SkillMd) -> Result<PathBuf, String> {
+    save_skill_with_meta(config_dir, s, None)
+}
+
+/// Write a skill, keeping existing SkillMeta (archived, last_used_at, …) unless
+/// `meta` is provided. The curator relies on those fields surviving edits.
+pub fn save_skill_with_meta(
+    config_dir: &Path,
+    s: &SkillMd,
+    meta: Option<&SkillMeta>,
+) -> Result<PathBuf, String> {
     if !skill_safe(&s.instructions) || !skill_safe(&s.pitfalls) {
         return Err("Secrets never in markdown".into());
     }
     let dir = skill_folder(config_dir, &s.name);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("SKILL.md");
-    grokhub_core::work_file::write_private_atomic(&path, render_skill_md(s).as_bytes())?;
+    let kept = meta.cloned().unwrap_or_else(|| {
+        fs::read_to_string(&path)
+            .map(|raw| parse_skill_meta(&raw))
+            .unwrap_or_default()
+    });
+    let text = if kept == SkillMeta::default() {
+        render_skill_md(s)
+    } else {
+        render_skill_md_with_meta(s, &kept)
+    };
+    grokhub_core::work_file::write_private_atomic(&path, text.as_bytes())?;
     write_verify_scripts(&dir, &s.verify)?;
     Ok(path)
 }
