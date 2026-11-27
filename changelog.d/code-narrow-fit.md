@@ -1,0 +1,1 @@
+- The Code page fits a 900px window again: the agent column gives way before the side column, so nothing scrolls sideways. A ui-shots failure now names the elements past the window's edge.
