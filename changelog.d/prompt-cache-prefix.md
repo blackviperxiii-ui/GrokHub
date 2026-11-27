@@ -1,0 +1,1 @@
+- Keep the system prompt's static prefix byte-identical across turns, and omit tool-calling instructions on no-tool turns so xAI prompt-cache hits stay high.

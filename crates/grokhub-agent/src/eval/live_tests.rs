@@ -421,17 +421,21 @@ fn the_eval_sends_the_apps_chat_prompt() {
     std::fs::create_dir_all(dir.join("cfg")).unwrap();
     let system = app_system(&dir.join("ws"), &dir.join("cfg"));
     let nyx = grokhub_core::personality::builtin(grokhub_core::personality::DEFAULT_ID);
-    // The cabin rules first, then the personality, then the safety closer last.
+    // Cabin rules first, then the personality in the cached prefix. No closer
+    // until identity or notes join the dynamic suffix.
     let stable = grokhub_core::cabin_rules::cabin_static_rules(false);
     let voice = nyx.prompt_block();
     let closer = grokhub_core::talk::safety_closer(nyx.explicit);
     assert!(!voice.is_empty());
-    let (s, v, c) = (
+    let (s, v) = (
         system.find(stable.trim()).expect("stable rules"),
         system.find(voice.trim()).expect("personality"),
-        system.rfind(closer.trim()).expect("closer"),
     );
-    assert!(s < v && v < c, "{s} {v} {c}");
+    assert!(s < v, "{s} {v}");
+    assert!(
+        !system.contains(closer.trim()),
+        "empty identity must not add a closer: {system}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

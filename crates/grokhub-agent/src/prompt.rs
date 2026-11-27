@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
+use crate::client::{ContentPart, InputItem};
 use crate::episode::clip_bytes;
 
 const TEMPLATE: &str = include_str!("prompt_template.md");
@@ -201,24 +202,44 @@ pub enum PromptProfile {
 }
 
 /// Extras a job opts into beyond the profile default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// `tools` is the tool/no-tool prompt split: when false, the fixed template
+/// drops tool-calling instructions (Hangout chat-only / plain chat). Schemas
+/// are omitted separately by the loop when it sends an empty tool list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptNeed {
     pub skills: bool,
     pub plugins: bool,
+    pub tools: bool,
+}
+
+impl Default for PromptNeed {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 impl PromptNeed {
     pub const NONE: Self = Self {
         skills: false,
         plugins: false,
+        tools: true,
+    };
+    /// Plain chat: no skills reminder, no plugin extras, no tool instructions.
+    pub const NO_TOOLS: Self = Self {
+        skills: false,
+        plugins: false,
+        tools: false,
     };
     pub const SKILLS: Self = Self {
         skills: true,
         plugins: false,
+        tools: true,
     };
     pub const FULL: Self = Self {
         skills: true,
         plugins: true,
+        tools: true,
     };
 }
 
@@ -227,6 +248,7 @@ pub fn prompt_need_from_job(job: &str) -> PromptNeed {
     PromptNeed {
         skills: job.contains("NEED_SKILLS"),
         plugins: job.contains("NEED_PLUGINS"),
+        tools: true,
     }
 }
 
@@ -318,12 +340,14 @@ pub fn system_prompt(cabin_rules: &str, workspace: &Path) -> String {
     )
 }
 
-/// The pieces of a chat's volatile prompt tail, already read by the caller.
-/// The app and the live eval both build the tail from this, so the eval runs
-/// the prompt the app sends.
+/// The pieces of a chat's prompt layers, already read by the caller.
+/// Personality ([`ChatTail::voice`]) is the cached static prefix. Notes,
+/// learned brief, identity and intentions are the per-turn dynamic suffix.
+/// The app and the live eval both build from this, so the eval runs the
+/// prompt the app sends.
 #[derive(Debug, Clone, Default)]
 pub struct ChatTail {
-    /// The personality's prompt block.
+    /// The personality's prompt block. Cached in the static prefix.
     pub voice: String,
     /// Tuned notes.
     pub notes: String,
@@ -337,14 +361,13 @@ pub struct ChatTail {
     pub explicit: bool,
 }
 
-/// Join a chat's volatile tail in the app's order. When a voice, notes,
-/// identity or intentions block is present, a short closer comes last so the
-/// cabin safety rules (earlier, in the stable prefix) still outrank it.
+/// Join a chat's volatile suffix in the app's order. Personality stays out
+/// (it is the static prefix). When notes, identity or intentions are present,
+/// a short closer comes last so the cabin safety rules still outrank them.
 pub fn chat_volatile_tail(tail: &ChatTail) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut closer = false;
     for (block, needs_closer) in [
-        (tail.voice.clone(), true),
         (tail.notes.clone(), true),
         (
             grokhub_core::cabin_rules::cabin_learned_tail(&tail.learned),
@@ -364,8 +387,75 @@ pub fn chat_volatile_tail(tail: &ChatTail) -> String {
     parts.join("\n\n")
 }
 
-/// Cache-friendly chat system prompt: stable rules + disk blocks first, volatile
-/// personality / tuned notes / learned brief last.
+/// Cache-friendly split of one system prompt: a byte-stable prefix, then a
+/// per-turn suffix (timestamp, volatile state, active files, reminders).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DynamicTail {
+    /// Current time for this turn, already formatted. Empty skips the line.
+    pub timestamp: String,
+    /// Tuned notes, identity, intentions, and other volatile state.
+    pub volatile: String,
+    /// Open / recently touched files for this turn.
+    pub active_files: String,
+    /// Short-lived reminders that must not sit in the cached prefix.
+    pub reminders: String,
+}
+
+impl DynamicTail {
+    /// Join the per-turn pieces in a fixed order, skipping empties.
+    pub fn render(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let ts = self.timestamp.trim();
+        if !ts.is_empty() {
+            parts.push(format!("Current time: {ts}"));
+        }
+        let files = self.active_files.trim();
+        if !files.is_empty() {
+            parts.push(files.to_string());
+        }
+        let reminders = self.reminders.trim();
+        if !reminders.is_empty() {
+            parts.push(reminders.to_string());
+        }
+        let volatile = self.volatile.trim();
+        if !volatile.is_empty() {
+            parts.push(volatile.to_string());
+        }
+        parts.join("\n\n")
+    }
+}
+
+/// Marker that starts the per-turn suffix. Prefix bytes stop immediately
+/// before this tag so a new timestamp cannot break the xAI prompt cache.
+pub const DYNAMIC_BOUNDARY: &str = "<turn-context>";
+
+/// One assembled system prompt, split at [`DYNAMIC_BOUNDARY`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssembledPrompt {
+    /// Core instructions, personality, project `AGENTS.md` / `CLAUDE.md`,
+    /// facts, skills and plugin extras. Byte-identical across turns when
+    /// only the suffix changes.
+    pub prefix: String,
+    /// Timestamp, volatile state, active files, ephemeral reminders.
+    pub suffix: String,
+}
+
+impl AssembledPrompt {
+    /// Prefix, then the dynamic suffix wrapped in [`DYNAMIC_BOUNDARY`].
+    pub fn render(&self) -> String {
+        if self.suffix.is_empty() {
+            return self.prefix.clone();
+        }
+        format!(
+            "{}\n\n{DYNAMIC_BOUNDARY}\n{}\n</turn-context>",
+            self.prefix, self.suffix
+        )
+    }
+}
+
+/// Cache-friendly chat system prompt: stable rules + personality + disk
+/// blocks first, volatile notes last. Put the personality in `stable_rules`
+/// (or pass it through [`assemble`]) so it stays in the cached prefix.
 pub fn system_prompt_parts(stable_rules: &str, volatile_tail: &str, workspace: &Path) -> String {
     system_prompt_with(
         PromptProfile::Chat,
@@ -374,6 +464,24 @@ pub fn system_prompt_parts(stable_rules: &str, volatile_tail: &str, workspace: &
         workspace,
         PromptNeed::FULL,
     )
+}
+
+/// Chat prompt from a [`ChatTail`]: personality in the static prefix, the
+/// rest of the tail after [`DYNAMIC_BOUNDARY`].
+pub fn system_prompt_from_chat(stable_rules: &str, tail: &ChatTail, workspace: &Path) -> String {
+    assemble(
+        stable_rules,
+        &tail.voice,
+        &DynamicTail {
+            volatile: chat_volatile_tail(tail),
+            ..DynamicTail::default()
+        },
+        workspace,
+        grokhub_core::user_home().as_deref(),
+        PromptProfile::Chat,
+        PromptNeed::FULL,
+    )
+    .render()
 }
 
 /// Build a system prompt for `profile`. Background and Unattended omit the
@@ -397,6 +505,87 @@ pub fn system_prompt_with(
         profile,
         need,
     )
+}
+
+/// Build the cache-friendly prefix and per-turn suffix as separate strings.
+/// Two calls that differ only in [`DynamicTail`] keep an identical `prefix`.
+pub fn assemble(
+    stable_rules: &str,
+    personality: &str,
+    dynamic: &DynamicTail,
+    workspace: &Path,
+    home: Option<&Path>,
+    profile: PromptProfile,
+    need: PromptNeed,
+) -> AssembledPrompt {
+    if profile == PromptProfile::Review {
+        return AssembledPrompt {
+            prefix: grokhub_core::review_system_prompt().to_string(),
+            suffix: String::new(),
+        };
+    }
+    let started = Instant::now();
+    let mut prefix = fixed_prompt(need.tools);
+    let rules = stable_rules.trim();
+    if !rules.is_empty() {
+        prefix.push_str("\n\n");
+        prefix.push_str(rules);
+    }
+    let voice = personality.trim();
+    if !voice.is_empty() {
+        prefix.push_str("\n\n");
+        prefix.push_str(voice);
+    }
+    if profile == PromptProfile::Chat {
+        if need.tools {
+            prefix.push_str("\n\n");
+            prefix.push_str(grokhub_core::cabin_rules::LOOKUP_RULES);
+        }
+        // How every voice talks: cached, under the personality.
+        prefix.push_str("\n\n");
+        prefix.push_str(grokhub_core::conversation::CORE);
+    }
+    let peer = profile == PromptProfile::Peer;
+    if let Some(agents) = (!peer).then(|| layered_agents(workspace, home)).flatten() {
+        prefix.push_str("\n\n<agents>\n");
+        prefix.push_str(&agents);
+        prefix.push_str("\n</agents>");
+    }
+    let facts = if peer {
+        String::new()
+    } else {
+        facts_block(workspace)
+    };
+    if !facts.is_empty() {
+        prefix.push_str("\n\n");
+        prefix.push_str(&facts);
+    }
+    if profile.want_skills(need) {
+        let skills =
+            crate::skills::discover(workspace, home, &crate::plugins::skill_dirs(workspace));
+        let reminder = crate::skills::reminder(&skills);
+        if !reminder.is_empty() {
+            prefix.push_str("\n\n");
+            prefix.push_str(&reminder);
+        }
+    }
+    if profile.want_plugins(need) {
+        let extras = crate::plugins::prompt_extras(workspace);
+        if !extras.is_empty() {
+            prefix.push_str("\n\n");
+            prefix.push_str(&extras);
+        }
+    }
+    let suffix = dynamic.render();
+    let prefix = prefix.trim_end().to_string();
+    let assembled = AssembledPrompt { prefix, suffix };
+    let out_len = assembled.render().len();
+    let ms = started.elapsed().as_secs_f64() * 1000.0;
+    if cfg!(debug_assertions) {
+        // Local compose cost only; provider cache hits are Usage.cached_tokens.
+        eprintln!("grokhub prompt_compose_ms={ms:.3} bytes={out_len}");
+    }
+    assembled
 }
 
 /// Checked environment facts for `workspace` (round 3 item 39). Tests only
@@ -457,62 +646,19 @@ fn compose(
     profile: PromptProfile,
     need: PromptNeed,
 ) -> String {
-    let started = Instant::now();
-    let mut out = fixed_prompt();
-    let rules = stable_rules.trim();
-    if !rules.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(rules);
-    }
-    if profile == PromptProfile::Chat {
-        out.push_str("\n\n");
-        out.push_str(grokhub_core::cabin_rules::LOOKUP_RULES);
-        // How every voice talks: cached, under the personality in the tail.
-        out.push_str("\n\n");
-        out.push_str(grokhub_core::conversation::CORE);
-    }
-    let peer = profile == PromptProfile::Peer;
-    if let Some(agents) = (!peer).then(|| layered_agents(workspace, home)).flatten() {
-        out.push_str("\n\n<agents>\n");
-        out.push_str(&agents);
-        out.push_str("\n</agents>");
-    }
-    let facts = if peer {
-        String::new()
-    } else {
-        facts_block(workspace)
-    };
-    if !facts.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(&facts);
-    }
-    if profile.want_skills(need) {
-        let skills =
-            crate::skills::discover(workspace, home, &crate::plugins::skill_dirs(workspace));
-        let reminder = crate::skills::reminder(&skills);
-        if !reminder.is_empty() {
-            out.push_str("\n\n");
-            out.push_str(&reminder);
-        }
-    }
-    if profile.want_plugins(need) {
-        let extras = crate::plugins::prompt_extras(workspace);
-        if !extras.is_empty() {
-            out.push_str("\n\n");
-            out.push_str(&extras);
-        }
-    }
-    let tail = volatile_tail.trim();
-    if !tail.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(tail);
-    }
-    let ms = started.elapsed().as_secs_f64() * 1000.0;
-    if cfg!(debug_assertions) {
-        // Local compose cost only; provider cache hits are Usage.cached_tokens.
-        eprintln!("grokhub prompt_compose_ms={ms:.3} bytes={}", out.len());
-    }
-    out
+    assemble(
+        stable_rules,
+        "",
+        &DynamicTail {
+            volatile: volatile_tail.to_string(),
+            ..DynamicTail::default()
+        },
+        workspace,
+        home,
+        profile,
+        need,
+    )
+    .render()
 }
 
 /// Template body length on `beta` before the values charter (`ad5df3e5`, the
@@ -546,21 +692,109 @@ const LEAN_RULES: &str = "<rules>
 - Write GitHub-flavored markdown. When citing the web, don't name tool backends or providers.
 </rules>";
 
+/// Lean rules with every tool-calling line removed (plain chat / Hangout).
+const LEAN_RULES_NO_TOOLS: &str = "<rules>
+- Sealed learnings in a <memory-context> block (such as Installed app: lines) are real Memory: use them.
+- A <cabin-volatile> block is the app's note for the turn, not the person's words; their latest ask outranks it.
+- Lead with the answer. No generic closing question.
+- Money, sending, deleting and credential steps still go through approval.
+- Write GitHub-flavored markdown. When citing the web, don't name tool backends or providers.
+</rules>";
+
+const TOOLS_OPEN: &str = "<tools>";
+const TOOLS_CLOSE: &str = "</tools>";
+const TOOL_OFFER_SENTENCES: &str = " Use the tools offered for this turn. Paths for workspace tools stay inside the workspace the user named.";
+
 /// The fixed prompt with less coaching: the same opening line and the same
 /// `<dangerous_actions>` block, word for word, then [`LEAN_RULES`]. Used only
 /// when `prompt_diet.toml` turns `lean_prompt` on.
 pub(crate) fn lean_template_body() -> String {
-    let full = template_body();
+    lean_template_body_for(true)
+}
+
+fn lean_template_body_for(tools: bool) -> String {
+    let full = if tools {
+        template_body()
+    } else {
+        no_tool_template_body()
+    };
     let intro = full.split("\n\n").next().unwrap_or_default();
-    format!("{intro}\n\n{}\n\n{LEAN_RULES}", safety_rules())
+    let rules = if tools {
+        LEAN_RULES
+    } else {
+        LEAN_RULES_NO_TOOLS
+    };
+    format!("{intro}\n\n{}\n\n{rules}", safety_rules())
 }
 
 /// The fixed prompt this thread's switches pick.
-fn fixed_prompt() -> String {
+fn fixed_prompt(tools: bool) -> String {
     if crate::diet::current().lean_prompt {
-        lean_template_body()
-    } else {
+        lean_template_body_for(tools)
+    } else if tools {
         template_body()
+    } else {
+        no_tool_template_body()
+    }
+}
+
+/// Fixed prompt with tool-calling instructions and the `<tools>` block removed.
+/// Derived by subtraction from [`template_body`]; no new coaching text.
+pub(crate) fn no_tool_template_body() -> String {
+    strip_tool_instructions(&template_body())
+}
+
+fn strip_tool_instructions(full: &str) -> String {
+    let mut t = full.replace(TOOL_OFFER_SENTENCES, "");
+    if let Some(start) = t.find(TOOLS_OPEN) {
+        if let Some(rel) = t[start..].find(TOOLS_CLOSE) {
+            let mut end = start + rel + TOOLS_CLOSE.len();
+            while end < t.len() && t.as_bytes()[end] == b'\n' {
+                end += 1;
+            }
+            let mut from = start;
+            while from > 0 && t.as_bytes()[from - 1] == b'\n' {
+                from -= 1;
+            }
+            t.replace_range(from..end, "\n");
+        }
+    }
+    while t.contains("\n\n\n") {
+        t = t.replace("\n\n\n", "\n\n");
+    }
+    t
+}
+
+/// Rewrite the first system message for a no-tool turn: drop the `<tools>`
+/// block, the tool-offer sentences, and chat lookup rules. Cabin rules and
+/// `AGENTS.md` stay. Idempotent, same idea as the lean coding swap.
+pub fn apply_no_tool_prompt(input: &mut [InputItem]) {
+    let full = template_body();
+    let none = no_tool_template_body();
+    let full_trim = full.trim();
+    let none_trim = none.trim();
+    let lookup = grokhub_core::cabin_rules::LOOKUP_RULES;
+    for item in input {
+        let InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role != "system" {
+            continue;
+        }
+        for part in content.iter_mut() {
+            let ContentPart::InputText(text) = part else {
+                continue;
+            };
+            if text.starts_with(none_trim) && !text.contains(TOOLS_OPEN) {
+                return;
+            }
+            if let Some(rest) = text.strip_prefix(full_trim) {
+                let rest = rest.replacen(&format!("\n\n{lookup}"), "", 1);
+                *text = format!("{none_trim}{rest}");
+                return;
+            }
+        }
+        return;
     }
 }
 
@@ -695,7 +929,10 @@ mod tests {
             explicit: false,
         });
         let at = |needle: &str| full.find(needle).unwrap();
-        assert!(at("VOICE") < at("NOTES"));
+        assert!(
+            !full.contains("VOICE"),
+            "personality stays in the static prefix, not the suffix"
+        );
         assert!(at("NOTES") < at("LEARNED"));
         assert!(at("LEARNED") < at("IDENTITY"));
         assert!(at("IDENTITY") < at("INTENTIONS"));
@@ -926,8 +1163,10 @@ mod tests {
             with_b.starts_with(&base),
             "volatile B must only extend the stable prefix"
         );
-        assert!(with_a.ends_with("VOLATILE_A"));
-        assert!(with_b.ends_with("VOLATILE_B"));
+        assert!(with_a.contains("VOLATILE_A"));
+        assert!(with_b.contains("VOLATILE_B"));
+        assert!(with_a.ends_with("</turn-context>"));
+        assert!(with_b.ends_with("</turn-context>"));
         assert_ne!(with_a, with_b);
         assert!(
             base.find("STABLE_RULES").unwrap() < base.find("Stable agents line").unwrap(),
@@ -1097,7 +1336,8 @@ mod tests {
             prompt_need_from_job("NEED_PLUGINS only"),
             PromptNeed {
                 skills: false,
-                plugins: true
+                plugins: true,
+                tools: true
             }
         );
         assert_eq!(
@@ -1231,5 +1471,128 @@ mod tests {
             PromptNeed::NONE,
         );
         assert!(!peer.contains("<paths>"));
+    }
+
+    #[test]
+    fn personality_sits_in_the_static_prefix_before_the_dynamic_suffix() {
+        let dir = fixture_workspace("voice-prefix");
+        let tail = ChatTail {
+            voice: "PERSONALITY_MARK".into(),
+            notes: "NOTES_MARK".into(),
+            ..Default::default()
+        };
+        let assembled = assemble(
+            "Cabin rule.",
+            &tail.voice,
+            &DynamicTail {
+                timestamp: "2026-01-02T03:04:05Z".into(),
+                volatile: chat_volatile_tail(&tail),
+                ..DynamicTail::default()
+            },
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::FULL,
+        );
+        assert!(
+            assembled.prefix.contains("PERSONALITY_MARK"),
+            "{}",
+            assembled.prefix
+        );
+        assert!(
+            !assembled.prefix.contains("NOTES_MARK"),
+            "{}",
+            assembled.prefix
+        );
+        assert!(
+            !assembled.prefix.contains("2026-01-02T03:04:05Z"),
+            "{}",
+            assembled.prefix
+        );
+        assert!(assembled.suffix.contains("NOTES_MARK"));
+        assert!(assembled
+            .suffix
+            .contains("Current time: 2026-01-02T03:04:05Z"));
+        let at = |n: &str| assembled.render().find(n).unwrap();
+        assert!(at("PERSONALITY_MARK") < at(DYNAMIC_BOUNDARY));
+        assert!(at(DYNAMIC_BOUNDARY) < at("NOTES_MARK"));
+        assert!(
+            assembled.prefix.find("Cabin rule.").unwrap()
+                < assembled.prefix.find("PERSONALITY_MARK").unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_tool_prompt_omits_tool_instructions_and_saves_tokens() {
+        let dir = fixture_workspace("no-tools");
+        let with = system_prompt_with(PromptProfile::Chat, "Cabin.", "", &dir, PromptNeed::FULL);
+        let without = system_prompt_with(
+            PromptProfile::Chat,
+            "Cabin.",
+            "",
+            &dir,
+            PromptNeed::NO_TOOLS,
+        );
+        assert!(with.contains("<tools>"), "{with}");
+        assert!(with.contains("read_file"), "{with}");
+        assert!(with.contains(grokhub_core::cabin_rules::LOOKUP_RULES));
+        assert!(with.contains("Use the tools offered for this turn"));
+        assert!(!without.contains("<tools>"), "{without}");
+        assert!(!without.contains("read_file"), "{without}");
+        assert!(!without.contains(grokhub_core::cabin_rules::LOOKUP_RULES));
+        assert!(!without.contains("Use the tools offered for this turn"));
+        assert!(without.contains("<dangerous_actions>"));
+        assert!(without.contains("Cabin."));
+        assert!(without.contains("Prefer small patches."));
+        let saved = with.len().saturating_sub(without.len());
+        assert!(
+            saved >= 400,
+            "no-tool prompt must drop tool text: with={} without={} saved={saved}",
+            with.len(),
+            without.len()
+        );
+        let with_tok = with.len().div_ceil(4);
+        let without_tok = without.len().div_ceil(4);
+        assert!(
+            without_tok < with_tok,
+            "with_tok={with_tok} without_tok={without_tok}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apply_no_tool_prompt_strips_the_template_and_lookup_rules() {
+        let full = template_body();
+        let lookup = grokhub_core::cabin_rules::LOOKUP_RULES;
+        let mut input = vec![InputItem::Message {
+            role: "system".into(),
+            content: vec![ContentPart::InputText(format!(
+                "{}\n\n{lookup}\n\nCabin rule.\n\n<agents>\nrules\n</agents>",
+                full.trim()
+            ))],
+        }];
+        apply_no_tool_prompt(&mut input);
+        let text = match &input[0] {
+            InputItem::Message { content, .. } => match &content[0] {
+                ContentPart::InputText(t) => t.clone(),
+                _ => panic!("text"),
+            },
+            _ => panic!("system"),
+        };
+        assert!(text.starts_with(no_tool_template_body().trim()), "{text}");
+        assert!(!text.contains("<tools>"), "{text}");
+        assert!(!text.contains(lookup), "{text}");
+        assert!(text.contains("Cabin rule."));
+        assert!(text.contains("<agents>\nrules\n</agents>"));
+        apply_no_tool_prompt(&mut input);
+        let again = match &input[0] {
+            InputItem::Message { content, .. } => match &content[0] {
+                ContentPart::InputText(t) => t.clone(),
+                _ => panic!("text"),
+            },
+            _ => panic!("system"),
+        };
+        assert_eq!(again, text);
     }
 }

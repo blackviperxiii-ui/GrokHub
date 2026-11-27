@@ -176,8 +176,10 @@ pub use plan_skills::{
     CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
 };
 pub use prompt::{
-    chat_volatile_tail, paths_block, prompt_need_from_job, system_prompt, system_prompt_parts,
-    system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
+    apply_no_tool_prompt, assemble, chat_volatile_tail, paths_block, prompt_need_from_job,
+    system_prompt, system_prompt_from_chat, system_prompt_parts, system_prompt_with,
+    tool_set_from_job, AssembledPrompt, ChatTail, DynamicTail, PromptNeed, PromptProfile,
+    DYNAMIC_BOUNDARY,
 };
 pub use repo_rules::{
     discover as discover_repo_rules, resolve_preferred_branch,

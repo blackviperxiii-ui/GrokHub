@@ -73,7 +73,7 @@ pub fn system_prompt_for(
     conversation_id: &str,
     chips: bool,
 ) -> String {
-    let volatile = volatile_tail(voice, &grokhub_agent::perm::config_dir(), conversation_id);
+    let volatile = volatile_tail(&grokhub_agent::perm::config_dir(), conversation_id);
     let mut rules = grokhub_core::cabin_rules::cabin_static_rules(desktop);
     if chips {
         rules.push_str("\n\n");
@@ -85,6 +85,10 @@ pub fn system_prompt_for(
         rules.push_str("\n\n");
         rules.push_str(&crate::code_agent::skills_block());
     }
+    if !voice.trim().is_empty() {
+        rules.push_str("\n\n");
+        rules.push_str(voice);
+    }
     let home = grokhub_core::user_home();
     let paths = grokhub_agent::paths_block(workspace, home.as_deref());
     if !paths.is_empty() {
@@ -94,13 +98,11 @@ pub fn system_prompt_for(
     grokhub_agent::system_prompt_parts(&rules, &volatile, workspace)
 }
 
-/// Voice, then the capped SOUL and USER blocks, then open intentions, then the
-/// safety closer. The closer is present only when that tail has something to outrank.
-fn volatile_tail(voice: &str, config_dir: &std::path::Path, conversation_id: &str) -> String {
+/// SOUL and USER blocks, then open intentions, then the safety closer.
+/// Personality lives in the cached static prefix, not here. The closer is
+/// present only when that tail has something to outrank.
+fn volatile_tail(config_dir: &std::path::Path, conversation_id: &str) -> String {
     let mut parts = Vec::new();
-    if !voice.trim().is_empty() {
-        parts.push(voice.to_string());
-    }
     // A scratch chat reads none of SOUL.md, USER.md or the user model.
     if !grokhub_agent::scratch::is_scratch(conversation_id) {
         let identity = grokhub_agent::identity_blocks(config_dir);
@@ -3045,8 +3047,10 @@ mod tests {
             let voice = crate::personality::voice(&cfg, &settings);
             assert!(!voice.is_empty());
             let prompt = system_prompt(ws, false, &voice);
-            assert_eq!(prompt.matches(closer).count(), 1, "{prompt}");
-            assert!(prompt.trim_end().ends_with(closer), "{prompt}");
+            assert!(prompt.contains(&voice), "{prompt}");
+            // Personality sits in the static prefix after cabin rules, so a
+            // closer is not needed until identity or notes join the suffix.
+            assert_eq!(prompt.matches(closer).count(), 0, "{prompt}");
         }
     }
 
