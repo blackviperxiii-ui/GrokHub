@@ -36,7 +36,7 @@ import {
   type ReviewOutput,
   type ReviewSeverity,
 } from "./codeReview";
-import { CodeReviewPanel } from "./CodeReview";
+import { CodeReviewPanel } from "./ReviewPanel";
 import { Agents } from "./Agents";
 import { Chat, newConversationId, type Prefill } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";

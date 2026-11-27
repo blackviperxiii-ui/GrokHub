@@ -144,7 +144,9 @@ fn parse_finding(value: &serde_json::Value) -> Option<Finding> {
     let body = value.get("body")?.as_str()?.to_string();
     let file = value.get("file")?.as_str()?.to_string();
     let line_start = int_field(value, "line_start")?.max(1);
-    let line_end = int_field(value, "line_end").unwrap_or(line_start).max(line_start);
+    let line_end = int_field(value, "line_end")
+        .unwrap_or(line_start)
+        .max(line_start);
     let confidence = value
         .get("confidence")?
         .as_f64()
