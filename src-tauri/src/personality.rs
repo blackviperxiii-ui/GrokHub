@@ -160,8 +160,8 @@ pub fn speech_voice(config_dir: &Path, settings: &ShellSettings) -> &'static str
 
 /// The block a chat's system prompt carries for the stored default. With 18+
 /// on, every voice jokes at the chosen heat. Empty only when that preset's
-/// tone rules are empty. The safety closer comes after the whole volatile
-/// tail (`agent::volatile_tail`), not here.
+/// tone rules are empty. This block sits in the cached static prefix.
+/// The safety closer comes after the volatile suffix (`agent::volatile_tail`).
 pub fn voice(config_dir: &Path, settings: &ShellSettings) -> String {
     home(config_dir, settings).prompt_block_for(settings.adult_heat())
 }

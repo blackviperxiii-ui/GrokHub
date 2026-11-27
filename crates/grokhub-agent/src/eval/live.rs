@@ -1184,13 +1184,16 @@ pub fn app_system_at(
         grokhub_core::personality::builtin(grokhub_core::personality::DEFAULT_ID),
         false,
     );
-    let tail = crate::chat_volatile_tail(&crate::ChatTail {
-        voice: personality.prompt_block_for(adult),
-        identity: crate::identity_blocks(config_dir),
-        explicit: personality.explicit,
-        ..Default::default()
-    });
-    crate::system_prompt_parts(&stable, &tail, workspace)
+    crate::system_prompt_from_chat(
+        &stable,
+        &crate::ChatTail {
+            voice: personality.prompt_block_for(adult),
+            identity: crate::identity_blocks(config_dir),
+            explicit: personality.explicit,
+            ..Default::default()
+        },
+        workspace,
+    )
 }
 
 fn one_try(

@@ -1149,7 +1149,9 @@ fn run_turn(
         // prompt). Hangout chat-only still wins with an empty list.
         let lean_coding = !chat_only
             && tools::coding::wants(input.conversation_id, input.model, turn_brief.as_ref());
-        if lean_coding {
+        if chat_only {
+            crate::prompt::apply_no_tool_prompt(&mut wire);
+        } else if lean_coding {
             tools::coding::apply_lean_prompt(&mut wire);
             if crate::repo_map::enabled(&crate::perm::config_dir()) {
                 let budget = if input.context_length > 0 && input.context_length <= 8_192 {
@@ -9343,6 +9345,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
         // First turn: plain chat, no tool calls. Tools list must be empty.
         struct RecordsTools {
             tools: Mutex<Vec<usize>>,
+            dropped_tool_block: Mutex<Vec<bool>>,
             inner: Script,
         }
         impl ModelClient for RecordsTools {
@@ -9353,21 +9356,37 @@ linter (or run the changed file) before you finish: a re-read or git status does
                 sink: &mut dyn FnMut(StreamEvent),
             ) -> Result<crate::TurnOutput, ClientError> {
                 self.tools.lock().unwrap().push(req.tools.len());
+                let system = req.input.iter().find_map(|item| match item {
+                    InputItem::Message { role, content } if role == "system" => {
+                        content.iter().find_map(|part| match part {
+                            crate::client::ContentPart::InputText(t) => Some(t.as_str()),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                });
+                let dropped = system.is_some_and(|t| {
+                    !t.contains("<tools>") && !t.contains("Use the tools offered for this turn")
+                });
+                self.dropped_tool_block.lock().unwrap().push(dropped);
                 self.inner.stream(req, cancel, sink)
             }
         }
         let plain = RecordsTools {
             tools: Mutex::new(Vec::new()),
+            dropped_tool_block: Mutex::new(Vec::new()),
             inner: said(&["hey, same — what's good?"]),
         };
         let (history, events) = {
             let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+            let system = crate::system_prompt("Cabin rule.", &dir);
+            assert!(system.contains("<tools>"));
             let input = LoopIn {
                 client: &plain,
                 workspace: &dir,
                 model: "grok-4.7",
                 effort: None,
-                system: "",
+                system: &system,
                 conversation_id: conv,
                 max_turns: 2,
                 usage_base: Usage::default(),
@@ -9394,6 +9413,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
             (history, events)
         };
         assert_eq!(plain.tools.lock().unwrap().as_slice(), &[0]);
+        assert_eq!(plain.dropped_tool_block.lock().unwrap().as_slice(), &[true]);
         assert!(
             !history
                 .iter()

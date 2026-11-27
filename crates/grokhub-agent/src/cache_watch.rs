@@ -120,4 +120,69 @@ mod tests {
         assert_eq!(dropped_from(Some(92), 85, 9_000), None, "still cached");
         assert_eq!(dropped_from(Some(92), 0, 500), None, "tiny turn");
     }
+
+    #[test]
+    fn consecutive_turns_keep_a_byte_identical_static_prefix() {
+        use crate::prompt::{assemble, DynamicTail, PromptNeed, PromptProfile, DYNAMIC_BOUNDARY};
+
+        let dir = std::env::temp_dir().join(format!(
+            "gh-cache-prefix-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "Keep the prefix stable.\n").unwrap();
+
+        let turn_a = assemble(
+            "Cabin rule.",
+            "PERSONALITY",
+            &DynamicTail {
+                timestamp: "2026-03-01T10:00:00Z".into(),
+                volatile: "NOTES_A".into(),
+                active_files: "src/prompt.rs".into(),
+                reminders: "ephemeral A".into(),
+            },
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::NONE,
+        );
+        let turn_b = assemble(
+            "Cabin rule.",
+            "PERSONALITY",
+            &DynamicTail {
+                timestamp: "2026-03-01T10:05:00Z".into(),
+                volatile: "NOTES_B".into(),
+                active_files: "src/cache_watch.rs".into(),
+                reminders: "ephemeral B".into(),
+            },
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::NONE,
+        );
+        assert_eq!(
+            turn_a.prefix, turn_b.prefix,
+            "static prefix must be byte-identical across turns"
+        );
+        assert!(turn_a.prefix.contains("Cabin rule."));
+        assert!(turn_a.prefix.contains("PERSONALITY"));
+        assert!(turn_a.prefix.contains("Keep the prefix stable."));
+        assert!(!turn_a.prefix.contains("2026-03-01T10:00:00Z"));
+        assert!(!turn_a.prefix.contains("NOTES_A"));
+        assert!(!turn_a.prefix.contains(DYNAMIC_BOUNDARY));
+        assert_ne!(turn_a.suffix, turn_b.suffix);
+        assert!(turn_a.suffix.contains("Current time: 2026-03-01T10:00:00Z"));
+        assert!(turn_b.suffix.contains("Current time: 2026-03-01T10:05:00Z"));
+        assert!(turn_a.render().starts_with(&turn_a.prefix));
+        assert!(turn_b.render().starts_with(&turn_a.prefix));
+        let rendered = turn_a.render();
+        let boundary = rendered.find(DYNAMIC_BOUNDARY).unwrap();
+        assert_eq!(&rendered[..boundary], format!("{}\n\n", turn_a.prefix));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
