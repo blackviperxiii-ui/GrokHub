@@ -357,12 +357,19 @@ mod tests {
                 "receivedMs": 1,
             })
         };
-        let (prompt, to) = prompt_for(&record("discord")).unwrap();
-        assert!(prompt.contains("on Discord"));
-        assert_eq!(to.unwrap().channel, ChannelKind::Discord);
-        for kind in ["slack", "signal", "email", "carrier-pigeon"] {
-            assert_eq!(prompt_for(&record(kind)), None, "{kind}");
+        // Every live kind in KINDS reads into a prompt; unknown keys do not.
+        for (key, on, kind) in [
+            ("discord", "on Discord", ChannelKind::Discord),
+            ("slack", "on Slack", ChannelKind::Slack),
+            ("signal", "on Signal", ChannelKind::Signal),
+            ("email", "on Email", ChannelKind::Email),
+            ("telegram", "on Telegram", ChannelKind::Telegram),
+        ] {
+            let (prompt, to) = prompt_for(&record(key)).expect(key);
+            assert!(prompt.contains(on), "{key}: {prompt}");
+            assert_eq!(to.expect(key).channel, kind, "{key}");
         }
+        assert_eq!(prompt_for(&record("carrier-pigeon")), None);
     }
 
     #[test]
