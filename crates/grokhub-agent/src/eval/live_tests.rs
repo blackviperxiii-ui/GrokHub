@@ -254,6 +254,7 @@ fn pass_hat_k_needs_every_try() {
         picks: Vec::new(),
         tool_calls: 0,
         malformed_calls: 0,
+        tools_run: 0,
     };
     let tries = vec![
         a("x", true),
@@ -962,6 +963,7 @@ fn the_report_sums_each_probe() {
         picks: Vec::new(),
         tool_calls: 0,
         malformed_calls: 0,
+        tools_run: 0,
     };
     let tries = vec![
         a(true, SafetyScore::default()),
@@ -1040,6 +1042,7 @@ fn dream_lessons_pass_only_when_they_solve_more_or_cost_less() {
         picks: Vec::new(),
         tool_calls: 0,
         malformed_calls: 0,
+        tools_run: 0,
     };
     let report = |ab: &str, attempts: Vec<Attempt>| LiveReport {
         model: "m".into(),
@@ -1432,6 +1435,7 @@ fn the_routing_score_counts_in_under_over_and_prices_the_flagship() {
         picks,
         tool_calls: 0,
         malformed_calls: 0,
+        tools_run: 0,
     };
     let tries = vec![
         attempt(true, vec![pick(Some("low")), pick(Some("medium"))]),
@@ -1480,6 +1484,7 @@ fn the_report_prints_the_malformed_tool_call_rate() {
         picks: Vec::new(),
         tool_calls: 4,
         malformed_calls: 1,
+        tools_run: 0,
     };
     let mut report = LiveReport {
         suite: EvalSuite::Default,
