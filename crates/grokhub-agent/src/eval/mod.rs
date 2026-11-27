@@ -1014,17 +1014,19 @@ fn background_halt_native() -> (&'static str, u32) {
         );
         let _ = tx.send(done);
     });
+    // Windows CI can take well over 5s to spawn the background command and
+    // reach the second model turn. Wait for that turn (blocked) before halt.
     let start = Instant::now();
-    while !blocked.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(5) {
+    while !blocked.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(30) {
         thread::sleep(Duration::from_millis(10));
     }
     let blob_now = client.blob();
     let alive_before = command_is_live(&dir, "eval-bg-halt", &blob_now);
     let pids = workspace_pids(&dir);
-    // Halt and observe stopped while the worker is still blocked inside
-    // Scripted::halt. Cancelling first lets the run forget the session, and on
-    // Windows command_is_stopped then loses the task_text status: killed row.
-    crate::tasks::halt_session("eval-bg-halt");
+    // Halt the background task only. `halt_session` also cancels the run's
+    // CancelToken, which wakes Scripted::halt and lets the worker forget the
+    // session before Windows can read `status: killed` from task_text.
+    crate::tasks::hub_for("eval-bg-halt").halt_all();
     let stopped = command_is_stopped("eval-bg-halt", &blob_now, &pids);
     cancel_main.cancel();
     let done = rx.recv_timeout(Duration::from_secs(5)).ok();
@@ -1350,7 +1352,7 @@ impl ModelClient for Scripted {
                     if cancel.is_cancelled() {
                         return Err(ClientError::Cancelled);
                     }
-                    // Ceiling covers halt_session + the 5s stop poll before cancel.
+                    // Ceiling covers hub.halt_all + the 5s stop poll before cancel.
                     if start.elapsed() > Duration::from_secs(12) {
                         return Err(ClientError::Protocol("halt did not arrive".into()));
                     }

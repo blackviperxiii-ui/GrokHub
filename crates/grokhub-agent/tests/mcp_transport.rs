@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use grokhub_agent::mcp::{self, ElicitNote};
 use grokhub_agent::perm::ConfigGuard;
@@ -1295,8 +1295,21 @@ fn mcp_tasks_cancel_on_run_stop_covers_every_open_task() {
         mcp::seed_open_task("s", "box", also);
         let cancel = CancelToken::new();
         let killer = cancel.clone();
+        // Cancel only after the poll loop has started (`tasks/get` in the RPC
+        // log). A fixed sleep races on slow Windows CI: cancel before the tool
+        // runs yields `Not run: the turn stopped before this call ran.`
+        let log = run.dir.join("rpc.log");
+        let watch = id.to_string();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(200));
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(15) {
+                if let Ok(text) = std::fs::read_to_string(&log) {
+                    if text.contains(&format!("tasks/get {watch}")) {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
             killer.cancel();
         });
         let output = run_named(&run.dir, true, "s", &cancel, "box__echo", &mut |_| {});

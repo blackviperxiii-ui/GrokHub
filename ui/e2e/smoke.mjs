@@ -1423,8 +1423,9 @@ async function openAdvanced(s) {
   await waitFor("the Advanced settings", () => find(s, "input[aria-label='Model file path']"));
 }
 
-// Labs: a folder bundle installs off and untrusted into the config folder,
-// then Trust and Turn on land in the same plugin-state.json the cabin reads.
+// Marketplace → Plugins: a folder bundle installs off and untrusted into the
+// config folder, then Trust and Turn on land in plugin-state.json. Plugins
+// moved off Settings → Labs (#2301).
 async function labs(s, config) {
   const bundle = join(config, "smoke-bundle");
   mkdirSync(bundle, { recursive: true });
@@ -1432,11 +1433,10 @@ async function labs(s, config) {
     join(bundle, "plugin.json"),
     JSON.stringify({ name: "smoke-kit", version: "0.1.0", description: "Smoke bundle" }),
   );
-  await tab(s, "Settings");
-  await section(s, "Labs");
-  const input = await waitFor("the install box", () => find(s, ".labs-row input"));
+  await tab(s, "Marketplace");
+  const input = await waitFor("the install box", () => find(s, ".marketplace-plugins .labs-row input"));
   await typeInto(s, input, bundle);
-  await click(s, ".labs-row button[type='submit']");
+  await click(s, ".marketplace-plugins .labs-row button[type='submit']");
   const step = async (label, state) => {
     const button = await waitFor(`the ${label} button`, async () => {
       const el = await wd("POST", `${s}/element`, {
