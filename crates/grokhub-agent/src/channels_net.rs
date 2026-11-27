@@ -8,6 +8,9 @@
 //!   API path, so no error from here carries a URL: it words its own.
 //! - [`DiscordLink`]: one Gateway socket ([`Gateway`] keeps the session) and
 //!   REST replies with the token in a header.
+//! - [`SlackLink`]: one Socket Mode socket, opened with the app token, and
+//!   Web API replies with the bot token. Every envelope is acknowledged
+//!   before it is handled, and a retried event is handled once.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,8 +20,9 @@ use std::net::{TcpStream, ToSocketAddrs};
 use grokhub_core::http;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust, Forwarded};
 use grokhub_core::msg_discord::{self, close_reason, Do, Gateway};
+use grokhub_core::msg_slack;
 use grokhub_core::msg_telegram::{self, Step};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -69,6 +73,13 @@ pub fn coming_next(kind: ChannelKind) -> String {
 /// Save a bot token in `store`, after checking its shape.
 pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result<(), String> {
     let token = token.trim();
+    // Slack's two tokens are kept as one entry, app token first.
+    let slack = match kind {
+        ChannelKind::Slack => {
+            msg_slack::split_tokens(token).map(|(app, bot)| Zeroizing::new(format!("{app} {bot}")))
+        }
+        _ => None,
+    };
     let (shaped, why) = match kind {
         ChannelKind::Telegram => (
             msg_telegram::valid_token(token),
@@ -78,14 +89,22 @@ pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result
             discord_token_shape(token),
             "That isn't a Discord bot token. Copy it from the Bot page of your Discord application.",
         ),
-        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+        ChannelKind::Slack => (
+            slack.is_some(),
+            "Those aren't Slack's two tokens. Paste the app token (xapp-…) and the bot token (xoxb-…), with a space between.",
+        ),
+        ChannelKind::Signal | ChannelKind::Email => {
             return Err(coming_next(kind));
         }
     };
     if !shaped {
         return Err(why.into());
     }
-    keyring_blob::set(store, token_account(kind), token)
+    keyring_blob::set(
+        store,
+        token_account(kind),
+        slack.as_deref().map_or(token, String::as_str),
+    )
 }
 
 pub fn load_token(
@@ -367,7 +386,8 @@ impl DiscordLink {
         Ok(())
     }
 
-    /// TCP, TLS for `wss`, then the WebSocket upgrade.
+    /// TCP, TLS for `wss`, then the WebSocket upgrade. Slack's socket opens
+    /// the same way.
     fn connect(url: &str) -> Result<GatewaySocket, String> {
         let request = url.into_client_request().map_err(|e| e.to_string())?;
         let uri = request.uri();
@@ -530,6 +550,301 @@ impl DiscordLink {
                 self.send(config_dir, &channel_id, &text, &[])
             }
             msg_discord::Step::Drop => trust.save(config_dir),
+        }
+    }
+}
+
+/// How many event ids [`SlackLink`] remembers.
+const SLACK_SEEN: usize = msg_slack::SEEN_EVENTS;
+
+/// One Slack app's Socket Mode session and its Web API replies. Not `Debug`:
+/// it holds both tokens.
+pub struct SlackLink {
+    app: Zeroizing<String>,
+    bot: Zeroizing<String>,
+    api: String,
+    /// The app's own user id, from `auth.test`, so its mention can be cut.
+    bot_user: String,
+    agent: http::Agent,
+    /// Off only in tests, which serve the socket on loopback.
+    public_only: bool,
+    seen: std::collections::VecDeque<String>,
+    last_problem: Option<String>,
+}
+
+impl SlackLink {
+    /// `tokens` as saved: the app token and the bot token, space between.
+    pub fn new(tokens: &str) -> Result<Self, String> {
+        Self::at(msg_slack::API_BASE, tokens, true)
+    }
+
+    fn at(api: &str, tokens: &str, public_only: bool) -> Result<Self, String> {
+        let (app, bot) =
+            msg_slack::split_tokens(tokens).ok_or("Those aren't Slack's two tokens.")?;
+        Ok(Self {
+            app: Zeroizing::new(app.to_string()),
+            bot: Zeroizing::new(bot.to_string()),
+            api: api.trim_end_matches('/').to_string(),
+            bot_user: String::new(),
+            agent: http::agent(http::Opts {
+                connect: Duration::from_secs(15),
+                overall: Some(Duration::from_secs(30)),
+                redirects: 0,
+                public_only,
+                ..Default::default()
+            }),
+            public_only,
+            seen: std::collections::VecDeque::new(),
+            last_problem: None,
+        })
+    }
+
+    /// The last message that couldn't be saved or answered, for the app to show.
+    pub fn last_problem(&self) -> Option<&str> {
+        self.last_problem.as_deref()
+    }
+
+    /// One Web API call with `token`. Slack answers 200 with `ok: false` for
+    /// most errors, so both are read; no error carries a token or a URL.
+    fn call(
+        &self,
+        config_dir: &Path,
+        method: &str,
+        token: &str,
+        body: Value,
+        data: &[DataClass],
+    ) -> Result<Value, String> {
+        let url = format!("{}/{method}", self.api);
+        guard_quiet(config_dir, &EgressReq::new(&url, data))?;
+        let answer: Value = self
+            .agent
+            .post(&url)
+            .header("Authorization", &format!("Bearer {token}"))
+            .send_json(body)
+            .map_err(|e| match e.status() {
+                Some(429) => "Slack asked the app to slow down.".to_string(),
+                Some(code) => format!("Slack's {method} failed (status {code})."),
+                None => format!("Couldn't reach Slack for {method}."),
+            })?
+            .into_json()
+            .map_err(|_| format!("Slack's {method} answer isn't JSON."))?;
+        match msg_slack::api_error(&answer) {
+            Some(why) => Err(why),
+            None => Ok(answer),
+        }
+    }
+
+    /// The app's name, to show the bot token works, and its user id.
+    pub fn check(&mut self, config_dir: &Path) -> Result<String, String> {
+        let me = self.call(config_dir, "auth.test", &self.bot, json!({}), &[])?;
+        self.bot_user = me
+            .get("user_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        me.get("user")
+            .and_then(Value::as_str)
+            .map(|u| format!("@{u}"))
+            .ok_or_else(|| "Slack's auth.test answer has no app name.".into())
+    }
+
+    /// Post `text` where `reply_to` says (a DM, or `channel:thread`); `data`
+    /// as [`TelegramLink::send`].
+    pub fn send(
+        &self,
+        config_dir: &Path,
+        reply_to: &str,
+        text: &str,
+        data: &[DataClass],
+    ) -> Result<(), String> {
+        let (channel, thread) =
+            msg_slack::split_reply_to(reply_to).ok_or("That isn't a Slack conversation.")?;
+        self.call(
+            config_dir,
+            "chat.postMessage",
+            &self.bot,
+            msg_slack::post_body(channel, thread, text),
+            data,
+        )
+        .map(|_| ())
+    }
+
+    /// A fresh Socket Mode address. It holds a one-time ticket, so the guard
+    /// sees only its host.
+    fn open_url(&self, config_dir: &Path) -> Result<String, String> {
+        let answer = self.call(
+            config_dir,
+            "apps.connections.open",
+            &self.app,
+            json!({}),
+            &[],
+        )?;
+        let url = answer
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or("Slack's apps.connections.open answer has no address.")?;
+        if !self.public_only && url.starts_with("ws://127.0.0.1:") {
+            return Ok(url.to_string());
+        }
+        let host = url
+            .strip_prefix("wss://")
+            .and_then(|rest| rest.split(['/', '?']).next())
+            .filter(|h| *h == "slack.com" || h.ends_with(".slack.com"))
+            .ok_or("Slack gave a socket address that isn't Slack's.")?;
+        guard_quiet(
+            config_dir,
+            &EgressReq::new(&format!("wss://{host}/link/"), &[]),
+        )?;
+        Ok(url.to_string())
+    }
+
+    /// Connect and stay connected until `stop` says so, opening a new socket
+    /// whenever Slack drops or refreshes one. `Err` when the tokens are
+    /// refused, the app is turned off, or the egress guard refuses.
+    pub fn run(&mut self, config_dir: &Path, stop: &dyn Fn() -> bool) -> Result<(), String> {
+        if self.bot_user.is_empty() {
+            self.check(config_dir)?;
+        }
+        let mut backoff = Duration::from_secs(1);
+        while !stop() {
+            let url = match self.open_url(config_dir) {
+                Ok(url) => url,
+                Err(why) if !Self::passing(&why) => return Err(why),
+                Err(why) => {
+                    self.last_problem = Some(why);
+                    backoff = (backoff * 2).min(DISCORD_MAX_BACKOFF);
+                    Self::nap(stop, backoff);
+                    continue;
+                }
+            };
+            match DiscordLink::connect(&url) {
+                Ok(mut socket) => {
+                    let ended = self.session(config_dir, &mut socket, stop);
+                    let _ = socket.close(None);
+                    let _ = socket.flush();
+                    match ended {
+                        Ended::Stopped => return Ok(()),
+                        Ended::Fatal(why) => return Err(why),
+                        Ended::Again { .. } => backoff = Duration::from_secs(1),
+                    }
+                }
+                Err(_) => backoff = (backoff * 2).min(DISCORD_MAX_BACKOFF),
+            }
+            Self::nap(stop, backoff);
+        }
+        Ok(())
+    }
+
+    /// True for a problem that trying again later can fix: Slack out of
+    /// reach, busy or asking for a pause. Anything else needs the person.
+    fn passing(why: &str) -> bool {
+        why.starts_with("Couldn't reach") || why.contains("slow down") || why.contains("(status 5")
+    }
+
+    fn nap(stop: &dyn Fn() -> bool, total: Duration) {
+        let until = std::time::Instant::now() + total;
+        while !stop() && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// True the first time `event_id` is seen.
+    fn first_time(&mut self, event_id: &str) -> bool {
+        if self.seen.iter().any(|id| id == event_id) {
+            return false;
+        }
+        if self.seen.len() >= SLACK_SEEN {
+            self.seen.pop_front();
+        }
+        self.seen.push_back(event_id.to_string());
+        true
+    }
+
+    fn session(
+        &mut self,
+        config_dir: &Path,
+        socket: &mut GatewaySocket,
+        stop: &dyn Fn() -> bool,
+    ) -> Ended {
+        loop {
+            if stop() {
+                return Ended::Stopped;
+            }
+            let frame = match socket.read() {
+                Ok(Message::Text(text)) => match serde_json::from_str::<Value>(text.as_str()) {
+                    Ok(frame) => msg_slack::read_frame(&frame, &self.bot_user),
+                    Err(_) => continue,
+                },
+                Ok(Message::Close(_)) => return Ended::Again { resume: false },
+                Ok(_) => continue,
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => return Ended::Again { resume: false },
+            };
+            match frame {
+                msg_slack::Frame::Hello | msg_slack::Frame::Other => {}
+                msg_slack::Frame::Disconnect { fatal: true } => {
+                    return Ended::Fatal("Slack turned the app's socket off. Turn Socket Mode back on in the Slack app.".into());
+                }
+                msg_slack::Frame::Disconnect { fatal: false } => {
+                    return Ended::Again { resume: false };
+                }
+                msg_slack::Frame::Event {
+                    envelope_id,
+                    event_id,
+                    message,
+                } => {
+                    // Acknowledged first: Slack retries anything not acked
+                    // within three seconds.
+                    let ack = msg_slack::ack(&envelope_id).to_string();
+                    if socket.send(Message::text(ack)).is_err() {
+                        return Ended::Again { resume: false };
+                    }
+                    let fresh = event_id.as_deref().is_none_or(|id| self.first_time(id));
+                    if let (true, Some(msg)) = (fresh, message) {
+                        if let Err(why) = self.handle(config_dir, msg, grokhub_core::now_ms()) {
+                            self.last_problem = Some(why);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle(
+        &self,
+        config_dir: &Path,
+        msg: msg_slack::Incoming,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let mut trust = DmTrust::load(config_dir);
+        match msg_slack::step(&mut trust, msg, now_ms) {
+            msg_slack::Step::Forward(m) => {
+                msg_channels::queue_message(
+                    config_dir,
+                    &Forwarded {
+                        channel: ChannelKind::Slack,
+                        sender: &m.sender,
+                        label: &m.sender,
+                        reply_to: &m.reply_to(),
+                        text: &m.text,
+                    },
+                    now_ms,
+                )?;
+                Ok(())
+            }
+            msg_slack::Step::Reply { channel, text } => {
+                // Saved before it's sent, as for Telegram.
+                trust.save(config_dir)?;
+                self.send(config_dir, &channel, &text, &[])
+            }
+            msg_slack::Step::Drop => trust.save(config_dir),
         }
     }
 }
@@ -743,7 +1058,17 @@ mod tests {
             Some(TOKEN)
         );
         assert!(save_token(&store, ChannelKind::Discord, TOKEN).is_err());
-        for kind in [ChannelKind::Slack, ChannelKind::Signal, ChannelKind::Email] {
+        assert!(save_token(&store, ChannelKind::Slack, TOKEN).is_err());
+        let (app, bot) = SLACK_TOKENS.split_once(' ').unwrap();
+        save_token(&store, ChannelKind::Slack, &format!("{bot}\n{app} ")).unwrap();
+        assert_eq!(
+            load_token(&store, ChannelKind::Slack)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some(SLACK_TOKENS)
+        );
+        for kind in [ChannelKind::Signal, ChannelKind::Email] {
             assert_eq!(
                 save_token(&store, kind, TOKEN).unwrap_err(),
                 coming_next(kind)
@@ -755,6 +1080,7 @@ mod tests {
             store.0.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
             vec![
                 "channel-discord".to_string(),
+                "channel-slack".to_string(),
                 "channel-telegram".to_string()
             ]
         );
@@ -859,6 +1185,103 @@ mod tests {
             me.join().unwrap()[0],
             format!("GET /users/@me HTTP/1.1 [auth: Bot {DISCORD_TOKEN}]\n")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const SLACK_TOKENS: &str =
+        "xapp-1-A0123456789-0123456789-abcdef0123 xoxb-0123456789-0123456789-abcdefABCDEF";
+
+    /// A fake Socket Mode server: says hello, sends one stranger's DM twice
+    /// (Slack's retry, same event id), collects both acks, then asks for a
+    /// refresh so the link opens a new socket.
+    fn fake_socket(listener: TcpListener) -> JoinHandle<Vec<Value>> {
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.send(Message::text(json!({ "type": "hello" }).to_string()))
+                .unwrap();
+            let dm = |envelope: &str| {
+                json!({ "type": "events_api", "envelope_id": envelope, "payload": {
+                    "event_id": "Ev01",
+                    "event": { "type": "message", "channel_type": "im", "channel": "D0DM",
+                               "user": "U0STRANGER", "text": "hello", "ts": "1700000000.000100" },
+                }})
+            };
+            let mut acks = Vec::new();
+            for envelope in ["env-1", "env-2"] {
+                ws.send(Message::text(dm(envelope).to_string())).unwrap();
+                acks.push(loop {
+                    if let Message::Text(t) = ws.read().unwrap() {
+                        break serde_json::from_str(t.as_str()).unwrap();
+                    }
+                });
+            }
+            let refresh = json!({ "type": "disconnect", "reason": "refresh_requested" });
+            ws.send(Message::text(refresh.to_string())).unwrap();
+            let _ = ws.read();
+            acks
+        })
+    }
+
+    #[test]
+    fn a_slack_stranger_gets_one_code_for_a_retried_event_and_refused_tokens_stop_the_run() {
+        let dir = temp_dir("slack");
+        let socket = TcpListener::bind("127.0.0.1:0").unwrap();
+        let socket_url = format!("ws://{}/link/?ticket=t1", socket.local_addr().unwrap());
+        let socket_server = fake_socket(socket);
+        let (api, api_server) = fake_api(vec![
+            (
+                200,
+                json!({ "ok": true, "user": "loadout", "user_id": "U0BOT" }),
+            ),
+            (200, json!({ "ok": true, "url": socket_url })),
+            (200, json!({ "ok": true, "ts": "1700000000.000200" })),
+            (200, json!({ "ok": false, "error": "invalid_auth" })),
+        ]);
+        let mut link = SlackLink::at(&api, SLACK_TOKENS, false).unwrap();
+        let result = link.run(&dir, &|| false);
+        let acks = socket_server.join().unwrap();
+        let seen = api_server.join().unwrap();
+
+        assert_eq!(
+            acks,
+            vec![
+                json!({ "envelope_id": "env-1" }),
+                json!({ "envelope_id": "env-2" })
+            ]
+        );
+        let lines: Vec<&str> = seen.iter().map(|s| s.split_once('\n').unwrap().0).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "POST /auth.test HTTP/1.1 [auth: Bearer xoxb-0123456789-0123456789-abcdefABCDEF]",
+                "POST /apps.connections.open HTTP/1.1 [auth: Bearer xapp-1-A0123456789-0123456789-abcdef0123]",
+                "POST /chat.postMessage HTTP/1.1 [auth: Bearer xoxb-0123456789-0123456789-abcdefABCDEF]",
+                "POST /apps.connections.open HTTP/1.1 [auth: Bearer xapp-1-A0123456789-0123456789-abcdef0123]",
+            ]
+        );
+        let code = DmTrust::load(&dir).pending[0].code.clone();
+        let posted: Value = serde_json::from_str(seen[2].split_once('\n').unwrap().1).unwrap();
+        assert_eq!(posted["channel"], "D0DM");
+        assert_eq!(posted["text"], msg_telegram::pairing_text(&code));
+        assert_eq!(link.last_problem(), None);
+        assert_eq!(
+            result,
+            Err("Slack refused the tokens. Copy them again from your Slack app.".into())
+        );
+
+        // Only Slack's own host may hold the socket, and a lone token isn't enough.
+        let (api, opened) = fake_api(vec![(
+            200,
+            json!({ "ok": true, "url": "wss://evil.example/link/" }),
+        )]);
+        let link = SlackLink::at(&api, SLACK_TOKENS, false).unwrap();
+        assert_eq!(
+            link.open_url(&dir).unwrap_err(),
+            "Slack gave a socket address that isn't Slack's."
+        );
+        opened.join().unwrap();
+        assert!(SlackLink::new("xoxb-0123456789-0123456789-abcdefABCDEF").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

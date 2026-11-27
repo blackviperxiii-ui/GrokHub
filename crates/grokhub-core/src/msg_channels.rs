@@ -75,9 +75,10 @@ pub const KINDS: [KindSpec; 5] = [
         key: "slack",
         name: "Slack",
         token_account: "channel-slack",
-        setup_label: "Slack tokens",
-        setup_hint: "Coming next.",
-        live: false,
+        setup_label: "Slack app and bot tokens",
+        setup_hint:
+            "Paste the app token (xapp-…) and the bot token (xoxb-…), with a space between.",
+        live: true,
     },
     KindSpec {
         kind: ChannelKind::Signal,
@@ -692,7 +693,7 @@ mod tests {
         }
         assert_eq!(ChannelKind::from_key("webhook"), None);
         let live: Vec<&str> = KINDS.iter().filter(|s| s.live).map(|s| s.key).collect();
-        assert_eq!(live, ["telegram", "discord"]);
+        assert_eq!(live, ["telegram", "discord", "slack"]);
         let accounts: BTreeSet<&str> = KINDS.iter().map(|s| s.token_account).collect();
         assert_eq!(accounts.len(), KINDS.len());
     }
