@@ -9293,6 +9293,29 @@ fieldset.channel label {
   }
 }
 
+/* vstack skill library: sync status on the Skills page and Code tab, and a scrolling filter list. */
+.vstack-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.vstack-sync .note {
+  margin: 0;
+}
+
+.code-skills .rows {
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.code-skills input[type="search"] {
+  flex: 1;
+  min-width: 12rem;
+}
+
 /* Order 0.08 — permanent grouped sidebar.
    This is the only styles.css edit for that change. It sits last so it wins
    over the Simple-mode switch and the phone tab bar above, and so another

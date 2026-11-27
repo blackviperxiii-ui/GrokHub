@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { Toggle } from "./Toggle";
 import { PageHead, StatusLine, useNote } from "./ui";
+import { VstackSyncBar } from "./VstackSync";
 
 export const SKILLS_HUB_NOTE =
   "Search ClawHub, SkillsSH, GitHub (owner/repo), or a host with /.well-known/skills. New installs go through the skill scanner and quarantine.";
@@ -32,12 +33,13 @@ export const SKILLS_HUB_NOTE =
 export const SKILLS_LIBRARY_NOTE =
   "Browse curated workflows and install the Everyday Life Pack in one click. Bundled and pack skills run through the same safety check as self-authored skills.";
 
-/** The groups, in page order. Built-in skills live in the Code tab, not here. */
+/** The groups, in page order. Built-in vstack skills are read-only. */
 export const SKILL_GROUPS: { source: SkillSource; label: string }[] = [
   { source: "cabin", label: "App skills" },
   { source: "project", label: "Project skills" },
   { source: "user", label: "User skills" },
   { source: "plugin", label: "Plugin skills" },
+  { source: "builtin", label: "Built-in (vstack)" },
 ];
 
 export const SKILLS_EMPTY = "No skills found yet.";
@@ -375,11 +377,13 @@ export function Skills({
           Connectors
         </button>
       </div>
+      <VstackSyncBar onSynced={() => void refresh()} />
       <p className="note">
-        Skills chat can use: this app's own, the project's and yours, and the
-        ones enabled plugins bring. Switch one off to keep it but stop chat
-        using it. Make a new one with New skill, or Edit one of this app's own
-        to change it.
+        Skills chat can use: this app's own, the project's and yours, the ones
+        enabled plugins bring, and the built-in vstack library. Built-in skills
+        stay read-only. Switch another skill off to keep it but stop chat using
+        it. Make a new one with New skill, or Edit one of this app's own to
+        change it.
       </p>
       {!remote && (
         <div className="skill-group" aria-label="Skill curator">
@@ -628,13 +632,16 @@ export function Skills({
                   {!row.on && (
                     <div className="card-status">{SKILL_OFF_NOTE}</div>
                   )}
-                  {!remote && !row.archived && (
+                  {!remote && !row.archived && row.source !== "builtin" && (
                     <Toggle
                       checked={row.on}
                       onChange={(on) => void switchSkill(row, on)}
                     >
                       Chat can use it
                     </Toggle>
+                  )}
+                  {row.source === "builtin" && (
+                    <div className="card-status">Read-only.</div>
                   )}
                   {!remote && row.source === "cabin" && (
                     <>

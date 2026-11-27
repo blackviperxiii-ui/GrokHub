@@ -4105,7 +4105,7 @@ export function onUpdateAvailable(
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
 
-/** The Skills page (src-tauri/src/skills.rs). Built-in skills stay off it. */
+/** The Skills page (src-tauri/src/skills.rs), including read-only built-in vstack skills. */
 export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
 
 export interface SkillRow {
