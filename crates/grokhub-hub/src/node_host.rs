@@ -23,9 +23,9 @@ use grokhub_core::pair::ct_eq;
 use grokhub_core::state::PairCode;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tiny_http::{Method, Request, Server};
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-use crate::server::{bearer, from_web_page, read_json, send, send_json, url_path};
+use crate::server::{bearer, from_web_page, read_json, send, url_path};
 
 pub const PREFIX: &str = "/node/v1";
 pub const KIND: &str = "companion-host";
@@ -211,6 +211,41 @@ struct Shared {
     key: String,
     events: Mutex<VecDeque<Event>>,
     host_name: String,
+    /// Optional single HTTPS (or loopback HTTP) web origin allowed to pair and
+    /// poll as a browser companion.
+    allowed_origin: Mutex<Option<String>>,
+}
+
+/// Normalize one explicit browser companion origin. Rejects wildcards, paths,
+/// credentials, and plain non-loopback `http://` origins.
+pub fn normalize_origin(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed == "*"
+        || trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return None;
+    }
+    let (scheme, rest) = if let Some(rest) = trimmed.strip_prefix("https://") {
+        ("https", rest)
+    } else {
+        let rest = trimmed.strip_prefix("http://")?;
+        ("http", rest)
+    };
+    if rest.is_empty() || rest.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    if scheme == "http" {
+        let host = if let Some(after) = rest.strip_prefix('[') {
+            after.split_once(']')?.0
+        } else {
+            rest.split(':').next().unwrap_or("")
+        };
+        if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+            return None;
+        }
+    }
+    Some(format!("{scheme}://{rest}"))
 }
 
 impl Shared {
@@ -260,6 +295,7 @@ impl NodeHost {
             key,
             events: Mutex::new(VecDeque::new()),
             host_name: host_name.to_string(),
+            allowed_origin: Mutex::new(None),
         });
         let server = Arc::new(server);
         let (loop_server, loop_shared) = (server.clone(), shared.clone());
@@ -346,6 +382,28 @@ impl NodeHost {
         changed
     }
 
+    /// Allow or clear the single browser origin permitted to call `/node/v1`
+    /// companion endpoints (never `/mcp/<id>`).
+    pub fn set_allowed_origin(&self, origin: Option<&str>) -> bool {
+        match origin {
+            None => {
+                *lock(&self.shared.allowed_origin) = None;
+                true
+            }
+            Some(raw) => match normalize_origin(raw) {
+                Some(norm) => {
+                    *lock(&self.shared.allowed_origin) = Some(norm);
+                    true
+                }
+                None => false,
+            },
+        }
+    }
+
+    pub fn allowed_origin(&self) -> Option<String> {
+        lock(&self.shared.allowed_origin).clone()
+    }
+
     /// Wakes and heard lines since the last take, oldest first.
     pub fn take_events(&self) -> Vec<Event> {
         lock(&self.shared.events).drain(..).collect()
@@ -357,10 +415,11 @@ fn accept_loop(server: &Server, shared: &Arc<Shared>) {
     for req in server.incoming_requests() {
         if in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
             in_flight.fetch_sub(1, Ordering::SeqCst);
-            let _ = send_json(
+            let _ = send_node_json(
                 req,
                 503,
                 json!({ "ok": false, "error": "Busy. Try again." }),
+                None,
             );
             continue;
         }
@@ -378,14 +437,75 @@ fn accept_loop(server: &Server, shared: &Arc<Shared>) {
     }
 }
 
-fn error(req: Request, status: u16, text: &str) -> Result<(), ()> {
-    send_json(req, status, json!({ "ok": false, "error": text }))
+fn send_node_json(
+    req: Request,
+    status: u16,
+    body: impl Serialize,
+    cors_origin: Option<&str>,
+) -> Result<(), ()> {
+    let bytes = serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec());
+    let mut headers = Vec::new();
+    for (name, value) in [
+        ("cache-control", "no-store"),
+        ("content-type", "application/json; charset=utf-8"),
+    ] {
+        if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+            headers.push(h);
+        }
+    }
+    if let Some(origin) = cors_origin {
+        for (name, value) in [("access-control-allow-origin", origin), ("vary", "Origin")] {
+            if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+                headers.push(h);
+            }
+        }
+    }
+    let resp = Response::new(
+        StatusCode(status),
+        headers,
+        bytes.as_slice(),
+        Some(bytes.len()),
+        None,
+    );
+    req.respond(resp).map_err(|_| ())
+}
+
+fn send_preflight(req: Request, origin: &str) -> Result<(), ()> {
+    let mut headers = Vec::new();
+    for (name, value) in [
+        ("cache-control", "no-store"),
+        ("access-control-allow-origin", origin),
+        ("access-control-allow-methods", "GET, POST, OPTIONS"),
+        (
+            "access-control-allow-headers",
+            "Authorization, Content-Type",
+        ),
+        ("vary", "Origin"),
+    ] {
+        if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+            headers.push(h);
+        }
+    }
+    let empty: &[u8] = b"";
+    let resp = Response::new(StatusCode(204), headers, empty, Some(0), None);
+    req.respond(resp).map_err(|_| ())
+}
+
+fn error(req: Request, status: u16, text: &str, cors: Option<&str>) -> Result<(), ()> {
+    send_node_json(req, status, json!({ "ok": false, "error": text }), cors)
+}
+
+fn request_origin(req: &Request) -> Option<String> {
+    req.headers()
+        .iter()
+        .find(|h| h.field.equiv("Origin"))
+        .map(|h| h.value.as_str().trim().to_string())
 }
 
 fn handle(shared: &Shared, mut req: Request) -> Result<(), ()> {
     let path = url_path(req.url());
     let Some(rest) = path.strip_prefix(PREFIX) else {
-        return error(req, 404, "Unknown route.");
+        return error(req, 404, "Unknown route.", None);
     };
     let rest = rest.to_string();
     let from = req.remote_addr().map(|a| a.ip());
@@ -393,29 +513,47 @@ fn handle(shared: &Shared, mut req: Request) -> Result<(), ()> {
         return mcp(shared, req, id, from);
     }
     if !from.is_some_and(nodes::private_address) {
-        return error(req, 403, "Companions pair from the same network.");
+        return error(req, 403, "Companions pair from the same network.", None);
     }
-    // A page in a browser on the network must not pair or poll: only the
-    // companion app itself, which sends no Origin.
-    if from_web_page(&req) {
-        return error(
-            req,
-            403,
-            "Pairing is for the companion app, not a web page.",
-        );
-    }
+    // A page in a browser on the network may pair/poll only from the single
+    // explicitly allowlisted Web access origin. Native companions send no Origin.
+    let cors_origin = match request_origin(&req) {
+        None => None,
+        Some(origin) => {
+            let allowed = lock(&shared.allowed_origin).clone();
+            if allowed.as_deref() != Some(origin.as_str()) {
+                return error(
+                    req,
+                    403,
+                    "Pairing is for the companion app, not a web page.",
+                    None,
+                );
+            }
+            Some(origin)
+        }
+    };
+    let cors = cors_origin.as_deref();
     let method = req.method().clone();
+    if method == Method::Options {
+        return match (cors, rest.as_str()) {
+            (Some(origin), "/health" | "/pair" | "/hello" | "/next" | "/reply" | "/event") => {
+                send_preflight(req, origin)
+            }
+            _ => error(req, 404, "Unknown route.", cors),
+        };
+    }
     match (method, rest.as_str()) {
-        (Method::Get, "/health") => send_json(
+        (Method::Get, "/health") => send_node_json(
             req,
             200,
             json!({ "ok": true, "kind": KIND, "version": nodes::VERSION }),
+            cors,
         ),
-        (Method::Post, "/pair") => pair(shared, req),
+        (Method::Post, "/pair") => pair(shared, req, cors),
         (Method::Post, "/hello") => {
             let (c, body) = match authed_body(shared, &mut req) {
                 Ok(got) => got,
-                Err((status, text)) => return error(req, status, text),
+                Err((status, text)) => return error(req, status, text, cors),
             };
             let offers: Vec<String> = body
                 .get("offers")
@@ -432,50 +570,52 @@ fn handle(shared: &Shared, mut req: Request) -> Result<(), ()> {
             shared.save(&book);
             let c = book.get(&c.id).cloned().ok_or(())?;
             drop(book);
-            send_json(
+            send_node_json(
                 req,
                 200,
                 json!({ "ok": true, "approved": c.approved, "offers": c.offers, "allowed": c.allowed }),
+                cors,
             )
         }
         (Method::Get, "/next") => {
             let Some(c) = authed(shared, &req) else {
-                return error(req, 401, "Pair this companion first.");
+                return error(req, 401, "Pair this companion first.", cors);
             };
             if !c.approved {
-                return send_json(req, 200, json!({ "ok": true, "pending": true }));
+                return send_node_json(req, 200, json!({ "ok": true, "pending": true }), cors);
             }
             match shared.relay.next(&c.id, POLL) {
-                Ok(Some(rpc)) => send_json(req, 200, json!({ "ok": true, "rpc": rpc })),
-                Ok(None) => send_json(req, 200, json!({ "ok": true })),
-                Err(()) => error(req, 429, "This companion is already polling."),
+                Ok(Some(rpc)) => send_node_json(req, 200, json!({ "ok": true, "rpc": rpc }), cors),
+                Ok(None) => send_node_json(req, 200, json!({ "ok": true }), cors),
+                Err(()) => error(req, 429, "This companion is already polling.", cors),
             }
         }
         (Method::Post, "/reply") => {
             let (c, body) = match authed_body(shared, &mut req) {
                 Ok(got) => got,
-                Err((status, text)) => return error(req, status, text),
+                Err((status, text)) => return error(req, status, text, cors),
             };
             let rpc = body.get("rpc").cloned().unwrap_or(Value::Null);
             let taken = shared.relay.reply(&c.id, rpc);
-            send_json(req, 200, json!({ "ok": true, "taken": taken }))
+            send_node_json(req, 200, json!({ "ok": true, "taken": taken }), cors)
         }
         (Method::Post, "/event") => {
             let (c, body) = match authed_body(shared, &mut req) {
                 Ok(got) => got,
-                Err((status, text)) => return error(req, status, text),
+                Err((status, text)) => return error(req, status, text, cors),
             };
             let kind = body.get("kind").and_then(Value::as_str).unwrap_or("");
             let needs = match kind {
                 "wake" => "wake",
                 "heard" => "talk",
-                _ => return error(req, 400, "An event is `wake` or `heard`."),
+                _ => return error(req, 400, "An event is `wake` or `heard`.", cors),
             };
             if !c.may(needs) {
                 return error(
                     req,
                     403,
                     &format!("`{needs}` isn't allowed for this companion."),
+                    cors,
                 );
             }
             let text: String = body
@@ -497,9 +637,9 @@ fn handle(shared: &Shared, mut req: Request) -> Result<(), ()> {
                 at: grokhub_core::now_ms(),
             });
             drop(events);
-            send_json(req, 200, json!({ "ok": true }))
+            send_node_json(req, 200, json!({ "ok": true }), cors)
         }
-        _ => error(req, 404, "Unknown route."),
+        _ => error(req, 404, "Unknown route.", cors),
     }
 }
 
@@ -518,10 +658,10 @@ fn authed_body(
     Ok((c, body))
 }
 
-fn pair(shared: &Shared, mut req: Request) -> Result<(), ()> {
+fn pair(shared: &Shared, mut req: Request, cors: Option<&str>) -> Result<(), ()> {
     let body = match read_json(&mut req) {
         Ok(body) => body,
-        Err(e) => return error(req, 400, e),
+        Err(e) => return error(req, 400, e, cors),
     };
     let text = |key: &str| body.get(key).and_then(Value::as_str).unwrap_or("");
     let mut book = lock(&shared.book);
@@ -537,7 +677,7 @@ fn pair(shared: &Shared, mut req: Request) -> Result<(), ()> {
     }
     drop(book);
     match result {
-        Ok(token) => send_json(
+        Ok(token) => send_node_json(
             req,
             200,
             json!({
@@ -546,6 +686,7 @@ fn pair(shared: &Shared, mut req: Request) -> Result<(), ()> {
                 "version": nodes::VERSION,
                 "host": { "name": shared.host_name },
             }),
+            cors,
         ),
         Err(e) => error(
             req,
@@ -554,6 +695,7 @@ fn pair(shared: &Shared, mut req: Request) -> Result<(), ()> {
                 nodes::PairError::Mismatch | nodes::PairError::Full => 403,
             },
             e.text(),
+            cors,
         ),
     }
 }
@@ -569,21 +711,21 @@ fn rpc_error(id: Value, error: Value) -> Value {
 fn mcp(shared: &Shared, mut req: Request, id: &str, from: Option<IpAddr>) -> Result<(), ()> {
     let key_ok = ct_eq(bearer(&req).as_bytes(), shared.key.as_bytes());
     if !from.is_some_and(|ip| ip.is_loopback()) || from_web_page(&req) || !key_ok {
-        return error(req, 403, "Only this app reaches its companions.");
+        return error(req, 403, "Only this app reaches its companions.", None);
     }
     if *req.method() != Method::Post {
         return send(req, 405, "text/plain; charset=utf-8", b"POST only");
     }
     let body = match read_json(&mut req) {
         Ok(body) => body,
-        Err(e) => return error(req, 400, e),
+        Err(e) => return error(req, 400, e, None),
     };
     if !body.is_object() {
         let answer = rpc_error(
             Value::Null,
             json!({ "code": -32600, "message": "One message per request." }),
         );
-        return send_json(req, 200, answer);
+        return send_node_json(req, 200, answer, None);
     }
     let rid = body.get("id").cloned();
     let companion = lock(&shared.book).get(id).cloned();
@@ -603,7 +745,7 @@ fn mcp(shared: &Shared, mut req: Request, id: &str, from: Option<IpAddr>) -> Res
         return send(req, 202, "text/plain; charset=utf-8", b"");
     };
     if let Some(error) = refused {
-        return send_json(req, 200, rpc_error(rid, error));
+        return send_node_json(req, 200, rpc_error(rid, error), None);
     }
     let Some(c) = companion else {
         return Err(());
@@ -613,7 +755,7 @@ fn mcp(shared: &Shared, mut req: Request, id: &str, from: Option<IpAddr>) -> Res
             rid,
             json!({ "code": -32001, "message": format!("{} is offline. Open its companion and try again.", c.name) }),
         );
-        return send_json(req, 200, answer);
+        return send_node_json(req, 200, answer, None);
     }
     let method = body
         .get("method")
@@ -627,12 +769,13 @@ fn mcp(shared: &Shared, mut req: Request, id: &str, from: Option<IpAddr>) -> Res
                 let now = lock(&shared.book).get(id).cloned().unwrap_or(c);
                 nodes::filter_tools(&mut answer, &now);
             }
-            send_json(req, 200, answer)
+            send_node_json(req, 200, answer, None)
         }
-        Err(text) => send_json(
+        Err(text) => send_node_json(
             req,
             200,
             rpc_error(rid, json!({ "code": -32001, "message": text })),
+            None,
         ),
     }
 }
@@ -1048,6 +1191,202 @@ mod tests {
             "{out}"
         );
         assert!(host.companions().is_empty(), "the code wasn't even tried");
+        let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+    }
+
+    fn http_with_origin(
+        port: u16,
+        method: &str,
+        path: &str,
+        origin: &str,
+        auth: &str,
+        body: &str,
+    ) -> (u16, String, Value) {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let auth = if auth.is_empty() {
+            String::new()
+        } else {
+            format!("Authorization: Bearer {auth}\r\n")
+        };
+        let req = format!(
+            "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\
+             Origin: {origin}\r\n{auth}Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).expect("write");
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).expect("read");
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let (head, raw_body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        (
+            status,
+            head.to_string(),
+            serde_json::from_str(raw_body).unwrap_or(Value::Null),
+        )
+    }
+
+    #[test]
+    fn normalize_origin_rejects_wildcards_paths_and_plain_lan_http() {
+        assert_eq!(
+            normalize_origin("https://192.168.1.10:4620"),
+            Some("https://192.168.1.10:4620".into())
+        );
+        assert_eq!(
+            normalize_origin("http://127.0.0.1:4620"),
+            Some("http://127.0.0.1:4620".into())
+        );
+        assert_eq!(
+            normalize_origin("http://localhost:4620"),
+            Some("http://localhost:4620".into())
+        );
+        assert_eq!(normalize_origin("*"), None);
+        assert_eq!(normalize_origin("https://192.168.1.10:4620/"), None);
+        assert_eq!(normalize_origin("http://192.168.1.10:4620"), None);
+    }
+
+    #[test]
+    fn allowlisted_browser_origin_can_preflight_pair_and_poll_with_same_consent_rules() {
+        let (host, path) = host();
+        let origin = "https://192.168.1.10:4620";
+        assert!(host.set_allowed_origin(Some(origin)));
+        assert_eq!(host.allowed_origin().as_deref(), Some(origin));
+
+        let (status, head, _) =
+            http_with_origin(host.port(), "OPTIONS", "/node/v1/pair", origin, "", "");
+        assert_eq!(status, 204);
+        assert!(
+            head.to_ascii_lowercase()
+                .contains(&format!("access-control-allow-origin: {origin}")),
+            "{head}"
+        );
+
+        let code = host.open_pairing().code;
+        let body =
+            format!(r#"{{"code":"{code}","id":"phone-web","name":"Phone","platform":"browser"}}"#);
+        let (status, head, v) =
+            http_with_origin(host.port(), "POST", "/node/v1/pair", origin, "", &body);
+        assert_eq!(status, 200, "{v}");
+        assert!(
+            head.to_ascii_lowercase()
+                .contains(&format!("access-control-allow-origin: {origin}")),
+            "{head}"
+        );
+        let token = v["token"].as_str().expect("token").to_string();
+
+        // Pending consent: polling is admitted with CORS and returns pending:true,
+        // and MCP calls stay refused until desktop approval.
+        let (status, _, v) =
+            http_with_origin(host.port(), "GET", "/node/v1/next", origin, &token, "");
+        assert_eq!((status, v["pending"].clone()), (200, json!(true)));
+        let hello = json!({ "offers": ["camera", "location"] }).to_string();
+        let (status, _, v) = http_with_origin(
+            host.port(),
+            "POST",
+            "/node/v1/hello",
+            origin,
+            &token,
+            &hello,
+        );
+        assert_eq!((status, v["approved"].clone()), (200, json!(false)));
+        assert!(host.approve("phone-web", &["camera".into()]));
+
+        // After approval, browser origin can pick up queued RPC calls just like native nodes.
+        let list = json!({"jsonrpc":"2.0","id":9,"method":"tools/list"}).to_string();
+        let port = host.port();
+        let poll_token = token.clone();
+        let poller_origin = origin.to_string();
+        let poller = std::thread::spawn(move || {
+            let (status, _, got) = http_with_origin(
+                port,
+                "GET",
+                "/node/v1/next",
+                &poller_origin,
+                &poll_token,
+                "",
+            );
+            assert_eq!(status, 200, "{got}");
+            let mut reply = json!({
+                "jsonrpc": "2.0",
+                "id": got["rpc"]["id"].clone(),
+                "result": { "tools": [
+                    { "name": "camera_snap" },
+                    { "name": "location_get" }
+                ] }
+            });
+            let reply_body = json!({ "rpc": reply.take() }).to_string();
+            let (status, _, v) = http_with_origin(
+                port,
+                "POST",
+                "/node/v1/reply",
+                &poller_origin,
+                &poll_token,
+                &reply_body,
+            );
+            assert_eq!((status, v["taken"].clone()), (200, json!(true)));
+        });
+        for _ in 0..200 {
+            if host.shared.relay.online("phone-web") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            host.shared.relay.online("phone-web"),
+            "phone-web never polled"
+        );
+        let (status, mcp_ans) = http(port, "POST", "/node/v1/mcp/phone-web", KEY, &list);
+        poller.join().expect("poller");
+        assert_eq!(status, 200);
+        assert_eq!(
+            mcp_ans["result"]["tools"],
+            json!([{ "name": "camera_snap" }])
+        );
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+    }
+
+    #[test]
+    fn unlisted_origin_and_mcp_with_origin_are_refused_with_no_cors_headers() {
+        let (host, path) = host();
+        let origin = "https://192.168.1.10:4620";
+        assert!(host.set_allowed_origin(Some(origin)));
+        let code = host.open_pairing().code;
+        let body = format!(r#"{{"code":"{code}","id":"evil","name":"Bad","platform":"browser"}}"#);
+
+        let (status, head, _) = http_with_origin(
+            host.port(),
+            "POST",
+            "/node/v1/pair",
+            "https://evil.example",
+            "",
+            &body,
+        );
+        assert_eq!(status, 403);
+        assert!(
+            !head.to_ascii_lowercase().contains("access-control-"),
+            "{head}"
+        );
+        assert!(host.companions().is_empty());
+
+        let (status, head, _) = http_with_origin(
+            host.port(),
+            "POST",
+            "/node/v1/mcp/evil",
+            origin,
+            KEY,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        );
+        assert_eq!(status, 403);
+        assert!(
+            !head.to_ascii_lowercase().contains("access-control-"),
+            "{head}"
+        );
         let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
     }
 }

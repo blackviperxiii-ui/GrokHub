@@ -1021,11 +1021,12 @@ fn background_halt_native() -> (&'static str, u32) {
     let blob_now = client.blob();
     let alive_before = command_is_live(&dir, "eval-bg-halt", &blob_now);
     let pids = workspace_pids(&dir);
-    cancel_main.cancel();
+    // Halt and observe stopped while the worker is still blocked inside
+    // Scripted::halt. Cancelling first lets the run forget the session, and on
+    // Windows command_is_stopped then loses the task_text status: killed row.
     crate::tasks::halt_session("eval-bg-halt");
-    // The run forgets the session when it returns, so the process check happens
-    // before that join. Halt already signalled the process group.
     let stopped = command_is_stopped("eval-bg-halt", &blob_now, &pids);
+    cancel_main.cancel();
     let done = rx.recv_timeout(Duration::from_secs(5)).ok();
     let _ = worker.join();
     #[cfg(unix)]
@@ -1349,7 +1350,8 @@ impl ModelClient for Scripted {
                     if cancel.is_cancelled() {
                         return Err(ClientError::Cancelled);
                     }
-                    if start.elapsed() > Duration::from_secs(8) {
+                    // Ceiling covers halt_session + the 5s stop poll before cancel.
+                    if start.elapsed() > Duration::from_secs(12) {
                         return Err(ClientError::Protocol("halt did not arrive".into()));
                     }
                     thread::sleep(Duration::from_millis(10));
@@ -1602,7 +1604,7 @@ fn command_is_stopped(session: &str, blob: &str, pids: &[u32]) -> bool {
             return false;
         }
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(2) {
+        while start.elapsed() < Duration::from_secs(5) {
             if pids.iter().copied().all(|pid| !process_alive(pid)) {
                 return true;
             }
@@ -1614,7 +1616,8 @@ fn command_is_stopped(session: &str, blob: &str, pids: &[u32]) -> bool {
     {
         let _ = pids;
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(2) {
+        // Generous for slow Windows CI; returns as soon as status: killed appears.
+        while start.elapsed() < Duration::from_secs(5) {
             if task_text(session, blob).is_some_and(|text| text.contains("status: killed")) {
                 return true;
             }
