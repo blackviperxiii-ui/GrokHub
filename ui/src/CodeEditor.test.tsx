@@ -618,6 +618,20 @@ describe("Code tab → Editor", () => {
     expect(hits).toEqual([]);
   });
 
+  it("opens a jump target at line_start", async () => {
+    api.codeFileRead.mockResolvedValue({
+      path: "src/review.rs",
+      text: "one\ntwo\nthree\nfour\n",
+      root: DEMO,
+    });
+    render(<CodeEditor jump={{ path: "src/review.rs", line: 3, n: 1 }} />);
+    await waitFor(() => expect(api.codeFileRead).toHaveBeenCalledWith("src/review.rs"));
+    await waitFor(() => {
+      const view = editorView();
+      expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(3);
+    });
+  });
+
   it("picks syntax by extension and finds a parent folder", async () => {
     expect(await languageFor("src/lib.rs")).toHaveLength(1);
     expect(await languageFor("ui/App.tsx")).toHaveLength(1);

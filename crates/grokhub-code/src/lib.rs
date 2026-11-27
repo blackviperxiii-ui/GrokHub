@@ -14,6 +14,7 @@ pub mod files;
 pub mod link;
 pub mod push;
 pub mod repo;
+pub mod review;
 pub mod rollback;
 pub mod runs;
 pub mod secrets;

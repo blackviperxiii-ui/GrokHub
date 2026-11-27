@@ -19,6 +19,7 @@ import {
   codeSessionLead,
   codeSessionLeft,
   codeSessionResume,
+  loadChat,
   type CodeLeftOff,
   type CodePanelState,
   codeTestPlan,
@@ -29,6 +30,13 @@ import {
   type CodeOverriddenBy,
   type CodeRepo,
 } from "./api";
+import {
+  CODE_REVIEW_PROMPT,
+  parseCodeReview,
+  type ReviewOutput,
+  type ReviewSeverity,
+} from "./codeReview";
+import { CodeReviewPanel } from "./CodeReview";
 import { Agents } from "./Agents";
 import { Chat, newConversationId, type Prefill } from "./Chat";
 import { CodeDeploy } from "./CodeDeploy";
@@ -119,7 +127,7 @@ export function leftOffLine(left: CodeLeftOff): string {
   return `Goal: ${left.goal}`;
 }
 export const CODE_DESKTOP_ONLY = "The editor and terminal are only in the desktop app.";
-export const CODE_REVIEW_PROMPT = "Review the uncommitted changes in this workspace: what changed, anything risky, and what to test before committing.";
+export { CODE_REVIEW_PROMPT } from "./codeReview";
 export const CODE_BUILTINS = "Built-in skills";
 export const CODE_TESTS = "Tests";
 export const CODE_CONFIRM = "Run this test command?";
@@ -200,6 +208,10 @@ export function Code({
   const [agentPct, setAgentPct] = useState(readAgentWidthPct);
   const tabRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startX: number; startPct: number } | null>(null);
+  const awaitingReview = useRef(false);
+  const [review, setReview] = useState<ReviewOutput | null>(null);
+  const [reviewFilter, setReviewFilter] = useState<ReviewSeverity | "all">("all");
+  const [jump, setJump] = useState<{ path: string; line: number; n: number } | null>(null);
 
   const selectSideTab = useCallback((tab: CodeSideTab) => {
     setSideTab(tab);
@@ -213,6 +225,13 @@ export function Code({
     const show = () => setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1, conversationId: id }));
     codeSessionBind(id).then(show, show);
   }, []);
+
+  const startReview = useCallback(() => {
+    awaitingReview.current = true;
+    setReview(null);
+    setReviewFilter("all");
+    startSession(CODE_REVIEW_PROMPT);
+  }, [startSession]);
 
   /** A message to the lead, sent in the session the agent window shows. */
   const askLead = useCallback((text: string) => {
@@ -279,9 +298,27 @@ export function Code({
   const onRan = useCallback(() => setEnded((n) => n + 1), []);
 
   const onBusy = useCallback((now: boolean) => {
+    const endedTurn = busyNow.current && !now;
     busyNow.current = now;
     setBusy(now);
     if (!now) setEnded((n) => n + 1);
+    if (!endedTurn || !awaitingReview.current) return;
+    const id = sessionNow.current;
+    if (!id) return;
+    awaitingReview.current = false;
+    loadChat(id).then(
+      (transcript) => {
+        const last = [...transcript.lines].reverse().find((line) => line.role === "assistant");
+        if (!last) {
+          setReview({ kind: "markdown", text: "No review reply yet." });
+          return;
+        }
+        setReview(parseCodeReview(last.text));
+      },
+      (err) => {
+        setReview({ kind: "markdown", text: String(err) });
+      },
+    );
   }, []);
 
   const onPanelState = useCallback((next: CodePanelState) => {
@@ -507,7 +544,21 @@ export function Code({
               />
             )}
             {sideTab !== "helpers" && sideTab !== "projects" && sideTab !== "settings" && (
-              <CodeWorkspace key={switches} agentBusy={busy} onAsk={startSession} shipped={shipped} tab={sideTab} />
+              <CodeWorkspace
+                key={switches}
+                agentBusy={busy}
+                onReview={startReview}
+                review={review}
+                reviewFilter={reviewFilter}
+                onReviewFilter={setReviewFilter}
+                jump={jump}
+                onJump={(file, line) => {
+                  selectSideTab("editor");
+                  setJump((now) => ({ path: file, line, n: (now?.n ?? 0) + 1 }));
+                }}
+                shipped={shipped}
+                tab={sideTab}
+              />
             )}
           </div>
         </section>
@@ -520,12 +571,22 @@ export function Code({
  * `shipped` counts commits and pushes made from the Tasks panel: each one reads the repo again. */
 function CodeWorkspace({
   agentBusy,
-  onAsk,
+  onReview,
+  review,
+  reviewFilter,
+  onReviewFilter,
+  jump,
+  onJump,
   shipped = 0,
   tab,
 }: {
   agentBusy: boolean;
-  onAsk: (prompt: string) => void;
+  onReview: () => void;
+  review: ReviewOutput | null;
+  reviewFilter: ReviewSeverity | "all";
+  onReviewFilter: (next: ReviewSeverity | "all") => void;
+  jump: { path: string; line: number; n: number } | null;
+  onJump: (file: string, line: number) => void;
   shipped?: number;
   tab: CodeSideTab;
 }) {
@@ -870,7 +931,7 @@ function CodeWorkspace({
             {busy ? "Refreshing…" : "Refresh"}
           </button>
           {repo?.isRepo && repo.files.length > 0 && (
-            <button type="button" disabled={agentBusy} onClick={() => onAsk(CODE_REVIEW_PROMPT)}>
+            <button type="button" disabled={agentBusy} onClick={onReview}>
               Ask the agent to review
             </button>
           )}
@@ -910,10 +971,23 @@ function CodeWorkspace({
           )}
         </div>
       )}
+      {review && (
+        <CodeReviewPanel
+          output={review}
+          filter={reviewFilter}
+          onFilter={onReviewFilter}
+          onJump={onJump}
+        />
+      )}
+      {jump && (
+        <p className="note" role="status">
+          Opened {jump.path} at line {jump.line}.
+        </p>
+      )}
       {repo !== null &&
         (inShell() ? (
           <Suspense fallback={<p className="note">Loading the editor and terminal…</p>}>
-            <CodeEditor refresh={refreshes} />
+            <CodeEditor refresh={refreshes} jump={jump} />
             <CodeTerminal />
           </Suspense>
         ) : (

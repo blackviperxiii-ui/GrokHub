@@ -55,7 +55,13 @@ export function usesCrlf(text: string): boolean {
 
 /** The Code tab's editor: a folder list of the project and one open file.
  * `refresh` is a counter: a new value lists the open folder again. */
-export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
+export default function CodeEditor({
+  refresh = 0,
+  jump = null,
+}: {
+  refresh?: number;
+  jump?: { path: string; line: number; n: number } | null;
+}) {
   const [listing, setListing] = useState<CodeFileListing | null>(null);
   const [path, setPath] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -209,6 +215,37 @@ export default function CodeEditor({ refresh = 0 }: { refresh?: number }) {
       if (pick === picked.current) setNote(String(err));
     }
   }
+
+  function revealLine(line: number) {
+    const cm = view.current;
+    if (!cm) return;
+    const n = Math.min(Math.max(1, line), cm.state.doc.lines);
+    const pos = cm.state.doc.line(n).from;
+    const selection = { anchor: pos, head: pos };
+    const canScroll = typeof navigator === "undefined" || !/jsdom/i.test(navigator.userAgent);
+    cm.dispatch(
+      canScroll
+        ? { selection, scrollIntoView: true, effects: EditorView.scrollIntoView(pos, { y: "center" }) }
+        : { selection },
+    );
+  }
+
+  const jumped = useRef(0);
+  const openRef = useRef(open);
+  const pathRef = useRef(path);
+  useEffect(() => {
+    openRef.current = open;
+    pathRef.current = path;
+  });
+  useEffect(() => {
+    if (!jump || jump.n === jumped.current) return;
+    jumped.current = jump.n;
+    const target = jump;
+    void (async () => {
+      if (pathRef.current !== target.path) await openRef.current(target.path);
+      revealLine(target.line);
+    })();
+  }, [jump]);
 
   function pick(file: string) {
     // The newest pick wins: an older one still on its way is dropped.
