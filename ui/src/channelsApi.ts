@@ -3,10 +3,18 @@
 // paired with it. Desktop only: the web app and the tests get `null`.
 import { call, inShell } from "./transport";
 
-export type ChannelKind = "telegram" | "discord";
+export type ChannelKind = "telegram" | "discord" | "slack" | "signal" | "email";
 
+/** One row of the shell's channel table (msg_channels::KINDS) and its state. */
 export interface ChannelState {
   kind: ChannelKind;
+  /** What the page calls it. */
+  name: string;
+  /** The setup box's label and hint. */
+  setupLabel: string;
+  setupHint: string;
+  /** It can be connected in this build; the others show as coming next. */
+  live: boolean;
   /** A token is saved. */
   connected: boolean;
   /** Listening for messages now. */

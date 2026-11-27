@@ -23,6 +23,105 @@ use crate::pair::{ct_eq, make_pair_code, normalize_code};
 pub enum ChannelKind {
     Telegram,
     Discord,
+    Slack,
+    Signal,
+    Email,
+}
+
+/// What the app knows about one channel kind. Callers read this table
+/// instead of matching on the kind, so a new kind is one row here plus its
+/// adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KindSpec {
+    pub kind: ChannelKind,
+    /// The lowercase key on disk and over the wire.
+    pub key: &'static str,
+    /// What the app calls it.
+    pub name: &'static str,
+    /// The keychain account its secret is saved under.
+    pub token_account: &'static str,
+    /// The setup box's label and hint.
+    pub setup_label: &'static str,
+    pub setup_hint: &'static str,
+    /// It has an adapter in this build. The others show as coming next.
+    pub live: bool,
+}
+
+/// Every kind, in [`ChannelKind`] order.
+pub const KINDS: [KindSpec; 5] = [
+    KindSpec {
+        kind: ChannelKind::Telegram,
+        key: "telegram",
+        name: "Telegram",
+        token_account: "channel-telegram",
+        setup_label: "Telegram bot token",
+        setup_hint: "Paste the token BotFather gave you.",
+        live: true,
+    },
+    KindSpec {
+        kind: ChannelKind::Discord,
+        key: "discord",
+        name: "Discord",
+        token_account: "channel-discord",
+        setup_label: "Discord bot token",
+        setup_hint: "Paste the token from the Bot page of your Discord application.",
+        live: true,
+    },
+    KindSpec {
+        kind: ChannelKind::Slack,
+        key: "slack",
+        name: "Slack",
+        token_account: "channel-slack",
+        setup_label: "Slack tokens",
+        setup_hint: "Coming next.",
+        live: false,
+    },
+    KindSpec {
+        kind: ChannelKind::Signal,
+        key: "signal",
+        name: "Signal",
+        token_account: "channel-signal",
+        setup_label: "Signal",
+        setup_hint: "Coming next.",
+        live: false,
+    },
+    KindSpec {
+        kind: ChannelKind::Email,
+        key: "email",
+        name: "Email",
+        token_account: "channel-email",
+        setup_label: "Email",
+        setup_hint: "Coming next.",
+        live: false,
+    },
+];
+
+impl ChannelKind {
+    /// Every kind, in table order.
+    pub const ALL: [ChannelKind; 5] = [
+        ChannelKind::Telegram,
+        ChannelKind::Discord,
+        ChannelKind::Slack,
+        ChannelKind::Signal,
+        ChannelKind::Email,
+    ];
+
+    pub fn spec(self) -> &'static KindSpec {
+        &KINDS[self as usize]
+    }
+
+    pub fn key(self) -> &'static str {
+        self.spec().key
+    }
+
+    pub fn name(self) -> &'static str {
+        self.spec().name
+    }
+
+    /// The kind a lowercase key names, if any.
+    pub fn from_key(key: &str) -> Option<ChannelKind> {
+        KINDS.iter().find(|s| s.key == key).map(|s| s.kind)
+    }
 }
 
 /// How long a pairing code stays good.
@@ -480,10 +579,7 @@ pub fn queue_message(
     msg: &Forwarded<'_>,
     now_ms: u64,
 ) -> Result<PathBuf, String> {
-    let tag = match msg.channel {
-        ChannelKind::Telegram => "telegram",
-        ChannelKind::Discord => "discord",
-    };
+    let tag = msg.channel.key();
     let record = serde_json::json!({
         "channel": msg.channel,
         "sender": msg.sender,
@@ -499,6 +595,46 @@ pub fn queue_message(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_kind_table_matches_the_enum() {
+        assert_eq!(ChannelKind::ALL.len(), KINDS.len());
+        for (i, kind) in ChannelKind::ALL.into_iter().enumerate() {
+            assert_eq!(KINDS[i].kind, kind);
+            assert_eq!(kind.spec().kind, kind);
+            // The key is what serde writes, so files and the UI agree.
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.key())
+            );
+            let back: ChannelKind = serde_json::from_str(&format!("\"{}\"", kind.key())).unwrap();
+            assert_eq!(back, kind);
+            assert_eq!(ChannelKind::from_key(kind.key()), Some(kind));
+        }
+        assert_eq!(ChannelKind::from_key("webhook"), None);
+        let live: Vec<&str> = KINDS.iter().filter(|s| s.live).map(|s| s.key).collect();
+        assert_eq!(live, ["telegram", "discord"]);
+        let accounts: BTreeSet<&str> = KINDS.iter().map(|s| s.token_account).collect();
+        assert_eq!(accounts.len(), KINDS.len());
+    }
+
+    #[test]
+    fn a_trust_file_from_before_the_new_kinds_still_loads() {
+        let dir = std::env::temp_dir().join(format!("grokhub-oldkinds-{}", std::process::id()));
+        let path = DmTrust::path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"paired":{"telegram":["1001"],"discord":["42"]},"pending":[],"wrong":2}"#,
+        )
+        .unwrap();
+        let trust = DmTrust::load(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(trust.is_paired(ChannelKind::Telegram, "1001"));
+        assert!(trust.is_paired(ChannelKind::Discord, "42"));
+        assert!(!trust.is_paired(ChannelKind::Slack, "1001"));
+        assert_eq!(trust.wrong, 2);
+    }
 
     #[test]
     fn hmac_matches_rfc_4231() {
