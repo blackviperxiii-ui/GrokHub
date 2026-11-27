@@ -188,6 +188,8 @@ pub struct CodingTotals<'a> {
     pub output_tokens: u64,
     pub wall_ms: u128,
     pub p50_wall_ms: u128,
+    /// Tries that ran no tool, so never read or edited the code.
+    pub no_tool_tries: usize,
 }
 
 pub fn pass_rate(passed: usize, tries: usize) -> String {
@@ -202,12 +204,12 @@ pub fn pass_rate(passed: usize, tries: usize) -> String {
 }
 
 pub fn render_section(totals: &CodingTotals<'_>) -> String {
-    format!(
+    let mut out = format!(
         "## Coding eval v1\n\n\
          One model per run. Pass or fail is the task's own tests.\n\n\
-         | model | provider | pass rate | escalations | tokens | input tokens | output tokens | wall ms | p50 wall ms |\n\
-         |---|---|---|---|---|---|---|---|---|\n\
-         | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n\n",
+         | model | provider | pass rate | escalations | tokens | input tokens | output tokens | wall ms | p50 wall ms | tries with no tool call |\n\
+         |---|---|---|---|---|---|---|---|---|---|\n\
+         | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n\n",
         totals.model,
         totals.provider,
         pass_rate(totals.passed, totals.tries),
@@ -217,7 +219,15 @@ pub fn render_section(totals: &CodingTotals<'_>) -> String {
         totals.output_tokens,
         totals.wall_ms,
         totals.p50_wall_ms,
-    )
+        totals.no_tool_tries,
+    );
+    if totals.tries > 0 && totals.no_tool_tries == totals.tries {
+        out.push_str(
+            "No try made a tool call, so this measures the model server, not the model. \
+             Check that the server returns structured tool calls.\n\n",
+        );
+    }
+    out
 }
 
 pub fn results_json(totals: &CodingTotals<'_>) -> String {
@@ -236,6 +246,7 @@ pub fn results_json(totals: &CodingTotals<'_>) -> String {
          \"output_tokens\": {},\n  \
          \"wall_ms\": {},\n  \
          \"p50_wall_ms\": {},\n  \
+         \"no_tool_tries\": {},\n  \
          \"sources\": {}\n}}\n",
         json_escape(totals.model),
         json_escape(totals.provider),
@@ -249,6 +260,7 @@ pub fn results_json(totals: &CodingTotals<'_>) -> String {
         totals.output_tokens,
         totals.wall_ms,
         totals.p50_wall_ms,
+        totals.no_tool_tries,
         sources_json(),
     )
 }
@@ -602,6 +614,7 @@ mod tests {
             output_tokens: 4,
             wall_ms: 90,
             p50_wall_ms: 40,
+            no_tool_tries: 0,
         };
         let json = results_json(&totals);
         assert!(json.contains("\"model\": \"local-a\""), "{json}");
@@ -615,10 +628,35 @@ mod tests {
         assert!(json.contains("\"source\": \"tech-bench#13\""), "{json}");
         let md = render_section(&totals);
         assert!(
-            md.contains("| local-a | local | 50% (1/2) | 1 | 14 | 10 | 4 | 90 | 40 |"),
+            md.contains("| local-a | local | 50% (1/2) | 1 | 14 | 10 | 4 | 90 | 40 | 0 |"),
             "{md}"
         );
         let path = results_path(Path::new("coding-local.md"));
         assert_eq!(path, PathBuf::from("coding-local.md.results.json"));
+    }
+
+    #[test]
+    fn a_run_where_no_try_made_a_tool_call_says_it_measured_the_server() {
+        let totals = |no_tool_tries| CodingTotals {
+            model: "local-a",
+            provider: "local",
+            task_set: 30,
+            tries: 30,
+            passed: 0,
+            escalations: 0,
+            input_tokens: 10,
+            output_tokens: 4,
+            wall_ms: 90,
+            p50_wall_ms: 3,
+            no_tool_tries,
+        };
+        let md = render_section(&totals(30));
+        assert!(md.contains("| 3 | 30 |"), "{md}");
+        assert!(
+            md.contains("measures the model server, not the model"),
+            "{md}"
+        );
+        assert!(results_json(&totals(30)).contains("\"no_tool_tries\": 30"));
+        assert!(!render_section(&totals(29)).contains("model server"));
     }
 }

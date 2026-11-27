@@ -1,0 +1,1 @@
+- The coding eval report counts tries that made no tool call, and says so when no try made one, since that run measured the model server rather than the model.

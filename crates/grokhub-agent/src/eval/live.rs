@@ -1119,6 +1119,9 @@ pub struct Attempt {
     pub tool_calls: u32,
     /// Of those, the ones whose arguments missed the schema.
     pub malformed_calls: u32,
+    /// Tools the try ran, on any provider. Zero on a coding task means the
+    /// model never made a tool call, so it never touched the code.
+    pub tools_run: u32,
 }
 
 pub struct LiveReport {
@@ -1374,6 +1377,7 @@ fn one_try(
         picks,
         tool_calls,
         malformed_calls,
+        tools_run: trace.tools.len() as u32,
     }
 }
 
@@ -1534,6 +1538,9 @@ pub struct AttemptRow {
     pub tool_calls: u32,
     #[serde(default)]
     pub malformed_calls: u32,
+    /// Old progress files omit it.
+    #[serde(default)]
+    pub tools_run: u32,
 }
 
 impl AttemptRow {
@@ -1557,6 +1564,7 @@ impl AttemptRow {
             picks: a.picks.clone(),
             tool_calls: a.tool_calls,
             malformed_calls: a.malformed_calls,
+            tools_run: a.tools_run,
         }
     }
 
@@ -1588,6 +1596,7 @@ impl AttemptRow {
             picks: self.picks.clone(),
             tool_calls: self.tool_calls,
             malformed_calls: self.malformed_calls,
+            tools_run: self.tools_run,
         })
     }
 }
@@ -1655,6 +1664,7 @@ fn coding_totals(report: &LiveReport) -> super::coding::CodingTotals<'_> {
         output_tokens: output,
         wall_ms: a.iter().map(|x| x.wall_ms).sum(),
         p50_wall_ms: p50,
+        no_tool_tries: a.iter().filter(|x| x.tools_run == 0).count(),
     }
 }
 
