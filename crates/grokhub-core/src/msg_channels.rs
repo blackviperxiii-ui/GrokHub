@@ -86,7 +86,7 @@ pub const KINDS: [KindSpec; 5] = [
         name: "Signal",
         token_account: "channel-signal",
         setup_label: "Signal number",
-        setup_hint: "Link signal-cli to your account, run signal-cli daemon --http 127.0.0.1:8080, then type your number with + and the country code. Only your Note to Self is read.",
+        setup_hint: "Run signal-cli daemon --http 127.0.0.1:8080, type your number with + and the country code, then link with a QR code (or Connect if signal-cli is already linked). Only your Note to Self is read.",
         live: true,
     },
     KindSpec {

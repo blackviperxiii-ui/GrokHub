@@ -506,6 +506,30 @@ async fn telegram_qr(state: State<'_, ShellState>) -> Result<channels::StartQr, 
         .await?
 }
 
+/// A QR the Signal app scans to link the local signal-cli daemon to
+/// `number`'s account. Desktop only, like the Telegram QR.
+#[tauri::command]
+async fn signal_link_start(
+    state: State<'_, ShellState>,
+    number: String,
+) -> Result<channels::LinkQr, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || channels::signal_link_start(&dir, &number)).await?
+}
+
+/// Waits (up to three minutes) for the phone to scan the Signal QR, then
+/// connects. Desktop only.
+#[tauri::command]
+async fn signal_link_finish(
+    state: State<'_, ShellState>,
+) -> Result<channels::ChannelsView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        channels::signal_link_finish(&dir, &grokhub_agent::channels_net::os_keychain())
+    })
+    .await?
+}
+
 /// The code a stranger was sent: they count as paired from now on.
 #[tauri::command]
 fn approve_channel_code(
@@ -10246,6 +10270,8 @@ pub fn run() {
             connect_channel,
             disconnect_channel,
             telegram_qr,
+            signal_link_start,
+            signal_link_finish,
             approve_channel_code,
             unpair_channel_sender,
             set_channel_asks,

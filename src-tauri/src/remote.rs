@@ -986,6 +986,8 @@ mod tests {
             "steer_task",
             "memory_graph",
             "telegram_qr",
+            "signal_link_start",
+            "signal_link_finish",
         ] {
             assert!(!web_command(name), "{name} must stay on the desktop");
         }

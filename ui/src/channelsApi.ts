@@ -95,6 +95,26 @@ export async function telegramQr(): Promise<StartQr | null> {
   return call<StartQr>("telegram_qr");
 }
 
+/** A QR the Signal app scans to link this computer's signal-cli as a device. */
+export interface LinkQr {
+  /** The QR as an SVG document. */
+  svg: string;
+  /** The number the phone must be signed in to. */
+  account: string;
+}
+
+/** Desktop only: asks the local signal-cli daemon for a device link for `number`. */
+export async function signalLinkStart(number: string): Promise<LinkQr | null> {
+  if (!inShell()) return null;
+  return call<LinkQr>("signal_link_start", { number });
+}
+
+/** Desktop only: waits up to three minutes for the phone to scan, then connects. */
+export async function signalLinkFinish(): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("signal_link_finish");
+}
+
 export async function disconnectChannel(kind: ChannelKind): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("disconnect_channel", { kind });
