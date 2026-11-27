@@ -67,7 +67,7 @@
 //! cargo run --release -p grokhub-agent --example live_eval -- --auth signin \
 //!     --budget-usd 5 --deadline-mins 150 --out rt05-armA.md
 //! cargo run --release -p grokhub-agent --example live_eval -- --auth signin \
-//!     --model grok-build-0.1 --budget-usd 5 --deadline-mins 150 --out rt05-armB.md
+//!     --model grok-code-fast-1 --budget-usd 5 --deadline-mins 150 --out rt05-armB.md
 //!
 //! If a run stops early (deadline or sign-in), open the app again and rerun
 //! the same command with `--resume`. The report's Routing section gives

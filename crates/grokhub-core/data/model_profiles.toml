@@ -176,19 +176,22 @@ verified = "2026-11-12"
 note = "Price verified; window and tool support not stated in the docs read."
 
 [[model]]
-key = "grok-build-0.1"
-name = "Grok Build 0.1"
+key = "grok-code-fast-1"
+name = "Grok Code Fast 1"
 provider = "xai"
-aliases = ["grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825"]
+aliases = ["grok-code-fast", "grok-code-fast-1-0825"]
 tier = "fast"
 prompt = 10_000
 cached = 2_000
 completion = 20_000
 context = 256_000
 output = ["text"]
+tools = true
+structured = true
+reasoning = false
 source = "docs.x.ai (models, pricing)"
-verified = "2026-11-12"
-note = "Coding model behind Grok Build; no batch pricing."
+verified = "2026-11-19"
+note = "Coding model; grok-build-0.1 retired 2026-11-19 and is not a known id."
 
 [[model]]
 key = "claude-fable-5.2"

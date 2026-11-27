@@ -60,6 +60,12 @@ impl SseParser {
         out
     }
 
+    /// A terminal event (`response.completed` / `incomplete`) already decided
+    /// the turn. Later socket noise must not fail it.
+    pub fn is_complete(&self) -> bool {
+        self.completed
+    }
+
     /// Whether a reasoning delta is new, not a repeat of what another reasoning kind
     /// already sent.
     fn new_reasoning(&mut self, kind: &str, delta: &str) -> bool {
@@ -94,14 +100,19 @@ impl SseParser {
     }
 
     fn parse_frame(&mut self, frame: &str) -> Vec<SseEvent> {
+        if self.completed {
+            return Vec::new();
+        }
         let mut data = String::new();
-        for line in frame.split(['\n', '\r']) {
-            let line = line.trim_end();
-            if let Some(rest) = line.strip_prefix("data:") {
+        let mut rest = frame;
+        while let Some((line, next)) = next_line(rest) {
+            rest = next;
+            let line = line.trim_end_matches(['\r', '\n']);
+            if let Some(payload) = line.strip_prefix("data:") {
                 if !data.is_empty() {
                     data.push('\n');
                 }
-                data.push_str(rest.trim_start());
+                data.push_str(payload.trim_start());
             }
         }
         let data = data.trim();
@@ -161,6 +172,9 @@ impl SseParser {
             return out;
         }
         if kind == "error" || kind == "response.failed" || kind == "response.error" {
+            if self.completed {
+                return Vec::new();
+            }
             self.errored = true;
             return vec![SseEvent::Error(error_message(&v))];
         }
@@ -220,13 +234,47 @@ impl Default for SseParser {
 }
 
 fn split_frame(buf: &str) -> Option<(String, String)> {
-    if let Some(i) = buf.find("\r\n\r\n") {
-        return Some((buf[..i].to_string(), buf[i + 4..].to_string()));
-    }
-    if let Some(i) = buf.find("\n\n") {
-        return Some((buf[..i].to_string(), buf[i + 2..].to_string()));
+    let bytes = buf.as_bytes();
+    let mut i = 0;
+    let mut prev_eol_end: Option<usize> = None;
+    while i < bytes.len() {
+        let n = match (bytes[i], bytes.get(i + 1).copied()) {
+            (b'\r', Some(b'\n')) => 2,
+            (b'\n', _) | (b'\r', _) => 1,
+            _ => {
+                prev_eol_end = None;
+                i += 1;
+                continue;
+            }
+        };
+        if prev_eol_end == Some(i) {
+            return Some((buf[..i].to_string(), buf[i + n..].to_string()));
+        }
+        prev_eol_end = Some(i + n);
+        i += n;
     }
     None
+}
+
+/// One SSE line, treating `\r\n`, `\n`, and `\r` as the same ending.
+fn next_line(s: &str) -> Option<(&str, &str)> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let n = match (bytes[i], bytes.get(i + 1).copied()) {
+            (b'\r', Some(b'\n')) => 2,
+            (b'\n', _) | (b'\r', _) => 1,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        return Some((&s[..i], &s[i + n..]));
+    }
+    Some((s, ""))
 }
 
 fn text_delta(v: &Value) -> Option<String> {

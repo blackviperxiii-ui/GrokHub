@@ -1,0 +1,1 @@
+- xAI client: keep a completed SSE turn through a later socket drop, parse `\r\n` SSE frames, reject unsafe REST resource ids, surface `x-watermark`, and drop retired `grok-build-0.1` from the known catalog.

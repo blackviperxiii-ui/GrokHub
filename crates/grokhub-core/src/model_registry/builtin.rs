@@ -565,7 +565,9 @@ mod tests {
         // xAI: dated, -latest and aliases.
         assert_eq!(key("grok-4.7-0414"), "grok-4.7");
         assert_eq!(key("grok-4.3-latest"), "grok-4.3");
-        assert_eq!(key("grok-code-fast-1"), "grok-build-0.1");
+        assert_eq!(key("grok-code-fast-1"), "grok-code-fast-1");
+        assert_eq!(key("grok-code-fast"), "grok-code-fast-1");
+        assert_eq!(get("grok-build-0.1"), None);
         // OpenRouter's Grok is its own row, not the direct one.
         assert_eq!(key("openrouter/x-ai/grok-4.7"), "x-ai/grok-4.7");
         assert_eq!(

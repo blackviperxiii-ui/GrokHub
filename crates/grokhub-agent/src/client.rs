@@ -1337,6 +1337,7 @@ impl XaiClient {
             return Err(ClientError::Cancelled);
         }
         let _ = crate::sse::take_served_model();
+        let _ = take_watermarked();
         let body = crate::timing::time("client:body", || responses_body(req));
         // Round 3 item 28: kept sealed by hash, so this exact request can be replayed.
         crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
@@ -1379,6 +1380,7 @@ impl XaiClient {
             }
         })?;
         crate::pace::note_ok(&req.model);
+        note_watermarked(response.header("x-watermark"));
         let reader = grokhub_core::http::with_stop(&stop, || response.into_reader());
         let mut turn = read_sse(reader, cancel, idle, sink)?;
         for item in &mut turn.reasoning_items {
@@ -1698,6 +1700,9 @@ impl XaiClient {
     }
 
     fn batch_id_url(&self, batch_id: &str, tail: &str) -> Result<String, ClientError> {
+        if let Some(why) = resource_id_error(batch_id) {
+            return Err(ClientError::Protocol(why.to_string()));
+        }
         if !crate::batch::valid_batch_id(batch_id) {
             return Err(ClientError::Protocol(format!("not a batch id: {batch_id}")));
         }
@@ -1799,6 +1804,46 @@ fn retry_after_header(resp: &grokhub_core::http::Response) -> Option<u64> {
     resp.header("retry-after")
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|n| *n > 0)
+}
+
+/// Reject ids that a URL parser would treat as empty or as `.` / `..` path
+/// segments, before they are interpolated into `/v1/{files,batches,responses,videos,voice}/…`.
+pub fn resource_id_error(id: &str) -> Option<&'static str> {
+    if id.is_empty() {
+        return Some("resource id is empty");
+    }
+    if id == "." || id == ".." {
+        return Some("resource id cannot be '.' or '..'");
+    }
+    if id.contains('/') || id.contains('\\') {
+        return Some("resource id cannot contain a path separator");
+    }
+    None
+}
+
+/// `/v1/{kind}/{id}{tail}` on api.x.ai after [`resource_id_error`].
+pub fn xai_resource_path(kind: &str, id: &str, tail: &str) -> Result<String, ClientError> {
+    if let Some(why) = resource_id_error(id) {
+        return Err(ClientError::Protocol(why.to_string()));
+    }
+    Ok(format!(
+        "{}/{kind}/{id}{tail}",
+        RESPONSES_URL.trim_end_matches("/responses")
+    ))
+}
+
+thread_local! {
+    static WATERMARKED: std::cell::RefCell<bool> = const { std::cell::RefCell::new(false) };
+}
+
+fn note_watermarked(header: Option<&str>) {
+    let on = header.is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+    WATERMARKED.with(|s| *s.borrow_mut() = on);
+}
+
+/// Whether the last `/v1/responses` reply on this thread sent `x-watermark: true`.
+pub fn take_watermarked() -> bool {
+    WATERMARKED.with(|s| s.replace(false))
 }
 
 fn read_error_body(resp: grokhub_core::http::Response) -> String {
@@ -1916,24 +1961,47 @@ fn read_sse(
     let mut pending: Vec<u8> = Vec::new();
     let mut last = std::time::Instant::now();
     let mut longest = Duration::ZERO;
+    let mut drain_until: Option<std::time::Instant> = None;
     let gap_done = |longest: Duration| crate::timing::record("stream:longest_gap", longest);
+    let transport_err = |msg: String| {
+        let lower = msg.to_ascii_lowercase();
+        if lower.contains("timed out") || lower.contains("timeout") {
+            ClientError::IdleTimeout
+        } else {
+            ClientError::Transport(msg)
+        }
+    };
     loop {
         if cancel.is_cancelled() {
+            if parser.is_complete() {
+                break;
+            }
             return Err(ClientError::Cancelled);
         }
-        let buf = match chunks.recv_timeout(READ_POLL.min(idle)) {
+        let wait = match drain_until {
+            Some(until) => {
+                let left = until.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                READ_POLL.min(left)
+            }
+            None => READ_POLL.min(idle),
+        };
+        let buf = match chunks.recv_timeout(wait) {
             Ok(Ok(buf)) if buf.is_empty() => break,
             Ok(Ok(buf)) => buf,
             Ok(Err(e)) => {
                 gap_done(longest.max(last.elapsed()));
-                let msg = e.to_string();
-                let lower = msg.to_ascii_lowercase();
-                if lower.contains("timed out") || lower.contains("timeout") {
-                    return Err(ClientError::IdleTimeout);
+                if parser.is_complete() {
+                    break;
                 }
-                return Err(ClientError::Transport(msg));
+                return Err(transport_err(e.to_string()));
             }
             Err(RecvTimeoutError::Timeout) => {
+                if parser.is_complete() {
+                    break;
+                }
                 if last.elapsed() >= idle {
                     gap_done(last.elapsed());
                     return Err(ClientError::IdleTimeout);
@@ -1941,6 +2009,9 @@ fn read_sse(
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => {
+                if parser.is_complete() {
+                    break;
+                }
                 return Err(ClientError::Transport("the stream reader stopped".into()));
             }
         };
@@ -1950,12 +2021,19 @@ fn read_sse(
         pending.extend_from_slice(&buf[..n]);
         let chunk = take_utf8(&mut pending);
         fold_events(parser.push(&chunk), sink, &mut out)?;
+        if parser.is_complete() && drain_until.is_none() {
+            drain_until = Some(std::time::Instant::now() + READ_POLL);
+        }
     }
     if !pending.is_empty() {
         let tail = String::from_utf8_lossy(&pending).into_owned();
-        fold_events(parser.push(&tail), sink, &mut out)?;
+        let _ = fold_events(parser.push(&tail), sink, &mut out);
     }
-    fold_events(parser.finish()?, sink, &mut out)?;
+    match parser.finish() {
+        Ok(rest) => fold_events(rest, sink, &mut out)?,
+        Err(_) if parser.is_complete() => {}
+        Err(err) => return Err(err),
+    }
     gap_done(longest);
     Ok(out)
 }
@@ -2210,6 +2288,124 @@ mod tests {
         pending.extend_from_slice(b"\xA9!");
         text.push_str(&take_utf8(&mut pending));
         assert_eq!(text, "ok\u{FFFD} café!");
+    }
+
+    #[test]
+    fn a_socket_drop_after_response_completed_still_returns_ok() {
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":1},\"output\":[]}}\n\n",
+        )
+        .as_bytes()
+        .to_vec();
+        struct DropAfter {
+            body: Vec<u8>,
+            at: usize,
+        }
+        impl Read for DropAfter {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if self.at >= self.body.len() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        "peer reset",
+                    ));
+                }
+                let n = (self.body.len() - self.at).min(out.len());
+                out[..n].copy_from_slice(&self.body[self.at..self.at + n]);
+                self.at += n;
+                Ok(n)
+            }
+        }
+        let out = read_sse(
+            DropAfter { body, at: 0 },
+            &CancelToken::new(),
+            Duration::from_secs(5),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.text, "done");
+        assert_eq!(out.usage.input_tokens, 3);
+        assert_eq!(out.usage.output_tokens, 1);
+        assert!(!out.truncated);
+    }
+
+    #[test]
+    fn crlf_multiline_sse_event_parses_as_one_frame() {
+        let body = concat!(
+            "event: response.output_text.delta\r\n",
+            "data: {\"type\":\"response.output_text.delta\",\r\n",
+            "data: \"delta\":\"hello\"}\r\n",
+            "\r\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"output\":[]}}\r\n",
+            "\r\n",
+        );
+        let mut parser = SseParser::new();
+        let events = parser.push(body);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, SseEvent::TextDelta(_)))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert_eq!(
+            events.iter().find_map(|e| match e {
+                SseEvent::TextDelta(t) => Some(t.as_str()),
+                _ => None,
+            }),
+            Some("hello")
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SseEvent::Completed {
+                incomplete: false,
+                ..
+            }
+        )));
+        parser.finish().unwrap();
+    }
+
+    #[test]
+    fn resource_ids_with_empty_dot_or_slash_are_rejected_before_http() {
+        let client = XaiClient::new(
+            "test-access-token",
+            AuthKind::ApiKey,
+            Duration::from_secs(1),
+        );
+        use crate::batch::BatchApi;
+        for (id, want) in [
+            ("", "resource id is empty"),
+            (".", "resource id cannot be '.' or '..'"),
+            ("..", "resource id cannot be '.' or '..'"),
+            ("a/b", "resource id cannot contain a path separator"),
+        ] {
+            match client.get(id) {
+                Err(ClientError::Protocol(msg)) => assert_eq!(msg, want, "{id}"),
+                other => panic!("{id}: {other:?}"),
+            }
+            for kind in ["files", "batches", "responses", "videos", "voice"] {
+                match xai_resource_path(kind, id, "") {
+                    Err(ClientError::Protocol(msg)) => assert_eq!(msg, want, "{kind} {id}"),
+                    other => panic!("{kind} {id}: {other:?}"),
+                }
+            }
+        }
+        assert_eq!(
+            xai_resource_path("files", "file_1", "").unwrap(),
+            "https://api.x.ai/v1/files/file_1"
+        );
+    }
+
+    #[test]
+    fn x_watermark_true_is_taken_as_client_metadata() {
+        note_watermarked(Some("true"));
+        assert!(take_watermarked());
+        assert!(!take_watermarked(), "take clears the flag");
+        note_watermarked(Some("false"));
+        assert!(!take_watermarked());
+        note_watermarked(Some(" TRUE "));
+        assert!(take_watermarked());
     }
 
     #[test]

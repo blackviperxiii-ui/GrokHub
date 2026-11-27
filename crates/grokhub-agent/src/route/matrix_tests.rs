@@ -43,7 +43,10 @@ impl LocalRuntime for Rt {
 }
 
 fn xai(id: &str) -> ModelMeta {
-    let reasoning = !id.contains("non-reasoning") && !id.contains("build");
+    // grok-code-fast-1 (and the retired grok-build ids) do not take a
+    // reasoning effort. Same split as `accepts_reasoning_effort`.
+    let reasoning =
+        !id.contains("non-reasoning") && !id.contains("build") && !id.contains("code-fast");
     ModelMeta {
         id: id.into(),
         efforts: reasoning
@@ -91,7 +94,7 @@ const GROK: &[&str] = &[
     "grok-4.3",
     "grok-4.20-0309-reasoning",
     "grok-4.20-0309-non-reasoning",
-    "grok-build-0.1",
+    "grok-code-fast-1",
 ];
 
 fn setup(label: &str, grok: bool, claude: bool, with_local: bool) -> std::path::PathBuf {
