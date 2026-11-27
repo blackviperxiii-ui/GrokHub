@@ -200,6 +200,27 @@ fn windows_nextest_on_beta_is_split_in_two_and_the_check_name_stays() {
     );
 }
 
+/// Pull requests cancel their own older run. A push never cancels the run
+/// before it, so every finished beta run is a real result for its commit.
+#[test]
+fn only_a_pull_request_cancels_its_older_ci_run() {
+    let ci = include_str!("../../.github/workflows/ci.yml");
+    assert!(ci
+        .lines()
+        .any(|line| line == "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}"));
+}
+
+/// The shell's tests run on nextest, and its doctests still run.
+#[test]
+fn shell_tests_run_on_nextest_and_keep_doctests() {
+    let lines = job_lines(include_str!("../../.github/workflows/ci.yml"), "shell");
+    assert!(lines.contains(
+        &"      - run: cargo nextest run --manifest-path src-tauri/Cargo.toml --locked --config-file .config/nextest.toml --profile ci"
+    ));
+    assert!(lines
+        .contains(&"      - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked"));
+}
+
 /// The value of every `path = "…"` or `path = '…'` key in a Cargo manifest.
 /// A value in triple quotes comes back empty.
 fn manifest_paths(manifest: &str) -> Vec<&str> {
