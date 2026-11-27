@@ -560,10 +560,12 @@ fn consider(
         return;
     };
     if hash_all || should_hash(&bundle.name, state) {
-        bundle.hash = Some(cached_hash(&bundle.root).and_then(|hash| match flagged(&bundle) {
-            Some(reason) => Err(reason),
-            None => Ok(hash),
-        }));
+        bundle.hash = Some(
+            cached_hash(&bundle.root).and_then(|hash| match flagged(&bundle) {
+                Some(reason) => Err(reason),
+                None => Ok(hash),
+            }),
+        );
     }
     if installed {
         map.insert(bundle.name.clone(), bundle);
@@ -2559,7 +2561,12 @@ mod tests {
             .find(|info| info.name == "demo")
             .unwrap();
         assert_eq!((info.trusted, info.enabled), (false, false));
-        assert!(info.summary.contains("unusable: skill skills/ship/SKILL.md is flagged"), "{}", info.summary);
+        assert!(
+            info.summary
+                .contains("unusable: skill skills/ship/SKILL.md is flagged"),
+            "{}",
+            info.summary
+        );
         assert_eq!(contributes(&iso), (false, false, false, false));
         let _ = fs::remove_dir_all(&iso.root);
     }
