@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use grokhub_agent::channels_net::{
-    self, DiscordLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
+    self, DiscordLink, SlackLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
 };
 use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
@@ -150,9 +150,10 @@ pub fn send_answer(
         ChannelKind::Discord => {
             DiscordLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
         }
-        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
-            Err(channels_net::coming_next(to.channel))
+        ChannelKind::Slack => {
+            SlackLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
         }
+        ChannelKind::Signal | ChannelKind::Email => Err(channels_net::coming_next(to.channel)),
     }
 }
 
@@ -352,7 +353,19 @@ fn start(config_dir: &Path, kind: ChannelKind, token: &str) -> Result<(), String
                 })
                 .map_err(|e| e.to_string())?;
         }
-        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+        ChannelKind::Slack => {
+            let mut link = SlackLink::new(token)?;
+            std::thread::Builder::new()
+                .name("channel-slack".into())
+                .spawn(move || {
+                    if let Err(why) = link.run(&dir, &|| s.load(Ordering::SeqCst)) {
+                        *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+                    }
+                    r.store(false, Ordering::SeqCst);
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        ChannelKind::Signal | ChannelKind::Email => {
             return Err(channels_net::coming_next(kind));
         }
     }
@@ -401,7 +414,8 @@ pub fn connect(
     let bot = match kind {
         ChannelKind::Telegram => TelegramLink::new(token)?.check(config_dir)?,
         ChannelKind::Discord => DiscordLink::new(token)?.check(config_dir)?,
-        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+        ChannelKind::Slack => SlackLink::new(token)?.check(config_dir)?,
+        ChannelKind::Signal | ChannelKind::Email => {
             return Err(channels_net::coming_next(kind));
         }
     };
@@ -610,7 +624,7 @@ mod tests {
             [
                 ("Telegram", true, false),
                 ("Discord", true, false),
-                ("Slack", false, false),
+                ("Slack", true, false),
                 ("Signal", false, false),
                 ("Email", false, false),
             ]
@@ -690,7 +704,11 @@ mod tests {
             connect(&dir, &store, ChannelKind::Discord, "nope").unwrap_err(),
             "That isn't a Discord bot token."
         );
-        for kind in [ChannelKind::Slack, ChannelKind::Signal, ChannelKind::Email] {
+        assert_eq!(
+            connect(&dir, &store, ChannelKind::Slack, "nope").unwrap_err(),
+            "Those aren't Slack's two tokens."
+        );
+        for kind in [ChannelKind::Signal, ChannelKind::Email] {
             assert_eq!(
                 connect(&dir, &store, kind, "anything").unwrap_err(),
                 channels_net::coming_next(kind)
