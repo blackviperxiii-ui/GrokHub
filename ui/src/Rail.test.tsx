@@ -54,6 +54,7 @@ describe("Rail", () => {
       "Command line",
       "Skills",
       "MCPs & Connectors",
+      "Marketplace",
       "Mods",
       "Personal",
       "Pulse",

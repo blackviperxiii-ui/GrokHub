@@ -1121,7 +1121,7 @@ export function Chat({
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. `false` back: this app has no such page. */
   onOpenView?: (view: View) => boolean | void;
-  /** `/plugins` opens Settings → Labs. */
+  /** `/plugins` opens the Marketplace page where plugins are on; the rest open their Settings section. */
   onOpenSection?: (section: "labs" | "localAi") => void;
   /** `/palette` opens the command palette. */
   onOpenPalette?: () => void;
