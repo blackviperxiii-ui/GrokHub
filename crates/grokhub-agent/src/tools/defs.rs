@@ -6,8 +6,8 @@ use crate::gate::Gate;
 
 use super::{
     connections, control, desktop, glob, grep, home_assistant, list_dir, local_ai, media,
-    models_check, mods, ptc, read_file, run_routine, save_routine, search_replace, session_search,
-    shell, show_panel, web_fetch, web_search, write,
+    models_check, mods, ptc, read_file, repo_map, run_routine, save_routine, search_replace,
+    session_search, shell, show_panel, web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -83,7 +83,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 18] = [
+    static DEFS: [ToolDef; 19] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -117,6 +117,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             blurb: "Read background command or subagent output",
             defer: false,
             schema: control::output_schema,
+            visible: always,
+        },
+        ToolDef {
+            name: repo_map::NAME,
+            blurb: "Ranked tree-sitter symbol map of the workspace",
+            defer: true,
+            schema: repo_map::schema,
             visible: always,
         },
         ToolDef {

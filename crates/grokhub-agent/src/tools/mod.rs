@@ -22,6 +22,7 @@ pub(crate) mod ports;
 pub(crate) mod ptc;
 mod read_file;
 pub(crate) mod registry;
+mod repo_map;
 pub(crate) mod run_routine;
 pub(crate) mod save_routine;
 mod schema_check;
@@ -384,6 +385,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         }
         "grep" => grep::run(ctx.workspace, args),
         "glob" => glob::run(ctx.workspace, args),
+        repo_map::NAME => repo_map::run(ctx.workspace, args),
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
         "scheduler_list" => control::scheduler_list(),
         "search_tool" => crate::mcp::search_output(args),
@@ -443,6 +445,7 @@ pub fn needs_workspace(name: &str) -> bool {
             | "list_dir"
             | "grep"
             | "glob"
+            | "repo_map"
             | "write"
             | "search_replace"
             | "run_terminal_command"

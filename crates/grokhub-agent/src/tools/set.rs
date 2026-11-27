@@ -150,6 +150,12 @@ pub fn tool_set_for_kind(kind: &str) -> ToolSet {
 
 /// Filter [`schemas_for`] by `set`. Order is preserved (stable prefix stays stable).
 pub fn schemas_for_job(gate: &Gate, set: &ToolSet) -> Vec<Value> {
+    if set.strict {
+        return super::defs::all_defs()
+            .filter(|def| (def.visible)(gate) && set.allows(def.name))
+            .map(|def| (def.schema)())
+            .collect();
+    }
     let all = schemas_for(gate);
     if set.is_full() {
         return all;
