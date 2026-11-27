@@ -30,10 +30,7 @@ fn reach_path(config_dir: &Path) -> PathBuf {
 }
 
 fn kind_key(kind: ChannelKind) -> &'static str {
-    match kind {
-        ChannelKind::Telegram => "telegram",
-        ChannelKind::Discord => "discord",
-    }
+    kind.key()
 }
 
 fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
@@ -103,7 +100,7 @@ pub fn targets(config_dir: &Path) -> Vec<ReplyTo> {
     let reach: Reach = read_json(&reach_path(config_dir));
     let trust = DmTrust::load(config_dir);
     let mut out = Vec::new();
-    for kind in [ChannelKind::Telegram, ChannelKind::Discord] {
+    for kind in ChannelKind::ALL {
         let key = kind_key(kind);
         for sender in approvers.get(key).into_iter().flatten() {
             if !trust.is_paired(kind, sender) {

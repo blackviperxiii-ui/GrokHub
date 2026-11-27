@@ -8,6 +8,12 @@
 //!   API path, so no error from here carries a URL: it words its own.
 //! - [`DiscordLink`]: one Gateway socket ([`Gateway`] keeps the session) and
 //!   REST replies with the token in a header.
+//! - [`SlackLink`]: one Socket Mode socket, opened with the app token, and
+//!   Web API replies with the bot token. Every envelope is acknowledged
+//!   before it is handled, and a retried event is handled once.
+//! - [`SignalLink`]: a signal-cli daemon on this computer only, linked to the
+//!   person's own account. It reads their Note to Self and answers there;
+//!   nobody else is read or written to.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -17,8 +23,11 @@ use std::net::{TcpStream, ToSocketAddrs};
 use grokhub_core::http;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust, Forwarded};
 use grokhub_core::msg_discord::{self, close_reason, Do, Gateway};
+use grokhub_core::msg_email;
+use grokhub_core::msg_signal;
+use grokhub_core::msg_slack;
 use grokhub_core::msg_telegram::{self, Step};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -37,10 +46,7 @@ pub const TELEGRAM_TOKEN_REFUSED: &str =
 
 /// The keychain account a channel's bot token is saved under.
 pub fn token_account(kind: ChannelKind) -> &'static str {
-    match kind {
-        ChannelKind::Telegram => "channel-telegram",
-        ChannelKind::Discord => "channel-discord",
-    }
+    kind.spec().token_account
 }
 
 fn keychain_message(err: keyring::Error) -> String {
@@ -64,25 +70,51 @@ fn discord_token_shape(token: &str) -> bool {
         })
 }
 
+/// What a kind with no adapter in this build answers.
 /// Save a bot token in `store`, after checking its shape.
 pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result<(), String> {
     let token = token.trim();
-    let shaped = match kind {
-        ChannelKind::Telegram => msg_telegram::valid_token(token),
-        ChannelKind::Discord => discord_token_shape(token),
+    // Slack's two tokens are kept as one entry, app token first.
+    let slack = match kind {
+        ChannelKind::Slack => {
+            msg_slack::split_tokens(token).map(|(app, bot)| Zeroizing::new(format!("{app} {bot}")))
+        }
+        _ => None,
+    };
+    let (shaped, why) = match kind {
+        ChannelKind::Telegram => (
+            msg_telegram::valid_token(token),
+            "That isn't a Telegram bot token. BotFather gives one shaped like 123456789:AA…",
+        ),
+        ChannelKind::Discord => (
+            discord_token_shape(token),
+            "That isn't a Discord bot token. Copy it from the Bot page of your Discord application.",
+        ),
+        ChannelKind::Slack => (
+            slack.is_some(),
+            "Those aren't Slack's two tokens. Paste the app token (xapp-…) and the bot token (xoxb-…), with a space between.",
+        ),
+        ChannelKind::Signal => {
+            // Kept in its normalized form: the number, then any daemon.
+            let config = msg_signal::parse_config(token)?;
+            return keyring_blob::set(store, token_account(kind), &config.saved());
+        }
+        ChannelKind::Email => {
+            // Kept as the address, any servers, then the app password.
+            let (config, password) = msg_email::parse_setup(token)?;
+            let password = Zeroizing::new(password);
+            let saved = Zeroizing::new(msg_email::saved_setup(&config, &password));
+            return keyring_blob::set(store, token_account(kind), &saved);
+        }
     };
     if !shaped {
-        return Err(match kind {
-            ChannelKind::Telegram => {
-                "That isn't a Telegram bot token. BotFather gives one shaped like 123456789:AA…"
-            }
-            ChannelKind::Discord => {
-                "That isn't a Discord bot token. Copy it from the Bot page of your Discord application."
-            }
-        }
-        .into());
+        return Err(why.into());
     }
-    keyring_blob::set(store, token_account(kind), token)
+    keyring_blob::set(
+        store,
+        token_account(kind),
+        slack.as_deref().map_or(token, String::as_str),
+    )
 }
 
 pub fn load_token(
@@ -364,7 +396,8 @@ impl DiscordLink {
         Ok(())
     }
 
-    /// TCP, TLS for `wss`, then the WebSocket upgrade.
+    /// TCP, TLS for `wss`, then the WebSocket upgrade. Slack's socket opens
+    /// the same way.
     fn connect(url: &str) -> Result<GatewaySocket, String> {
         let request = url.into_client_request().map_err(|e| e.to_string())?;
         let uri = request.uri();
@@ -528,6 +561,600 @@ impl DiscordLink {
             }
             msg_discord::Step::Drop => trust.save(config_dir),
         }
+    }
+}
+
+/// How many event ids [`SlackLink`] remembers.
+const SLACK_SEEN: usize = msg_slack::SEEN_EVENTS;
+
+/// One Slack app's Socket Mode session and its Web API replies. Not `Debug`:
+/// it holds both tokens.
+pub struct SlackLink {
+    app: Zeroizing<String>,
+    bot: Zeroizing<String>,
+    api: String,
+    /// The app's own user id, from `auth.test`, so its mention can be cut.
+    bot_user: String,
+    agent: http::Agent,
+    /// Off only in tests, which serve the socket on loopback.
+    public_only: bool,
+    seen: std::collections::VecDeque<String>,
+    last_problem: Option<String>,
+}
+
+impl SlackLink {
+    /// `tokens` as saved: the app token and the bot token, space between.
+    pub fn new(tokens: &str) -> Result<Self, String> {
+        Self::at(msg_slack::API_BASE, tokens, true)
+    }
+
+    fn at(api: &str, tokens: &str, public_only: bool) -> Result<Self, String> {
+        let (app, bot) =
+            msg_slack::split_tokens(tokens).ok_or("Those aren't Slack's two tokens.")?;
+        Ok(Self {
+            app: Zeroizing::new(app.to_string()),
+            bot: Zeroizing::new(bot.to_string()),
+            api: api.trim_end_matches('/').to_string(),
+            bot_user: String::new(),
+            agent: http::agent(http::Opts {
+                connect: Duration::from_secs(15),
+                overall: Some(Duration::from_secs(30)),
+                redirects: 0,
+                public_only,
+                ..Default::default()
+            }),
+            public_only,
+            seen: std::collections::VecDeque::new(),
+            last_problem: None,
+        })
+    }
+
+    /// The last message that couldn't be saved or answered, for the app to show.
+    pub fn last_problem(&self) -> Option<&str> {
+        self.last_problem.as_deref()
+    }
+
+    /// One Web API call with `token`. Slack answers 200 with `ok: false` for
+    /// most errors, so both are read; no error carries a token or a URL.
+    fn call(
+        &self,
+        config_dir: &Path,
+        method: &str,
+        token: &str,
+        body: Value,
+        data: &[DataClass],
+    ) -> Result<Value, String> {
+        let url = format!("{}/{method}", self.api);
+        guard_quiet(config_dir, &EgressReq::new(&url, data))?;
+        let answer: Value = self
+            .agent
+            .post(&url)
+            .header("Authorization", &format!("Bearer {token}"))
+            .send_json(body)
+            .map_err(|e| match e.status() {
+                Some(429) => "Slack asked the app to slow down.".to_string(),
+                Some(code) => format!("Slack's {method} failed (status {code})."),
+                None => format!("Couldn't reach Slack for {method}."),
+            })?
+            .into_json()
+            .map_err(|_| format!("Slack's {method} answer isn't JSON."))?;
+        match msg_slack::api_error(&answer) {
+            Some(why) => Err(why),
+            None => Ok(answer),
+        }
+    }
+
+    /// The app's name, to show the bot token works, and its user id.
+    pub fn check(&mut self, config_dir: &Path) -> Result<String, String> {
+        let me = self.call(config_dir, "auth.test", &self.bot, json!({}), &[])?;
+        self.bot_user = me
+            .get("user_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        me.get("user")
+            .and_then(Value::as_str)
+            .map(|u| format!("@{u}"))
+            .ok_or_else(|| "Slack's auth.test answer has no app name.".into())
+    }
+
+    /// Post `text` where `reply_to` says (a DM, or `channel:thread`); `data`
+    /// as [`TelegramLink::send`].
+    pub fn send(
+        &self,
+        config_dir: &Path,
+        reply_to: &str,
+        text: &str,
+        data: &[DataClass],
+    ) -> Result<(), String> {
+        let (channel, thread) =
+            msg_slack::split_reply_to(reply_to).ok_or("That isn't a Slack conversation.")?;
+        self.call(
+            config_dir,
+            "chat.postMessage",
+            &self.bot,
+            msg_slack::post_body(channel, thread, text),
+            data,
+        )
+        .map(|_| ())
+    }
+
+    /// A fresh Socket Mode address. It holds a one-time ticket, so the guard
+    /// sees only its host.
+    fn open_url(&self, config_dir: &Path) -> Result<String, String> {
+        let answer = self.call(
+            config_dir,
+            "apps.connections.open",
+            &self.app,
+            json!({}),
+            &[],
+        )?;
+        let url = answer
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or("Slack's apps.connections.open answer has no address.")?;
+        if !self.public_only && url.starts_with("ws://127.0.0.1:") {
+            return Ok(url.to_string());
+        }
+        let host = url
+            .strip_prefix("wss://")
+            .and_then(|rest| rest.split(['/', '?']).next())
+            .filter(|h| *h == "slack.com" || h.ends_with(".slack.com"))
+            .ok_or("Slack gave a socket address that isn't Slack's.")?;
+        guard_quiet(
+            config_dir,
+            &EgressReq::new(&format!("wss://{host}/link/"), &[]),
+        )?;
+        Ok(url.to_string())
+    }
+
+    /// Connect and stay connected until `stop` says so, opening a new socket
+    /// whenever Slack drops or refreshes one. `Err` when the tokens are
+    /// refused, the app is turned off, or the egress guard refuses.
+    pub fn run(&mut self, config_dir: &Path, stop: &dyn Fn() -> bool) -> Result<(), String> {
+        if self.bot_user.is_empty() {
+            self.check(config_dir)?;
+        }
+        let mut backoff = Duration::from_secs(1);
+        while !stop() {
+            let url = match self.open_url(config_dir) {
+                Ok(url) => url,
+                Err(why) if !Self::passing(&why) => return Err(why),
+                Err(why) => {
+                    self.last_problem = Some(why);
+                    backoff = (backoff * 2).min(DISCORD_MAX_BACKOFF);
+                    Self::nap(stop, backoff);
+                    continue;
+                }
+            };
+            match DiscordLink::connect(&url) {
+                Ok(mut socket) => {
+                    let ended = self.session(config_dir, &mut socket, stop);
+                    let _ = socket.close(None);
+                    let _ = socket.flush();
+                    match ended {
+                        Ended::Stopped => return Ok(()),
+                        Ended::Fatal(why) => return Err(why),
+                        Ended::Again { .. } => backoff = Duration::from_secs(1),
+                    }
+                }
+                Err(_) => backoff = (backoff * 2).min(DISCORD_MAX_BACKOFF),
+            }
+            Self::nap(stop, backoff);
+        }
+        Ok(())
+    }
+
+    /// True for a problem that trying again later can fix: Slack out of
+    /// reach, busy or asking for a pause. Anything else needs the person.
+    fn passing(why: &str) -> bool {
+        why.starts_with("Couldn't reach") || why.contains("slow down") || why.contains("(status 5")
+    }
+
+    fn nap(stop: &dyn Fn() -> bool, total: Duration) {
+        let until = std::time::Instant::now() + total;
+        while !stop() && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// True the first time `event_id` is seen.
+    fn first_time(&mut self, event_id: &str) -> bool {
+        if self.seen.iter().any(|id| id == event_id) {
+            return false;
+        }
+        if self.seen.len() >= SLACK_SEEN {
+            self.seen.pop_front();
+        }
+        self.seen.push_back(event_id.to_string());
+        true
+    }
+
+    fn session(
+        &mut self,
+        config_dir: &Path,
+        socket: &mut GatewaySocket,
+        stop: &dyn Fn() -> bool,
+    ) -> Ended {
+        loop {
+            if stop() {
+                return Ended::Stopped;
+            }
+            let frame = match socket.read() {
+                Ok(Message::Text(text)) => match serde_json::from_str::<Value>(text.as_str()) {
+                    Ok(frame) => msg_slack::read_frame(&frame, &self.bot_user),
+                    Err(_) => continue,
+                },
+                Ok(Message::Close(_)) => return Ended::Again { resume: false },
+                Ok(_) => continue,
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => return Ended::Again { resume: false },
+            };
+            match frame {
+                msg_slack::Frame::Hello | msg_slack::Frame::Other => {}
+                msg_slack::Frame::Disconnect { fatal: true } => {
+                    return Ended::Fatal("Slack turned the app's socket off. Turn Socket Mode back on in the Slack app.".into());
+                }
+                msg_slack::Frame::Disconnect { fatal: false } => {
+                    return Ended::Again { resume: false };
+                }
+                msg_slack::Frame::Event {
+                    envelope_id,
+                    event_id,
+                    message,
+                } => {
+                    // Acknowledged first: Slack retries anything not acked
+                    // within three seconds.
+                    let ack = msg_slack::ack(&envelope_id).to_string();
+                    if socket.send(Message::text(ack)).is_err() {
+                        return Ended::Again { resume: false };
+                    }
+                    let fresh = event_id.as_deref().is_none_or(|id| self.first_time(id));
+                    if let (true, Some(msg)) = (fresh, message) {
+                        if let Err(why) = self.handle(config_dir, msg, grokhub_core::now_ms()) {
+                            self.last_problem = Some(why);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle(
+        &self,
+        config_dir: &Path,
+        msg: msg_slack::Incoming,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let mut trust = DmTrust::load(config_dir);
+        match msg_slack::step(&mut trust, msg, now_ms) {
+            msg_slack::Step::Forward(m) => {
+                msg_channels::queue_message(
+                    config_dir,
+                    &Forwarded {
+                        channel: ChannelKind::Slack,
+                        sender: &m.sender,
+                        label: &m.sender,
+                        reply_to: &m.reply_to(),
+                        text: &m.text,
+                    },
+                    now_ms,
+                )?;
+                Ok(())
+            }
+            msg_slack::Step::Reply { channel, text } => {
+                // Saved before it's sent, as for Telegram.
+                trust.save(config_dir)?;
+                self.send(config_dir, &channel, &text, &[])
+            }
+            msg_slack::Step::Drop => trust.save(config_dir),
+        }
+    }
+}
+
+/// How long a call to the local signal-cli daemon may take. `finishLink`
+/// waits for the phone, so it has its own limit.
+const SIGNAL_CALL: Duration = Duration::from_secs(30);
+/// How long linking waits for the phone to confirm.
+pub const SIGNAL_LINK_WAIT: Duration = Duration::from_secs(180);
+/// A quiet event stream is opened again after this, so a daemon that hung is
+/// noticed.
+const SIGNAL_QUIET: Duration = Duration::from_secs(300);
+
+/// The person's own Signal account, reached through a signal-cli daemon on
+/// this computer. It reads their Note to Self and answers there; nobody else
+/// is ever read or written to (see [`msg_signal`]).
+pub struct SignalLink {
+    config: msg_signal::Config,
+    /// Short calls: the check and JSON-RPC.
+    calls: http::Agent,
+    /// The event stream and `finishLink`, which wait.
+    waits: http::Agent,
+    events: msg_signal::EventReader,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl SignalLink {
+    /// `saved` as the keychain keeps it: the number, then the daemon when it
+    /// isn't the default.
+    pub fn new(saved: &str) -> Result<Self, String> {
+        Ok(Self::with(msg_signal::parse_config(saved)?))
+    }
+
+    /// A link to the daemon alone, before any account is linked.
+    pub fn daemon(daemon: &str) -> Result<Self, String> {
+        Ok(Self::with(msg_signal::Config {
+            account: String::new(),
+            daemon: msg_signal::daemon_url(daemon)?,
+        }))
+    }
+
+    fn with(config: msg_signal::Config) -> Self {
+        // Loopback only, whatever the address resolves to.
+        let opts = http::Opts {
+            connect: Duration::from_secs(3),
+            redirects: 0,
+            resolve: Some(http::loopback_only_resolve),
+            ..Default::default()
+        };
+        Self {
+            config,
+            calls: http::agent(http::Opts {
+                overall: Some(SIGNAL_CALL),
+                ..opts
+            }),
+            waits: http::agent(http::Opts {
+                read: Some(SIGNAL_QUIET),
+                ..opts
+            }),
+            events: msg_signal::EventReader::default(),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+
+    pub fn config(&self) -> &msg_signal::Config {
+        &self.config
+    }
+
+    fn unreachable(&self) -> String {
+        format!(
+            "signal-cli isn't answering at {}. Start it with: {}",
+            self.config.daemon,
+            msg_signal::DAEMON_COMMAND
+        )
+    }
+
+    fn rpc_on(
+        &self,
+        agent: &http::Agent,
+        config_dir: &Path,
+        method: &str,
+        params: Value,
+        data: &[DataClass],
+    ) -> Result<Value, String> {
+        let url = self.config.rpc_url();
+        guard_quiet(config_dir, &EgressReq::new(&url, data))?;
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let account = (!self.config.account.is_empty()).then_some(self.config.account.as_str());
+        let answer: Value = agent
+            .post(&url)
+            .send_json(msg_signal::rpc(id, method, account, params))
+            .map_err(|e| match e.status() {
+                Some(code) => format!("signal-cli's {method} failed (status {code})."),
+                None => self.unreachable(),
+            })?
+            .into_json()
+            .map_err(|_| format!("signal-cli's {method} answer isn't JSON."))?;
+        msg_signal::rpc_result(&answer, method)
+    }
+
+    fn rpc(
+        &self,
+        config_dir: &Path,
+        method: &str,
+        params: Value,
+        data: &[DataClass],
+    ) -> Result<Value, String> {
+        self.rpc_on(&self.calls, config_dir, method, params, data)
+    }
+
+    /// The daemon runs and knows the account. Answers the number.
+    pub fn check(&self, config_dir: &Path) -> Result<String, String> {
+        let url = self.config.check_url();
+        guard_quiet(config_dir, &EgressReq::new(&url, &[]))?;
+        self.calls.get(&url).call().map_err(|e| match e.status() {
+            Some(code) => format!(
+                "Something at {} answered, but not as signal-cli's HTTP daemon (status {code}).",
+                self.config.daemon
+            ),
+            None => self.unreachable(),
+        })?;
+        let accounts =
+            msg_signal::listed_accounts(&self.rpc(config_dir, "listAccounts", json!({}), &[])?);
+        if !accounts.contains(&self.config.account) {
+            return Err(format!(
+                "signal-cli isn't linked to {}. Link it first, then connect again.",
+                self.config.account
+            ));
+        }
+        Ok(self.config.account.clone())
+    }
+
+    /// Answer in the account's own Note to Self. `reply_to` must be that
+    /// account: there is nobody else to answer.
+    pub fn send(
+        &self,
+        config_dir: &Path,
+        reply_to: &str,
+        text: &str,
+        data: &[DataClass],
+    ) -> Result<(), String> {
+        if reply_to != self.config.account {
+            return Err("Signal answers go only to your own Note to Self.".into());
+        }
+        self.rpc(
+            config_dir,
+            "send",
+            msg_signal::send_params(&self.config.account, text),
+            data,
+        )
+        .map(|_| ())
+    }
+
+    /// Start linking: the `sgnl://linkdevice` address the phone scans.
+    pub fn start_link(&self, config_dir: &Path) -> Result<String, String> {
+        msg_signal::link_uri(&self.rpc(config_dir, "startLink", json!({}), &[])?)
+    }
+
+    /// Wait for the phone to confirm `uri`, up to [`SIGNAL_LINK_WAIT`].
+    /// Answers the linked number.
+    pub fn finish_link(
+        &self,
+        config_dir: &Path,
+        uri: &str,
+        device: &str,
+    ) -> Result<String, String> {
+        let wait = http::agent(http::Opts {
+            connect: Duration::from_secs(3),
+            overall: Some(SIGNAL_LINK_WAIT),
+            redirects: 0,
+            resolve: Some(http::loopback_only_resolve),
+            ..Default::default()
+        });
+        let result = self.rpc_on(
+            &wait,
+            config_dir,
+            "finishLink",
+            json!({"deviceLinkUri": uri, "deviceName": device}),
+            &[],
+        )?;
+        msg_signal::linked_number(&result)
+    }
+
+    /// Read events until `stop` says so, opening the stream again (with
+    /// `Last-Event-ID`, so the daemon replays what was missed) whenever it
+    /// ends. `report` gets the current problem, or `None` once events flow.
+    /// `Err` only when the egress guard refuses.
+    pub fn run(
+        &mut self,
+        config_dir: &Path,
+        stop: &(dyn Fn() -> bool + Sync),
+        report: &dyn Fn(Option<&str>),
+    ) -> Result<(), String> {
+        let mut backoff = Duration::from_secs(1);
+        while !stop() {
+            match self.stream(config_dir, stop, report) {
+                Ok(()) => backoff = Duration::from_secs(1),
+                Err(Some(why)) => {
+                    report(Some(&why));
+                    backoff = (backoff * 2).min(DISCORD_MAX_BACKOFF);
+                }
+                Err(None) => return Err("The egress guard refused the Signal daemon.".into()),
+            }
+            SlackLink::nap(stop, backoff);
+        }
+        Ok(())
+    }
+
+    /// One open stream. `Err(None)` for a guard refusal; `Err(Some)` for
+    /// anything trying again can fix.
+    fn stream(
+        &mut self,
+        config_dir: &Path,
+        stop: &(dyn Fn() -> bool + Sync),
+        report: &dyn Fn(Option<&str>),
+    ) -> Result<(), Option<String>> {
+        let url = self.config.events_url();
+        guard_quiet(config_dir, &EgressReq::new(&url, &[])).map_err(|_| None)?;
+        // Pressed by the watcher below once `stop` reads true.
+        let pressed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let switch = {
+            let pressed = pressed.clone();
+            http::StopSwitch::new(move || pressed.load(std::sync::atomic::Ordering::SeqCst))
+        };
+        let mut req = self.waits.get(&url).header("Accept", "text/event-stream");
+        if let Some(id) = &self.events.last_id {
+            req = req.header("Last-Event-ID", id);
+        }
+        // The body is taken inside, so its reads keep the switch.
+        let reader = http::with_stop(&switch, || req.call().map(http::Response::into_reader))
+            .map_err(|e| {
+                Some(match e.status() {
+                    Some(code) => format!("signal-cli's event stream failed (status {code})."),
+                    None => self.unreachable(),
+                })
+            })?;
+        report(None);
+        let mut lines = std::io::BufReader::new(reader);
+        let mut line = String::new();
+        std::thread::scope(|s| {
+            // Presses the switch once `stop` reads true, so a quiet stream
+            // doesn't hold the worker.
+            let watcher = s.spawn(|| {
+                while !pressed.load(std::sync::atomic::Ordering::SeqCst) {
+                    if stop() {
+                        pressed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+            let out = loop {
+                line.clear();
+                match std::io::BufRead::read_line(&mut lines, &mut line) {
+                    Ok(0) => break Err(Some("signal-cli closed its event stream.".to_string())),
+                    Ok(_) => {}
+                    Err(e) if http::is_stopped(&e) => break Ok(()),
+                    Err(_) => break Err(Some("signal-cli's event stream broke off.".to_string())),
+                }
+                let Some(event) = self.events.line(line.trim_end_matches('\n')) else {
+                    continue;
+                };
+                if let Err(why) = self.handle(config_dir, &event.data, grokhub_core::now_ms()) {
+                    report(Some(&why));
+                }
+            };
+            pressed.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = watcher.join();
+            out
+        })
+    }
+
+    /// One event's data: a Note to Self is queued for the app; anything else
+    /// is dropped without a word.
+    fn handle(&self, config_dir: &Path, data: &str, now_ms: u64) -> Result<(), String> {
+        let Ok(data) = serde_json::from_str::<Value>(data) else {
+            return Ok(());
+        };
+        let Some(text) = msg_signal::note_to_self(&data, &self.config.account) else {
+            return Ok(());
+        };
+        let account = &self.config.account;
+        // Paired when connected; checked again, so unpairing in the app stops
+        // the queue at once.
+        if !DmTrust::load(config_dir).is_paired(ChannelKind::Signal, account) {
+            return Ok(());
+        }
+        msg_channels::queue_message(
+            config_dir,
+            &Forwarded {
+                channel: ChannelKind::Signal,
+                sender: account,
+                label: msg_signal::SELF_LABEL,
+                reply_to: account,
+                text: &text,
+            },
+            now_ms,
+        )
+        .map(|_| ())
     }
 }
 
@@ -740,11 +1367,55 @@ mod tests {
             Some(TOKEN)
         );
         assert!(save_token(&store, ChannelKind::Discord, TOKEN).is_err());
+        assert!(save_token(&store, ChannelKind::Slack, TOKEN).is_err());
+        let (app, bot) = SLACK_TOKENS.split_once(' ').unwrap();
+        save_token(&store, ChannelKind::Slack, &format!("{bot}\n{app} ")).unwrap();
+        assert_eq!(
+            load_token(&store, ChannelKind::Slack)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some(SLACK_TOKENS)
+        );
+        assert!(save_token(&store, ChannelKind::Signal, TOKEN).is_err());
+        save_token(
+            &store,
+            ChannelKind::Signal,
+            "+1 555 123 4567 http://localhost:8080",
+        )
+        .unwrap();
+        assert_eq!(
+            load_token(&store, ChannelKind::Signal)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("+15551234567")
+        );
+        assert!(save_token(&store, ChannelKind::Email, TOKEN)
+            .unwrap_err()
+            .starts_with("That isn't an email address"));
+        assert_eq!(load_token(&store, ChannelKind::Email).unwrap(), None);
+        save_token(
+            &store,
+            ChannelKind::Email,
+            " Me@Example.org imap.example.org smtp.example.org mx.example.org abcd efgh ",
+        )
+        .unwrap();
+        assert_eq!(
+            load_token(&store, ChannelKind::Email)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("me@example.org imap.example.org smtp.example.org mx.example.org abcdefgh")
+        );
+        forget_token(&store, ChannelKind::Email).unwrap();
         save_token(&store, ChannelKind::Discord, "MTIz.abc_DEF.ghi-jkl").unwrap();
         assert_eq!(
             store.0.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
             vec![
                 "channel-discord".to_string(),
+                "channel-signal".to_string(),
+                "channel-slack".to_string(),
                 "channel-telegram".to_string()
             ]
         );
@@ -849,6 +1520,297 @@ mod tests {
             me.join().unwrap()[0],
             format!("GET /users/@me HTTP/1.1 [auth: Bot {DISCORD_TOKEN}]\n")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const SLACK_TOKENS: &str =
+        "xapp-1-A0123456789-0123456789-abcdef0123 xoxb-0123456789-0123456789-abcdefABCDEF";
+
+    /// A fake Socket Mode server: says hello, sends one stranger's DM twice
+    /// (Slack's retry, same event id), collects both acks, then asks for a
+    /// refresh so the link opens a new socket.
+    fn fake_socket(listener: TcpListener) -> JoinHandle<Vec<Value>> {
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.send(Message::text(json!({ "type": "hello" }).to_string()))
+                .unwrap();
+            let dm = |envelope: &str| {
+                json!({ "type": "events_api", "envelope_id": envelope, "payload": {
+                    "event_id": "Ev01",
+                    "event": { "type": "message", "channel_type": "im", "channel": "D0DM",
+                               "user": "U0STRANGER", "text": "hello", "ts": "1700000000.000100" },
+                }})
+            };
+            let mut acks = Vec::new();
+            for envelope in ["env-1", "env-2"] {
+                ws.send(Message::text(dm(envelope).to_string())).unwrap();
+                acks.push(loop {
+                    if let Message::Text(t) = ws.read().unwrap() {
+                        break serde_json::from_str(t.as_str()).unwrap();
+                    }
+                });
+            }
+            let refresh = json!({ "type": "disconnect", "reason": "refresh_requested" });
+            ws.send(Message::text(refresh.to_string())).unwrap();
+            let _ = ws.read();
+            acks
+        })
+    }
+
+    #[test]
+    fn a_slack_stranger_gets_one_code_for_a_retried_event_and_refused_tokens_stop_the_run() {
+        let dir = temp_dir("slack");
+        let socket = TcpListener::bind("127.0.0.1:0").unwrap();
+        let socket_url = format!("ws://{}/link/?ticket=t1", socket.local_addr().unwrap());
+        let socket_server = fake_socket(socket);
+        let (api, api_server) = fake_api(vec![
+            (
+                200,
+                json!({ "ok": true, "user": "loadout", "user_id": "U0BOT" }),
+            ),
+            (200, json!({ "ok": true, "url": socket_url })),
+            (200, json!({ "ok": true, "ts": "1700000000.000200" })),
+            (200, json!({ "ok": false, "error": "invalid_auth" })),
+        ]);
+        let mut link = SlackLink::at(&api, SLACK_TOKENS, false).unwrap();
+        let result = link.run(&dir, &|| false);
+        let acks = socket_server.join().unwrap();
+        let seen = api_server.join().unwrap();
+
+        assert_eq!(
+            acks,
+            vec![
+                json!({ "envelope_id": "env-1" }),
+                json!({ "envelope_id": "env-2" })
+            ]
+        );
+        let lines: Vec<&str> = seen.iter().map(|s| s.split_once('\n').unwrap().0).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "POST /auth.test HTTP/1.1 [auth: Bearer xoxb-0123456789-0123456789-abcdefABCDEF]",
+                "POST /apps.connections.open HTTP/1.1 [auth: Bearer xapp-1-A0123456789-0123456789-abcdef0123]",
+                "POST /chat.postMessage HTTP/1.1 [auth: Bearer xoxb-0123456789-0123456789-abcdefABCDEF]",
+                "POST /apps.connections.open HTTP/1.1 [auth: Bearer xapp-1-A0123456789-0123456789-abcdef0123]",
+            ]
+        );
+        let code = DmTrust::load(&dir).pending[0].code.clone();
+        let posted: Value = serde_json::from_str(seen[2].split_once('\n').unwrap().1).unwrap();
+        assert_eq!(posted["channel"], "D0DM");
+        assert_eq!(posted["text"], msg_telegram::pairing_text(&code));
+        assert_eq!(link.last_problem(), None);
+        assert_eq!(
+            result,
+            Err("Slack refused the tokens. Copy them again from your Slack app.".into())
+        );
+
+        // Only Slack's own host may hold the socket, and a lone token isn't enough.
+        let (api, opened) = fake_api(vec![(
+            200,
+            json!({ "ok": true, "url": "wss://evil.example/link/" }),
+        )]);
+        let link = SlackLink::at(&api, SLACK_TOKENS, false).unwrap();
+        assert_eq!(
+            link.open_url(&dir).unwrap_err(),
+            "Slack gave a socket address that isn't Slack's."
+        );
+        opened.join().unwrap();
+        assert!(SlackLink::new("xoxb-0123456789-0123456789-abcdefABCDEF").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const ME: &str = "+15551234567";
+
+    /// One request the fake daemon saw: its line, `Last-Event-ID` and body.
+    type Seen = (String, Option<String>, String);
+
+    /// A fake signal-cli daemon on loopback. `answers` is served one per
+    /// connection: `rpc` answers carry a JSON body, `events` a raw event
+    /// stream. Hands back each request's line, its `Last-Event-ID` and its
+    /// body, and sets `done` after the last one.
+    fn fake_daemon(
+        answers: Vec<(u16, String)>,
+        done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (String, JoinHandle<Vec<Seen>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for (status, body) in answers {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let (mut length, mut last_id) = (0, None);
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap();
+                        }
+                        if name.eq_ignore_ascii_case("last-event-id") {
+                            last_id = Some(value.trim().to_string());
+                        }
+                    }
+                }
+                let mut sent = vec![0; length];
+                reader.read_exact(&mut sent).unwrap();
+                seen.push((
+                    line.trim_end().to_string(),
+                    last_id,
+                    String::from_utf8(sent).unwrap(),
+                ));
+                let kind = if line.contains("/events") {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                let mut stream = reader.into_inner();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            seen
+        });
+        (base, handle)
+    }
+
+    fn rpc_answer(result: Value) -> (u16, String) {
+        (
+            200,
+            json!({"jsonrpc": "2.0", "id": 1, "result": result}).to_string(),
+        )
+    }
+
+    fn event(id: u32, params: Value) -> String {
+        let data = json!({"jsonrpc": "2.0", "method": "receive", "params": params});
+        format!("event:receive\nid:{id}\ndata:{data}\n\n")
+    }
+
+    #[test]
+    fn signal_reads_only_the_note_to_self_and_picks_up_where_the_stream_broke() {
+        let dir = temp_dir("signal");
+        let mut trust = DmTrust::default();
+        trust.pair(ChannelKind::Signal, ME);
+        trust.save(&dir).unwrap();
+        let stream = [
+            event(1, json!({"account": ME, "envelope": {
+                "source": "+15559876543", "sourceNumber": "+15559876543",
+                "dataMessage": {"message": "what's your pairing code?"}
+            }})),
+            ": keep-alive\n\n".to_string(),
+            event(2, json!({"account": ME, "envelope": {
+                "source": ME, "sourceNumber": ME, "sourceUuid": "aci-me",
+                "syncMessage": {"sentMessage": {"destinationNumber": ME, "message": "plan my week"}}
+            }})),
+        ]
+        .concat();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (base, daemon) = fake_daemon(vec![(200, stream), (503, String::new())], done.clone());
+        let mut link = SignalLink::new(&format!("{ME} {base}")).unwrap();
+        let problems = Mutex::new(Vec::new());
+        let result = link.run(
+            &dir,
+            &|| done.load(std::sync::atomic::Ordering::SeqCst),
+            &|p| problems.lock().unwrap().push(p.map(str::to_string)),
+        );
+        let seen = daemon.join().unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen[0].0, "GET /api/v1/events HTTP/1.1");
+        assert_eq!(seen[0].1, None);
+        // The second stream asks the daemon to replay from the last event.
+        assert_eq!(seen[1].1.as_deref(), Some("2"));
+        let queued: Vec<_> = std::fs::read_dir(msg_channels::inbox_dir(&dir))
+            .unwrap()
+            .collect();
+        assert_eq!(queued.len(), 1, "only the Note to Self is queued");
+        let saved = std::fs::read_to_string(queued[0].as_ref().unwrap().path()).unwrap();
+        assert!(
+            saved.contains("plan my week") && !saved.contains("pairing code"),
+            "{saved}"
+        );
+        // Nothing was ever sent, and the stranger got no code.
+        assert!(seen.iter().all(|s| !s.0.starts_with("POST")));
+        assert!(DmTrust::load(&dir).pending.is_empty());
+        let problems = problems.into_inner().unwrap();
+        assert_eq!(problems.first(), Some(&None));
+        assert!(problems.contains(&Some("signal-cli closed its event stream.".into())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signal_checks_the_daemon_knows_the_account_and_answers_only_itself() {
+        let dir = temp_dir("signal-send");
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (base, daemon) = fake_daemon(
+            vec![
+                (200, String::new()),
+                rpc_answer(json!([{"number": ME}])),
+                (200, String::new()),
+                rpc_answer(json!([{"number": "+15550000000"}])),
+                rpc_answer(json!({"timestamp": 9})),
+            ],
+            done,
+        );
+        let link = SignalLink::new(&format!("{ME} {base}")).unwrap();
+        assert_eq!(link.check(&dir).unwrap(), ME);
+        let other = SignalLink::new(&format!("+15551112222 {base}")).unwrap();
+        assert_eq!(
+            other.check(&dir).unwrap_err(),
+            "signal-cli isn't linked to +15551112222. Link it first, then connect again."
+        );
+        assert_eq!(
+            link.send(&dir, "+15559876543", "hi", &[]).unwrap_err(),
+            "Signal answers go only to your own Note to Self."
+        );
+        link.send(&dir, ME, "done", &[DataClass::Chat]).unwrap();
+        let seen = daemon.join().unwrap();
+        let lines: Vec<&str> = seen.iter().map(|s| s.0.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /api/v1/check HTTP/1.1",
+                "POST /api/v1/rpc HTTP/1.1",
+                "GET /api/v1/check HTTP/1.1",
+                "POST /api/v1/rpc HTTP/1.1",
+                "POST /api/v1/rpc HTTP/1.1",
+            ]
+        );
+        let listed: Value = serde_json::from_str(&seen[1].2).unwrap();
+        assert_eq!(listed["method"], "listAccounts");
+        assert_eq!(listed["params"]["account"], ME);
+        let sent: Value = serde_json::from_str(&seen[4].2).unwrap();
+        assert_eq!(sent["method"], "send");
+        assert_eq!(
+            sent["params"],
+            json!({"recipient": [ME], "message": "done", "account": ME})
+        );
+
+        // A daemon that isn't running, and one that isn't on this computer.
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let gone = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let err = SignalLink::new(&format!("{ME} {gone}"))
+            .unwrap()
+            .check(&dir)
+            .unwrap_err();
+        assert!(
+            err.starts_with("signal-cli isn't answering at http://127.0.0.1:"),
+            "{err}"
+        );
+        assert!(err.ends_with(msg_signal::DAEMON_COMMAND), "{err}");
+        assert!(SignalLink::new(&format!("{ME} http://192.168.1.4:8080")).is_err());
+        assert!(SignalLink::daemon("http://example.com:8080").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

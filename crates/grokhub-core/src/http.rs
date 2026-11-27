@@ -191,7 +191,7 @@ fn system_resolve(netloc: &str) -> io::Result<Vec<SocketAddr>> {
 }
 
 /// Loopback addresses only: anything else is refused before it is dialed.
-fn loopback_only_resolve(netloc: &str) -> io::Result<Vec<SocketAddr>> {
+pub fn loopback_only_resolve(netloc: &str) -> io::Result<Vec<SocketAddr>> {
     let all = system_resolve(netloc)?;
     if all.iter().any(|a| !a.ip().is_loopback()) {
         return Err(io::Error::new(

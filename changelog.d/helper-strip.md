@@ -1,0 +1,1 @@
+- Chat: running helpers now show in a strip above the composer, each with Steer (type what it should do next, Enter sends) and Stop. The strip is hidden while no helper runs. Desktop only.

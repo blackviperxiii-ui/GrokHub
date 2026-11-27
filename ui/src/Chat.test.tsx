@@ -115,6 +115,11 @@ const auto = vi.hoisted(() => ({
 vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
+  // The helper strip above the composer: no helper runs in these tests.
+  getQueue: () => Promise.resolve({ todos: [], tasks: [] }),
+  onTasksChanged: () => Promise.resolve(() => {}),
+  steerTask: () => Promise.resolve({ todos: [], tasks: [] }),
+  stopTask: () => Promise.resolve({ todos: [], tasks: [] }),
   commandBoxApprove: api.commandBoxApprove,
   hubSendApprove: api.hubSendApprove,
   getDeviceGlance: api.getDeviceGlance,

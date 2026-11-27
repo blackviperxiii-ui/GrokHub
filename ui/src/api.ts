@@ -1383,7 +1383,7 @@ export type SlashEffect =
   | { kind: "openNote"; view: "settings"; text: string }
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
-  /** `/plugins`: Settings → Labs. `/download` alone: Settings → Local AI. */
+  /** `/plugins`: the Marketplace page. `/download` alone: Settings → Local AI. */
   | { kind: "openSection"; section: "labs" | "localAi" }
   /** `/download <model>`: that model's download starts on this computer. */
   | { kind: "downloadModel"; id: string; name: string }
@@ -1474,6 +1474,47 @@ export function exportPersonal(): Promise<string> {
 /** Updates the Obsidian-friendly wiki of the plain memory; returns the page's line. Desktop only. */
 export function exportMemoryWiki(): Promise<string> {
   return invoke<string>("export_memory_wiki");
+}
+
+/** One live memory line on the map. `label` is empty for a private line. */
+export interface MemoryGraphNode {
+  id: string;
+  kind: string;
+  label: string;
+  confidence: number;
+  updated: string;
+  sealed: boolean;
+  proposed: boolean;
+  paused: boolean;
+  superseded: boolean;
+}
+
+export type MemoryEdgeKind =
+  | "references"
+  | "supersedes"
+  | "learned_from_span"
+  | "about_project"
+  | "contradicts";
+
+export interface MemoryGraphEdge {
+  from: string;
+  to: string;
+  kind: MemoryEdgeKind;
+}
+
+/** The memory map: newest nodes first, edges only between nodes shown. */
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  /** Private lines that could not be opened, so are not on the map. */
+  locked: number;
+  /** More lines than the map holds; the oldest are left off. */
+  truncated: boolean;
+}
+
+/** Desktop only: the memory as nodes and edges for the Memory map. */
+export function getMemoryGraph(): Promise<MemoryGraph> {
+  return invoke<MemoryGraph>("memory_graph");
 }
 
 export interface PersonalWiped {
@@ -3557,6 +3598,12 @@ export interface PluginEntry {
   version: string;
   description: string;
   source: string;
+  /** Empty when the index names none. */
+  author?: string;
+  category?: string;
+  /** An https page about the plugin, or empty. */
+  homepage?: string;
+  keywords?: string[];
 }
 
 export interface PluginMarket {
@@ -4105,7 +4152,7 @@ export function onUpdateAvailable(
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
 
-/** The Skills page (src-tauri/src/skills.rs). Built-in skills stay off it. */
+/** The Skills page (src-tauri/src/skills.rs), including read-only built-in vstack skills. */
 export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
 
 export interface SkillRow {
@@ -4475,6 +4522,16 @@ export function stopTask(
   taskId?: string,
 ): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** Steer: text for a running helper's next step. Rejects when the helper has
+ * already finished, so the box can say the text never reached it. */
+export function steerTask(
+  conversationId: string,
+  taskId: string,
+  text: string,
+): Promise<Queue> {
+  return invoke<Queue>("steer_task", { conversationId, taskId, text });
 }
 
 /** How the session's review stands against the change that is there now.

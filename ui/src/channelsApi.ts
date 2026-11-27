@@ -3,10 +3,18 @@
 // paired with it. Desktop only: the web app and the tests get `null`.
 import { call, inShell } from "./transport";
 
-export type ChannelKind = "telegram" | "discord";
+export type ChannelKind = "telegram" | "discord" | "slack" | "signal" | "email";
 
+/** One row of the shell's channel table (msg_channels::KINDS) and its state. */
 export interface ChannelState {
   kind: ChannelKind;
+  /** What the page calls it. */
+  name: string;
+  /** The setup box's label and hint. */
+  setupLabel: string;
+  setupHint: string;
+  /** It can be connected in this build; the others show as coming next. */
+  live: boolean;
   /** A token is saved. */
   connected: boolean;
   /** Listening for messages now. */
@@ -62,6 +70,15 @@ export interface Channels {
   status: string | null;
 }
 
+/** A QR that pairs the phone which scans it with the Telegram bot. */
+export interface StartQr {
+  /** The `t.me` link the QR holds, for a phone that can't scan. */
+  link: string;
+  /** The QR as an SVG document. */
+  svg: string;
+  expiresMs: number;
+}
+
 export async function getChannels(): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("get_channels");
@@ -70,6 +87,32 @@ export async function getChannels(): Promise<Channels | null> {
 export async function connectChannel(kind: ChannelKind, token: string): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("connect_channel", { kind, token });
+}
+
+/** Desktop only: each call makes a new link and the last one stops working. */
+export async function telegramQr(): Promise<StartQr | null> {
+  if (!inShell()) return null;
+  return call<StartQr>("telegram_qr");
+}
+
+/** A QR the Signal app scans to link this computer's signal-cli as a device. */
+export interface LinkQr {
+  /** The QR as an SVG document. */
+  svg: string;
+  /** The number the phone must be signed in to. */
+  account: string;
+}
+
+/** Desktop only: asks the local signal-cli daemon for a device link for `number`. */
+export async function signalLinkStart(number: string): Promise<LinkQr | null> {
+  if (!inShell()) return null;
+  return call<LinkQr>("signal_link_start", { number });
+}
+
+/** Desktop only: waits up to three minutes for the phone to scan, then connects. */
+export async function signalLinkFinish(): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("signal_link_finish");
 }
 
 export async function disconnectChannel(kind: ChannelKind): Promise<Channels | null> {
@@ -90,6 +133,12 @@ export async function setChannelAsks(kind: ChannelKind, sender: string, on: bool
 export async function unpairChannelSender(kind: ChannelKind, sender: string): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("unpair_channel_sender", { kind, sender });
+}
+
+/** Let mail from one address reach the assistant (the email channel). */
+export async function allowEmailSender(sender: string): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("allow_email_sender", { sender });
 }
 
 /** The answer carries the new secret once, in `newSecret`. */

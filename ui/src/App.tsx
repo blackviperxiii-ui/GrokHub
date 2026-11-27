@@ -100,6 +100,7 @@ const loaders = {
   code: () => import("./Code").then((m) => ({ default: m.Code })),
   command: () => import("./CommandBox").then((m) => ({ default: m.CommandBox })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  marketplace: () => import("./Marketplace").then((m) => ({ default: m.Marketplace })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
@@ -119,6 +120,7 @@ const loaders = {
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
+const Marketplace = lazy(loaders.marketplace);
 const Devices = lazy(loaders.devices);
 const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
@@ -801,7 +803,10 @@ export function App() {
               onOpenSettings={() => setView("settings")}
               onSignIn={() => run({ kind: "settings", section: "account" })}
               onOpenView={openView}
-              onOpenSection={(section) => run({ kind: "settings", section })}
+              onOpenSection={(section) =>
+                // `/plugins` lands on the Marketplace, where plugins moved from Labs.
+                section === "labs" && openView("marketplace") ? undefined : run({ kind: "settings", section })
+              }
               onOpenPalette={() => setPalette("all")}
               onQueue={onQueue}
               queueAct={queueAct}
@@ -995,6 +1000,12 @@ export function App() {
             <Connectors remote={Boolean(caps.remote)} />
           </Page>
         ) : null;
+      case "marketplace":
+        return opened.has("marketplace") && caps.plugins ? (
+          <Page key="marketplace" shown={shown}>
+            <Marketplace onUse={ask} remote={Boolean(caps.remote)} />
+          </Page>
+        ) : null;
       case "updates":
         return opened.has("updates") && !caps.remote ? (
           <Page key="updates" shown={shown}>
@@ -1022,7 +1033,6 @@ export function App() {
               onClose={() => setView(before)}
               backTo={VIEW_LABELS[before]}
               onProfile={setProfile}
-              onOpenConnectors={() => setView("connectors")}
             />
           </Page>
         ) : null;
@@ -1209,6 +1219,7 @@ export function App() {
                 {pageNode("history", view === "history")}
                 {pageNode("memory", view === "memory")}
                 {pageNode("connectors", view === "connectors")}
+                {pageNode("marketplace", view === "marketplace")}
                 {pageNode("updates", view === "updates")}
                 {pageNode("library", view === "library")}
                 {pageNode("mods", view === "mods")}
@@ -1243,6 +1254,7 @@ export function App() {
               {pageNode("memory", view === "memory")}
               {pageNode("skills", view === "skills")}
               {pageNode("connectors", view === "connectors")}
+              {pageNode("marketplace", view === "marketplace")}
               {pageNode("updates", view === "updates")}
               {pageNode("library", view === "library")}
               {pageNode("mods", view === "mods")}

@@ -1,0 +1,1 @@
+- Tasks: a running helper can now be steered by the person, not only by the chat. Steer queues the text for the helper's next step and is refused once the helper has finished. Desktop only.

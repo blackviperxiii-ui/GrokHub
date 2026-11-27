@@ -1,0 +1,1 @@
+- Code tab Tasks panel: each live helper row now has a Steer button in the desktop app. Type what the helper should do next and press Enter; Escape closes the box.

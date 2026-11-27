@@ -4,6 +4,9 @@
 //! - [`DmTrust`]: a direct message from a sender nobody paired is never
 //!   handed to a model. The sender gets a pairing code; the user approves
 //!   that code in the app, and only then does the sender count as trusted.
+//!   A start link (a QR the app shows) pairs the one sender who opens it
+//!   first, within [`START_LINK_TTL_MS`].
+//! - [`qr_svg`]: a QR code as an SVG, drawn in Rust so the UI needs no package.
 //! - [`verify_webhook`]: an inbound webhook must carry an HMAC-SHA256
 //!   signature over `"{timestamp}.{body}"` from a fresh timestamp.
 //! - [`Filter`]: declarative pre-filters drop routine webhook noise before
@@ -23,6 +26,106 @@ use crate::pair::{ct_eq, make_pair_code, normalize_code};
 pub enum ChannelKind {
     Telegram,
     Discord,
+    Slack,
+    Signal,
+    Email,
+}
+
+/// What the app knows about one channel kind. Callers read this table
+/// instead of matching on the kind, so a new kind is one row here plus its
+/// adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KindSpec {
+    pub kind: ChannelKind,
+    /// The lowercase key on disk and over the wire.
+    pub key: &'static str,
+    /// What the app calls it.
+    pub name: &'static str,
+    /// The keychain account its secret is saved under.
+    pub token_account: &'static str,
+    /// The setup box's label and hint.
+    pub setup_label: &'static str,
+    pub setup_hint: &'static str,
+    /// It has an adapter in this build. The others show as coming next.
+    pub live: bool,
+}
+
+/// Every kind, in [`ChannelKind`] order.
+pub const KINDS: [KindSpec; 5] = [
+    KindSpec {
+        kind: ChannelKind::Telegram,
+        key: "telegram",
+        name: "Telegram",
+        token_account: "channel-telegram",
+        setup_label: "Telegram bot token",
+        setup_hint: "Paste the token BotFather gave you.",
+        live: true,
+    },
+    KindSpec {
+        kind: ChannelKind::Discord,
+        key: "discord",
+        name: "Discord",
+        token_account: "channel-discord",
+        setup_label: "Discord bot token",
+        setup_hint: "Paste the token from the Bot page of your Discord application.",
+        live: true,
+    },
+    KindSpec {
+        kind: ChannelKind::Slack,
+        key: "slack",
+        name: "Slack",
+        token_account: "channel-slack",
+        setup_label: "Slack app and bot tokens",
+        setup_hint:
+            "Paste the app token (xapp-…) and the bot token (xoxb-…), with a space between.",
+        live: true,
+    },
+    KindSpec {
+        kind: ChannelKind::Signal,
+        key: "signal",
+        name: "Signal",
+        token_account: "channel-signal",
+        setup_label: "Signal number",
+        setup_hint: "Run signal-cli daemon --http 127.0.0.1:8080, type your number with + and the country code, then link with a QR code (or Connect if signal-cli is already linked). Only your Note to Self is read.",
+        live: true,
+    },
+    KindSpec {
+        kind: ChannelKind::Email,
+        key: "email",
+        name: "Email",
+        token_account: "channel-email",
+        setup_label: "Email address",
+        setup_hint: "Your address (other mail adds its IMAP server, SMTP server and Authentication-Results name after it), then an app password. Only senders you allow are read.",
+        live: true,
+    },
+];
+
+impl ChannelKind {
+    /// Every kind, in table order.
+    pub const ALL: [ChannelKind; 5] = [
+        ChannelKind::Telegram,
+        ChannelKind::Discord,
+        ChannelKind::Slack,
+        ChannelKind::Signal,
+        ChannelKind::Email,
+    ];
+
+    pub fn spec(self) -> &'static KindSpec {
+        &KINDS[self as usize]
+    }
+
+    pub fn key(self) -> &'static str {
+        self.spec().key
+    }
+
+    pub fn name(self) -> &'static str {
+        self.spec().name
+    }
+
+    /// The kind a lowercase key names, if any.
+    pub fn from_key(key: &str) -> Option<ChannelKind> {
+        KINDS.iter().find(|s| s.key == key).map(|s| s.kind)
+    }
 }
 
 /// How long a pairing code stays good.
@@ -31,6 +134,11 @@ pub const PAIR_CODE_TTL_MS: u64 = 60 * 60 * 1000;
 pub const MAX_PENDING: usize = 3;
 /// Wrong codes typed in the app before every waiting code is dropped.
 pub const MAX_WRONG: u32 = 10;
+/// How long a start link pairs whoever opens it first.
+pub const START_LINK_TTL_MS: u64 = 10 * 60 * 1000;
+/// A start link's secret: 16 random bytes as hex. Telegram allows 64 of
+/// `A-Z a-z 0-9 _ -` in a start payload, and hex is inside that.
+pub const START_SECRET_LEN: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,13 +152,24 @@ pub struct Pending {
     pub expires_ms: u64,
 }
 
-/// Paired senders per channel, and the codes waiting for the user.
+/// A link the app showed as a QR. The first sender to open it is paired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartLink {
+    pub channel: ChannelKind,
+    pub secret: String,
+    pub expires_ms: u64,
+}
+
+/// Paired senders per channel, the codes waiting for the user, and the one
+/// live start link per channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DmTrust {
     pub paired: BTreeMap<ChannelKind, BTreeSet<String>>,
     pub pending: Vec<Pending>,
     pub wrong: u32,
+    pub start_links: Vec<StartLink>,
 }
 
 /// What to do with one inbound direct message.
@@ -72,8 +191,65 @@ impl DmTrust {
             .is_some_and(|set| set.contains(sender))
     }
 
+    /// Pair `sender` on `channel` with no code: for a channel whose only
+    /// sender is the person themselves, such as Signal's Note to Self.
+    pub fn pair(&mut self, channel: ChannelKind, sender: &str) {
+        self.pending
+            .retain(|p| !(p.channel == channel && p.sender == sender));
+        self.paired
+            .entry(channel)
+            .or_default()
+            .insert(sender.to_string());
+    }
+
     fn sweep(&mut self, now_ms: u64) {
         self.pending.retain(|p| p.expires_ms > now_ms);
+        self.start_links.retain(|l| l.expires_ms > now_ms);
+    }
+
+    /// A fresh start link for `channel`, replacing any earlier one, so only
+    /// the newest QR the app showed can pair. Returns the secret.
+    pub fn issue_start_link(&mut self, channel: ChannelKind, now_ms: u64) -> String {
+        self.sweep(now_ms);
+        self.start_links.retain(|l| l.channel != channel);
+        let mut bytes = [0u8; START_SECRET_LEN / 2];
+        crate::fill_random(&mut bytes);
+        let secret = hex::encode(bytes);
+        self.start_links.push(StartLink {
+            channel,
+            secret: secret.clone(),
+            expires_ms: now_ms + START_LINK_TTL_MS,
+        });
+        secret
+    }
+
+    /// `sender` opened a start link carrying `given`. When it matches the live
+    /// link for `channel`, the link is spent, the sender is paired and any code
+    /// they were waiting on is dropped. A wrong secret spends nothing, so a
+    /// stranger guessing can't use up the person's QR.
+    pub fn redeem_start_link(
+        &mut self,
+        channel: ChannelKind,
+        sender: &str,
+        given: &str,
+        now_ms: u64,
+    ) -> bool {
+        self.sweep(now_ms);
+        let Some(i) = self
+            .start_links
+            .iter()
+            .position(|l| l.channel == channel && ct_eq(l.secret.as_bytes(), given.as_bytes()))
+        else {
+            return false;
+        };
+        self.start_links.remove(i);
+        self.pending
+            .retain(|p| !(p.channel == channel && p.sender == sender));
+        self.paired
+            .entry(channel)
+            .or_default()
+            .insert(sender.to_string());
+        true
     }
 
     /// A direct message from `sender` on `channel` arrived.
@@ -163,6 +339,20 @@ impl DmTrust {
 }
 
 /// HMAC-SHA256 (RFC 2104).
+/// `text` as a QR code in SVG, dark modules on a white ground with the quiet
+/// zone kept, at least `min_px` wide.
+pub fn qr_svg(text: &str, min_px: u32) -> Result<String, String> {
+    let code = qrcode::QrCode::new(text.as_bytes())
+        .map_err(|e| format!("Couldn't draw that link as a QR code ({e})."))?;
+    Ok(code
+        .render::<qrcode::render::svg::Color<'_>>()
+        .min_dimensions(min_px, min_px)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .quiet_zone(true)
+        .build())
+}
+
 pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     const BLOCK: usize = 64;
     let mut k = [0u8; BLOCK];
@@ -480,10 +670,7 @@ pub fn queue_message(
     msg: &Forwarded<'_>,
     now_ms: u64,
 ) -> Result<PathBuf, String> {
-    let tag = match msg.channel {
-        ChannelKind::Telegram => "telegram",
-        ChannelKind::Discord => "discord",
-    };
+    let tag = msg.channel.key();
     let record = serde_json::json!({
         "channel": msg.channel,
         "sender": msg.sender,
@@ -499,6 +686,127 @@ pub fn queue_message(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_kind_table_matches_the_enum() {
+        assert_eq!(ChannelKind::ALL.len(), KINDS.len());
+        for (i, kind) in ChannelKind::ALL.into_iter().enumerate() {
+            assert_eq!(KINDS[i].kind, kind);
+            assert_eq!(kind.spec().kind, kind);
+            // The key is what serde writes, so files and the UI agree.
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.key())
+            );
+            let back: ChannelKind = serde_json::from_str(&format!("\"{}\"", kind.key())).unwrap();
+            assert_eq!(back, kind);
+            assert_eq!(ChannelKind::from_key(kind.key()), Some(kind));
+        }
+        assert_eq!(ChannelKind::from_key("webhook"), None);
+        let live: Vec<&str> = KINDS.iter().filter(|s| s.live).map(|s| s.key).collect();
+        assert_eq!(live, ["telegram", "discord", "slack", "signal", "email"]);
+        let accounts: BTreeSet<&str> = KINDS.iter().map(|s| s.token_account).collect();
+        assert_eq!(accounts.len(), KINDS.len());
+    }
+
+    #[test]
+    fn a_trust_file_from_before_the_new_kinds_still_loads() {
+        let dir = std::env::temp_dir().join(format!("grokhub-oldkinds-{}", std::process::id()));
+        let path = DmTrust::path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"paired":{"telegram":["1001"],"discord":["42"]},"pending":[],"wrong":2}"#,
+        )
+        .unwrap();
+        let trust = DmTrust::load(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(trust.is_paired(ChannelKind::Telegram, "1001"));
+        assert!(trust.is_paired(ChannelKind::Discord, "42"));
+        assert!(!trust.is_paired(ChannelKind::Slack, "1001"));
+        assert_eq!(trust.wrong, 2);
+    }
+
+    #[test]
+    fn pair_trusts_a_sender_with_no_code_and_drops_their_waiting_one() {
+        let mut t = DmTrust::default();
+        assert!(matches!(
+            t.inbound(ChannelKind::Signal, "+15551234567", "me", 0),
+            Inbound::Pair { .. }
+        ));
+        t.pair(ChannelKind::Signal, "+15551234567");
+        assert!(t.is_paired(ChannelKind::Signal, "+15551234567"));
+        assert!(!t.is_paired(ChannelKind::Telegram, "+15551234567"));
+        assert!(t.pending.is_empty());
+        assert_eq!(
+            t.inbound(ChannelKind::Signal, "+15551234567", "me", 0),
+            Inbound::Trusted
+        );
+    }
+
+    #[test]
+    fn a_start_link_pairs_its_first_opener_once() {
+        const NOW: u64 = 1_763_550_000_000;
+        let mut trust = DmTrust::default();
+        // A stranger already waiting on a code is paired by the link, and the
+        // code goes.
+        trust.inbound(ChannelKind::Telegram, "777", "@user", NOW);
+        let secret = trust.issue_start_link(ChannelKind::Telegram, NOW);
+        assert_eq!(secret.len(), START_SECRET_LEN);
+        assert!(secret.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(!trust.redeem_start_link(
+            ChannelKind::Telegram,
+            "666",
+            "0".repeat(32).as_str(),
+            NOW + 1
+        ));
+        assert!(!trust.redeem_start_link(ChannelKind::Discord, "777", &secret, NOW + 1));
+        assert!(trust.redeem_start_link(ChannelKind::Telegram, "777", &secret, NOW + 2));
+        assert!(trust.is_paired(ChannelKind::Telegram, "777"));
+        assert!(trust.pending.is_empty());
+        // Spent: the same link pairs nobody else.
+        assert!(!trust.redeem_start_link(ChannelKind::Telegram, "888", &secret, NOW + 3));
+        assert!(!trust.is_paired(ChannelKind::Telegram, "888"));
+    }
+
+    #[test]
+    fn a_start_link_expires_and_a_new_one_replaces_the_old() {
+        const NOW: u64 = 1_763_550_000_000;
+        let mut trust = DmTrust::default();
+        let old = trust.issue_start_link(ChannelKind::Telegram, NOW);
+        let new = trust.issue_start_link(ChannelKind::Telegram, NOW + 1);
+        assert_ne!(old, new);
+        assert_eq!(trust.start_links.len(), 1);
+        assert!(!trust.redeem_start_link(ChannelKind::Telegram, "1", &old, NOW + 2));
+        assert!(!trust.redeem_start_link(
+            ChannelKind::Telegram,
+            "1",
+            &new,
+            NOW + 1 + START_LINK_TTL_MS
+        ));
+        assert!(trust.start_links.is_empty());
+        // A trust file from before start links loads with none.
+        let back: DmTrust =
+            serde_json::from_str(r#"{"paired":{},"pending":[],"wrong":0}"#).unwrap();
+        assert!(back.start_links.is_empty());
+    }
+
+    #[test]
+    fn a_qr_is_an_svg_of_the_asked_size() {
+        let svg = qr_svg("https://t.me/example_bot?start=abc", 240).unwrap();
+        assert!(svg.starts_with("<?xml"), "{}", &svg[..40]);
+        assert!(svg.contains("<svg"));
+        assert!(svg.trim_end().ends_with("</svg>"));
+        assert!(svg.contains("width=\""));
+        assert!(!svg.contains("<script"));
+        let width: u32 = svg
+            .split("width=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .and_then(|w| w.parse().ok())
+            .unwrap();
+        assert!(width >= 240, "{width}");
+    }
 
     #[test]
     fn hmac_matches_rfc_4231() {
