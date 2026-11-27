@@ -3557,6 +3557,12 @@ export interface PluginEntry {
   version: string;
   description: string;
   source: string;
+  /** Empty when the index names none. */
+  author?: string;
+  category?: string;
+  /** An https page about the plugin, or empty. */
+  homepage?: string;
+  keywords?: string[];
 }
 
 export interface PluginMarket {

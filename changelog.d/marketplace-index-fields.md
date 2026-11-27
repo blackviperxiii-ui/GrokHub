@@ -1,0 +1,1 @@
+- Plugins: a marketplace index entry now also reads its author, category, https homepage and up to 8 keywords (the Claude plugin marketplace shape), for the coming Marketplace page. Older indexes read as before.
