@@ -97,7 +97,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/telephony_net.rs", 1, "telephony calls: offline::refuse + guard_quiet before http::agent"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-agent/src/mods_net.rs", 1, "mod sources (both shells): offline::refuse + guard_quiet on every hop"),
-    ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
+    ("crates/grokhub-agent/src/plugins.rs", 3, "marketplace index: egress guard; plugin git clone and pinned-sha fetch: offline::check_url"),
     ("src-tauri/src/pc_files_run.rs", 1, "PC helpers printer alerts: the user's printer only, LAN-only host check before every GET, no redirects (a public host is refused); the net log speed test calls offline::refuse first"),
     ("src-tauri/src/library.rs", 1, "Library store art: guard_quiet + public_only resolve, no redirects; Play only spawns the OS opener for steam://rungameid/<digits>"),
     ("src-tauri/src/games.rs", 3, "GW2, OSRS and Destiny companion refresh: guard_quiet before each GET/POST; Offline only maps to the cabin's game-specific refuse lines"),

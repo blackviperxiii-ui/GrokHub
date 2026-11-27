@@ -3584,6 +3584,8 @@ export interface PluginRow {
   enabled: boolean;
   /** Installed through GrokHub, so it can be removed here. */
   installed: boolean;
+  /** Git commit the copy was checked out at, or empty. */
+  installedSha?: string;
 }
 
 export interface PluginPage {
@@ -3604,6 +3606,9 @@ export interface PluginEntry {
   /** An https page about the plugin, or empty. */
   homepage?: string;
   keywords?: string[];
+  /** Pinned git commit from the index, or empty. */
+  sha?: string;
+  domains?: string[];
 }
 
 export interface PluginMarket {
@@ -3660,8 +3665,8 @@ export function pluginAct(name: string, act: PluginAct): Promise<PluginPage> {
   return invoke<PluginPage>("plugin_act", { name, act });
 }
 
-export function installPlugin(source: string): Promise<PluginPage> {
-  return invoke<PluginPage>("install_plugin", { source });
+export function installPlugin(source: string, sha?: string): Promise<PluginPage> {
+  return invoke<PluginPage>("install_plugin", { source, sha: sha || null });
 }
 
 export function fetchPluginMarket(url: string): Promise<PluginMarket> {

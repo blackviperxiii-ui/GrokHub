@@ -20,10 +20,16 @@ export const PLUGINS_TIP =
 export const PLUGINS_MCP_NOTE = "MCP servers you add yourself are on the Connectors tab.";
 export const INSTALL_HINT = "Nothing from the bundle runs. It installs off and untrusted.";
 export const MARKET_HINT = "An https index URL. Fetch only lists entries; Install is a separate step.";
+export const XAI_OFFICIAL_PRESET_ID = "xai-official";
+export const XAI_OFFICIAL_MARKETPLACE_URL =
+  "https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/.grok-plugin/marketplace.json";
+export const OFFICIAL_CATALOG_LABEL = "Load official xAI catalog";
+export const OFFICIAL_CATALOG_HINT =
+  "The official xAI catalog. Fetching it installs nothing. Install still goes through trust before enable.";
 export const MARKET_EMPTY = "No marketplace entries.";
 export const MARKET_NONE_MATCHED = "No entries match that search.";
 export const REMOVE_HINT = "Remove the installed copy.";
-export const UPDATE_HINT = "A newer version than yours. Remove yours above, then install this one.";
+export const UPDATE_HINT = "Update available. Remove yours above, then install this one.";
 export const PLUGINS_NOTE =
   "Bundles stay off until you trust this version and turn them on. Trust covers the hook commands, MCP server commands, skills and agents a bundle lists. Fetching a marketplace list installs nothing.";
 export const PLUGINS_EMPTY =
@@ -71,6 +77,11 @@ export function compareVersions(a: string, b: string): number {
 export function entryStatus(entry: PluginEntry, rows: PluginRow[]): "new" | "installed" | "update" {
   const here = rows.find((row) => row.name === entry.name);
   if (!here) return "new";
+  const indexSha = (entry.sha ?? "").trim().toLowerCase();
+  const hereSha = (here.installedSha ?? "").trim().toLowerCase();
+  if (/^[0-9a-f]{40}$/.test(indexSha) && /^[0-9a-f]{40}$/.test(hereSha)) {
+    return indexSha === hereSha ? "installed" : "update";
+  }
   return compareVersions(entry.version, here.version) > 0 ? "update" : "installed";
 }
 
@@ -182,18 +193,18 @@ export function PluginsTab({ onOpenConnectors }: { onOpenConnectors?: () => void
     }
   }
 
-  async function install(event: { preventDefault(): void }, from: string) {
+  async function install(event: { preventDefault(): void }, from: string, sha?: string) {
     event.preventDefault();
     if (!from.trim() || busy) return;
-    const done = await run(() => installPlugin(from));
+    const done = await run(() => (sha ? installPlugin(from, sha) : installPlugin(from)));
     if (done?.note.startsWith("Installed")) setSource("");
   }
 
-  async function fetchList(event: FormEvent) {
+  async function fetchList(event: FormEvent, url = marketUrl) {
     event.preventDefault();
     if (busy) return;
     const done = await run(async () => {
-      const market = await fetchPluginMarket(marketUrl);
+      const market = await fetchPluginMarket(url);
       setEntries(market.entries);
       setFetched(market.read);
       setMarketUrl(market.page.marketUrl);
@@ -303,8 +314,19 @@ export function PluginsTab({ onOpenConnectors }: { onOpenConnectors?: () => void
         <button type="submit" disabled={busy}>
           Fetch list
         </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={(e) => {
+            setMarketUrl(XAI_OFFICIAL_MARKETPLACE_URL);
+            void fetchList(e, XAI_OFFICIAL_PRESET_ID);
+          }}
+        >
+          {OFFICIAL_CATALOG_LABEL}
+        </button>
       </form>
       <p className="note">{MARKET_HINT}</p>
+      <p className="note">{OFFICIAL_CATALOG_HINT}</p>
       {fetched && entries.length === 0 && <p className="empty">{MARKET_EMPTY}</p>}
       {entries.length > 0 && (
         <div className="labs-row" role="search" aria-label="Filter the index">
@@ -350,7 +372,7 @@ export function PluginsTab({ onOpenConnectors }: { onOpenConnectors?: () => void
                       type="button"
                       disabled={busy}
                       aria-label={`Install ${entry.name}`}
-                      onClick={(e) => void install(e, entry.source)}
+                      onClick={(e) => void install(e, entry.source, entry.sha)}
                     >
                       Install
                     </button>

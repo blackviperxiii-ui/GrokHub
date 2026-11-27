@@ -1,0 +1,1 @@
+- Plugins: one-click official xAI marketplace catalog (`xai-official`), SHA-pinned git installs, and an update badge when the index pin moves.
