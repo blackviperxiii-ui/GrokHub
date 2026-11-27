@@ -462,7 +462,6 @@ describe("Marketplace plugins", () => {
     expect(card("ship-kit").getByText("Not trusted · off")).toBeVisible();
   });
 });
-});
 
 describe("index helpers", () => {
   it("compares dotted versions as numbers", () => {
