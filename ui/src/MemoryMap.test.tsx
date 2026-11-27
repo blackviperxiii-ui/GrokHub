@@ -200,8 +200,10 @@ describe("MemoryMap", () => {
   });
 
   it("says why when the map can't load", async () => {
-    // Rejected only when called, so the map's own handler is the one that sees it.
-    api.getMemoryGraph.mockImplementation(() => Promise.reject("memory store is off"));
+    // Rejected a tick after the call, once the map's own handler is attached.
+    api.getMemoryGraph.mockImplementation(
+      () => new Promise((_, reject) => setTimeout(() => reject(new Error("memory store is off")), 0)),
+    );
     renderMap();
     expect(await screen.findByText("The map couldn't load: memory store is off")).toBeVisible();
   });

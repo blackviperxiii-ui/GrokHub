@@ -213,7 +213,7 @@ export function MemoryMap({
         setError(null);
       },
       (err: unknown) => {
-        if (!dropped) setError(String(err));
+        if (!dropped) setError(err instanceof Error ? err.message : String(err));
       },
     );
     return () => {
