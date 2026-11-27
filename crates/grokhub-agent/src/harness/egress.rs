@@ -114,7 +114,10 @@ pub fn egress_dest(target: &str) -> String {
         .strip_prefix("https://")
         .or_else(|| t.strip_prefix("http://"))
         .or_else(|| t.strip_prefix("wss://"))
-        .or_else(|| t.strip_prefix("ws://"));
+        .or_else(|| t.strip_prefix("ws://"))
+        // The email channel's IMAP and SMTP sockets.
+        .or_else(|| t.strip_prefix("imaps://"))
+        .or_else(|| t.strip_prefix("smtps://"));
     let Some(rest) = rest else {
         let key: String = t.to_ascii_lowercase().chars().take(80).collect();
         return grokhub_core::redact_secrets(&key);
@@ -703,6 +706,8 @@ mod tests {
         );
         assert_eq!(egress_dest("http://[::1]:9/x"), "[::1]");
         assert_eq!(egress_dest("hub"), "hub");
+        assert_eq!(egress_dest("imaps://IMAP.gmail.com"), "imap.gmail.com");
+        assert_eq!(egress_dest("smtps://smtp.gmail.com"), "smtp.gmail.com");
         assert_eq!(egress_dest("http://evil.com\\@127.0.0.1/feed"), "evil.com");
         assert!(is_model_host("api.x.ai") && is_model_host("grok.com") && is_model_host("x.ai"));
         assert!(!is_model_host("evilx.ai") && !is_model_host("x.ai.example.org"));
