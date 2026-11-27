@@ -171,7 +171,24 @@ async function run() {
     const check = async (page, where) => {
       for (const hit of await page.evaluate(sweep)) outlines.push({ where, ...hit });
       const [wide, fits] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
-      if (wide > fits) errors.push(`${where}: the page scrolls sideways, ${wide}px wide in a ${fits}px window`);
+      if (wide > fits) {
+        // Name what sticks out, so a failure says which element to fix.
+        const past = await page.evaluate((edge) => {
+          const name = (el) => el.tagName.toLowerCase() + (el.id ? `#${el.id}` : "") + [...el.classList].map((c) => `.${c}`).join("");
+          const out = [];
+          for (const el of document.querySelectorAll("body *")) {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.right <= edge + 1) continue;
+            // Keep the outermost element past the edge whose parent fits.
+            const up = el.parentElement?.getBoundingClientRect();
+            if (up && up.right > edge + 1) continue;
+            out.push(`${name(el)} ${Math.round(r.width)}px wide, right edge ${Math.round(r.right)}px`);
+            if (out.length >= 5) break;
+          }
+          return out;
+        }, fits);
+        errors.push(`${where}: the page scrolls sideways, ${wide}px wide in a ${fits}px window${past.length ? `; past the edge: ${past.join("; ")}` : ""}`);
+      }
     };
     try {
       for (const theme of THEMES) {
