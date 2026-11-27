@@ -2432,6 +2432,23 @@ async fn stop_task(
     .await?
 }
 
+/// Tasks → Steer: text for a running helper's next step. Desktop only, like
+/// the chat it steers: it is not a web command.
+#[tauri::command]
+async fn steer_task(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    task_id: String,
+    text: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::steer(&conversation_id, &task_id, &text)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
 /// Tasks → the checks on the session's change before it can be committed.
 /// Read only: nothing is committed, staged or pushed. `message` and
 /// `allowed` are what the Commit card holds: the confirm text is for that
@@ -10243,6 +10260,7 @@ pub fn run() {
             desktop_nyx_talk,
             get_queue,
             stop_task,
+            steer_task,
             ship_status,
             ship_commit,
             ship_waive,
