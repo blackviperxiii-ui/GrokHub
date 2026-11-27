@@ -1,0 +1,1 @@
+- Phone and chat apps lists Slack, Signal and Email as coming next. Every channel kind now comes from one table (name, keychain account, setup box), so each new channel is a table row plus its adapter.

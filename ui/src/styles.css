@@ -8544,7 +8544,9 @@ fieldset.channel label {
 
 .code-agent {
   flex: 1 1 var(--code-agent-pct, 62%);
-  min-width: 420px;
+  /* Give way before the side column does: it keeps its 300px, plus the
+     handle, so a window just wide enough to split never scrolls sideways. */
+  min-width: min(420px, 100% - 310px);
   min-height: 0;
   display: flex;
   flex-direction: column;

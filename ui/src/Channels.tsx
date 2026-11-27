@@ -9,26 +9,26 @@ import {
   setChannelAsks,
   unpairChannelSender,
   type ChannelKind,
+  type ChannelState,
   type Channels as Shape,
 } from "./channelsApi";
 import { PRODUCT_NAME } from "./brand";
 import { StatusLine, useNote } from "./ui";
 
-const NAMES: Record<ChannelKind, string> = { telegram: "Telegram", discord: "Discord" };
-
 export const CHANNELS_NOTE = `Message ${PRODUCT_NAME} from your phone through a bot you made. Anyone else who messages the bot gets a pairing code and nothing more, until you enter that code here.`;
 
 export const WEBHOOKS_NOTE = `A service you use (a deploy, a form, a store) can trigger ${PRODUCT_NAME} with a signed POST. It sends X-Webhook-Timestamp (Unix seconds) and X-Webhook-Signature: sha256= then the HMAC-SHA256 of "timestamp.body" with the secret. The hub listens while this computer is shared on the Devices page.`;
 
-const TOKEN_HINT: Record<ChannelKind, string> = {
-  telegram: "Paste the token BotFather gave you.",
-  discord: "Paste the token from the Bot page of your Discord application.",
-};
+function statusOf(ch: ChannelState): string {
+  if (!ch.live) return "Coming next";
+  if (!ch.connected) return "Not connected";
+  return ch.running ? "Listening for messages" : "Connected, not listening";
+}
 
 /** Connectors → Phone and chat apps. Hidden in the web app. */
 export function Channels() {
   const [shown, setShown] = useState<Shape | null>(null);
-  const [tokens, setTokens] = useState<Record<ChannelKind, string>>({ telegram: "", discord: "" });
+  const [tokens, setTokens] = useState<Partial<Record<ChannelKind, string>>>({});
   const [code, setCode] = useState("");
   const [hookName, setHookName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
@@ -40,6 +40,9 @@ export function Channels() {
   }, []);
 
   if (!shown) return null;
+  // Names come from the shell's channel table, so a new kind needs no code here.
+  const names = new Map(shown.channels.map((ch) => [ch.kind, ch.name]));
+  const nameOf = (kind: ChannelKind) => names.get(kind) ?? kind;
 
   async function act(step: () => Promise<Shape | null>): Promise<boolean> {
     setBusy(true);
@@ -60,7 +63,7 @@ export function Channels() {
 
   async function connect(event: FormEvent, kind: ChannelKind) {
     event.preventDefault();
-    const token = tokens[kind].trim();
+    const token = (tokens[kind] ?? "").trim();
     // The token leaves the page's state as soon as it is sent.
     setTokens((t) => ({ ...t, [kind]: "" }));
     if (token) await act(() => connectChannel(kind, token));
@@ -82,13 +85,13 @@ export function Channels() {
       <p className="note">{CHANNELS_NOTE}</p>
       <ul className="rows">
         {shown.channels.map((ch) => (
-          <li key={ch.kind} className="card" aria-label={NAMES[ch.kind]}>
-            <div className="card-title">{NAMES[ch.kind]}</div>
+          <li key={ch.kind} className="card" aria-label={ch.name}>
+            <div className="card-title">{ch.name}</div>
             <div className="card-status">
-              {ch.connected ? (ch.running ? "Listening for messages" : "Connected, not listening") : "Not connected"}
+              {statusOf(ch)}
             </div>
             {ch.problem && <div className="card-health">{ch.problem}</div>}
-            {ch.connected ? (
+            {!ch.live ? null : ch.connected ? (
               <div className="card-buttons">
                 <button type="button" className="quiet danger" disabled={busy} onClick={() => void act(() => disconnectChannel(ch.kind))}>
                   Disconnect
@@ -97,17 +100,17 @@ export function Channels() {
             ) : (
               <form className="card-buttons" onSubmit={(e) => void connect(e, ch.kind)}>
                 <label>
-                  {NAMES[ch.kind]} bot token
+                  {ch.setupLabel}
                   <input
                     type="password"
                     autoComplete="off"
                     spellCheck={false}
-                    value={tokens[ch.kind]}
-                    placeholder={TOKEN_HINT[ch.kind]}
+                    value={tokens[ch.kind] ?? ""}
+                    placeholder={ch.setupHint}
                     onChange={(e) => setTokens((t) => ({ ...t, [ch.kind]: e.target.value }))}
                   />
                 </label>
-                <button type="submit" disabled={busy || !tokens[ch.kind].trim()}>
+                <button type="submit" disabled={busy || !(tokens[ch.kind] ?? "").trim()}>
                   Connect
                 </button>
               </form>
@@ -119,7 +122,7 @@ export function Channels() {
         <ul className="rows" aria-label="Waiting to pair">
           {shown.pending.map((p) => (
             <li key={`${p.channel}-${p.code}`} className="card-status">
-              {p.label || "Someone"} on {NAMES[p.channel]} was sent a code
+              {p.label || "Someone"} on {nameOf(p.channel)} was sent a code
             </li>
           ))}
         </ul>
@@ -138,7 +141,7 @@ export function Channels() {
           {shown.paired.map((p) => (
             <li key={`${p.channel}-${p.sender}`} className="card-buttons">
               <span>
-                {NAMES[p.channel]} {p.sender}
+                {nameOf(p.channel)} {p.sender}
                 {p.asks && !p.reachable && <span className="note"> · asks start once they write to the bot</span>}
               </span>
               <button
@@ -146,7 +149,7 @@ export function Channels() {
                 className="quiet"
                 disabled={busy}
                 aria-pressed={p.asks}
-                aria-label={`Approval asks for ${p.sender} on ${NAMES[p.channel]}`}
+                aria-label={`Approval asks for ${p.sender} on ${nameOf(p.channel)}`}
                 onClick={() => void act(() => setChannelAsks(p.channel, p.sender, !p.asks))}
               >
                 {p.asks ? "Stop approval asks" : "Send approval asks"}
@@ -155,7 +158,7 @@ export function Channels() {
                 type="button"
                 className="quiet"
                 disabled={busy}
-                aria-label={`Unpair ${p.sender} on ${NAMES[p.channel]}`}
+                aria-label={`Unpair ${p.sender} on ${nameOf(p.channel)}`}
                 onClick={() => void act(() => unpairChannelSender(p.channel, p.sender))}
               >
                 Unpair

@@ -37,10 +37,7 @@ pub const TELEGRAM_TOKEN_REFUSED: &str =
 
 /// The keychain account a channel's bot token is saved under.
 pub fn token_account(kind: ChannelKind) -> &'static str {
-    match kind {
-        ChannelKind::Telegram => "channel-telegram",
-        ChannelKind::Discord => "channel-discord",
-    }
+    kind.spec().token_account
 }
 
 fn keychain_message(err: keyring::Error) -> String {
@@ -64,23 +61,29 @@ fn discord_token_shape(token: &str) -> bool {
         })
 }
 
+/// What a kind with no adapter in this build answers.
+pub fn coming_next(kind: ChannelKind) -> String {
+    format!("{} is coming next. It can't be connected yet.", kind.name())
+}
+
 /// Save a bot token in `store`, after checking its shape.
 pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result<(), String> {
     let token = token.trim();
-    let shaped = match kind {
-        ChannelKind::Telegram => msg_telegram::valid_token(token),
-        ChannelKind::Discord => discord_token_shape(token),
+    let (shaped, why) = match kind {
+        ChannelKind::Telegram => (
+            msg_telegram::valid_token(token),
+            "That isn't a Telegram bot token. BotFather gives one shaped like 123456789:AA…",
+        ),
+        ChannelKind::Discord => (
+            discord_token_shape(token),
+            "That isn't a Discord bot token. Copy it from the Bot page of your Discord application.",
+        ),
+        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+            return Err(coming_next(kind));
+        }
     };
     if !shaped {
-        return Err(match kind {
-            ChannelKind::Telegram => {
-                "That isn't a Telegram bot token. BotFather gives one shaped like 123456789:AA…"
-            }
-            ChannelKind::Discord => {
-                "That isn't a Discord bot token. Copy it from the Bot page of your Discord application."
-            }
-        }
-        .into());
+        return Err(why.into());
     }
     keyring_blob::set(store, token_account(kind), token)
 }
@@ -740,6 +743,13 @@ mod tests {
             Some(TOKEN)
         );
         assert!(save_token(&store, ChannelKind::Discord, TOKEN).is_err());
+        for kind in [ChannelKind::Slack, ChannelKind::Signal, ChannelKind::Email] {
+            assert_eq!(
+                save_token(&store, kind, TOKEN).unwrap_err(),
+                coming_next(kind)
+            );
+            assert_eq!(load_token(&store, kind).unwrap(), None);
+        }
         save_token(&store, ChannelKind::Discord, "MTIz.abc_DEF.ghi-jkl").unwrap();
         assert_eq!(
             store.0.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
