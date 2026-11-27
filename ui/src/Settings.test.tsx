@@ -471,6 +471,8 @@ describe("Settings", () => {
     expect(screen.queryByText(/^Game companion row/)).toBeNull();
   });
 
+  // Walks ~15 sections. On Windows CI this runs beside a release-profile
+  // hub sidecar build (main pushes); keep headroom over the default 5s.
   it("opens every section from the nav, one at a time", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Loadout control the desktop")).toBeInTheDocument();
@@ -566,7 +568,7 @@ describe("Settings", () => {
     // The retired cabin isn't mentioned any more.
     expect(screen.queryByText(/cabin/i)).toBeNull();
     expect(screen.queryByText("Labs panel")).toBeNull();
-  });
+  }, 15_000);
 
   it("opens each section at the top and closes from the button or Esc", async () => {
     api.getSettings.mockResolvedValue(shape({}));
