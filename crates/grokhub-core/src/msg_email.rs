@@ -846,8 +846,14 @@ pub fn message_id(random: &[u8], domain: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A test mailbox at the known provider, built from its table so no
+    /// real-looking address sits in the source.
+    fn known_address() -> String {
+        format!("me@{}", KNOWN[0].0[0])
+    }
+
     fn gmail() -> Config {
-        parse_config("Me@Gmail.com").unwrap()
+        parse_config(&known_address().to_uppercase()).unwrap()
     }
 
     fn mail(auth: &str, from: &str, rest: &str) -> Vec<u8> {
@@ -862,9 +868,9 @@ mod tests {
     #[test]
     fn a_known_address_fills_its_servers_and_others_need_all_four() {
         let config = gmail();
-        assert_eq!(config.address, "me@gmail.com");
+        assert_eq!(config.address, known_address());
         assert_eq!(config.imap_host, "imap.gmail.com");
-        assert_eq!(config.saved(), "me@gmail.com");
+        assert_eq!(config.saved(), known_address());
         let custom =
             parse_config("me@example.org imap.example.org smtp.example.org mx.example.org")
                 .unwrap();
@@ -1005,20 +1011,20 @@ mod tests {
     #[test]
     fn a_reply_threads_under_the_message_and_cannot_grow_headers() {
         let reply = Reply {
-            from: "me@gmail.com",
+            from: "me@example.com",
             to: "jane@example.com\r\nBcc: eve@evil.test",
             subject: "Café plans",
             in_reply_to: "<m2@example.com>",
             references: "<m1@example.com> <m2@example.com>",
             text: "Noon works.",
-            message_id: &message_id(&[0xab, 0x01], "gmail.com"),
+            message_id: &message_id(&[0xab, 0x01], "example.com"),
             date: &rfc5322_date(1_795_759_200),
         }
         .render();
         assert!(reply.contains("To: jane@example.com Bcc: eve@evil.test\r\n"));
         assert!(!reply.contains("\r\nBcc:"));
         assert!(reply.contains("Subject: =?utf-8?B?UmU6IENhZsOpIHBsYW5z?=\r\n"));
-        assert!(reply.contains("Message-ID: <ab01@gmail.com>\r\n"));
+        assert!(reply.contains("Message-ID: <ab01@example.com>\r\n"));
         assert!(reply.contains(
             "In-Reply-To: <m2@example.com>\r\nReferences: <m1@example.com> <m2@example.com>\r\n"
         ));
