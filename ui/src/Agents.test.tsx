@@ -20,6 +20,7 @@ import type {
 const api = vi.hoisted(() => ({
   getQueue: vi.fn<(conversationId: string) => Promise<Queue>>(),
   stopTask: vi.fn<(conversationId: string, taskId?: string) => Promise<Queue>>(),
+  steerTask: vi.fn<(conversationId: string, taskId: string, text: string) => Promise<Queue>>(),
   onTasksChanged: vi.fn<(handler: (conversationId: string) => void) => Promise<() => void>>(),
   onEventGap: vi.fn<(handler: () => void) => Promise<() => void>>(),
   getTaskDetail: vi.fn<(conversationId: string, taskId: string) => Promise<TaskDetail>>(),
@@ -378,6 +379,55 @@ describe("Agents", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Stop all" }));
     expect(api.stopTask).toHaveBeenCalledWith("shell-c1", undefined);
     expect(await screen.findByText(AGENTS_EMPTY)).toBeInTheDocument();
+  });
+
+  it("Steer sends the typed words to that live helper and closes its box", async () => {
+    api.getQueue.mockResolvedValue(QUEUE);
+    api.steerTask.mockResolvedValue(QUEUE);
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} />);
+
+    const tasks = await screen.findByRole("list", { name: "Tasks" });
+    const rows = within(tasks).getAllByRole("listitem");
+    expect(rows.map((row) => within(row).queryByRole("button", { name: "Steer" }) !== null)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    const row = rows[0];
+    await userEvent.click(within(row).getByRole("button", { name: "Steer" }));
+    const box = within(row).getByRole("textbox", { name: "What cargo test --workspace should do next" });
+    expect(box).toHaveFocus();
+    await userEvent.type(box, "  skip the docs  {Enter}");
+    expect(api.steerTask).toHaveBeenCalledWith("shell-c1", "t1", "skip the docs");
+    await waitFor(() => expect(within(row).queryByRole("textbox")).toBeNull());
+  });
+
+  it("Steer sends nothing for blank words, Escape closes the box, and a refusal shows", async () => {
+    api.getQueue.mockResolvedValue(QUEUE);
+    api.steerTask.mockRejectedValue("helper t1 is not running");
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} />);
+
+    const row = await screen.findByRole("listitem", { name: "cargo test --workspace" });
+    await userEvent.click(within(row).getByRole("button", { name: "Steer" }));
+    await userEvent.type(within(row).getByRole("textbox"), "   {Enter}");
+    expect(api.steerTask).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Escape}");
+    expect(within(row).queryByRole("textbox")).toBeNull();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Steer" }));
+    await userEvent.type(within(row).getByRole("textbox"), "go{Enter}");
+    expect(await screen.findByRole("status")).toHaveTextContent("helper t1 is not running");
+  });
+
+  it("a browser gets no Steer, since only the desktop app can steer a helper", async () => {
+    shell.desktop = false;
+    api.getQueue.mockResolvedValue(QUEUE);
+    render(<Agents conversationId="shell-c1" onOpenChat={() => {}} />);
+
+    const row = await screen.findByRole("listitem", { name: "cargo test --workspace" });
+    expect(within(row).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Steer" })).toBeNull();
   });
 
   it("shows a refused stop", async () => {

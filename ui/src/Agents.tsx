@@ -12,6 +12,7 @@ import {
   shipCommit,
   shipStatus,
   shipWaive,
+  steerTask,
   stopTask,
   type HelperWork,
   type Queue,
@@ -476,6 +477,9 @@ export function Agents({
   const [started, setStarted] = useState<number[]>([]);
   /** The helper whose details window is open. */
   const [detail, setDetail] = useState<string | null>(null);
+  /** The live helper whose Steer box is open, and what is typed in it. */
+  const [steering, setSteering] = useState<string | null>(null);
+  const [steerText, setSteerText] = useState("");
   /** The helper work a confirm window asks about, and the step it asks for. */
   const [ask, setAsk] = useState<{ key: string; step: "merge" | "discard" } | null>(null);
   /** A refused click, shown on its row. */
@@ -796,6 +800,22 @@ export function Agents({
     }
   }
 
+  async function steer(taskId: string) {
+    const words = steerText.trim();
+    if (!conversationId || !words) return;
+    setBusy(`steer:${taskId}`);
+    try {
+      setQueue(await steerTask(conversationId, taskId, words));
+      setSteering(null);
+      setSteerText("");
+      setNote(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function act(work: HelperWork, action: WorkAction) {
     if (!conversationId) return;
     const id = conversationId;
@@ -988,6 +1008,20 @@ export function Agents({
                   {made && <div className="card-status task-work">{made}</div>}
                   {(task.live || progress) && (
                     <div className="card-buttons">
+                      {task.live && desktop && (
+                        <button
+                          type="button"
+                          className="quiet"
+                          aria-expanded={steering === task.id}
+                          disabled={busy !== null}
+                          onClick={() => {
+                            setSteering(steering === task.id ? null : task.id);
+                            setSteerText("");
+                          }}
+                        >
+                          Steer
+                        </button>
+                      )}
                       {task.live && (
                         <button
                           type="button"
@@ -1009,6 +1043,27 @@ export function Agents({
                         </button>
                       )}
                     </div>
+                  )}
+                  {task.live && desktop && steering === task.id && (
+                    <form
+                      className="agent-steer"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void steer(task.id);
+                      }}
+                    >
+                      <input
+                        autoFocus
+                        aria-label={`What ${task.title} should do next`}
+                        placeholder="Tell this helper what to do next"
+                        value={steerText}
+                        disabled={busy === `steer:${task.id}`}
+                        onChange={(event) => setSteerText(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") setSteering(null);
+                        }}
+                      />
+                    </form>
                   )}
                 </li>
               );
