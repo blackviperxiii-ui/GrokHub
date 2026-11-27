@@ -391,18 +391,25 @@ fn scratch_config() -> std::path::PathBuf {
 
 /// Read-only view of the app's keychain sign-in. Saving and deleting are
 /// refused so the eval can never rotate or drop the app's tokens.
+///
+/// Uses [`grokhub_agent::keyring_blob`] so a Windows sign-in split across
+/// `account#n` / `account.0`… chunks still loads, same as the shell.
 struct ReadOnlyKeychain;
+
+fn keychain_err(e: keyring::Error) -> String {
+    format!("The system keychain is not available: {e}")
+}
+
+fn keychain_backend() -> grokhub_agent::keyring_blob::OsBackend {
+    grokhub_agent::keyring_blob::OsBackend::new(grokhub_core::brand::INTERNAL_ID, keychain_err)
+}
 
 impl grokhub_core::OAuthAccountStore for ReadOnlyKeychain {
     fn load_account(&self, account: &str) -> Result<Option<grokhub_core::ImagineTokens>, String> {
-        let entry = keyring::Entry::new("GrokHub", account).map_err(|e| e.to_string())?;
-        match entry.get_password() {
-            Ok(raw) => serde_json::from_str(&raw)
-                .map(Some)
-                .map_err(|_| "the saved sign-in could not be read".to_string()),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
+        Ok(
+            grokhub_agent::keyring_blob::get(&keychain_backend(), account)?
+                .and_then(|raw| serde_json::from_str(&raw).ok()),
+        )
     }
 
     fn save_account(&self, _: &str, _: &grokhub_core::ImagineTokens) -> Result<(), String> {
@@ -464,10 +471,9 @@ fn note_time_left(name: &str, expires_at: Option<u64>, access: &str, now: u64) {
     }
 }
 
-/// The shell's own keychain sign-in, if any.
+/// The shell's own keychain sign-in, if any (including chunked Windows blobs).
 fn shell_keychain_tokens() -> Option<grokhub_core::XaiOAuthTokens> {
-    let entry = keyring::Entry::new("GrokHub", "shell-xai-oauth").ok()?;
-    let raw = entry.get_password().ok()?;
+    let raw = grokhub_agent::keyring_blob::get(&keychain_backend(), "shell-xai-oauth").ok()??;
     serde_json::from_str::<grokhub_core::XaiOAuthTokens>(&raw)
         .ok()
         .filter(|t| !t.access_token.trim().is_empty())
