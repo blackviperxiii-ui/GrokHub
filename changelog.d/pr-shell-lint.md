@@ -1,1 +1,0 @@
-- CI: pull requests into beta that touch the shell, the UI or a crate the shell builds run a shell-lint job (ui lint, tests and build, shell fmt and clippy), and the required linux check waits for it.

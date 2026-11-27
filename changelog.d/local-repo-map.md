@@ -1,1 +1,0 @@
-- Add a tree-sitter repository map (`repo_map` tool and automatic local coding turn injection) with cross-file symbol ranking and a strict token budget.

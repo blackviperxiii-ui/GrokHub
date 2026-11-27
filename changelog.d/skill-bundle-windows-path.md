@@ -1,1 +1,0 @@
-- Fixed the skill bundle preview test so it passes on Windows paths.

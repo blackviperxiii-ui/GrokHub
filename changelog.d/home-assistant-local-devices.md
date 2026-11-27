@@ -1,1 +1,0 @@
-- Home Assistant: first-class local device list, read, and control with explicit consent, Settings config, and a keychain token (not MCP-only).

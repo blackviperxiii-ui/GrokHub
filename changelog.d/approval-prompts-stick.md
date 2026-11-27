@@ -1,1 +1,0 @@
-- Chat approval: a missing workspace fails once without a card, Allow always sticks for the same tool and arguments for the rest of the conversation, a grant that cannot be saved is shown once, and DuckDuckGo's anomaly page is an error instead of "No results".

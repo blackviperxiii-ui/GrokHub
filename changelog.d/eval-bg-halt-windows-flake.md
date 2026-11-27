@@ -1,1 +1,0 @@
-- Eval: halt background session before cancelling the worker so Windows CI always sees `status: killed` for `background-halt`.

@@ -1,1 +1,0 @@
-- Added a 3-arm skill quality and ablation evaluation suite (`--suite skills`, `--ablate-skill`, `--skill-override`) to `live_eval` comparing `baseline`, `full`, and `trimmed` skill variants with per-arm, delta, and `net_value` metrics in both Markdown and `<out>.results.json`, alongside per-skill runtime invocation telemetry in `models/skill_metrics.json`.

@@ -1,1 +1,0 @@
-- `/learn` builds a skill from a URL, folder, PDF, or this chat (scanner + approval; large sources become an index plus `references/`).

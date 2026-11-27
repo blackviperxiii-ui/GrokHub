@@ -1,1 +1,0 @@
-- Composer `@` context references expand `@file:`, `@folder:`, `@diff`, `@staged`, `@git:N`, and `@url:` into the current turn (plus-button attach unchanged).

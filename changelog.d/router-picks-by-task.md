@@ -1,4 +1,0 @@
-- Auto: a small edit that names a line ("fix the typo on line 3 of README.md") reads as a small code edit at medium effort, not as debugging on the flagship at high effort.
-- Auto: hard asks (planning, design, multi-file code, debugging, reasoning) get the strong model even when they're short; easy chat still gets the quick, cheap one.
-- Auto: when a model is already loaded on this computer, light chat (greetings, quick facts, stories, explanations) answers on the device even while online; code, reasoning, pictures the device can't see and long pastes stay in the cloud.
-- Local AI: a debugging or reasoning question typed in chat now picks the on-device model that is best at that kind of work.

@@ -1,1 +1,0 @@
-- Email channel, part 3: connect your own mailbox on the Phone and chat apps page with its address and an app password, then allow each sender whose mail should reach Loadout. Mail is read from when you connect, only from senders you allowed, and only when your mail server vouches for them; answers go back in the same thread. Anyone else's mail is dropped without an answer.

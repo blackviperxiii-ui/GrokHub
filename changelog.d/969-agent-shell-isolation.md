@@ -1,1 +1,0 @@
-- An agent's shell commands can no longer see the app's own chats and memory or other agents' homes, and they follow the app's shell sandbox settings. An agent also can't write the app's or another agent's skills and memory without the usual hard card, and xAI's hosted search follows the agent turn's own rules.

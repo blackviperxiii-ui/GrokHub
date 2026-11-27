@@ -1,1 +1,0 @@
-- CI: fix Windows eval background-halt, MCP cancel-on-stop race, and shell smoke after plugins moved to Marketplace.

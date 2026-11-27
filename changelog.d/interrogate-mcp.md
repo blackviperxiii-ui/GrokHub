@@ -1,5 +1,0 @@
-- MCP: tools a server marks for its own app only no longer reach the model, through `search_tool`, `use_tool` or a direct call, and are not lent to other devices.
-- MCP: one slow or hung tool call no longer freezes every chat's tool list, permission checks and the Connectors rows while it runs.
-- MCP: an imported or pasted `mcpServers` entry keeps its `tool_timeout_sec` and `startup_timeout_sec`.
-- Tools: a batched `tool_search` in a plan-mode chat searches that chat's own list, so it no longer offers desktop or scheduler writes the chat can't use.
-- Tools: plan mode no longer offers a loaded `work_*` write tool that it always refuses; the `work_*` reads stay.

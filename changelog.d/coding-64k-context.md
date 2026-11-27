@@ -1,1 +1,0 @@
-- Raised the `Normal` governor context cap from 32K to 64K (`65_536`) for catalog coding models, falling back to `q4_0` KV cache (with `--flash-attn on`) and single-slot allocation when needed to stay fully on GPU on 16 GB cards.

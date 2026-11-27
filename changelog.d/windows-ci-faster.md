@@ -1,1 +1,0 @@
-- CI: Windows beta pushes build the hub sidecar from the shared workspace cache and split the workspace tests across two runners.
