@@ -7555,6 +7555,10 @@ fn set_web_access(
     capabilities::needs(capabilities::current().web_access, "Web access")?;
     if !on {
         web.stop();
+        #[cfg(desktop)]
+        if let Some(companions) = app.try_state::<Arc<companions::Companions>>() {
+            companions.set_web_origin(None);
+        }
         return Ok(web.view());
     }
     let config_dir = app.state::<ShellState>().config_dir.clone();
@@ -7566,13 +7570,19 @@ fn set_web_access(
             .get(path.to_string())
             .map(|asset| (asset.bytes, asset.mime_type))
     });
-    web.start(
+    let view = web.start(
         std::net::Ipv4Addr::UNSPECIFIED.into(),
         remote::PORT,
         Some(&config_dir),
         dispatch,
         assets,
-    )
+    )?;
+    #[cfg(desktop)]
+    if let Some(companions) = app.try_state::<Arc<companions::Companions>>() {
+        companions.set_web_origin(web.primary_origin());
+        web.set_companion_port(companions.active_port());
+    }
+    Ok(view)
 }
 
 /// The Devices page (desktop only; not a web command): this computer, web
@@ -9556,6 +9566,8 @@ pub fn run() {
                 app.state::<ShellState>().config_dir.clone(),
                 Arc::clone(&app.state::<Arc<hub_share::HubShare>>()),
             );
+            let web = Arc::new(remote::WebAccess::default());
+            app.manage(Arc::clone(&web));
             #[cfg(desktop)]
             {
                 let host = Arc::new(companions::Companions::open(
@@ -9563,13 +9575,13 @@ pub fn run() {
                 ));
                 app.manage(Arc::clone(&host));
                 let handle = app.handle().clone();
+                let web_for_companions = Arc::clone(&web);
                 std::thread::spawn(move || {
                     host.resume();
+                    web_for_companions.set_companion_port(host.active_port());
                     companions::watch(handle, host);
                 });
             }
-            let web = Arc::new(remote::WebAccess::default());
-            app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
             // conversation's.
             app.listen_any(CHAT_EVENT, move |event| {

@@ -71,6 +71,8 @@ pub struct Companions {
     host: Mutex<Option<NodeHost>>,
     /// Approved companions that were online at the last look.
     online: Mutex<Vec<String>>,
+    /// Active Web access origin allowed to pair/poll as a browser companion.
+    web_origin: Mutex<Option<String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -101,7 +103,21 @@ impl Companions {
             lan,
             host: Mutex::new(None),
             online: Mutex::new(vec![]),
+            web_origin: Mutex::new(None),
         }
+    }
+
+    /// Update the single browser origin permitted on the companion host.
+    pub fn set_web_origin(&self, origin: Option<String>) {
+        *lock(&self.web_origin) = origin.clone();
+        if let Some(h) = lock(&self.host).as_ref() {
+            h.set_allowed_origin(origin.as_deref());
+        }
+    }
+
+    /// Loopback port of the running companion host, if started.
+    pub fn active_port(&self) -> Option<u16> {
+        lock(&self.host).as_ref().map(|h| h.port())
     }
 
     /// Start the host again when the user left it on.
@@ -140,6 +156,8 @@ impl Companions {
                     "Companions could not start on this computer's network.".to_string()
                 }
             })?;
+            let origin = lock(&self.web_origin).clone();
+            started.set_allowed_origin(origin.as_deref());
             *host = Some(started);
         }
         if with_code {
@@ -358,17 +376,32 @@ pub(crate) async fn get_companions(
 #[tauri::command]
 pub(crate) async fn start_companions(
     companions: State<'_, Arc<Companions>>,
+    web: State<'_, Arc<crate::remote::WebAccess>>,
 ) -> Result<CompanionsView, String> {
     let c = Arc::clone(&companions);
-    crate::off_main(move || c.start()).await?
+    let w = Arc::clone(&web);
+    crate::off_main(move || {
+        c.set_web_origin(w.primary_origin());
+        let view = c.start()?;
+        w.set_companion_port(c.active_port());
+        Ok(view)
+    })
+    .await?
 }
 
 #[tauri::command]
 pub(crate) async fn stop_companions(
     companions: State<'_, Arc<Companions>>,
+    web: State<'_, Arc<crate::remote::WebAccess>>,
 ) -> Result<CompanionsView, String> {
     let c = Arc::clone(&companions);
-    crate::off_main(move || c.stop()).await?
+    let w = Arc::clone(&web);
+    crate::off_main(move || {
+        let view = c.stop()?;
+        w.set_companion_port(None);
+        Ok(view)
+    })
+    .await?
 }
 
 #[tauri::command]
