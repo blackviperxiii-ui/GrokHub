@@ -7635,8 +7635,10 @@ fn set_web_access(
     let dispatch_app = app.clone();
     let dispatch: remote::Dispatch =
         Arc::new(move |command, args| remote_call(&dispatch_app, command, &args));
+    let assets_app = app.clone();
     let assets: remote::Assets = Arc::new(move |path| {
-        app.asset_resolver()
+        assets_app
+            .asset_resolver()
             .get(path.to_string())
             .map(|asset| (asset.bytes, asset.mime_type))
     });
