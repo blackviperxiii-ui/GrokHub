@@ -94,9 +94,9 @@ pub const KINDS: [KindSpec; 5] = [
         key: "email",
         name: "Email",
         token_account: "channel-email",
-        setup_label: "Email",
-        setup_hint: "Coming next.",
-        live: false,
+        setup_label: "Email address",
+        setup_hint: "Your address (other mail adds its IMAP server, SMTP server and Authentication-Results name after it), then an app password. Only senders you allow are read.",
+        live: true,
     },
 ];
 
@@ -704,7 +704,7 @@ mod tests {
         }
         assert_eq!(ChannelKind::from_key("webhook"), None);
         let live: Vec<&str> = KINDS.iter().filter(|s| s.live).map(|s| s.key).collect();
-        assert_eq!(live, ["telegram", "discord", "slack", "signal"]);
+        assert_eq!(live, ["telegram", "discord", "slack", "signal", "email"]);
         let accounts: BTreeSet<&str> = KINDS.iter().map(|s| s.token_account).collect();
         assert_eq!(accounts.len(), KINDS.len());
     }

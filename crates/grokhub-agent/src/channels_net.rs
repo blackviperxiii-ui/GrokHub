@@ -23,6 +23,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use grokhub_core::http;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust, Forwarded};
 use grokhub_core::msg_discord::{self, close_reason, Do, Gateway};
+use grokhub_core::msg_email;
 use grokhub_core::msg_signal;
 use grokhub_core::msg_slack;
 use grokhub_core::msg_telegram::{self, Step};
@@ -70,10 +71,6 @@ fn discord_token_shape(token: &str) -> bool {
 }
 
 /// What a kind with no adapter in this build answers.
-pub fn coming_next(kind: ChannelKind) -> String {
-    format!("{} is coming next. It can't be connected yet.", kind.name())
-}
-
 /// Save a bot token in `store`, after checking its shape.
 pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result<(), String> {
     let token = token.trim();
@@ -103,7 +100,11 @@ pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result
             return keyring_blob::set(store, token_account(kind), &config.saved());
         }
         ChannelKind::Email => {
-            return Err(coming_next(kind));
+            // Kept as the address, any servers, then the app password.
+            let (config, password) = msg_email::parse_setup(token)?;
+            let password = Zeroizing::new(password);
+            let saved = Zeroizing::new(msg_email::saved_setup(&config, &password));
+            return keyring_blob::set(store, token_account(kind), &saved);
         }
     };
     if !shaped {
@@ -1390,11 +1391,24 @@ mod tests {
                 .map(String::as_str),
             Some("+15551234567")
         );
-        assert_eq!(
-            save_token(&store, ChannelKind::Email, TOKEN).unwrap_err(),
-            coming_next(ChannelKind::Email)
-        );
+        assert!(save_token(&store, ChannelKind::Email, TOKEN)
+            .unwrap_err()
+            .starts_with("That isn't an email address"));
         assert_eq!(load_token(&store, ChannelKind::Email).unwrap(), None);
+        save_token(
+            &store,
+            ChannelKind::Email,
+            " Me@Example.org imap.example.org smtp.example.org mx.example.org abcd efgh ",
+        )
+        .unwrap();
+        assert_eq!(
+            load_token(&store, ChannelKind::Email)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("me@example.org imap.example.org smtp.example.org mx.example.org abcdefgh")
+        );
+        forget_token(&store, ChannelKind::Email).unwrap();
         save_token(&store, ChannelKind::Discord, "MTIz.abc_DEF.ghi-jkl").unwrap();
         assert_eq!(
             store.0.lock().unwrap().keys().cloned().collect::<Vec<_>>(),

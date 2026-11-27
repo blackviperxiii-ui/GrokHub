@@ -135,6 +135,12 @@ export async function unpairChannelSender(kind: ChannelKind, sender: string): Pr
   return call<Channels>("unpair_channel_sender", { kind, sender });
 }
 
+/** Let mail from one address reach the assistant (the email channel). */
+export async function allowEmailSender(sender: string): Promise<Channels | null> {
+  if (!inShell()) return null;
+  return call<Channels>("allow_email_sender", { sender });
+}
+
 /** The answer carries the new secret once, in `newSecret`. */
 export async function addChannelWebhook(name: string): Promise<Channels | null> {
   if (!inShell()) return null;

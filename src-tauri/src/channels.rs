@@ -1,6 +1,7 @@
 //! Connectors → Phone and chat apps (messaging channels, part 6): connect a
-//! Telegram, Discord or Slack bot, or the person's own Signal account (its
-//! Note to Self only), approve the pairing codes strangers were sent,
+//! Telegram, Discord or Slack bot, the person's own Signal account (its
+//! Note to Self only) or their own mailbox (only senders they allow),
+//! approve the pairing codes strangers were sent,
 //! unpair senders, show a QR that pairs a phone in one scan (Telegram), and
 //! add or remove signed webhooks. Each connected bot has one background worker; its
 //! token stays in the OS keychain, and what paired senders write is queued
@@ -12,13 +13,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use grokhub_agent::channels_email::EmailLink;
 use grokhub_agent::channels_net::{
     self, DiscordLink, SignalLink, SlackLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
 };
 use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust};
-use grokhub_core::{msg_signal, msg_telegram};
+use grokhub_core::{msg_email, msg_signal, msg_telegram};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -157,7 +159,10 @@ pub fn send_answer(
         ChannelKind::Signal => {
             SignalLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
         }
-        ChannelKind::Email => Err(channels_net::coming_next(to.channel)),
+        // `to.to` is the thread the message kept: its id, references and subject.
+        ChannelKind::Email => {
+            EmailLink::new(&token)?.send(config_dir, &to.sender, &to.to, text, &[DataClass::Chat])
+        }
     }
 }
 
@@ -385,7 +390,19 @@ fn start(config_dir: &Path, kind: ChannelKind, token: &str) -> Result<(), String
                 .map_err(|e| e.to_string())?;
         }
         ChannelKind::Email => {
-            return Err(channels_net::coming_next(kind));
+            let link = EmailLink::new(token)?;
+            std::thread::Builder::new()
+                .name("channel-email".into())
+                .spawn(move || {
+                    let report = |why: Option<&str>| {
+                        *p.lock().unwrap_or_else(|e| e.into_inner()) = why.map(str::to_string);
+                    };
+                    if let Err(why) = link.run(&dir, &|| s.load(Ordering::SeqCst), &report) {
+                        report(Some(&why));
+                    }
+                    r.store(false, Ordering::SeqCst);
+                })
+                .map_err(|e| e.to_string())?;
         }
     }
     workers().insert(
@@ -450,7 +467,18 @@ pub fn connect(
             ));
         }
         ChannelKind::Email => {
-            return Err(channels_net::coming_next(kind));
+            let link = EmailLink::new(token)?;
+            let address = link.check(config_dir)?;
+            let saved = link.saved();
+            channels_net::save_token(store, kind, &saved)?;
+            start(config_dir, kind, &saved)?;
+            return Ok(view(
+                config_dir,
+                store,
+                Some(format!(
+                    "Connected {address}. Mail is read from now on, only from senders you allow, and only when your mail server vouches for them."
+                )),
+            ));
         }
     };
     channels_net::save_token(store, kind, token)?;
@@ -504,6 +532,29 @@ pub fn approve(config_dir: &Path, store: &dyn Backend, code: &str) -> Result<Cha
         config_dir,
         store,
         Some(format!("Paired {who} on {}.", name(pending.channel))),
+    ))
+}
+
+/// Let mail from `sender` reach the assistant. Email has no pairing code:
+/// a stranger is never written to, so the person adds each sender here.
+pub fn allow_email_sender(
+    config_dir: &Path,
+    store: &dyn Backend,
+    sender: &str,
+) -> Result<ChannelsView, String> {
+    let sender = sender.trim().to_ascii_lowercase();
+    if !msg_email::valid_address(&sender) {
+        return Err("That isn't an email address.".into());
+    }
+    let mut trust = DmTrust::load(config_dir);
+    trust.pair(ChannelKind::Email, &sender);
+    trust.save(config_dir)?;
+    Ok(view(
+        config_dir,
+        store,
+        Some(format!(
+            "Mail from {sender} now reaches you here when its server vouches for it."
+        )),
     ))
 }
 
@@ -719,7 +770,7 @@ mod tests {
                 ("Discord", true, false),
                 ("Slack", true, false),
                 ("Signal", true, false),
-                ("Email", false, false),
+                ("Email", true, false),
             ]
         );
         assert_eq!(before.channels[0].setup_label, "Telegram bot token");
@@ -833,11 +884,36 @@ mod tests {
         .starts_with("The Signal daemon must run on this computer"));
         assert_eq!(
             connect(&dir, &store, ChannelKind::Email, "anything").unwrap_err(),
-            channels_net::coming_next(ChannelKind::Email)
+            "That isn't an email address."
+        );
+        assert_eq!(
+            connect(&dir, &store, ChannelKind::Email, "me@example.org s3cr3t").unwrap_err(),
+            "For this provider, type the address, its IMAP server, its SMTP server and the server name its Authentication-Results header starts with, separated by spaces."
         );
         assert!(store.0.lock().unwrap().is_empty());
         assert!(DmTrust::load(&dir).paired.is_empty());
         assert!(workers().is_empty());
+    }
+
+    #[test]
+    fn an_email_sender_is_allowed_by_address_and_unpaired_like_any_other() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-email-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MemoryStore::default();
+        assert_eq!(
+            allow_email_sender(&dir, &store, "jane at example.com").unwrap_err(),
+            "That isn't an email address."
+        );
+        assert!(DmTrust::load(&dir).paired.is_empty());
+        let shown = allow_email_sender(&dir, &store, " Jane@Example.com ").unwrap();
+        assert!(DmTrust::load(&dir).is_paired(ChannelKind::Email, "jane@example.com"));
+        assert!(shown
+            .paired
+            .iter()
+            .any(|p| p.channel == ChannelKind::Email && p.sender == "jane@example.com"));
+        unpair(&dir, &store, ChannelKind::Email, "jane@example.com").unwrap();
+        assert!(!DmTrust::load(&dir).is_paired(ChannelKind::Email, "jane@example.com"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
