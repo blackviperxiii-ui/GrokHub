@@ -18,10 +18,10 @@ import {
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
-import { RAIL_SECTIONS, type RailMode, type RailPrefs, type RailSectionDef, type RailSectionId } from "./railPrefs";
+import { RAIL_SECTIONS, type RailPrefs, type RailSectionDef, type RailSectionId } from "./railPrefs";
 import { useModalFocus } from "./ui";
 
-export type { RailMode, RailPrefs, RailSectionDef, RailSectionId };
+export type { RailPrefs, RailSectionDef, RailSectionId };
 export { RAIL_SECTIONS };
 
 export type View =
@@ -87,8 +87,6 @@ export interface PaletteExtras {
   chats: readonly ChatHit[];
   slash: readonly SlashHit[];
   chips?: readonly QuickChip[];
-  /** Only these pages, and nothing else: the rail's More list. */
-  only?: readonly View[];
 }
 
 const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
@@ -174,54 +172,25 @@ export function hasPage(caps: Capabilities, view: View): boolean {
   return pageViews(caps).includes(view);
 }
 
-/** Simple-mode rail, top to bottom; Settings sits at the rail's foot.
- * MCPs & Connectors stays on the rail (not under More) so connect and
- * reconnect are one click away. */
-export const RAIL: readonly View[] = [
-  "home",
-  "chat",
-  "code",
-  "pulse",
-  "library",
-  "connectors",
-  "settings",
-];
-
-/** Optional Sidebar v2 prefs; omitted means Simple with no pins. */
-export type RailNavOpts = Pick<RailPrefs, "mode" | "pinned">;
+/** Pins for the rail. Omitted means nothing is pinned. */
+export type RailNavOpts = Pick<RailPrefs, "pinned">;
 
 /** Pages available on this platform, minus Settings (foot) and already listed. */
 function availablePages(caps: Capabilities, skip: ReadonlySet<string>): View[] {
   return pageViews(caps).filter((view) => view !== "settings" && !skip.has(view));
 }
 
-/** The rail pages this platform has. Simple keeps the chat-first set plus pins;
- * Advanced puts every page on the rail (Settings still at the foot). */
-export function railViews(caps: Capabilities, opts: RailNavOpts = { mode: "simple", pinned: [] }): View[] {
+/** The rail pages this platform has. Pins sit first. Settings stays at the foot. */
+export function railViews(caps: Capabilities, opts: RailNavOpts = { pinned: [] }): View[] {
   const shown = new Set<string>(pageViews(caps));
   const pinned: View[] = opts.pinned.filter((view) => shown.has(view) && view !== "settings");
-  if (opts.mode === "advanced") {
-    const rest = availablePages(caps, new Set(pinned));
-    return shown.has("settings") ? [...pinned, ...rest, "settings"] : [...pinned, ...rest];
-  }
-  const core = RAIL.filter((view) => shown.has(view));
-  const top: View[] = core.filter((view) => view !== "settings");
-  const extra = pinned.filter((view) => !top.includes(view));
-  return core.includes("settings") ? [...top, ...extra, "settings"] : [...top, ...extra];
+  const rest = availablePages(caps, new Set(pinned));
+  return shown.has("settings") ? [...pinned, ...rest, "settings"] : [...pinned, ...rest];
 }
 
-/** The pages the rail's More opens: every page that is not on the rail. */
-export function moreViews(caps: Capabilities, opts: RailNavOpts = { mode: "simple", pinned: [] }): View[] {
-  const rail = new Set<string>(railViews(caps, opts));
-  return pageViews(caps).filter((view) => !rail.has(view));
-}
-
-/** Advanced-mode groups with only the pages this platform has, pins omitted
+/** Groups with only the pages this platform has. Pins are omitted
  * (they sit above the groups). Empty groups are dropped. */
-export function railSections(
-  caps: Capabilities,
-  opts: RailNavOpts = { mode: "advanced", pinned: [] },
-): RailSectionDef[] {
+export function railSections(caps: Capabilities, opts: RailNavOpts = { pinned: [] }): RailSectionDef[] {
   const pinned = new Set<string>(opts.pinned);
   const shown = new Set<string>(pageViews(caps));
   return RAIL_SECTIONS.map((section) => ({
@@ -257,10 +226,6 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     action: { kind: "settings", section },
   }));
   const named = (rows: PaletteRow[]) => (q ? rows.filter((row) => answersTo(row.label, q)) : rows);
-  if (extras.only) {
-    const only = extras.only;
-    return named(pages.filter((row) => row.action.kind === "view" && only.includes(row.action.view)));
-  }
   const views = pageViews(caps);
   const suggested = q ? [] : (extras.chips ?? []).flatMap((chip) => chipRow(chip, views) ?? []);
   const all = [
@@ -302,14 +267,11 @@ const paletteRoom = () => window.innerHeight * 0.5;
 export function Palette({
   caps,
   sources = NO_SOURCES,
-  only,
   onPick,
   onClose,
 }: {
   caps: Capabilities;
   sources?: PaletteSources;
-  /** Only these pages: the rail's More list, with no commands, chats or Ask. */
-  only?: readonly View[];
   onPick: (action: PaletteAction) => void;
   onClose: () => void;
 }) {
@@ -325,7 +287,6 @@ export function Palette({
   // row opens Chat, where the inbox sits.
   const [waiting, setWaiting] = useState(0);
   useEffect(() => {
-    if (only) return;
     let live = true;
     Promise.resolve()
       .then(() => decisionInbox())
@@ -336,15 +297,13 @@ export function Palette({
     return () => {
       live = false;
     };
-  }, [only]);
+  }, []);
   const inboxLabel = `Decisions waiting · ${waiting}`;
   const inboxRow: PaletteRow[] =
     waiting > 0 && (!query.trim() || answersTo(inboxLabel, query.trim().toLowerCase()))
       ? [{ label: inboxLabel, action: { kind: "view", view: "chat" } }]
       : [];
-  const rows = only
-    ? paletteRows(caps, query, { ...NO_EXTRAS, only })
-    : [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
+  const rows = [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
   const none = rows.length === 0;
   const { onChip } = sources;
   const { chats: findChats, slash: findSlash } = sources;
@@ -359,7 +318,6 @@ export function Palette({
   // Chats and slash commands come from the desktop, so they arrive a moment
   // later; an answer for an older query is dropped.
   useEffect(() => {
-    if (only) return;
     let live = true;
     const q = query.trim();
     const keep = (next: typeof found) => {
@@ -372,7 +330,7 @@ export function Palette({
     return () => {
       live = false;
     };
-  }, [query, findChats, findSlash, only]);
+  }, [query, findChats, findSlash]);
 
   useEffect(() => {
     const dir = moved.current;
@@ -414,14 +372,14 @@ export function Palette({
         className="palette"
         role="dialog"
         aria-modal="true"
-        aria-label={only ? "More pages" : "Command palette"}
+        aria-label="Command palette"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <input
           ref={input}
-          aria-label={only ? "Search pages" : "Search pages and commands"}
-          placeholder={only ? "Search pages" : "Search pages and commands"}
+          aria-label="Search pages and commands"
+          placeholder="Search pages and commands"
           value={query}
           role="combobox"
           aria-expanded="true"
@@ -433,7 +391,7 @@ export function Palette({
             setPick(0);
           }}
         />
-        <ul ref={list} id="palette-rows" role="listbox" aria-label={only ? "Pages" : "Pages and commands"}>
+        <ul ref={list} id="palette-rows" role="listbox" aria-label="Pages and commands">
           {rows.map((row, i) => (
             <li
               key={rowKey(row)}

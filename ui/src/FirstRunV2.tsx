@@ -1,4 +1,4 @@
-// First run v2: after Auto Setup and Get to know you. Layout pick, connect
+// First run v2: after Auto Setup and Get to know you. Connect
 // suggested apps (MCP Connectors), skills, local-model offer, IDE import,
 // sandbox confirmation (never turns it off), first task, and a short tour.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,7 +20,6 @@ import {
   FIRST_RUN_V2_LABELS,
   FIRST_RUN_V2_ORDER,
   FIRST_TASKS,
-  layoutBlurb,
   loadFirstRunV2,
   nextStep,
   prevStep,
@@ -32,12 +31,9 @@ import {
 } from "./firstRunV2Api";
 import { OPEN_EVENT, onboard, type ImportSource } from "./onboardApi";
 import { StepTracker } from "./Progress";
-import { loadRailPrefs, saveRailPrefs, type RailMode } from "./railPrefs";
 import { useModalFocus } from "./ui";
 
 export const TITLE = `Finish setting up ${PRODUCT_NAME}`;
-export const BODY =
-  "A few optional steps. Skip any of them. You can run this again from Settings → Personal.";
 export const SANDBOX_NOTE =
   "Shell commands stay sandboxed by default. This step never turns the sandbox off.";
 export const SANDBOX_KEEP =
@@ -54,19 +50,15 @@ const SKILL_HINTS = ["how", "viper-mode", "tdd", "verify-this", "land-it", "qa-w
 export function FirstRunV2({
   after,
   onAsk,
-  onLayout,
 }: {
   /** True once Auto Setup's first-run window is closed. */
   after: boolean;
   /** Send a first chat message (opens Chat). */
   onAsk: (text: string) => void;
-  /** Apply Simple / Advanced immediately on the rail. */
-  onLayout: (mode: RailMode) => void;
 }) {
   const [progress, setProgress] = useState<FirstRunV2Progress>(() => loadFirstRunV2());
   const [onboardPending, setOnboardPending] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<RailMode>(() => loadRailPrefs().mode);
   const [apps, setApps] = useState<CatalogRow[] | null>(null);
   const [pickedApps, setPickedApps] = useState<Set<string>>(() => new Set());
   const [skills, setSkills] = useState<SkillRow[] | null>(null);
@@ -198,33 +190,6 @@ export function FirstRunV2({
   let title = TITLE;
   let body;
   switch (step) {
-    case "layout":
-      title = "Pick a layout";
-      body = (
-        <>
-          <p>Simple stays chat-first. Advanced puts every page on the rail.</p>
-          <div className="first-run-choices" role="group" aria-label="Layout">
-            {(["simple", "advanced"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                className="chip"
-                aria-pressed={mode === m}
-                onClick={() => {
-                  setMode(m);
-                  const prefs = { ...loadRailPrefs(), mode: m };
-                  saveRailPrefs(prefs);
-                  onLayout(m);
-                }}
-              >
-                {m === "simple" ? "Simple" : "Advanced"}
-              </button>
-            ))}
-          </div>
-          <p className="note">{layoutBlurb(mode)}</p>
-        </>
-      );
-      break;
     case "apps":
       title = "Connect apps";
       body = (
@@ -362,7 +327,7 @@ export function FirstRunV2({
         <>
           <p>
             The left rail opens Chat, Code, Pulse and more. Press Ctrl+K for the palette. Connectors
-            and Skills sit under Make in Advanced, or under More in Simple.
+            and Skills sit under Make.
           </p>
           <p className="note">Next, pick a first task — or skip and explore on your own.</p>
         </>
@@ -479,7 +444,6 @@ export function FirstRunV2({
       >
         <h2 id="first-run-v2-title">{title}</h2>
         <StepTracker steps={TRACK_STEPS} current={step} label="First-run steps" />
-        {step === "layout" && <p className="note">{BODY}</p>}
         {body}
         {error && <p className="note warn">{error}</p>}
         <div className="first-run-foot">

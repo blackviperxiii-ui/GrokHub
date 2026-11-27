@@ -4,7 +4,6 @@ import {
   finishFirstRunV2,
   FIRST_RUN_V2_ORDER,
   FIRST_TASKS,
-  layoutBlurb,
   loadFirstRunV2,
   nextStep,
   prevStep,
@@ -18,31 +17,32 @@ beforeEach(() => {
 });
 
 describe("firstRunV2 progress", () => {
-  it("defaults to pending at layout", () => {
+  it("defaults to pending at apps", () => {
     expect(loadFirstRunV2()).toEqual(DEFAULT_FIRST_RUN_V2);
     expect(SUGGESTED_APPS).toHaveLength(8);
     expect(FIRST_TASKS.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("round-trips progress and reopen resets to layout", () => {
-    saveFirstRunV2({ stage: "pending", step: "apps" });
-    expect(loadFirstRunV2()).toEqual({ stage: "pending", step: "apps" });
-    expect(reopenFirstRunV2()).toEqual({ stage: "pending", step: "layout" });
+  it("round-trips progress and reopen resets to apps", () => {
+    saveFirstRunV2({ stage: "pending", step: "skills" });
+    expect(loadFirstRunV2()).toEqual({ stage: "pending", step: "skills" });
+    expect(reopenFirstRunV2()).toEqual({ stage: "pending", step: "apps" });
     expect(finishFirstRunV2(true).stage).toBe("skipped");
     expect(finishFirstRunV2(false).stage).toBe("done");
   });
 
   it("walks steps forward and back without skipping sandbox", () => {
     expect(FIRST_RUN_V2_ORDER).toContain("sandbox");
-    expect(nextStep("layout")).toBe("apps");
-    expect(prevStep("layout")).toBeNull();
-    expect(prevStep("apps")).toBe("layout");
+    expect(FIRST_RUN_V2_ORDER[0]).toBe("apps");
+    expect(nextStep("apps")).toBe("skills");
+    expect(prevStep("apps")).toBeNull();
+    expect(prevStep("skills")).toBe("apps");
     expect(nextStep("tour")).toBe("task");
     expect(nextStep("task")).toBe("done");
   });
 
-  it("layout blurb names Simple and Advanced", () => {
-    expect(layoutBlurb("simple")).toContain("More");
-    expect(layoutBlurb("advanced")).toContain("groups");
+  it("reads a saved layout step as the apps step", () => {
+    localStorage.setItem("shell.firstRunV2", JSON.stringify({ stage: "pending", step: "layout" }));
+    expect(loadFirstRunV2()).toEqual({ stage: "pending", step: "apps" });
   });
 });

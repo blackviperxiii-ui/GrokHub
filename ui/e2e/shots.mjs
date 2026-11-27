@@ -218,7 +218,7 @@ async function run() {
               manifest.push({ file, theme: theme.id, viewport: vp.name, view });
             }
           }
-          // The rest of the rail, then every page More lists: swept, not shot.
+          // The rest of the grouped rail: swept, not shot.
           const shot = new Set(VIEWS.map((v) => (v === "settings" ? "Settings" : v[0].toUpperCase() + v.slice(1))));
           const slug = (label) => `${theme.label}_${vp.name}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
           const rail = page.getByRole("navigation", { name: "Views" });
@@ -246,19 +246,6 @@ async function run() {
             await avatar.click({ timeout: 15_000 });
             await page.getByRole("group", { name: "Profile" }).waitFor({ timeout: 15_000 });
             await check(page, slug("profile"));
-          }
-          at = "More";
-          await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });
-          const more = page.getByRole("dialog", { name: "More pages" });
-          const pages = await more.getByRole("option").allTextContents();
-          await check(page, slug("more"));
-          await page.keyboard.press("Escape");
-          for (const label of pages) {
-            at = label;
-            await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });
-            await more.getByRole("option", { name: label, exact: true }).click({ timeout: 15_000 });
-            await sleep(400);
-            await check(page, slug(label));
           }
           await context.close();
         }

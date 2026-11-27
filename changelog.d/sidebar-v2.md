@@ -1,1 +1,1 @@
-- Sidebar v2: Simple keeps the chat-first rail; Advanced shows every page in collapsible Core / Work / Make / You / PC groups with pin/unpin. More stays labeled overflow.
+- Sidebar: every page sits in collapsible Core / Work / Make / You / PC groups, with pin and fold.
