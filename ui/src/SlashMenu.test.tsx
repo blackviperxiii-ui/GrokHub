@@ -174,6 +174,47 @@ describe("composer slash commands", () => {
     expect(api.sendChat).not.toHaveBeenCalled();
   });
 
+  it("typing /qa lists /qa-walkthrough and selecting it runs the skill", async () => {
+    api.slashHits.mockImplementation((draft) =>
+      Promise.resolve(
+        draft.trim().toLowerCase().startsWith("/qa")
+          ? [
+              {
+                cmd: "/qa-walkthrough",
+                hint: "Ship-gate walkthrough",
+                insert: "/qa-walkthrough",
+                runOnPick: true,
+                disabled: null,
+              },
+            ]
+          : [],
+      ),
+    );
+    api.runSlash.mockResolvedValue({
+      kind: "mode",
+      mode: "chat",
+      text: "/qa-walkthrough",
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "/qa");
+    const menu = await screen.findByRole("listbox", { name: "Commands" });
+    expect(menu).toHaveAttribute("id", "slash-menu");
+    expect(await screen.findByRole("option", { name: /qa-walkthrough/ })).toBeInTheDocument();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(api.runSlash).toHaveBeenCalledWith("/qa-walkthrough", expect.stringMatching(/^shell-/)),
+    );
+    // Mode effect with the skill prompt delivers it as the next chat turn.
+    await waitFor(() =>
+      expect(api.sendChat).toHaveBeenCalledWith(
+        expect.stringMatching(/^shell-/),
+        "/qa-walkthrough",
+        "chat",
+      ),
+    );
+  });
+
   it("/connectors opens its page", async () => {
     api.runSlash.mockResolvedValue({ kind: "open", view: "connectors" });
     const open = vi.fn();

@@ -283,15 +283,49 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
         }
         Op::SkillBundle { slug, args } => {
             let _config = ConfigGuard::set(cx.config_dir);
-            let bundle = grokhub_core::bundle_by_slug(cx.config_dir, &slug)
-                .ok_or_else(|| format!("No skill bundle /{slug}"))?;
-            Ok(Applied {
-                effect: Effect::Mode {
-                    mode: "chat",
-                    text: Some(grokhub_core::bundle_load_prompt(&bundle, &args)),
-                },
-                workspace: None,
-            })
+            // (1) skill bundle, (2) loaded skill (respect on), (3) Unknown command.
+            if let Some(bundle) = grokhub_core::bundle_by_slug(cx.config_dir, &slug) {
+                return Ok(Applied {
+                    effect: Effect::Mode {
+                        mode: "chat",
+                        text: Some(grokhub_core::bundle_load_prompt(&bundle, &args)),
+                    },
+                    workspace: None,
+                });
+            }
+            let home = grokhub_core::user_home();
+            let page = crate::skills::load(cx.config_dir, &work, home.as_deref());
+            let want = slug.trim().trim_start_matches('/');
+            let row = page.rows.iter().find(|r| {
+                r.name.eq_ignore_ascii_case(want)
+                    || r.trigger
+                        .trim()
+                        .trim_start_matches('/')
+                        .eq_ignore_ascii_case(want)
+            });
+            match row {
+                Some(r) if r.on => {
+                    let slash = if r.trigger.trim().starts_with('/') {
+                        r.trigger.trim().to_string()
+                    } else {
+                        format!("/{}", r.name)
+                    };
+                    let mut prompt = grokhub_core::skill_use_in_chat_prompt(&slash, &r.name);
+                    let args = args.trim();
+                    if !args.is_empty() {
+                        prompt = format!("{prompt} {args}");
+                    }
+                    Ok(Applied {
+                        effect: Effect::Mode {
+                            mode: "chat",
+                            text: Some(prompt),
+                        },
+                        workspace: None,
+                    })
+                }
+                Some(r) => Err(format!("{} is switched off. Turn it on in Skills.", r.name)),
+                None => Err(format!("Unknown command /{slug}. Type /help for the list.")),
+            }
         }
         Op::SkillChanges => notice(crate::changes::report(
             cx.config_dir,
@@ -892,6 +926,49 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn slash_skill_slug_loads_builtin_and_keeps_args() {
+        let h = home("slash-skill-slug");
+        match go(&h, "/qa-walkthrough") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("skill prompt");
+                assert!(
+                    body.contains("qa-walkthrough"),
+                    "expected qa-walkthrough in {body}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match go(&h, "/qa-walkthrough check the Code tab") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("skill prompt");
+                assert!(
+                    body.contains("check the Code tab"),
+                    "args must be preserved: {body}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match go(&h, "/arena") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("skill prompt");
+                assert!(body.contains("arena"), "expected arena in {body}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            go(&h, "/hepl"),
+            Err("Unknown command /hepl. Type /help for the list.".into())
+        );
+        assert_eq!(
+            go(&h, "/not-a-real-skill"),
+            Err("Unknown command /not-a-real-skill. Type /help for the list.".into())
+        );
     }
 
     #[test]

@@ -790,8 +790,18 @@ fn tell_display(window: &tauri::WebviewWindow) {
 
 /// The composer's command list for a draft that starts with `/`.
 #[tauri::command]
-fn slash_hits(draft: String) -> Vec<slash::Hit> {
-    slash::hits(&draft, false)
+fn slash_hits(state: State<'_, ShellState>, draft: String) -> Vec<slash::Hit> {
+    let work = workspace(&state);
+    let home = grokhub_core::user_home();
+    slash::hits_with(
+        &draft,
+        false,
+        Some(slash::HitsCtx {
+            config_dir: &state.config_dir,
+            workspace: &work,
+            home: home.as_deref(),
+        }),
+    )
 }
 
 /// Runs a slash line instead of sending it. Nothing reaches the model.
@@ -8628,7 +8638,20 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "base")?,
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
-        "slash_hits" => out(slash::hits(&arg::<String>(args, "draft")?, true)),
+        "slash_hits" => {
+            let draft: String = arg(args, "draft")?;
+            let work = workspace(&state);
+            let home = grokhub_core::user_home();
+            out(slash::hits_with(
+                &draft,
+                true,
+                Some(slash::HitsCtx {
+                    config_dir: &state.config_dir,
+                    workspace: &work,
+                    home: home.as_deref(),
+                }),
+            ))
+        }
         "run_slash" => {
             let id: Option<String> = arg(args, "conversationId")?;
             let owned = |id: &str| web.owns(id);

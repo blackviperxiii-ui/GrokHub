@@ -1,0 +1,1 @@
+- Slash: `/<skill>` and `/` autocomplete resolve synced/bundled skills (not only skill bundles), so `/qa-walkthrough` and `/arena` run instead of "No skill bundle" / "Unknown command".
