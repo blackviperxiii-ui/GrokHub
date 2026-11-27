@@ -1151,6 +1151,14 @@ fn run_turn(
             && tools::coding::wants(input.conversation_id, input.model, turn_brief.as_ref());
         if lean_coding {
             tools::coding::apply_lean_prompt(&mut wire);
+            if crate::repo_map::enabled(&crate::perm::config_dir()) {
+                let budget = if input.context_length > 0 && input.context_length <= 8_192 {
+                    crate::repo_map::COMPACT_TOKEN_BUDGET
+                } else {
+                    crate::repo_map::DEFAULT_TOKEN_BUDGET
+                };
+                tools::coding::apply_repo_map(&mut wire, input.workspace, user_text, budget);
+            }
         }
         let tools = if chat_only {
             Vec::new()
@@ -9517,6 +9525,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
                 "grep".to_string(),
                 "glob".to_string(),
                 "get_command_or_subagent_output".to_string(),
+                "repo_map".to_string(),
                 "write".to_string(),
                 "search_replace".to_string(),
                 "run_terminal_command".to_string(),

@@ -6,6 +6,7 @@
 //! tool is registered; until then schemas simply omit it.
 
 use std::cell::Cell;
+use std::path::Path;
 
 use crate::brain::{Brief, Intent};
 use crate::client::{ContentPart, InputItem};
@@ -46,16 +47,15 @@ pub const CODING_TOOLS: &[&str] = &[
     "grep",
     "glob",
     "get_command_or_subagent_output",
+    "repo_map",
     "write",
     "search_replace",
     "run_terminal_command",
-    "repo_map",
 ];
 
-/// How many of [`CODING_TOOLS`] are registered today (everything except the
-/// future `repo_map` row).
+/// How many of [`CODING_TOOLS`] are registered today.
 #[cfg(test)]
-pub(crate) const CODING_TOOLS_LIVE: usize = CODING_TOOLS.len() - 1;
+pub(crate) const CODING_TOOLS_LIVE: usize = CODING_TOOLS.len();
 
 /// Allowlist for a local coding turn.
 pub fn tool_set() -> ToolSet {
@@ -125,6 +125,54 @@ pub fn apply_lean_prompt(input: &mut [InputItem]) {
     }
 }
 
+/// Append a ranked tree-sitter repository map to the system message on local
+/// coding turns so the model starts with the workspace structure within budget.
+pub fn apply_repo_map(
+    input: &mut [InputItem],
+    workspace: &Path,
+    user_text: &str,
+    token_budget: usize,
+) {
+    let (focus_files, query_terms) = crate::repo_map::extract_prompt_hints(user_text);
+    let map = crate::repo_map::build(
+        workspace,
+        &crate::repo_map::RepoMapConfig {
+            token_budget,
+            focus_files,
+            query_terms,
+            ..Default::default()
+        },
+    );
+    if map.rendered.is_empty() {
+        return;
+    }
+    for item in input {
+        let InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role != "system" {
+            continue;
+        }
+        for part in content.iter_mut() {
+            let ContentPart::InputText(text) = part else {
+                continue;
+            };
+            if text.contains("<repo_map ") {
+                return;
+            }
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&map.rendered);
+            return;
+        }
+        return;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,13 +198,13 @@ mod tests {
                 "grep",
                 "glob",
                 "get_command_or_subagent_output",
+                "repo_map",
                 "write",
                 "search_replace",
                 "run_terminal_command",
-                "repo_map",
             ]
         );
-        assert_eq!(CODING_TOOLS_LIVE, 8);
+        assert_eq!(CODING_TOOLS_LIVE, 9);
         assert!(CODING_TOOLS.contains(&"repo_map"));
     }
 
@@ -209,6 +257,46 @@ mod tests {
     }
 
     #[test]
+    fn apply_repo_map_appends_once_and_respects_budget() {
+        let dir = std::env::temp_dir().join(format!("grokhub-coding-rm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn target_worker() -> i32 { 7 }\n",
+        )
+        .unwrap();
+
+        let mut input = vec![InputItem::Message {
+            role: "system".into(),
+            content: vec![ContentPart::InputText("System intro.".into())],
+        }];
+        apply_repo_map(&mut input, &dir, "fix target_worker in src/lib.rs", 256);
+        let text = match &input[0] {
+            InputItem::Message { content, .. } => match &content[0] {
+                ContentPart::InputText(t) => t.clone(),
+                _ => panic!("text"),
+            },
+            _ => panic!("system"),
+        };
+        assert!(text.contains("<repo_map "), "{text}");
+        assert!(text.contains("target_worker"), "{text}");
+
+        // Idempotent across turns in the same wire build.
+        apply_repo_map(&mut input, &dir, "fix target_worker in src/lib.rs", 256);
+        let again = match &input[0] {
+            InputItem::Message { content, .. } => match &content[0] {
+                ContentPart::InputText(t) => t.clone(),
+                _ => panic!("text"),
+            },
+            _ => panic!("system"),
+        };
+        assert_eq!(again, text);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn coding_set_allows_only_code_tools() {
         let set = tool_set();
         for name in CODING_TOOLS {
@@ -246,6 +334,7 @@ mod tests {
                 "grep",
                 "glob",
                 "get_command_or_subagent_output",
+                "repo_map",
                 "write",
                 "search_replace",
                 "run_terminal_command",

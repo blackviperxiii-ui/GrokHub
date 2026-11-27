@@ -138,6 +138,11 @@ pub const AB_FLAGS: &[AbFlag] = &[
         key: "sparse_line_numbers",
     },
     AbFlag {
+        name: "repo_map",
+        file: crate::repo_map::CONFIG_NAME,
+        key: "enabled",
+    },
+    AbFlag {
         name: BOUNDARY_ROUTING,
         file: crate::route::boundary::CONFIG,
         key: "enabled",

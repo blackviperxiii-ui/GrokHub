@@ -58,6 +58,7 @@ mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;
 pub mod repair;
+pub mod repo_map;
 mod repo_rules;
 pub mod research;
 mod retry;
