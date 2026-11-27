@@ -44,6 +44,15 @@ describe("HelperStrip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("shows nothing, and throws nothing, when the queue comes back empty-handed", async () => {
+    // The screenshot harness and an older desktop answer get_queue with null.
+    api.getQueue.mockResolvedValue(null as unknown as Queue);
+    const { container } = render(<HelperStrip conversationId="c1" />);
+    await waitFor(() => expect(api.getQueue).toHaveBeenCalledWith("c1"));
+    await act(async () => {});
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("lists running helpers with their model and progress", async () => {
     api.getQueue.mockResolvedValue(queue([helper("s1"), helper("s2")]));
     render(<HelperStrip conversationId="c1" />);
