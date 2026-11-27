@@ -7,11 +7,14 @@ import {
   getChannels,
   removeChannelWebhook,
   setChannelAsks,
+  signalLinkFinish,
+  signalLinkStart,
   telegramQr,
   unpairChannelSender,
   type ChannelKind,
   type ChannelState,
   type Channels as Shape,
+  type LinkQr,
   type StartQr,
 } from "./channelsApi";
 import { PRODUCT_NAME } from "./brand";
@@ -23,6 +26,9 @@ export const WEBHOOKS_NOTE = `A service you use (a deploy, a form, a store) can 
 
 export const QR_NOTE =
   "Scan it with your phone's camera. Telegram opens the bot and pairs that phone, with no code to type. It works once, for 10 minutes, and showing a new one turns this one off.";
+
+export const SIGNAL_QR_NOTE =
+  "In Signal on your phone, open Settings, then Linked devices, tap the plus and scan this. Waiting for your phone for up to three minutes.";
 
 function statusOf(ch: ChannelState): string {
   if (!ch.live) return "Coming next";
@@ -38,6 +44,7 @@ export function Channels() {
   const [hookName, setHookName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
   const [qr, setQr] = useState<StartQr | null>(null);
+  const [signalQr, setSignalQr] = useState<LinkQr | null>(null);
   const [busy, setBusy] = useState(false);
   const { note, ok, fail } = useNote();
 
@@ -76,6 +83,24 @@ export function Channels() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // The number stays in the box: it is not a secret, and the link is for it.
+  async function linkSignal() {
+    const number = (tokens.signal ?? "").trim();
+    setBusy(true);
+    let shownQr: LinkQr | null = null;
+    try {
+      shownQr = await signalLinkStart(number);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+    if (!shownQr) return;
+    setSignalQr(shownQr);
+    if (await act(() => signalLinkFinish())) setTokens((t) => ({ ...t, signal: "" }));
+    setSignalQr(null);
   }
 
   async function connect(event: FormEvent, kind: ChannelKind) {
@@ -150,7 +175,7 @@ export function Channels() {
                 <label>
                   {ch.setupLabel}
                   <input
-                    type="password"
+                    type={ch.kind === "signal" ? "tel" : "password"}
                     autoComplete="off"
                     spellCheck={false}
                     value={tokens[ch.kind] ?? ""}
@@ -161,6 +186,26 @@ export function Channels() {
                 <button type="submit" disabled={busy || !(tokens[ch.kind] ?? "").trim()}>
                   Connect
                 </button>
+                {ch.kind === "signal" && (
+                  <button
+                    type="button"
+                    disabled={busy || !(tokens.signal ?? "").trim()}
+                    onClick={() => void linkSignal()}
+                  >
+                    Link with a QR code
+                  </button>
+                )}
+                {ch.kind === "signal" && signalQr && (
+                  <figure className="channel-qr" aria-label="Signal link QR code">
+                    <img
+                      src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(signalQr.svg)}`}
+                      alt={`QR code that links this computer to Signal for ${signalQr.account}`}
+                      width={240}
+                      height={240}
+                    />
+                    <figcaption className="note">{SIGNAL_QR_NOTE}</figcaption>
+                  </figure>
+                )}
               </form>
             )}
           </li>

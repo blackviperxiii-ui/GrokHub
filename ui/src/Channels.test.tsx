@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelKind, ChannelState, Channels as Shape, StartQr } from "./channelsApi";
+import type { ChannelKind, ChannelState, Channels as Shape, LinkQr, StartQr } from "./channelsApi";
 
 const api = vi.hoisted(() => ({
   getChannels: vi.fn<() => Promise<Shape | null>>(),
@@ -13,10 +13,12 @@ const api = vi.hoisted(() => ({
   addChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
   removeChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
   telegramQr: vi.fn<() => Promise<StartQr | null>>(),
+  signalLinkStart: vi.fn<(number: string) => Promise<LinkQr | null>>(),
+  signalLinkFinish: vi.fn<() => Promise<Shape | null>>(),
 }));
 vi.mock("./channelsApi", () => api);
 
-import { Channels, QR_NOTE } from "./Channels";
+import { Channels, QR_NOTE, SIGNAL_QR_NOTE } from "./Channels";
 
 const row = (kind: ChannelKind, name: string, live: boolean, setupLabel = `${name} bot token`): ChannelState => ({
   kind,
@@ -114,6 +116,52 @@ describe("Phone and chat apps", () => {
     ).toBeTruthy();
     expect(screen.getByText("Listening for messages")).toBeTruthy();
     expect(screen.queryByLabelText("Telegram bot token")).toBeNull();
+  });
+
+  it("links Signal from a QR for the typed number, and hides the QR when the phone is done", async () => {
+    const signalLive: Shape = {
+      ...none,
+      channels: none.channels.map((ch) =>
+        ch.kind === "signal" ? { ...ch, live: true, setupLabel: "Signal number" } : ch,
+      ),
+    };
+    api.getChannels.mockResolvedValue(signalLive);
+    api.signalLinkStart.mockResolvedValue({ svg: "<svg>link</svg>", account: "+15551234567" });
+    let finish: (next: Shape) => void = () => {};
+    api.signalLinkFinish.mockReturnValue(new Promise((done) => (finish = done)));
+    render(<Channels />);
+    const input = (await screen.findByLabelText("Signal number")) as HTMLInputElement;
+    expect(input.type).toBe("tel");
+    const link = screen.getByRole("button", { name: "Link with a QR code" });
+    expect(link).toBeDisabled();
+    await userEvent.type(input, "+1 555 123 4567");
+    await userEvent.click(link);
+    expect(api.signalLinkStart).toHaveBeenCalledWith("+1 555 123 4567");
+    const figure = await screen.findByRole("figure", { name: "Signal link QR code" });
+    expect(figure.textContent).toContain(SIGNAL_QR_NOTE);
+    expect(screen.getByRole("img", { name: "QR code that links this computer to Signal for +15551234567" })).toBeTruthy();
+    finish({
+      ...signalLive,
+      channels: signalLive.channels.map((ch) => (ch.kind === "signal" ? { ...ch, connected: true, running: true } : ch)),
+      status: "Connected Signal as +15551234567. Only your Note to Self is read, and answers go back there.",
+    });
+    expect(await screen.findByText(/Connected Signal as \+15551234567/)).toBeTruthy();
+    expect(screen.queryByRole("figure", { name: "Signal link QR code" })).toBeNull();
+  });
+
+  it("says why a Signal link failed and takes the QR down", async () => {
+    api.getChannels.mockResolvedValue({
+      ...none,
+      channels: none.channels.map((ch) => (ch.kind === "signal" ? { ...ch, live: true, setupLabel: "Signal number" } : ch)),
+    });
+    api.signalLinkStart.mockResolvedValue({ svg: "<svg>link</svg>", account: "+15551234567" });
+    api.signalLinkFinish.mockRejectedValue("That phone is signed in to +15559876543, not +15551234567.");
+    render(<Channels />);
+    await userEvent.type(await screen.findByLabelText("Signal number"), "+15551234567");
+    await userEvent.click(screen.getByRole("button", { name: "Link with a QR code" }));
+    expect(await screen.findByText(/That phone is signed in to \+15559876543/)).toBeTruthy();
+    expect(screen.queryByRole("figure", { name: "Signal link QR code" })).toBeNull();
+    expect((screen.getByLabelText("Signal number") as HTMLInputElement).value).toBe("+15551234567");
   });
 
   it("lists every kind from the table and offers setup only for live ones", async () => {

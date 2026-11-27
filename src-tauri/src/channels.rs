@@ -18,7 +18,7 @@ use grokhub_agent::channels_net::{
 use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust};
-use grokhub_core::msg_telegram;
+use grokhub_core::{msg_signal, msg_telegram};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -566,6 +566,57 @@ fn start_qr(config_dir: &Path, bot: &str, now_ms: u64) -> Result<StartQr, String
     })
 }
 
+/// The Signal link the page is showing: the account it must end up linked
+/// to, and the `sgnl://linkdevice` address in the QR. One at a time.
+static SIGNAL_LINKING: Mutex<Option<(msg_signal::Config, String)>> = Mutex::new(None);
+
+/// A QR the Signal app scans to link signal-cli as one more device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkQr {
+    /// The QR as an SVG document. The address itself isn't shown.
+    pub svg: String,
+    /// The number the phone must be signed in to.
+    pub account: String,
+}
+
+/// Ask the local signal-cli daemon for a device link for `number`'s account
+/// and show it as a QR. Desktop only.
+pub fn signal_link_start(config_dir: &Path, number: &str) -> Result<LinkQr, String> {
+    let config = msg_signal::parse_config(number)?;
+    let uri = SignalLink::daemon(&config.daemon)?.start_link(config_dir)?;
+    let svg = msg_channels::qr_svg(&uri, QR_PX)?;
+    let account = config.account.clone();
+    *SIGNAL_LINKING.lock().unwrap_or_else(|e| e.into_inner()) = Some((config, uri));
+    Ok(LinkQr { svg, account })
+}
+
+/// Wait for the phone to scan the QR, then connect as [`connect`] does. A
+/// phone signed in to another number is refused: the QR only links the
+/// account the person typed.
+pub fn signal_link_finish(config_dir: &Path, store: &dyn Backend) -> Result<ChannelsView, String> {
+    let (config, uri) = SIGNAL_LINKING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .ok_or("Show the QR code first, then scan it.")?;
+    let device = grokhub_core::brand::product_name();
+    let linked = SignalLink::daemon(&config.daemon)?.finish_link(config_dir, &uri, device)?;
+    check_linked(&config, &linked)?;
+    connect(config_dir, store, ChannelKind::Signal, &config.saved())
+}
+
+fn check_linked(config: &msg_signal::Config, linked: &str) -> Result<(), String> {
+    if linked == config.account {
+        Ok(())
+    } else {
+        Err(format!(
+            "That phone is signed in to {linked}, not {}, so Signal wasn't connected. Unlink the new device in that phone's Signal settings.",
+            config.account
+        ))
+    }
+}
+
 /// Turn approval asks on or off for one paired sender.
 pub fn set_asks(
     config_dir: &Path,
@@ -731,6 +782,25 @@ mod tests {
             "That sender isn't paired."
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_signal_link_needs_a_number_first_and_only_links_that_number() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-signal-{}", std::process::id()));
+        let store = MemoryStore::default();
+        assert!(signal_link_start(&dir, "not a number")
+            .unwrap_err()
+            .starts_with("That isn't a phone number."));
+        assert_eq!(
+            signal_link_finish(&dir, &store).unwrap_err(),
+            "Show the QR code first, then scan it."
+        );
+        let config = msg_signal::parse_config("+15551234567").unwrap();
+        assert_eq!(check_linked(&config, "+15551234567"), Ok(()));
+        assert!(check_linked(&config, "+15559876543")
+            .unwrap_err()
+            .starts_with("That phone is signed in to +15559876543, not +15551234567"));
+        assert!(store.0.lock().unwrap().is_empty());
     }
 
     #[test]
