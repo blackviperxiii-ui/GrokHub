@@ -221,6 +221,55 @@ fn shell_tests_run_on_nextest_and_keep_doctests() {
         .contains(&"      - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked"));
 }
 
+/// Windows runs the shell's clippy in a row of its own, beside the row that
+/// builds, tests and smoke-tests the shell. Linux and macOS have one row
+/// that still runs clippy, and every row that runs tests still runs them.
+#[test]
+fn windows_shell_clippy_runs_in_its_own_row_and_nothing_is_dropped() {
+    let lines = job_lines(include_str!("../../.github/workflows/ci.yml"), "shell");
+    let condition = |step: &str| {
+        let at = lines
+            .iter()
+            .position(|line| *line == step)
+            .unwrap_or_else(|| panic!("the shell job has `{step}`"));
+        lines[at + 1].trim()
+    };
+    for row in [
+        "        part: [build, clippy]",
+        "          - os: ubuntu-latest",
+        "          - os: macos-latest",
+    ] {
+        assert!(lines.contains(&row), "shell matrix: {row}");
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.trim() == "part: clippy")
+            .count(),
+        2,
+        "only Linux and macOS drop the clippy row"
+    );
+    assert_eq!(
+        condition("      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings"),
+        "if: runner.os != 'Windows' || matrix.part == 'clippy'"
+    );
+    for step in [
+        "      - run: cargo nextest run --manifest-path src-tauri/Cargo.toml --locked --config-file .config/nextest.toml --profile ci",
+        "      - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked",
+    ] {
+        assert_eq!(condition(step), "if: matrix.part == 'build'", "{step}");
+    }
+    for step in [
+        "      - name: Smoke-test build",
+        "      - name: Smoke test (Windows)",
+    ] {
+        assert!(
+            condition(step).starts_with("if: matrix.part == 'build' && "),
+            "{step} runs in the build row"
+        );
+    }
+}
+
 /// The value of every `path = "…"` or `path = '…'` key in a Cargo manifest.
 /// A value in triple quotes comes back empty.
 fn manifest_paths(manifest: &str) -> Vec<&str> {

@@ -548,6 +548,9 @@ jobs:
   # main, tags, nightly and manual — not on every PR revision (CI audit
   # 916.7/900.73: bundles were ~15 min / ~62% of PR shell wall-clock).
   # The web app smoke test (Phase 5) runs on Linux.
+  # Windows runs clippy in a row of its own (`shell clippy (windows-latest)`)
+  # beside the build, tests and smoke test, so clippy's ~100s leaves the
+  # Windows long pole. Linux and macOS keep clippy in their one row.
   shell:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.shell_os != '[]' && needs.changes.outputs.shell_os != ''
@@ -555,7 +558,13 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(needs.changes.outputs.shell_os) }}
-    name: shell (${{ matrix.os }})
+        part: [build, clippy]
+        exclude:
+          - os: ubuntu-latest
+            part: clippy
+          - os: macos-latest
+            part: clippy
+    name: ${{ matrix.part == 'clippy' && format('shell clippy ({0})', matrix.os) || format('shell ({0})', matrix.os) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -572,7 +581,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src-tauri
-          shared-key: shell-${{ matrix.os }}
+          # The clippy row keeps its own check artifacts, so neither row's
+          # save drops what the other one compiled.
+          shared-key: shell-${{ matrix.os }}${{ matrix.part == 'clippy' && '-clippy' || '' }}
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' || inputs.nightly == true }}
       # Beta Windows builds the hub sidecar from the same dev artifacts the
@@ -675,7 +686,10 @@ jobs:
           ui/node_modules/.bin/playwright install --with-deps chromium
           node ui/e2e/web.mjs
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+        if: runner.os != 'Windows' || matrix.part == 'clippy'
+      # Everything below is the build row's: tests, bundles and the smoke test.
       - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2
+        if: matrix.part == 'build'
         with:
           tool: nextest
       # nextest runs each test in its own process, in parallel (same profile
@@ -683,21 +697,23 @@ jobs:
       # the config file is named). It skips doctests, so `cargo test --doc`
       # keeps them.
       - run: cargo nextest run --manifest-path src-tauri/Cargo.toml --locked --config-file .config/nextest.toml --profile ci
+        if: matrix.part == 'build'
       - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked
+        if: matrix.part == 'build'
       # Release installer/AppImage/dmg. Skipped on pull_request and on push
       # to beta: the debug smoke build below already compiles the shell the
       # smoke test drives, and release.yml builds the beta channel bundles
       # for every beta push, so building them here too only doubles the run.
       - name: Bundles
-        if: github.event_name != 'pull_request' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
+        if: matrix.part == 'build' && github.event_name != 'pull_request' && !(github.event_name == 'push' && github.ref == 'refs/heads/beta')
         shell: bash
         run: ui/node_modules/.bin/tauri build -- --locked
       - name: Smoke-test build
-        if: runner.os != 'macOS'
+        if: matrix.part == 'build' && runner.os != 'macOS'
         shell: bash
         run: ui/node_modules/.bin/tauri build --debug --no-bundle -- --locked
       - name: tauri-driver
-        if: runner.os != 'macOS'
+        if: matrix.part == 'build' && runner.os != 'macOS'
         run: cargo install tauri-driver --locked
       # SMOKE_WEB adds the web access step (Chromium from the web smoke test).
       - name: Smoke test (Linux)
@@ -709,7 +725,7 @@ jobs:
       # msedgedriver must match the WebView2 runtime the shell runs on, which
       # can differ from the runner's Edge, so fetch the driver for that version.
       - name: msedgedriver for WebView2
-        if: runner.os == 'Windows'
+        if: matrix.part == 'build' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
@@ -719,13 +735,13 @@ jobs:
           Expand-Archive edgedriver.zip -DestinationPath edgedriver
           "SMOKE_NATIVE_DRIVER=$PWD\edgedriver\msedgedriver.exe" >> $env:GITHUB_ENV
       - name: Smoke test (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.part == 'build' && runner.os == 'Windows'
         env:
           SMOKE_SHOTS: smoke-shots
         run: node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell.exe
       # One screenshot per walked screen, for the parity walk.
       - name: Smoke screenshots
-        if: always() && runner.os != 'macOS'
+        if: always() && matrix.part == 'build' && runner.os != 'macOS'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-shots-${{ runner.os }}
