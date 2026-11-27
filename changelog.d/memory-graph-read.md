@@ -1,0 +1,1 @@
+- Memory: the desktop app can read the memory as a graph (live lines newest first, their type and state, and the edges between them) for the coming memory map. Private lines come back without their words, and forgotten lines are left out.

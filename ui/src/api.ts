@@ -1476,6 +1476,47 @@ export function exportMemoryWiki(): Promise<string> {
   return invoke<string>("export_memory_wiki");
 }
 
+/** One live memory line on the map. `label` is empty for a private line. */
+export interface MemoryGraphNode {
+  id: string;
+  kind: string;
+  label: string;
+  confidence: number;
+  updated: string;
+  sealed: boolean;
+  proposed: boolean;
+  paused: boolean;
+  superseded: boolean;
+}
+
+export type MemoryEdgeKind =
+  | "references"
+  | "supersedes"
+  | "learned_from_span"
+  | "about_project"
+  | "contradicts";
+
+export interface MemoryGraphEdge {
+  from: string;
+  to: string;
+  kind: MemoryEdgeKind;
+}
+
+/** The memory map: newest nodes first, edges only between nodes shown. */
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  /** Private lines that could not be opened, so are not on the map. */
+  locked: number;
+  /** More lines than the map holds; the oldest are left off. */
+  truncated: boolean;
+}
+
+/** Desktop only: the memory as nodes and edges for the Memory map. */
+export function getMemoryGraph(): Promise<MemoryGraph> {
+  return invoke<MemoryGraph>("memory_graph");
+}
+
 export interface PersonalWiped {
   removed: number;
   /** Private lines that were locked and stay until opened. */

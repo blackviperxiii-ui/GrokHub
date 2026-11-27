@@ -980,7 +980,7 @@ mod tests {
 
     #[test]
     fn a_browser_never_halts_the_computer() {
-        for name in ["halt_desktop", "get_halt_keys"] {
+        for name in ["halt_desktop", "get_halt_keys", "memory_graph"] {
             assert!(!web_command(name), "{name} must stay on the desktop");
         }
     }
