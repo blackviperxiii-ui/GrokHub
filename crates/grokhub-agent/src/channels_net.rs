@@ -11,6 +11,9 @@
 //! - [`SlackLink`]: one Socket Mode socket, opened with the app token, and
 //!   Web API replies with the bot token. Every envelope is acknowledged
 //!   before it is handled, and a retried event is handled once.
+//! - [`SignalLink`]: a signal-cli daemon on this computer only, linked to the
+//!   person's own account. It reads their Note to Self and answers there;
+//!   nobody else is read or written to.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,6 +23,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use grokhub_core::http;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust, Forwarded};
 use grokhub_core::msg_discord::{self, close_reason, Do, Gateway};
+use grokhub_core::msg_signal;
 use grokhub_core::msg_slack;
 use grokhub_core::msg_telegram::{self, Step};
 use serde_json::{json, Value};
@@ -93,7 +97,12 @@ pub fn save_token(store: &dyn Backend, kind: ChannelKind, token: &str) -> Result
             slack.is_some(),
             "Those aren't Slack's two tokens. Paste the app token (xapp-…) and the bot token (xoxb-…), with a space between.",
         ),
-        ChannelKind::Signal | ChannelKind::Email => {
+        ChannelKind::Signal => {
+            // Kept in its normalized form: the number, then any daemon.
+            let config = msg_signal::parse_config(token)?;
+            return keyring_blob::set(store, token_account(kind), &config.saved());
+        }
+        ChannelKind::Email => {
             return Err(coming_next(kind));
         }
     };
@@ -849,6 +858,305 @@ impl SlackLink {
     }
 }
 
+/// How long a call to the local signal-cli daemon may take. `finishLink`
+/// waits for the phone, so it has its own limit.
+const SIGNAL_CALL: Duration = Duration::from_secs(30);
+/// How long linking waits for the phone to confirm.
+pub const SIGNAL_LINK_WAIT: Duration = Duration::from_secs(180);
+/// A quiet event stream is opened again after this, so a daemon that hung is
+/// noticed.
+const SIGNAL_QUIET: Duration = Duration::from_secs(300);
+
+/// The person's own Signal account, reached through a signal-cli daemon on
+/// this computer. It reads their Note to Self and answers there; nobody else
+/// is ever read or written to (see [`msg_signal`]).
+pub struct SignalLink {
+    config: msg_signal::Config,
+    /// Short calls: the check and JSON-RPC.
+    calls: http::Agent,
+    /// The event stream and `finishLink`, which wait.
+    waits: http::Agent,
+    events: msg_signal::EventReader,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl SignalLink {
+    /// `saved` as the keychain keeps it: the number, then the daemon when it
+    /// isn't the default.
+    pub fn new(saved: &str) -> Result<Self, String> {
+        Ok(Self::with(msg_signal::parse_config(saved)?))
+    }
+
+    /// A link to the daemon alone, before any account is linked.
+    pub fn daemon(daemon: &str) -> Result<Self, String> {
+        Ok(Self::with(msg_signal::Config {
+            account: String::new(),
+            daemon: msg_signal::daemon_url(daemon)?,
+        }))
+    }
+
+    fn with(config: msg_signal::Config) -> Self {
+        // Loopback only, whatever the address resolves to.
+        let opts = http::Opts {
+            connect: Duration::from_secs(3),
+            redirects: 0,
+            resolve: Some(http::loopback_only_resolve),
+            ..Default::default()
+        };
+        Self {
+            config,
+            calls: http::agent(http::Opts {
+                overall: Some(SIGNAL_CALL),
+                ..opts
+            }),
+            waits: http::agent(http::Opts {
+                read: Some(SIGNAL_QUIET),
+                ..opts
+            }),
+            events: msg_signal::EventReader::default(),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+
+    pub fn config(&self) -> &msg_signal::Config {
+        &self.config
+    }
+
+    fn unreachable(&self) -> String {
+        format!(
+            "signal-cli isn't answering at {}. Start it with: {}",
+            self.config.daemon,
+            msg_signal::DAEMON_COMMAND
+        )
+    }
+
+    fn rpc_on(
+        &self,
+        agent: &http::Agent,
+        config_dir: &Path,
+        method: &str,
+        params: Value,
+        data: &[DataClass],
+    ) -> Result<Value, String> {
+        let url = self.config.rpc_url();
+        guard_quiet(config_dir, &EgressReq::new(&url, data))?;
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let account = (!self.config.account.is_empty()).then_some(self.config.account.as_str());
+        let answer: Value = agent
+            .post(&url)
+            .send_json(msg_signal::rpc(id, method, account, params))
+            .map_err(|e| match e.status() {
+                Some(code) => format!("signal-cli's {method} failed (status {code})."),
+                None => self.unreachable(),
+            })?
+            .into_json()
+            .map_err(|_| format!("signal-cli's {method} answer isn't JSON."))?;
+        msg_signal::rpc_result(&answer, method)
+    }
+
+    fn rpc(
+        &self,
+        config_dir: &Path,
+        method: &str,
+        params: Value,
+        data: &[DataClass],
+    ) -> Result<Value, String> {
+        self.rpc_on(&self.calls, config_dir, method, params, data)
+    }
+
+    /// The daemon runs and knows the account. Answers the number.
+    pub fn check(&self, config_dir: &Path) -> Result<String, String> {
+        let url = self.config.check_url();
+        guard_quiet(config_dir, &EgressReq::new(&url, &[]))?;
+        self.calls.get(&url).call().map_err(|e| match e.status() {
+            Some(code) => format!(
+                "Something at {} answered, but not as signal-cli's HTTP daemon (status {code}).",
+                self.config.daemon
+            ),
+            None => self.unreachable(),
+        })?;
+        let accounts =
+            msg_signal::listed_accounts(&self.rpc(config_dir, "listAccounts", json!({}), &[])?);
+        if !accounts.contains(&self.config.account) {
+            return Err(format!(
+                "signal-cli isn't linked to {}. Link it first, then connect again.",
+                self.config.account
+            ));
+        }
+        Ok(self.config.account.clone())
+    }
+
+    /// Answer in the account's own Note to Self. `reply_to` must be that
+    /// account: there is nobody else to answer.
+    pub fn send(
+        &self,
+        config_dir: &Path,
+        reply_to: &str,
+        text: &str,
+        data: &[DataClass],
+    ) -> Result<(), String> {
+        if reply_to != self.config.account {
+            return Err("Signal answers go only to your own Note to Self.".into());
+        }
+        self.rpc(
+            config_dir,
+            "send",
+            msg_signal::send_params(&self.config.account, text),
+            data,
+        )
+        .map(|_| ())
+    }
+
+    /// Start linking: the `sgnl://linkdevice` address the phone scans.
+    pub fn start_link(&self, config_dir: &Path) -> Result<String, String> {
+        msg_signal::link_uri(&self.rpc(config_dir, "startLink", json!({}), &[])?)
+    }
+
+    /// Wait for the phone to confirm `uri`, up to [`SIGNAL_LINK_WAIT`].
+    /// Answers the linked number.
+    pub fn finish_link(
+        &self,
+        config_dir: &Path,
+        uri: &str,
+        device: &str,
+    ) -> Result<String, String> {
+        let wait = http::agent(http::Opts {
+            connect: Duration::from_secs(3),
+            overall: Some(SIGNAL_LINK_WAIT),
+            redirects: 0,
+            resolve: Some(http::loopback_only_resolve),
+            ..Default::default()
+        });
+        let result = self.rpc_on(
+            &wait,
+            config_dir,
+            "finishLink",
+            json!({"deviceLinkUri": uri, "deviceName": device}),
+            &[],
+        )?;
+        msg_signal::linked_number(&result)
+    }
+
+    /// Read events until `stop` says so, opening the stream again (with
+    /// `Last-Event-ID`, so the daemon replays what was missed) whenever it
+    /// ends. `report` gets the current problem, or `None` once events flow.
+    /// `Err` only when the egress guard refuses.
+    pub fn run(
+        &mut self,
+        config_dir: &Path,
+        stop: &(dyn Fn() -> bool + Sync),
+        report: &dyn Fn(Option<&str>),
+    ) -> Result<(), String> {
+        let mut backoff = Duration::from_secs(1);
+        while !stop() {
+            match self.stream(config_dir, stop, report) {
+                Ok(()) => backoff = Duration::from_secs(1),
+                Err(Some(why)) => {
+                    report(Some(&why));
+                    backoff = (backoff * 2).min(DISCORD_MAX_BACKOFF);
+                }
+                Err(None) => return Err("The egress guard refused the Signal daemon.".into()),
+            }
+            SlackLink::nap(stop, backoff);
+        }
+        Ok(())
+    }
+
+    /// One open stream. `Err(None)` for a guard refusal; `Err(Some)` for
+    /// anything trying again can fix.
+    fn stream(
+        &mut self,
+        config_dir: &Path,
+        stop: &(dyn Fn() -> bool + Sync),
+        report: &dyn Fn(Option<&str>),
+    ) -> Result<(), Option<String>> {
+        let url = self.config.events_url();
+        guard_quiet(config_dir, &EgressReq::new(&url, &[])).map_err(|_| None)?;
+        // Pressed by the watcher below once `stop` reads true.
+        let pressed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let switch = {
+            let pressed = pressed.clone();
+            http::StopSwitch::new(move || pressed.load(std::sync::atomic::Ordering::SeqCst))
+        };
+        let mut req = self.waits.get(&url).header("Accept", "text/event-stream");
+        if let Some(id) = &self.events.last_id {
+            req = req.header("Last-Event-ID", id);
+        }
+        // The body is taken inside, so its reads keep the switch.
+        let reader = http::with_stop(&switch, || req.call().map(http::Response::into_reader))
+            .map_err(|e| {
+                Some(match e.status() {
+                    Some(code) => format!("signal-cli's event stream failed (status {code})."),
+                    None => self.unreachable(),
+                })
+            })?;
+        report(None);
+        let mut lines = std::io::BufReader::new(reader);
+        let mut line = String::new();
+        std::thread::scope(|s| {
+            // Presses the switch once `stop` reads true, so a quiet stream
+            // doesn't hold the worker.
+            let watcher = s.spawn(|| {
+                while !pressed.load(std::sync::atomic::Ordering::SeqCst) {
+                    if stop() {
+                        pressed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+            let out = loop {
+                line.clear();
+                match std::io::BufRead::read_line(&mut lines, &mut line) {
+                    Ok(0) => break Err(Some("signal-cli closed its event stream.".to_string())),
+                    Ok(_) => {}
+                    Err(e) if http::is_stopped(&e) => break Ok(()),
+                    Err(_) => break Err(Some("signal-cli's event stream broke off.".to_string())),
+                }
+                let Some(event) = self.events.line(line.trim_end_matches('\n')) else {
+                    continue;
+                };
+                if let Err(why) = self.handle(config_dir, &event.data, grokhub_core::now_ms()) {
+                    report(Some(&why));
+                }
+            };
+            pressed.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = watcher.join();
+            out
+        })
+    }
+
+    /// One event's data: a Note to Self is queued for the app; anything else
+    /// is dropped without a word.
+    fn handle(&self, config_dir: &Path, data: &str, now_ms: u64) -> Result<(), String> {
+        let Ok(data) = serde_json::from_str::<Value>(data) else {
+            return Ok(());
+        };
+        let Some(text) = msg_signal::note_to_self(&data, &self.config.account) else {
+            return Ok(());
+        };
+        let account = &self.config.account;
+        // Paired when connected; checked again, so unpairing in the app stops
+        // the queue at once.
+        if !DmTrust::load(config_dir).is_paired(ChannelKind::Signal, account) {
+            return Ok(());
+        }
+        msg_channels::queue_message(
+            config_dir,
+            &Forwarded {
+                channel: ChannelKind::Signal,
+                sender: account,
+                label: msg_signal::SELF_LABEL,
+                reply_to: account,
+                text: &text,
+            },
+            now_ms,
+        )
+        .map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1068,18 +1376,31 @@ mod tests {
                 .map(String::as_str),
             Some(SLACK_TOKENS)
         );
-        for kind in [ChannelKind::Signal, ChannelKind::Email] {
-            assert_eq!(
-                save_token(&store, kind, TOKEN).unwrap_err(),
-                coming_next(kind)
-            );
-            assert_eq!(load_token(&store, kind).unwrap(), None);
-        }
+        assert!(save_token(&store, ChannelKind::Signal, TOKEN).is_err());
+        save_token(
+            &store,
+            ChannelKind::Signal,
+            "+1 555 123 4567 http://localhost:8080",
+        )
+        .unwrap();
+        assert_eq!(
+            load_token(&store, ChannelKind::Signal)
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
+            Some("+15551234567")
+        );
+        assert_eq!(
+            save_token(&store, ChannelKind::Email, TOKEN).unwrap_err(),
+            coming_next(ChannelKind::Email)
+        );
+        assert_eq!(load_token(&store, ChannelKind::Email).unwrap(), None);
         save_token(&store, ChannelKind::Discord, "MTIz.abc_DEF.ghi-jkl").unwrap();
         assert_eq!(
             store.0.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
             vec![
                 "channel-discord".to_string(),
+                "channel-signal".to_string(),
                 "channel-slack".to_string(),
                 "channel-telegram".to_string()
             ]
@@ -1282,6 +1603,200 @@ mod tests {
         );
         opened.join().unwrap();
         assert!(SlackLink::new("xoxb-0123456789-0123456789-abcdefABCDEF").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const ME: &str = "+15551234567";
+
+    /// One request the fake daemon saw: its line, `Last-Event-ID` and body.
+    type Seen = (String, Option<String>, String);
+
+    /// A fake signal-cli daemon on loopback. `answers` is served one per
+    /// connection: `rpc` answers carry a JSON body, `events` a raw event
+    /// stream. Hands back each request's line, its `Last-Event-ID` and its
+    /// body, and sets `done` after the last one.
+    fn fake_daemon(
+        answers: Vec<(u16, String)>,
+        done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (String, JoinHandle<Vec<Seen>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for (status, body) in answers {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let (mut length, mut last_id) = (0, None);
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap();
+                        }
+                        if name.eq_ignore_ascii_case("last-event-id") {
+                            last_id = Some(value.trim().to_string());
+                        }
+                    }
+                }
+                let mut sent = vec![0; length];
+                reader.read_exact(&mut sent).unwrap();
+                seen.push((
+                    line.trim_end().to_string(),
+                    last_id,
+                    String::from_utf8(sent).unwrap(),
+                ));
+                let kind = if line.contains("/events") {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                let mut stream = reader.into_inner();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            seen
+        });
+        (base, handle)
+    }
+
+    fn rpc_answer(result: Value) -> (u16, String) {
+        (
+            200,
+            json!({"jsonrpc": "2.0", "id": 1, "result": result}).to_string(),
+        )
+    }
+
+    fn event(id: u32, params: Value) -> String {
+        let data = json!({"jsonrpc": "2.0", "method": "receive", "params": params});
+        format!("event:receive\nid:{id}\ndata:{data}\n\n")
+    }
+
+    #[test]
+    fn signal_reads_only_the_note_to_self_and_picks_up_where_the_stream_broke() {
+        let dir = temp_dir("signal");
+        let mut trust = DmTrust::default();
+        trust.pair(ChannelKind::Signal, ME);
+        trust.save(&dir).unwrap();
+        let stream = [
+            event(1, json!({"account": ME, "envelope": {
+                "source": "+15559876543", "sourceNumber": "+15559876543",
+                "dataMessage": {"message": "what's your pairing code?"}
+            }})),
+            ": keep-alive\n\n".to_string(),
+            event(2, json!({"account": ME, "envelope": {
+                "source": ME, "sourceNumber": ME, "sourceUuid": "aci-me",
+                "syncMessage": {"sentMessage": {"destinationNumber": ME, "message": "plan my week"}}
+            }})),
+        ]
+        .concat();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (base, daemon) = fake_daemon(vec![(200, stream), (503, String::new())], done.clone());
+        let mut link = SignalLink::new(&format!("{ME} {base}")).unwrap();
+        let problems = Mutex::new(Vec::new());
+        let result = link.run(
+            &dir,
+            &|| done.load(std::sync::atomic::Ordering::SeqCst),
+            &|p| problems.lock().unwrap().push(p.map(str::to_string)),
+        );
+        let seen = daemon.join().unwrap();
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen[0].0, "GET /api/v1/events HTTP/1.1");
+        assert_eq!(seen[0].1, None);
+        // The second stream asks the daemon to replay from the last event.
+        assert_eq!(seen[1].1.as_deref(), Some("2"));
+        let queued: Vec<_> = std::fs::read_dir(msg_channels::inbox_dir(&dir))
+            .unwrap()
+            .collect();
+        assert_eq!(queued.len(), 1, "only the Note to Self is queued");
+        let saved = std::fs::read_to_string(queued[0].as_ref().unwrap().path()).unwrap();
+        assert!(
+            saved.contains("plan my week") && !saved.contains("pairing code"),
+            "{saved}"
+        );
+        // Nothing was ever sent, and the stranger got no code.
+        assert!(seen.iter().all(|s| !s.0.starts_with("POST")));
+        assert!(DmTrust::load(&dir).pending.is_empty());
+        let problems = problems.into_inner().unwrap();
+        assert_eq!(problems.first(), Some(&None));
+        assert!(problems.contains(&Some("signal-cli closed its event stream.".into())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signal_checks_the_daemon_knows_the_account_and_answers_only_itself() {
+        let dir = temp_dir("signal-send");
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (base, daemon) = fake_daemon(
+            vec![
+                (200, String::new()),
+                rpc_answer(json!([{"number": ME}])),
+                (200, String::new()),
+                rpc_answer(json!([{"number": "+15550000000"}])),
+                rpc_answer(json!({"timestamp": 9})),
+            ],
+            done,
+        );
+        let link = SignalLink::new(&format!("{ME} {base}")).unwrap();
+        assert_eq!(link.check(&dir).unwrap(), ME);
+        let other = SignalLink::new(&format!("+15551112222 {base}")).unwrap();
+        assert_eq!(
+            other.check(&dir).unwrap_err(),
+            "signal-cli isn't linked to +15551112222. Link it first, then connect again."
+        );
+        assert_eq!(
+            link.send(&dir, "+15559876543", "hi", &[]).unwrap_err(),
+            "Signal answers go only to your own Note to Self."
+        );
+        link.send(&dir, ME, "done", &[DataClass::Chat]).unwrap();
+        let seen = daemon.join().unwrap();
+        let lines: Vec<&str> = seen.iter().map(|s| s.0.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /api/v1/check HTTP/1.1",
+                "POST /api/v1/rpc HTTP/1.1",
+                "GET /api/v1/check HTTP/1.1",
+                "POST /api/v1/rpc HTTP/1.1",
+                "POST /api/v1/rpc HTTP/1.1",
+            ]
+        );
+        let listed: Value = serde_json::from_str(&seen[1].2).unwrap();
+        assert_eq!(listed["method"], "listAccounts");
+        assert_eq!(listed["params"]["account"], ME);
+        let sent: Value = serde_json::from_str(&seen[4].2).unwrap();
+        assert_eq!(sent["method"], "send");
+        assert_eq!(
+            sent["params"],
+            json!({"recipient": [ME], "message": "done", "account": ME})
+        );
+
+        // A daemon that isn't running, and one that isn't on this computer.
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let gone = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let err = SignalLink::new(&format!("{ME} {gone}"))
+            .unwrap()
+            .check(&dir)
+            .unwrap_err();
+        assert!(
+            err.starts_with("signal-cli isn't answering at http://127.0.0.1:"),
+            "{err}"
+        );
+        assert!(err.ends_with(msg_signal::DAEMON_COMMAND), "{err}");
+        assert!(SignalLink::new(&format!("{ME} http://192.168.1.4:8080")).is_err());
+        assert!(SignalLink::daemon("http://example.com:8080").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

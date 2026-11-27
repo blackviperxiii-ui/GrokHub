@@ -1,5 +1,6 @@
 //! Connectors → Phone and chat apps (messaging channels, part 6): connect a
-//! Telegram or Discord bot, approve the pairing codes strangers were sent,
+//! Telegram, Discord or Slack bot, or the person's own Signal account (its
+//! Note to Self only), approve the pairing codes strangers were sent,
 //! unpair senders, show a QR that pairs a phone in one scan (Telegram), and
 //! add or remove signed webhooks. Each connected bot has one background worker; its
 //! token stays in the OS keychain, and what paired senders write is queued
@@ -12,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use grokhub_agent::channels_net::{
-    self, DiscordLink, SlackLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
+    self, DiscordLink, SignalLink, SlackLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
 };
 use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
@@ -153,7 +154,10 @@ pub fn send_answer(
         ChannelKind::Slack => {
             SlackLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
         }
-        ChannelKind::Signal | ChannelKind::Email => Err(channels_net::coming_next(to.channel)),
+        ChannelKind::Signal => {
+            SignalLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
+        }
+        ChannelKind::Email => Err(channels_net::coming_next(to.channel)),
     }
 }
 
@@ -365,7 +369,22 @@ fn start(config_dir: &Path, kind: ChannelKind, token: &str) -> Result<(), String
                 })
                 .map_err(|e| e.to_string())?;
         }
-        ChannelKind::Signal | ChannelKind::Email => {
+        ChannelKind::Signal => {
+            let mut link = SignalLink::new(token)?;
+            std::thread::Builder::new()
+                .name("channel-signal".into())
+                .spawn(move || {
+                    let report = |why: Option<&str>| {
+                        *p.lock().unwrap_or_else(|e| e.into_inner()) = why.map(str::to_string);
+                    };
+                    if let Err(why) = link.run(&dir, &|| s.load(Ordering::SeqCst), &report) {
+                        report(Some(&why));
+                    }
+                    r.store(false, Ordering::SeqCst);
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        ChannelKind::Email => {
             return Err(channels_net::coming_next(kind));
         }
     }
@@ -415,7 +434,22 @@ pub fn connect(
         ChannelKind::Telegram => TelegramLink::new(token)?.check(config_dir)?,
         ChannelKind::Discord => DiscordLink::new(token)?.check(config_dir)?,
         ChannelKind::Slack => SlackLink::new(token)?.check(config_dir)?,
-        ChannelKind::Signal | ChannelKind::Email => {
+        ChannelKind::Signal => {
+            let link = SignalLink::new(token)?;
+            let account = link.check(config_dir)?;
+            pair_owner(config_dir, &account)?;
+            let saved = link.config().saved();
+            channels_net::save_token(store, kind, &saved)?;
+            start(config_dir, kind, &saved)?;
+            return Ok(view(
+                config_dir,
+                store,
+                Some(format!(
+                    "Connected Signal as {account}. Only your Note to Self is read, and answers go back there."
+                )),
+            ));
+        }
+        ChannelKind::Email => {
             return Err(channels_net::coming_next(kind));
         }
     };
@@ -429,6 +463,14 @@ pub fn connect(
             name(kind)
         )),
     ))
+}
+
+/// Signal reads only the person's own Note to Self, so their number is
+/// paired with no code: there is nobody else to approve.
+fn pair_owner(config_dir: &Path, account: &str) -> Result<(), String> {
+    let mut trust = DmTrust::load(config_dir);
+    trust.pair(ChannelKind::Signal, account);
+    trust.save(config_dir)
 }
 
 /// Stop listening and forget the token. Paired senders stay paired.
@@ -625,7 +667,7 @@ mod tests {
                 ("Telegram", true, false),
                 ("Discord", true, false),
                 ("Slack", true, false),
-                ("Signal", false, false),
+                ("Signal", true, false),
                 ("Email", false, false),
             ]
         );
@@ -708,13 +750,23 @@ mod tests {
             connect(&dir, &store, ChannelKind::Slack, "nope").unwrap_err(),
             "Those aren't Slack's two tokens."
         );
-        for kind in [ChannelKind::Signal, ChannelKind::Email] {
-            assert_eq!(
-                connect(&dir, &store, kind, "anything").unwrap_err(),
-                channels_net::coming_next(kind)
-            );
-        }
+        assert!(connect(&dir, &store, ChannelKind::Signal, "nope")
+            .unwrap_err()
+            .starts_with("That isn't a phone number."));
+        assert!(connect(
+            &dir,
+            &store,
+            ChannelKind::Signal,
+            "+15551234567 http://10.0.0.2:8080"
+        )
+        .unwrap_err()
+        .starts_with("The Signal daemon must run on this computer"));
+        assert_eq!(
+            connect(&dir, &store, ChannelKind::Email, "anything").unwrap_err(),
+            channels_net::coming_next(ChannelKind::Email)
+        );
         assert!(store.0.lock().unwrap().is_empty());
+        assert!(DmTrust::load(&dir).paired.is_empty());
         assert!(workers().is_empty());
     }
 
