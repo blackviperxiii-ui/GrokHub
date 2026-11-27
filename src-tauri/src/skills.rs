@@ -1165,7 +1165,7 @@ mod tests {
             &src.join("skills/ship-it/SKILL.md"),
             skill("ship-it", "Release steps").as_bytes(),
         );
-        crate::plugins::install(&cfg, &ws, src.to_str().unwrap());
+        crate::plugins::install(&cfg, &ws, src.to_str().unwrap(), None);
         crate::plugins::act(&cfg, &ws, "skill-pack", crate::plugins::Act::Trust);
         let on = crate::plugins::act(&cfg, &ws, "skill-pack", crate::plugins::Act::Enable);
         assert_eq!(on.note, "Enabled skill-pack.");

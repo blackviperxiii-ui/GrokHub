@@ -25,6 +25,8 @@ pub struct Row {
     pub enabled: bool,
     /// Installed through GrokHub, so Remove can delete the copy.
     pub installed: bool,
+    /// Git commit the copy was checked out at, or empty.
+    pub installed_sha: String,
 }
 
 /// One labelled line of a bundle's summary, such as its skills or hooks.
@@ -58,6 +60,8 @@ pub struct Entry {
     pub category: String,
     pub homepage: String,
     pub keywords: Vec<String>,
+    pub sha: String,
+    pub domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -167,6 +171,7 @@ fn row(info: PluginInfo) -> Row {
         trusted: info.trusted,
         enabled: info.enabled,
         installed: info.installed,
+        installed_sha: info.installed_sha,
     }
 }
 
@@ -180,6 +185,8 @@ fn entry(e: MarketEntry) -> Entry {
         category: e.category,
         homepage: e.homepage,
         keywords: e.keywords,
+        sha: e.sha,
+        domains: e.domains,
     }
 }
 
@@ -212,9 +219,9 @@ pub fn act(config_dir: &Path, workspace: &Path, name: &str, act: Act) -> Page {
 }
 
 /// An https, ssh or file URL, or an absolute folder. Nothing from it runs.
-pub fn install(config_dir: &Path, workspace: &Path, source: &str) -> Page {
+pub fn install(config_dir: &Path, workspace: &Path, source: &str, sha: Option<&str>) -> Page {
     let _config = ConfigGuard::set(config_dir);
-    let note = match plugins::install_source(source.trim()) {
+    let note = match plugins::install_source_at(source.trim(), sha) {
         Ok(info) => format!("Installed {}. It stays off until you trust it.", info.name),
         Err(err) => err,
     };
@@ -343,6 +350,7 @@ mod tests {
             enabled: false,
             trusted: false,
             installed: true,
+            installed_sha: String::new(),
             summary: summary.into(),
             mcp_servers: mcp_servers.iter().map(|s| s.to_string()).collect(),
         }
@@ -361,7 +369,7 @@ mod tests {
         let root = scratch("rich");
         let (cfg, ws) = (root.join("cfg"), root.join("ws"));
         let src = rich_bundle(&root, "rich-demo");
-        let page = install(&cfg, &ws, src.to_str().unwrap());
+        let page = install(&cfg, &ws, src.to_str().unwrap(), None);
         let r = find(&page, "rich-demo");
         assert_eq!(r.description, "Demo bundle");
         assert_eq!(
@@ -523,7 +531,7 @@ mod tests {
         let (cfg, ws) = (root.join("cfg"), root.join("ws"));
         let src = bundle(&root, "shell-demo");
 
-        let page = install(&cfg, &ws, src.to_str().unwrap());
+        let page = install(&cfg, &ws, src.to_str().unwrap(), None);
         assert_eq!(
             page.note,
             "Installed shell-demo. It stays off until you trust it."
@@ -563,7 +571,7 @@ mod tests {
         let root = scratch("untrusted");
         let (cfg, ws) = (root.join("cfg"), root.join("ws"));
         let src = bundle(&root, "shell-raw");
-        install(&cfg, &ws, src.to_str().unwrap());
+        install(&cfg, &ws, src.to_str().unwrap(), None);
 
         let page = act(&cfg, &ws, "shell-raw", Act::Enable);
         assert_eq!(page.note, "trust shell-raw 1.2.0 before enabling");
@@ -575,7 +583,7 @@ mod tests {
     fn an_empty_source_or_url_installs_and_fetches_nothing() {
         let root = scratch("empty");
         let (cfg, ws) = (root.join("cfg"), root.join("ws"));
-        let page = install(&cfg, &ws, "  ");
+        let page = install(&cfg, &ws, "  ", None);
         assert_eq!(
             page.note,
             "marketplace entry is not an https, ssh, or file URL, or an absolute path"
@@ -610,6 +618,7 @@ mod tests {
                 trusted: true,
                 enabled: false,
                 installed: true,
+                installed_sha: String::new(),
             }],
             market_url: "https://example.com/index.json".into(),
             note: String::new(),
@@ -617,7 +626,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&page).unwrap(),
             serde_json::json!({
-                "rows": [{"name": "a", "version": "1", "summary": "a 1", "description": "", "parts": [{"label": "Skills", "text": "s", "warn": false}], "trusted": true, "enabled": false, "installed": true}],
+                "rows": [{"name": "a", "version": "1", "summary": "a 1", "description": "", "parts": [{"label": "Skills", "text": "s", "warn": false}], "trusted": true, "enabled": false, "installed": true, "installedSha": ""}],
                 "marketUrl": "https://example.com/index.json",
                 "note": "",
             })

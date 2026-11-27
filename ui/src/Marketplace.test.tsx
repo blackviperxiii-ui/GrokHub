@@ -7,7 +7,7 @@ import type { PluginAct, PluginEntry, PluginMarket, PluginPage, PluginRow } from
 const api = vi.hoisted(() => ({
   getPlugins: vi.fn<() => Promise<PluginPage>>(),
   pluginAct: vi.fn<(name: string, act: PluginAct) => Promise<PluginPage>>(),
-  installPlugin: vi.fn<(source: string) => Promise<PluginPage>>(),
+  installPlugin: vi.fn<(source: string, sha?: string) => Promise<PluginPage>>(),
   fetchPluginMarket: vi.fn<(url: string) => Promise<PluginMarket>>(),
 }));
 
@@ -28,6 +28,8 @@ vi.mock("./Connectors", () => ({ Connectors: () => <div>Connectors list</div> })
 import {
   MARKET_EMPTY,
   MARKET_NONE_MATCHED,
+  OFFICIAL_CATALOG_LABEL,
+  XAI_OFFICIAL_PRESET_ID,
   Marketplace,
   PLUGINS_EMPTY,
   PLUGINS_MCP_NOTE,
@@ -461,6 +463,54 @@ describe("Marketplace plugins", () => {
     );
     expect(card("ship-kit").getByText("Not trusted · off")).toBeVisible();
   });
+
+  it("loads the official xAI catalog in one click without installing", async () => {
+    api.getPlugins.mockResolvedValue(page([]));
+    api.fetchPluginMarket.mockResolvedValue({
+      entries: [
+        entry({
+          name: "vercel",
+          category: "deployment",
+          source: "https://github.com/vercel/vercel-plugin.git",
+          sha: "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f",
+          keywords: ["vercel"],
+        }),
+      ],
+      page: page([], "1 entries. Nothing was installed.", "https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/.grok-plugin/marketplace.json"),
+      read: true,
+    });
+    render(<PluginsTab />);
+    await screen.findByText(PLUGINS_EMPTY);
+    await userEvent.click(screen.getByRole("button", { name: OFFICIAL_CATALOG_LABEL }));
+    expect(api.fetchPluginMarket).toHaveBeenCalledWith(XAI_OFFICIAL_PRESET_ID);
+    expect(api.installPlugin).not.toHaveBeenCalled();
+    const card = within(screen.getByRole("listitem", { name: "vercel" }));
+    expect(card.getByText("deployment")).toBeVisible();
+  });
+
+  it("installs a catalog entry at its pinned sha", async () => {
+    api.getPlugins.mockResolvedValue(page([]));
+    api.fetchPluginMarket.mockResolvedValue({
+      entries: [
+        entry({
+          sha: "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f",
+        }),
+      ],
+      page: page([]),
+      read: true,
+    });
+    api.installPlugin.mockResolvedValue(
+      page([row({ installedSha: "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f" })], "Installed ship-kit. It stays off until you trust it."),
+    );
+    render(<PluginsTab />);
+    await screen.findByText(PLUGINS_EMPTY);
+    await userEvent.click(screen.getByRole("button", { name: "Fetch list" }));
+    await userEvent.click(screen.getByRole("button", { name: "Install ship-kit" }));
+    expect(api.installPlugin).toHaveBeenCalledWith(
+      "https://example.com/ship-kit.git",
+      "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f",
+    );
+  });
 });
 
 describe("index helpers", () => {
@@ -476,6 +526,14 @@ describe("index helpers", () => {
     expect(entryStatus(entry({ version: "1.2.0" }), rows)).toBe("installed");
     expect(entryStatus(entry({ version: "1.1.0" }), rows)).toBe("installed");
     expect(entryStatus(entry({ version: "1.3.0" }), rows)).toBe("update");
+    const pin = "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f";
+    const other = "3b4ec482aa94a964b210d004c817bdce15cda8f7";
+    expect(
+      entryStatus(entry({ version: "1.2.0", sha: other }), [row({ installedSha: pin })]),
+    ).toBe("update");
+    expect(
+      entryStatus(entry({ version: "9.0.0", sha: pin }), [row({ version: "1.2.0", installedSha: pin })]),
+    ).toBe("installed");
   });
 
   it("matches every search word across name, description, author, category and keywords", () => {

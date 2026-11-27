@@ -35,6 +35,8 @@ pub struct PluginInfo {
     pub enabled: bool,
     pub trusted: bool,
     pub installed: bool,
+    /// Git commit the copy was checked out at, or empty for a folder copy.
+    pub installed_sha: String,
     pub summary: String,
     /// Each MCP server on its own, named as the bundle names it (no
     /// `plugin__<name>__` key), with its command or URL as it runs.
@@ -54,13 +56,25 @@ pub struct MarketEntry {
     pub homepage: String,
     /// At most [`MAX_KEYWORDS`] short words, from `keywords` or `tags`.
     pub keywords: Vec<String>,
+    /// Pinned git commit from `source.sha`, or empty.
+    pub sha: String,
+    /// At most [`MAX_DOMAINS`] hostnames from `domains`.
+    pub domains: Vec<String>,
 }
 
 /// Keywords kept per index entry, and the longest one, in characters.
 const MAX_KEYWORDS: usize = 8;
 const MAX_KEYWORD_CHARS: usize = 32;
+/// Hostnames kept per index entry.
+const MAX_DOMAINS: usize = 8;
 /// The longest author, category or homepage kept, in characters.
 const MAX_FIELD_CHARS: usize = 200;
+
+/// Named official catalog. Fetching it lists entries; it never installs.
+pub const XAI_OFFICIAL_PRESET_ID: &str = "xai-official";
+/// Public HTTPS index for [`XAI_OFFICIAL_PRESET_ID`].
+pub const XAI_OFFICIAL_MARKETPLACE_URL: &str =
+    "https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/.grok-plugin/marketplace.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StateFile {
@@ -78,6 +92,8 @@ struct Entry {
     version: String,
     #[serde(default)]
     hash: String,
+    #[serde(default)]
+    git_sha: String,
 }
 
 struct Manifest {
@@ -279,23 +295,48 @@ pub fn install_path(src: &Path) -> Result<PluginInfo, String> {
         let _ = remove_path(&staging);
         return Err(err);
     }
-    commit_staging(&staging, false)
+    commit_staging(&staging, false, String::new())
 }
 
 pub fn install_git(url: &str) -> Result<PluginInfo, String> {
+    install_git_at(url, None)
+}
+
+/// Clone `url` and, when `sha` is set, check out that commit instead of HEAD.
+pub fn install_git_at(url: &str, sha: Option<&str>) -> Result<PluginInfo, String> {
     let url = validate_git_url(url)?;
+    let pin = match sha.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Some(require_git_sha(s)?),
+        None => None,
+    };
     let staging = staging_path()?;
-    if let Err(err) = git_clone(&url, &staging) {
-        let _ = remove_path(&staging);
-        return Err(err);
+    let resolved = match git_clone(&url, &staging, pin.as_deref()) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            let _ = remove_path(&staging);
+            return Err(err);
+        }
+    };
+    if let Some(pin) = pin.as_deref() {
+        if resolved != pin {
+            let _ = remove_path(&staging);
+            return Err(format!("cloned sha {resolved} does not match pin {pin}"));
+        }
     }
-    commit_staging(&staging, true)
+    commit_staging(&staging, true, resolved)
 }
 
 pub fn install_source(source: &str) -> Result<PluginInfo, String> {
+    install_source_at(source, None)
+}
+
+pub fn install_source_at(source: &str, sha: Option<&str>) -> Result<PluginInfo, String> {
     let source = source.trim();
     if validate_git_url(source).is_ok() {
-        return install_git(source);
+        return install_git_at(source, sha);
+    }
+    if sha.map(str::trim).filter(|s| !s.is_empty()).is_some() {
+        return Err("sha pins apply only to git installs".into());
     }
     let path = Path::new(source);
     if path.is_absolute() {
@@ -377,6 +418,28 @@ pub fn marketplace_url() -> String {
     load_state().marketplace_url
 }
 
+/// Index URL for a named preset, or none.
+pub fn official_marketplace_url(id: &str) -> Option<&'static str> {
+    (id.trim() == XAI_OFFICIAL_PRESET_ID).then_some(XAI_OFFICIAL_MARKETPLACE_URL)
+}
+
+/// Resolve a preset id or an https index URL. Never installs.
+pub fn resolve_marketplace_url(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    if let Some(preset) = official_marketplace_url(url) {
+        return Ok(preset.to_string());
+    }
+    https_index_url(url).map(str::to_string)
+}
+
+/// True when the installed pin and the index pin are both 40-char SHAs and differ.
+pub fn sha_update_available(installed_sha: &str, index_sha: &str) -> bool {
+    match (parse_git_sha(installed_sha), parse_git_sha(index_sha)) {
+        (Some(here), Some(index)) => here != index,
+        _ => false,
+    }
+}
+
 pub fn set_marketplace_url(url: &str) -> Result<(), String> {
     let url = url.trim();
     let _guard = state_lock();
@@ -384,17 +447,17 @@ pub fn set_marketplace_url(url: &str) -> Result<(), String> {
     if url.is_empty() {
         state.marketplace_url.clear();
     } else {
-        state.marketplace_url = https_index_url(url)?.to_string();
+        state.marketplace_url = resolve_marketplace_url(url)?;
     }
     save_state(&state)
 }
 
 pub fn fetch_marketplace(url: &str) -> Result<Vec<MarketEntry>, String> {
-    let url = https_index_url(url)?;
+    let url = resolve_marketplace_url(url)?;
     // EgressGuard (Spike-4c): a plain GET of the index, no user data.
     crate::harness::guard_quiet(
         &crate::perm::config_dir(),
-        &crate::harness::EgressReq::new(url, &[]),
+        &crate::harness::EgressReq::new(&url, &[]),
     )?;
     // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
     // on the target (same as web_fetch / Pulse).
@@ -405,7 +468,7 @@ pub fn fetch_marketplace(url: &str) -> Result<Vec<MarketEntry>, String> {
         ..Default::default()
     });
     let response = agent
-        .get(url)
+        .get(&url)
         .call()
         .map_err(|err| format!("marketplace index: {err}"))?;
     let mut buf = Vec::new();
@@ -500,6 +563,12 @@ pub fn parse_marketplace(text: &str) -> Result<Vec<MarketEntry>, String> {
                 kept
             })
             .unwrap_or_default();
+        let sha = item.get("source").and_then(source_sha).unwrap_or_default();
+        let domains = item
+            .get("domains")
+            .and_then(|value| value.as_array())
+            .map(|words| parse_domains(words))
+            .unwrap_or_default();
         out.push(MarketEntry {
             name: name.to_string(),
             version,
@@ -509,6 +578,8 @@ pub fn parse_marketplace(text: &str) -> Result<Vec<MarketEntry>, String> {
             category,
             homepage,
             keywords,
+            sha,
+            domains,
         });
     }
     Ok(out)
@@ -1648,6 +1719,11 @@ fn info_of(bundle: &Bundle, state: &StateFile) -> PluginInfo {
         enabled: is_active(state, bundle),
         trusted: is_trusted(state, bundle),
         installed: bundle.installed,
+        installed_sha: state
+            .entries
+            .get(&bundle.name)
+            .map(|entry| entry.git_sha.clone())
+            .unwrap_or_default(),
         summary: summary_of(bundle),
         mcp_servers: mcp_servers_of(bundle),
     }
@@ -1872,6 +1948,46 @@ fn source_string(value: &Value) -> Option<String> {
     }
 }
 
+fn source_sha(value: &Value) -> Option<String> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    parse_git_sha(map.get("sha").and_then(|item| item.as_str()).unwrap_or(""))
+}
+
+fn parse_domains(words: &[Value]) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for word in words.iter().filter_map(|word| word.as_str()) {
+        let word = word.trim();
+        if word.is_empty()
+            || word.chars().count() > MAX_FIELD_CHARS
+            || word.chars().any(|c| {
+                c.is_control() || c.is_whitespace() || c == '/' || c == ':' || c == '@' || c == '\\'
+            })
+            || kept.iter().any(|seen| seen.eq_ignore_ascii_case(word))
+        {
+            continue;
+        }
+        kept.push(word.to_string());
+        if kept.len() == MAX_DOMAINS {
+            break;
+        }
+    }
+    kept
+}
+
+fn parse_git_sha(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.len() != 40 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(text.to_ascii_lowercase())
+}
+
+fn require_git_sha(text: &str) -> Result<String, String> {
+    parse_git_sha(text).ok_or_else(|| "sha must be a 40-character git commit".into())
+}
+
 fn https_index_url(url: &str) -> Result<&str, String> {
     let url = url.trim();
     if url.is_empty()
@@ -1947,7 +2063,7 @@ fn unique_suffix() -> u128 {
         .unwrap_or(0)
 }
 
-fn commit_staging(staging: &Path, from_git: bool) -> Result<PluginInfo, String> {
+fn commit_staging(staging: &Path, from_git: bool, git_sha: String) -> Result<PluginInfo, String> {
     let outcome = (|| {
         if from_git {
             let git = staging.join(".git");
@@ -1967,7 +2083,15 @@ fn commit_staging(staging: &Path, from_git: bool) -> Result<PluginInfo, String> 
             let _ = remove_path(&dest);
             return Err("installed bundle has no manifest".into());
         };
-        let state = load_state();
+        let mut state = load_state();
+        if !git_sha.is_empty() {
+            state
+                .entries
+                .entry(manifest.name.clone())
+                .or_default()
+                .git_sha = git_sha;
+            save_state(&state)?;
+        }
         Ok(info_of(&bundle, &state))
     })();
     if outcome.is_err() {
@@ -2042,7 +2166,7 @@ fn place_symlink(src: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
-fn git_clone(url: &str, dest: &Path) -> Result<(), String> {
+fn git_clone(url: &str, dest: &Path, sha: Option<&str>) -> Result<String, String> {
     grokhub_core::offline::check_url(url)?;
     let parent = dest
         .parent()
@@ -2054,6 +2178,22 @@ fn git_clone(url: &str, dest: &Path) -> Result<(), String> {
     fs::write(&empty_cfg, "").map_err(|err| err.to_string())?;
     let hooks = template.join("hooks");
     let hooks_arg = hooks.display().to_string();
+    let prefix = git_safety_prefix(url, &hooks_arg);
+    let cloned = if let Some(sha) = sha {
+        git_fetch_sha(url, dest, sha, &template, &prefix, &empty_cfg)
+    } else {
+        git_clone_head(url, dest, &template, &hooks_arg, &prefix, &empty_cfg)
+    };
+    let sha = match cloned {
+        Ok(()) => git_head_sha(dest, &empty_cfg),
+        Err(err) => Err(err),
+    };
+    let _ = remove_path(&template);
+    let _ = remove_path(&empty_cfg);
+    sha
+}
+
+fn git_safety_prefix(url: &str, hooks_arg: &str) -> Vec<String> {
     let mut args = vec![
         "-c".to_string(),
         format!("core.hooksPath={hooks_arg}"),
@@ -2068,6 +2208,18 @@ fn git_clone(url: &str, dest: &Path) -> Result<(), String> {
         args.push("-c".to_string());
         args.push("safe.directory=*".to_string());
     }
+    args
+}
+
+fn git_clone_head(
+    url: &str,
+    dest: &Path,
+    template: &Path,
+    hooks_arg: &str,
+    prefix: &[String],
+    empty_cfg: &Path,
+) -> Result<(), String> {
+    let mut args = prefix.to_vec();
     args.extend([
         "clone".to_string(),
         "--depth".to_string(),
@@ -2081,16 +2233,78 @@ fn git_clone(url: &str, dest: &Path) -> Result<(), String> {
         url.to_string(),
         dest.display().to_string(),
     ]);
-    let result = run_git(&args, &empty_cfg);
-    let _ = remove_path(&template);
-    let _ = remove_path(&empty_cfg);
-    result
+    run_git(&args, empty_cfg)
+}
+
+fn git_fetch_sha(
+    url: &str,
+    dest: &Path,
+    sha: &str,
+    template: &Path,
+    prefix: &[String],
+    empty_cfg: &Path,
+) -> Result<(), String> {
+    let dest_s = dest.display().to_string();
+    let mut init = prefix.to_vec();
+    init.extend([
+        "init".to_string(),
+        "--template".to_string(),
+        template.display().to_string(),
+        dest_s.clone(),
+    ]);
+    run_git(&init, empty_cfg)?;
+    let mut remote = prefix.to_vec();
+    remote.extend([
+        "-C".to_string(),
+        dest_s.clone(),
+        "remote".to_string(),
+        "add".to_string(),
+        "origin".to_string(),
+        url.to_string(),
+    ]);
+    run_git(&remote, empty_cfg)?;
+    let mut fetch = prefix.to_vec();
+    fetch.extend([
+        "-C".to_string(),
+        dest_s.clone(),
+        "fetch".to_string(),
+        "--depth".to_string(),
+        "1".to_string(),
+        "--no-recurse-submodules".to_string(),
+        "--".to_string(),
+        "origin".to_string(),
+        sha.to_string(),
+    ]);
+    run_git(&fetch, empty_cfg)?;
+    let mut checkout = prefix.to_vec();
+    checkout.extend([
+        "-C".to_string(),
+        dest_s,
+        "checkout".to_string(),
+        "--detach".to_string(),
+        sha.to_string(),
+    ]);
+    run_git(&checkout, empty_cfg)
+}
+
+fn git_head_sha(repo: &Path, empty_cfg: &Path) -> Result<String, String> {
+    let args = vec![
+        "-C".to_string(),
+        repo.display().to_string(),
+        "rev-parse".to_string(),
+        "HEAD".to_string(),
+    ];
+    require_git_sha(run_git_output(&args, empty_cfg)?.trim())
 }
 
 fn run_git(args: &[String], empty_cfg: &Path) -> Result<(), String> {
+    run_git_output(args, empty_cfg).map(|_| ())
+}
+
+fn run_git_output(args: &[String], empty_cfg: &Path) -> Result<String, String> {
     let mut cmd = grokhub_core::git_cmd::git();
     cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", empty_cfg)
@@ -2115,12 +2329,16 @@ fn run_git(args: &[String], empty_cfg: &Path) -> Result<(), String> {
             Err(err) => return Err(err.to_string()),
         }
     };
+    let mut out_text = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out_text);
+    }
     let mut err_text = String::new();
     if let Some(mut stderr) = child.stderr.take() {
         let _ = stderr.read_to_string(&mut err_text);
     }
     if status.success() {
-        return Ok(());
+        return Ok(out_text);
     }
     let err_text: String = err_text.trim().chars().take(400).collect();
     if err_text.is_empty() {
@@ -2319,6 +2537,10 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
+        let _ = git_out(dir, args);
+    }
+
+    fn git_out(dir: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
             .args(args)
             .current_dir(dir)
@@ -2330,6 +2552,7 @@ mod tests {
             "{args:?} {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
     fn contributes(iso: &Iso) -> (bool, bool, bool, bool) {
@@ -2677,6 +2900,7 @@ mod tests {
                 enabled: true,
                 version: "1.0.0".into(),
                 hash,
+                git_sha: String::new(),
             },
         );
         save_state(&state).unwrap();
@@ -2776,6 +3000,7 @@ mod tests {
         git(&repo, &["commit", "-m", "init", "--no-verify"]);
         let info = install_git(&file_git_url(&repo)).unwrap();
         assert_eq!(info.version, "2.0.0");
+        assert_eq!(info.installed_sha.len(), 40);
         assert!(!info.enabled && !info.trusted);
         let dest = install_root().join("demo");
         assert!(dest.join(".grok-plugin").join("plugin.json").is_file());
@@ -2957,6 +3182,142 @@ mod tests {
             ("", "", "")
         );
         assert!(odd.keywords.is_empty());
+    }
+
+    #[test]
+    fn official_xai_preset_points_at_the_public_https_index() {
+        assert_eq!(XAI_OFFICIAL_PRESET_ID, "xai-official");
+        assert_eq!(
+            XAI_OFFICIAL_MARKETPLACE_URL,
+            "https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/.grok-plugin/marketplace.json"
+        );
+        assert_eq!(
+            official_marketplace_url("xai-official"),
+            Some(XAI_OFFICIAL_MARKETPLACE_URL)
+        );
+        assert_eq!(
+            resolve_marketplace_url("xai-official").unwrap(),
+            XAI_OFFICIAL_MARKETPLACE_URL
+        );
+        assert_eq!(official_marketplace_url("other"), None);
+        assert_eq!(
+            resolve_marketplace_url("https://127.0.0.1/index.json").unwrap_err(),
+            "marketplace index url is not a public address"
+        );
+        assert_eq!(
+            resolve_marketplace_url("http://example.invalid/index.json").unwrap_err(),
+            "marketplace index is fetched only from an https url"
+        );
+    }
+
+    #[test]
+    fn marketplace_index_reads_xai_official_vercel_and_sentry_pins() {
+        let entries = parse_marketplace(
+            r#"{
+              "name": "xai-official",
+              "plugins": [
+                {
+                  "name": "vercel",
+                  "description": "Vercel deployment platform integration. Manage deployments, check build status, access logs, configure domains, and control your frontend infrastructure directly from Grok.",
+                  "category": "deployment",
+                  "source": {
+                    "source": "url",
+                    "url": "https://github.com/vercel/vercel-plugin.git",
+                    "sha": "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f"
+                  },
+                  "homepage": "https://github.com/vercel/vercel-plugin",
+                  "keywords": ["vercel", "vercel deploy", "deploy to vercel"],
+                  "domains": ["vercel.com"]
+                },
+                {
+                  "name": "sentry",
+                  "description": "Sentry error monitoring integration. Access error reports, analyze stack traces, search issues by fingerprint, and debug production errors directly from your development environment.",
+                  "category": "monitoring",
+                  "source": {
+                    "source": "url",
+                    "url": "https://github.com/getsentry/plugin-grok.git",
+                    "sha": "3b4ec482aa94a964b210d004c817bdce15cda8f7"
+                  },
+                  "homepage": "https://github.com/getsentry/sentry-for-ai",
+                  "keywords": ["sentry"],
+                  "domains": ["sentry.io"]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2);
+        let vercel = &entries[0];
+        assert_eq!(vercel.name, "vercel");
+        assert_eq!(vercel.category, "deployment");
+        assert_eq!(vercel.source, "https://github.com/vercel/vercel-plugin.git");
+        assert_eq!(vercel.sha, "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f");
+        assert_eq!(vercel.homepage, "https://github.com/vercel/vercel-plugin");
+        assert_eq!(
+            vercel.keywords,
+            ["vercel", "vercel deploy", "deploy to vercel"]
+        );
+        assert_eq!(vercel.domains, ["vercel.com"]);
+        let sentry = &entries[1];
+        assert_eq!(sentry.name, "sentry");
+        assert_eq!(sentry.category, "monitoring");
+        assert_eq!(
+            sentry.source,
+            "https://github.com/getsentry/plugin-grok.git"
+        );
+        assert_eq!(sentry.sha, "3b4ec482aa94a964b210d004c817bdce15cda8f7");
+        assert_eq!(
+            sentry.homepage,
+            "https://github.com/getsentry/sentry-for-ai"
+        );
+        assert_eq!(sentry.keywords, ["sentry"]);
+        assert_eq!(sentry.domains, ["sentry.io"]);
+        assert!(!sha_update_available(
+            "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f",
+            "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f"
+        ));
+        assert!(sha_update_available(
+            "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f",
+            "3b4ec482aa94a964b210d004c817bdce15cda8f7"
+        ));
+        assert!(!sha_update_available(
+            "",
+            "3b4ec482aa94a964b210d004c817bdce15cda8f7"
+        ));
+    }
+
+    #[test]
+    fn git_install_checks_out_the_pinned_sha_not_head() {
+        let iso = iso("pin");
+        let repo = iso.root.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        write_manifest(&repo, ".grok-plugin", demo_manifest("demo", "1.0.0"));
+        write_parts(&repo, "echo plugin-hook");
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["config", "user.email", "plugin-test@example.com"]);
+        git(&repo, &["config", "user.name", "Plugin Test"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "one", "--no-verify"]);
+        let pin = git_out(&repo, &["rev-parse", "HEAD"]);
+        write_manifest(&repo, ".grok-plugin", demo_manifest("demo", "2.0.0"));
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "two", "--no-verify"]);
+        let head = git_out(&repo, &["rev-parse", "HEAD"]);
+        assert_ne!(pin, head);
+        assert_eq!(
+            install_git_at(&file_git_url(&repo), Some("not-a-sha")).unwrap_err(),
+            "sha must be a 40-character git commit"
+        );
+        let info = install_git_at(&file_git_url(&repo), Some(&pin)).unwrap();
+        assert_eq!(info.version, "1.0.0");
+        assert_eq!(info.installed_sha, pin);
+        assert!(!info.enabled && !info.trusted);
+        assert!(sha_update_available(&info.installed_sha, &head));
+        assert!(!sha_update_available(&info.installed_sha, &pin));
+        let dest = install_root().join("demo");
+        assert!(!dest.join(".git").exists());
+        let _ = fs::remove_dir_all(&iso.root);
     }
 
     #[test]

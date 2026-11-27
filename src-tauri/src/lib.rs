@@ -5654,10 +5654,11 @@ async fn plugin_act(
 async fn install_plugin(
     state: State<'_, ShellState>,
     source: String,
+    sha: Option<String>,
 ) -> Result<plugins::Page, String> {
     capabilities::needs(capabilities::current().plugins, "Plugins")?;
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
-    off_main(move || plugins::install(&dir, &workspace, &source)).await
+    off_main(move || plugins::install(&dir, &workspace, &source, sha.as_deref())).await
 }
 
 #[tauri::command]

@@ -742,7 +742,40 @@ export function initScript(theme = "ops-dark") {
           return fix.interests;
         case "get_plugins":
         case "plugin_act":
+        case "install_plugin":
           return fix.plugins;
+        case "fetch_plugin_market": {
+          const url =
+            "https://raw.githubusercontent.com/xai-org/plugin-marketplace/main/.grok-plugin/marketplace.json";
+          return {
+            entries: [
+              {
+                name: "vercel",
+                version: "1.0.0",
+                description: "Vercel deployment platform integration.",
+                source: "https://github.com/vercel/vercel-plugin.git",
+                category: "deployment",
+                homepage: "https://github.com/vercel/vercel-plugin",
+                keywords: ["vercel"],
+                sha: "8b2c4a6491fd388f63f5ec84e8a9e78def592e4f",
+                domains: ["vercel.com"],
+              },
+              {
+                name: "sentry",
+                version: "1.0.0",
+                description: "Sentry error monitoring integration.",
+                source: "https://github.com/getsentry/plugin-grok.git",
+                category: "monitoring",
+                homepage: "https://github.com/getsentry/sentry-for-ai",
+                keywords: ["sentry"],
+                sha: "3b4ec482aa94a964b210d004c817bdce15cda8f7",
+                domains: ["sentry.io"],
+              },
+            ],
+            page: { ...fix.plugins, marketUrl: url, note: "2 entries. Nothing was installed." },
+            read: true,
+          };
+        }
         case "get_web_access":
         case "set_web_access":
           return fix.web;
