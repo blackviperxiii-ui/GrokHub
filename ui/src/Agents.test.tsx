@@ -2103,8 +2103,8 @@ describe("Agents", () => {
     ]);
     const hub = screen.getByRole("list", { name: "Helpers and commands" });
     expect(within(hub).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
-      "cargo test --workspaceRunning · t1Stop",
-      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sRan on grok-4.7 · quality · High: debugging.StopDetails",
+      "cargo test --workspaceRunning · t1SteerStop",
+      "failed to fetch the docsFailed · s2Step 3: read_file · 1.2k tokens · 2m 5sRan on grok-4.7 · quality · High: debugging.SteerStopDetails",
       "npm run buildFailed · t3",
       "Monitor: build logDone · m4",
     ]);
@@ -2201,7 +2201,7 @@ describe("Agents", () => {
     render(<Agents conversationId="shell-c1" onOpenChat={() => {}} />);
 
     const row = await screen.findByRole("listitem", { name: "failed to fetch the docs" });
-    expect(row.textContent).toBe("failed to fetch the docsFailed · s2Stop");
+    expect(row.textContent).toBe("failed to fetch the docsFailed · s2SteerStop");
     expect(screen.queryByRole("button", { name: "Helper s2 details" })).toBeNull();
     expect(document.querySelector(".task-progress")).toBeNull();
   });
