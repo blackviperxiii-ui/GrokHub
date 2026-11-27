@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   telegramQr: vi.fn<() => Promise<StartQr | null>>(),
   signalLinkStart: vi.fn<(number: string) => Promise<LinkQr | null>>(),
   signalLinkFinish: vi.fn<() => Promise<Shape | null>>(),
+  allowEmailSender: vi.fn<(sender: string) => Promise<Shape | null>>(),
 }));
 vi.mock("./channelsApi", () => api);
 
@@ -147,6 +148,53 @@ describe("Phone and chat apps", () => {
     });
     expect(await screen.findByText(/Connected Signal as \+15551234567/)).toBeTruthy();
     expect(screen.queryByRole("figure", { name: "Signal link QR code" })).toBeNull();
+  });
+
+  it("connects email with the address and app password, and keeps the address if it fails", async () => {
+    const emailLive: Shape = {
+      ...none,
+      channels: none.channels.map((ch) =>
+        ch.kind === "email" ? { ...ch, live: true, setupLabel: "Email address" } : ch,
+      ),
+    };
+    api.getChannels.mockResolvedValue(emailLive);
+    api.connectChannel.mockRejectedValueOnce("The mail server didn't accept the address and app password.");
+    render(<Channels />);
+    const address = (await screen.findByLabelText("Email address")) as HTMLInputElement;
+    const password = screen.getByLabelText("App password") as HTMLInputElement;
+    expect(password.type).toBe("password");
+    const card = screen.getByRole("listitem", { name: "Email" });
+    const connect = card.querySelector("button[type=submit]") as HTMLButtonElement;
+    await userEvent.type(address, "me@example.org");
+    expect(connect.disabled).toBe(true);
+    await userEvent.type(password, "abcd efgh");
+    await userEvent.click(connect);
+    expect(api.connectChannel).toHaveBeenCalledWith("email", "me@example.org abcd efgh");
+    expect(await screen.findByText(/didn't accept the address and app password/)).toBeTruthy();
+    expect(address.value).toBe("me@example.org");
+    expect(password.value).toBe("");
+  });
+
+  it("allows an email sender once email is connected", async () => {
+    const connected: Shape = {
+      ...none,
+      channels: none.channels.map((ch) =>
+        ch.kind === "email" ? { ...ch, live: true, connected: true, running: true, setupLabel: "Email address" } : ch,
+      ),
+    };
+    api.getChannels.mockResolvedValue(connected);
+    api.allowEmailSender.mockResolvedValue({
+      ...connected,
+      paired: [{ channel: "email", sender: "jane@example.com", asks: false, reachable: false }],
+      status: "Mail from jane@example.com now reaches you here when its server vouches for it.",
+    });
+    render(<Channels />);
+    const box = await screen.findByLabelText("Allow a sender");
+    await userEvent.type(box, "jane@example.com ");
+    await userEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(api.allowEmailSender).toHaveBeenCalledWith("jane@example.com");
+    expect(await screen.findByRole("button", { name: "Unpair jane@example.com on Email" })).toBeTruthy();
+    expect((box as HTMLInputElement).value).toBe("");
   });
 
   it("says why a Signal link failed and takes the QR down", async () => {

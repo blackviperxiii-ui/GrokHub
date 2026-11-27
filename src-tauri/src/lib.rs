@@ -598,6 +598,19 @@ fn unpair_channel_sender(
     )
 }
 
+/// Let mail from one sender reach the assistant (the email channel).
+#[tauri::command]
+fn allow_email_sender(
+    state: State<'_, ShellState>,
+    sender: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::allow_email_sender(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
+        &sender,
+    )
+}
+
 /// Settings → General → Your browser.
 #[tauri::command]
 fn get_browser_attach(state: State<'_, ShellState>) -> browser_attach::AttachView {
@@ -10274,6 +10287,7 @@ pub fn run() {
             signal_link_finish,
             approve_channel_code,
             unpair_channel_sender,
+            allow_email_sender,
             set_channel_asks,
             add_channel_webhook,
             remove_channel_webhook,

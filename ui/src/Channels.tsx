@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   addChannelWebhook,
+  allowEmailSender,
   approveChannelCode,
   connectChannel,
   disconnectChannel,
@@ -27,6 +28,9 @@ export const WEBHOOKS_NOTE = `A service you use (a deploy, a form, a store) can 
 export const QR_NOTE =
   "Scan it with your phone's camera. Telegram opens the bot and pairs that phone, with no code to type. It works once, for 10 minutes, and showing a new one turns this one off.";
 
+export const EMAIL_NOTE =
+  "Use an app password from your mail account's security settings, not your sign-in password. Mail is read from when you connect, nothing is marked read, and mail from anyone you haven't allowed is dropped without an answer.";
+
 export const SIGNAL_QR_NOTE =
   "In Signal on your phone, open Settings, then Linked devices, tap the plus and scan this. Waiting for your phone for up to three minutes.";
 
@@ -41,6 +45,8 @@ export function Channels() {
   const [shown, setShown] = useState<Shape | null>(null);
   const [tokens, setTokens] = useState<Partial<Record<ChannelKind, string>>>({});
   const [code, setCode] = useState("");
+  const [appPassword, setAppPassword] = useState("");
+  const [sender, setSender] = useState("");
   const [hookName, setHookName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
   const [qr, setQr] = useState<StartQr | null>(null);
@@ -105,10 +111,21 @@ export function Channels() {
 
   async function connect(event: FormEvent, kind: ChannelKind) {
     event.preventDefault();
-    const token = (tokens[kind] ?? "").trim();
-    // The token leaves the page's state as soon as it is sent.
-    setTokens((t) => ({ ...t, [kind]: "" }));
-    if (token) await act(() => connectChannel(kind, token));
+    const typed = (tokens[kind] ?? "").trim();
+    // Email's setup is the address (and any servers), then the app password.
+    const token = kind === "email" ? `${typed} ${appPassword.trim()}` : typed;
+    // The token leaves the page's state as soon as it is sent; the address
+    // stays, since it isn't a secret.
+    if (kind === "email") setAppPassword("");
+    else setTokens((t) => ({ ...t, [kind]: "" }));
+    if (typed && (await act(() => connectChannel(kind, token))) && kind === "email") {
+      setTokens((t) => ({ ...t, email: "" }));
+    }
+  }
+
+  async function allowSender(event: FormEvent) {
+    event.preventDefault();
+    if (await act(() => allowEmailSender(sender.trim()))) setSender("");
   }
 
   async function addHook(event: FormEvent) {
@@ -153,6 +170,25 @@ export function Channels() {
                     Disconnect
                   </button>
                 </div>
+                {ch.kind === "email" && (
+                  <form className="card-buttons" onSubmit={(e) => void allowSender(e)}>
+                    <label>
+                      Allow a sender
+                      <input
+                        type="text"
+                        inputMode="email"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={sender}
+                        placeholder="name@example.com"
+                        onChange={(e) => setSender(e.target.value)}
+                      />
+                    </label>
+                    <button type="submit" disabled={busy || !sender.trim()}>
+                      Allow
+                    </button>
+                  </form>
+                )}
                 {ch.kind === "telegram" && qr && (
                   <figure className="channel-qr" aria-label="Telegram pairing QR code">
                     <img
@@ -175,7 +211,7 @@ export function Channels() {
                 <label>
                   {ch.setupLabel}
                   <input
-                    type={ch.kind === "signal" ? "tel" : "password"}
+                    type={ch.kind === "signal" ? "tel" : ch.kind === "email" ? "text" : "password"}
                     autoComplete="off"
                     spellCheck={false}
                     value={tokens[ch.kind] ?? ""}
@@ -183,9 +219,27 @@ export function Channels() {
                     onChange={(e) => setTokens((t) => ({ ...t, [ch.kind]: e.target.value }))}
                   />
                 </label>
-                <button type="submit" disabled={busy || !(tokens[ch.kind] ?? "").trim()}>
+                {ch.kind === "email" && (
+                  <label>
+                    App password
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={appPassword}
+                      onChange={(e) => setAppPassword(e.target.value)}
+                    />
+                  </label>
+                )}
+                <button
+                  type="submit"
+                  disabled={
+                    busy || !(tokens[ch.kind] ?? "").trim() || (ch.kind === "email" && !appPassword.trim())
+                  }
+                >
                   Connect
                 </button>
+                {ch.kind === "email" && <p className="note">{EMAIL_NOTE}</p>}
                 {ch.kind === "signal" && (
                   <button
                     type="button"

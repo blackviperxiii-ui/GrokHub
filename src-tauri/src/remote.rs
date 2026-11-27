@@ -1257,6 +1257,7 @@ mod tests {
             "disconnect_channel",
             "approve_channel_code",
             "unpair_channel_sender",
+            "allow_email_sender",
             "set_channel_asks",
             "add_channel_webhook",
             "remove_channel_webhook",
