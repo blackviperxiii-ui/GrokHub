@@ -85,9 +85,9 @@ pub const KINDS: [KindSpec; 5] = [
         key: "signal",
         name: "Signal",
         token_account: "channel-signal",
-        setup_label: "Signal",
-        setup_hint: "Coming next.",
-        live: false,
+        setup_label: "Signal number",
+        setup_hint: "Link signal-cli to your account, run signal-cli daemon --http 127.0.0.1:8080, then type your number with + and the country code. Only your Note to Self is read.",
+        live: true,
     },
     KindSpec {
         kind: ChannelKind::Email,
@@ -189,6 +189,17 @@ impl DmTrust {
         self.paired
             .get(&channel)
             .is_some_and(|set| set.contains(sender))
+    }
+
+    /// Pair `sender` on `channel` with no code: for a channel whose only
+    /// sender is the person themselves, such as Signal's Note to Self.
+    pub fn pair(&mut self, channel: ChannelKind, sender: &str) {
+        self.pending
+            .retain(|p| !(p.channel == channel && p.sender == sender));
+        self.paired
+            .entry(channel)
+            .or_default()
+            .insert(sender.to_string());
     }
 
     fn sweep(&mut self, now_ms: u64) {
@@ -693,7 +704,7 @@ mod tests {
         }
         assert_eq!(ChannelKind::from_key("webhook"), None);
         let live: Vec<&str> = KINDS.iter().filter(|s| s.live).map(|s| s.key).collect();
-        assert_eq!(live, ["telegram", "discord", "slack"]);
+        assert_eq!(live, ["telegram", "discord", "slack", "signal"]);
         let accounts: BTreeSet<&str> = KINDS.iter().map(|s| s.token_account).collect();
         assert_eq!(accounts.len(), KINDS.len());
     }
@@ -714,6 +725,23 @@ mod tests {
         assert!(trust.is_paired(ChannelKind::Discord, "42"));
         assert!(!trust.is_paired(ChannelKind::Slack, "1001"));
         assert_eq!(trust.wrong, 2);
+    }
+
+    #[test]
+    fn pair_trusts_a_sender_with_no_code_and_drops_their_waiting_one() {
+        let mut t = DmTrust::default();
+        assert!(matches!(
+            t.inbound(ChannelKind::Signal, "+15551234567", "me", 0),
+            Inbound::Pair { .. }
+        ));
+        t.pair(ChannelKind::Signal, "+15551234567");
+        assert!(t.is_paired(ChannelKind::Signal, "+15551234567"));
+        assert!(!t.is_paired(ChannelKind::Telegram, "+15551234567"));
+        assert!(t.pending.is_empty());
+        assert_eq!(
+            t.inbound(ChannelKind::Signal, "+15551234567", "me", 0),
+            Inbound::Trusted
+        );
     }
 
     #[test]
