@@ -9430,3 +9430,12 @@ fieldset.channel label {
   width: 100%;
   box-sizing: border-box;
 }
+
+.agent-steer {
+  margin: 8px 0 0;
+}
+
+.agent-steer input {
+  width: 100%;
+  box-sizing: border-box;
+}
