@@ -123,6 +123,7 @@ import { scrubHeld } from "./heldScrub";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { splitSources } from "./replySources";
 import { SourceChips } from "./SourceChips";
+import { HelperStrip } from "./HelperStrip";
 import {
   collapseAll,
   COLLAPSE,
@@ -2777,6 +2778,7 @@ export function Chat({
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       {!remote && <VoiceCaption text={voice.caption} state={voice.state} />}
       {!remote && <VoiceLine text={voice.state === "off" ? micLine : voice.line} />}
+      {!remote && <HelperStrip conversationId={conversationId} />}
       <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu

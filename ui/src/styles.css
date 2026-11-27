@@ -9388,3 +9388,45 @@ fieldset.channel label {
     transform: none;
   }
 }
+
+/* Running helpers above the composer: one quiet row each, Steer and Stop. */
+.helper-strip ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.helper-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.helper-strip-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.helper-strip-model,
+.helper-strip-progress,
+.helper-strip-note {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.helper-strip-steer {
+  flex-basis: 100%;
+}
+
+.helper-strip-steer input {
+  width: 100%;
+  box-sizing: border-box;
+}
