@@ -111,6 +111,29 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
     })
 }
 
+/// The setup text as typed and as the keychain keeps it: the config's text
+/// (see [`parse_config`]), then the app password. Spaces in the password
+/// are dropped, because Gmail shows its app passwords in groups of four.
+pub fn parse_setup(text: &str) -> Result<(Config, String), String> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    let servers = parts.len() >= 5 && parts[1..4].iter().all(|p| host(p).is_ok());
+    let split = if servers { 4 } else { 1 }.min(parts.len());
+    let config = parse_config(&parts[..split].join(" "))?;
+    let password: String = parts[split..].concat();
+    if password.is_empty() {
+        return Err("Type the mailbox's app password after the address.".into());
+    }
+    if !password.chars().all(|c| c.is_ascii_graphic()) || password.len() > 256 {
+        return Err("An app password is letters, digits and symbols only.".into());
+    }
+    Ok((config, password))
+}
+
+/// The keychain entry for a mailbox: what [`parse_setup`] reads back.
+pub fn saved_setup(config: &Config, password: &str) -> String {
+    format!("{} {password}", config.saved())
+}
+
 /// A server name: letters, digits, dots and dashes, with a dot, and no
 /// scheme, port or path. Loopback and bare addresses are refused here,
 /// because mail is only fetched from a real provider.
@@ -398,6 +421,42 @@ pub fn incoming(raw: &[u8], config: &Config, allowed: impl Fn(&str) -> bool) -> 
         references: references.join(" "),
         message_id,
     })
+}
+
+impl Incoming {
+    /// What the model reads: the subject, then the text.
+    pub fn prompt_text(&self) -> String {
+        if self.subject.is_empty() {
+            self.text.clone()
+        } else {
+            format!("Subject: {}\n\n{}", self.subject, self.text)
+        }
+    }
+
+    /// Where the answer goes, as the queued message keeps it: the message
+    /// id, the references and the subject, one per line. The address is the
+    /// queued message's sender.
+    pub fn thread(&self) -> String {
+        format!("{}\n{}\n{}", self.message_id, self.references, self.subject)
+    }
+}
+
+/// A queued message's [`Incoming::thread`], read back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Thread {
+    pub in_reply_to: String,
+    pub references: String,
+    pub subject: String,
+}
+
+pub fn parse_thread(text: &str) -> Thread {
+    let mut lines = text.splitn(3, '\n');
+    let mut next = || lines.next().unwrap_or("").trim().to_string();
+    Thread {
+        in_reply_to: next(),
+        references: next(),
+        subject: next(),
+    }
 }
 
 /// The readable text of a message or part: `text/plain` first, else
@@ -899,6 +958,52 @@ mod tests {
         assert!(!valid_address("a@b"));
         assert!(!valid_address("a b@example.com"));
         assert!(valid_address("jane.doe+tag@mail.example.com"));
+    }
+
+    #[test]
+    fn the_setup_ends_with_the_app_password_and_reads_back_the_same() {
+        let me = known_address();
+        let typed = format!("{} abcd efgh ijkl mnop", me.to_uppercase());
+        let (config, password) = parse_setup(&typed).unwrap();
+        assert_eq!(
+            (config.address.as_str(), password.as_str()),
+            (me.as_str(), "abcdefghijklmnop")
+        );
+        let saved = saved_setup(&config, &password);
+        assert_eq!(saved, format!("{me} abcdefghijklmnop"));
+        assert_eq!(parse_setup(&saved).unwrap(), (config, password));
+        let (custom, pw) =
+            parse_setup("me@example.org imap.example.org smtp.example.org mx.example.org s3cr3t!")
+                .unwrap();
+        assert_eq!(
+            (custom.smtp_host.as_str(), pw.as_str()),
+            ("smtp.example.org", "s3cr3t!")
+        );
+        assert_eq!(
+            parse_setup(&saved_setup(&custom, &pw)).unwrap(),
+            (custom, pw)
+        );
+        assert!(parse_setup(&me).unwrap_err().contains("app password"));
+        assert!(parse_setup("me@example.org s3cr3t")
+            .unwrap_err()
+            .starts_with("For this provider"));
+    }
+
+    #[test]
+    fn the_thread_reads_back_for_the_reply() {
+        let msg = Incoming {
+            sender: "jane@example.com".into(),
+            subject: "Lunch".into(),
+            text: "Noon?".into(),
+            message_id: "<m2@example.com>".into(),
+            references: "<m1@example.com> <m2@example.com>".into(),
+        };
+        assert_eq!(msg.prompt_text(), "Subject: Lunch\n\nNoon?");
+        let thread = parse_thread(&msg.thread());
+        assert_eq!(thread.in_reply_to, "<m2@example.com>");
+        assert_eq!(thread.references, "<m1@example.com> <m2@example.com>");
+        assert_eq!(thread.subject, "Lunch");
+        assert_eq!(parse_thread(""), Thread::default());
     }
 
     #[test]
