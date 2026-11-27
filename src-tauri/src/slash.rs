@@ -2149,7 +2149,13 @@ mod tests {
         );
     }
 
-    fn hits_home(name: &str) -> (std::path::PathBuf, std::path::PathBuf, grokhub_agent::perm::ConfigGuard) {
+    fn hits_home(
+        name: &str,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        grokhub_agent::perm::ConfigGuard,
+    ) {
         let root = std::env::temp_dir().join(format!(
             "grokhub-shell-slash-hits-{name}-{}-{}",
             std::process::id(),
@@ -2171,25 +2177,30 @@ mod tests {
             workspace: &ws,
             home: None,
         };
-        let qa = hits_with("/qa", false, Some(HitsCtx {
-            config_dir: &config,
-            workspace: &ws,
-            home: None,
-        }));
+        let qa = hits_with(
+            "/qa",
+            false,
+            Some(HitsCtx {
+                config_dir: &config,
+                workspace: &ws,
+                home: None,
+            }),
+        );
         assert!(
             cmds(&qa).contains(&"/qa-walkthrough"),
             "expected /qa-walkthrough in {qa:?}"
         );
 
-        let ar = hits_with("/ar", false, Some(HitsCtx {
-            config_dir: &config,
-            workspace: &ws,
-            home: None,
-        }));
-        assert!(
-            cmds(&ar).contains(&"/arena"),
-            "expected /arena in {ar:?}"
+        let ar = hits_with(
+            "/ar",
+            false,
+            Some(HitsCtx {
+                config_dir: &config,
+                workspace: &ws,
+                home: None,
+            }),
         );
+        assert!(cmds(&ar).contains(&"/arena"), "expected /arena in {ar:?}");
         assert!(
             cmds(&ar).contains(&"/architect"),
             "expected /architect in {ar:?}"
@@ -2210,8 +2221,7 @@ mod tests {
             "---\nname: off-skill\ndescription: Switched off skill\n---\n\n# off-skill\n\n## Steps\nnone\n",
         )
         .expect("skill");
-        grokhub_agent::set_skill_off_in(&config.join("skills"), "off-skill", true)
-            .expect("off");
+        grokhub_agent::set_skill_off_in(&config.join("skills"), "off-skill", true).expect("off");
         let off = hits_with(
             "/off",
             false,

@@ -324,9 +324,7 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
                     })
                 }
                 Some(r) => Err(format!("{} is switched off. Turn it on in Skills.", r.name)),
-                None => Err(format!(
-                    "Unknown command /{slug}. Type /help for the list."
-                )),
+                None => Err(format!("Unknown command /{slug}. Type /help for the list.")),
             }
         }
         Op::SkillChanges => notice(crate::changes::report(
