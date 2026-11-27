@@ -81,7 +81,11 @@ const dots = () =>
     .getAllByRole("button")
     .map((b) => b.getAttribute("aria-label"));
 
-beforeEach(() => api.getMemoryGraph.mockReset());
+// A braced body: a hook that returns a function has it run as a teardown, and
+// mockReset returns the mock, which would load the map once more.
+beforeEach(() => {
+  api.getMemoryGraph.mockReset();
+});
 
 describe("layoutMap", () => {
   it("clusters by type in a fixed order and keeps a line of versions together", () => {
@@ -200,10 +204,7 @@ describe("MemoryMap", () => {
   });
 
   it("says why when the map can't load", async () => {
-    // Rejected a tick after the call, once the map's own handler is attached.
-    api.getMemoryGraph.mockImplementation(
-      () => new Promise((_, reject) => setTimeout(() => reject(new Error("memory store is off")), 0)),
-    );
+    api.getMemoryGraph.mockRejectedValue(new Error("memory store is off"));
     renderMap();
     expect(await screen.findByText("The map couldn't load: memory store is off")).toBeVisible();
   });
