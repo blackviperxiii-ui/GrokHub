@@ -2569,7 +2569,7 @@ mod tests {
         let body = format!(
             r#"{{"code":"{pair_code}","id":"phone-web","name":"Phone","platform":"browser"}}"#
         );
-        let (status, _, paired, _) = forward_node_request(
+        let (status, paired, _, _) = forward_node_request(
             web_port,
             "POST",
             "/pair",
@@ -2584,7 +2584,7 @@ mod tests {
         let token = parsed["token"].as_str().expect("token");
 
         // Unapproved companion stays pending through the proxy.
-        let (status, _, next_raw, _) = forward_node_request(
+        let (status, next_raw, _, _) = forward_node_request(
             web_port,
             "GET",
             "/next",
