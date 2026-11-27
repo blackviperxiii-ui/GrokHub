@@ -1,0 +1,1 @@
+- Personal has a Map view on the desktop: what Loadout learned, as dots grouped by type and joined by their links. Filter by type or by lines waiting for your OK, pick a dot to see its card and older versions, keep one of two lines that disagree, or read the map as a list.
