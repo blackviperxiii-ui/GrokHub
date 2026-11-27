@@ -1,1 +1,0 @@
-- Always-listening on-device wake word: opt-in mic, open-vocabulary phrases, multi-profile routing, and hands-free stop (complements push-to-talk / open-mic; wake audio stays local).

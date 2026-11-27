@@ -1,1 +1,0 @@
-- Packaging: desktop productName and install menu labels say Loadout (binary and release assets unchanged).

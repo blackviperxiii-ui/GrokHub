@@ -1,1 +1,0 @@
-- Tests: channel inbox expects Slack, Signal, and Email as live adapters (same as Discord), and only unknown kinds stay unread.

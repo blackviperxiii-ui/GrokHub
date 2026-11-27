@@ -1,1 +1,0 @@
-- CI: the nightly CI run and beta pre-release now run as dispatched runs on beta, so beta's code never writes main's shared caches; the web smoke trusts the app's own certificate instead of turning TLS checks off.

@@ -1,1 +1,0 @@
-- Claude (your plan): find Desktop-managed Claude Code under `~/.config/Claude/claude-code/<ver>/` and `claude-code-vm` (not only PATH / `~/.local/bin` / `~/.claude/local`).

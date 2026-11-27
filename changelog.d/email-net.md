@@ -1,1 +1,0 @@
-- Email channel, part 2: Loadout can now sign in to your mailbox over IMAP and SMTP with an app password. It reads the inbox without marking anything read, starts from the mail that arrives after you connect, and answers only senders you allowed, in the same thread. Not switched on in the app yet.

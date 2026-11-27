@@ -1,1 +1,0 @@
-- Local replies that repeat the same token or a short phrase stop at the limit, and the partial answer stays up with a short note. On-device chats also send a repetition penalty and a token cap for the loaded model.

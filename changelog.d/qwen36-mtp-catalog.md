@@ -1,1 +1,0 @@
-- Local catalog: Qwen3.6 gets pinned MTP heads and a 13.2 GB fit at 64K context. Devstral's default context is 12288 and Qwen3-Coder's is 32768.

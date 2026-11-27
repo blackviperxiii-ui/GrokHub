@@ -1,3 +1,0 @@
-- Chat: at the window's opening size the message box gets its own row instead of shrinking to a couple of words, and the box no longer drops and jumps back on every send (the suggestion row stays, dimmed, while a reply runs).
-- The Code agent no longer suggests game and life starters such as "Fix my stutter", and its Skills tab stops saying "Loading skills…" once the list has failed to load.
-- The command palette finds Appearance for "dark", "light" or "theme", and Account for "api key".

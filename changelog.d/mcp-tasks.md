@@ -1,1 +1,0 @@
-- MCP client follows a long `tools/call` that returns a task handle: it polls, asks on the elicit card, and returns the final result.

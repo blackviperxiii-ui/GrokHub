@@ -1,1 +1,0 @@
-- Hangout: casual chat offers no tools; identical tool calls reuse the earlier result; impossible asks get one plain "I can't do that here".

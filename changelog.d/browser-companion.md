@@ -1,1 +1,0 @@
-- Browser companions can now pair and operate from a phone or tablet browser over Web access HTTPS (`/node/v1/*` proxied with a single explicit Origin allowlist while keeping `/mcp/*` strictly loopback-only) under the existing two-yes companion consent model.

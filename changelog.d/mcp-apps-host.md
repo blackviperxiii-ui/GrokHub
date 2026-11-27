@@ -1,1 +1,0 @@
-- MCP Apps host: render interactive in-chat app UIs from MCP tools that name a `ui://` HTML resource (`text/html;profile=mcp-app`), with a sandboxed iframe bridge on top of the existing MCP client.

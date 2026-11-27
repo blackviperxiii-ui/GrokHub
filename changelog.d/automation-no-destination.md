@@ -1,1 +1,0 @@
-- Automations: a script-only job, or a check that found nothing to do, no longer reads "delivery failed". Its row shows delivery as not applicable and the run as complete. A job with a board card still reads delivered only once its card took the result.

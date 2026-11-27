@@ -1,1 +1,0 @@
-- Plugins: trusting a bundle now runs the skill safety check on every SKILL.md, agent and command it carries. A flagged one blocks trust with the reason, and a bundle trusted before this check turns off until its flagged text is fixed.

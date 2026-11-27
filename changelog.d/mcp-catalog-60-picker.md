@@ -1,1 +1,0 @@
-- Connectors: curated MCP catalog grown to about 60 reviewed entries, with a pick-your-tools step at install that writes an include list to mcp.json.

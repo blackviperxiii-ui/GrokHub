@@ -1,1 +1,0 @@
-- /rewind on Windows keeps the shell step's first snapshot when an edit names the workspace by its short path.

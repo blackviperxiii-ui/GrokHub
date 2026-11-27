@@ -2,12 +2,12 @@
 
 Loadout is built with Tauri (`grokhub-shell`) and ships with its LAN hub (`grokhub-hub`). No Electron. The cross-platform plan is in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version.
 
-**v3.6.0** — The Loadout look: one brand file names the app and its companion, Nyx becomes the default personality for new installs, Ops Dark, OLED Black and Soft Charcoal themes arrive, Loadout's chat home gets a dock, Pulse reflows from side-by-side to one column and can follow your Steam library's game news, and the shell gets an Activity Dock for running chats, approvals and automation runs.
+**v3.7.0** — The Loadout look: one brand file names the app and its companion, Nyx becomes the default personality for new installs, Ops Dark, OLED Black and Soft Charcoal themes arrive, Loadout's chat home gets a dock, Pulse reflows from side-by-side to one column and can follow your Steam library's game news, and the shell gets an Activity Dock for running chats, approvals and automation runs.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (x86_64) | `grokhub-shell-v*-linux-amd64.AppImage`, `.deb`, Arch recipe in [`packaging/aur/`](../packaging/aur/) | **v3.6.0** |
-| **Windows** (x86_64) | `GrokHub-Shell-Setup-*.exe` | **v3.6.0** |
+| **Linux** (x86_64) | `grokhub-shell-v*-linux-amd64.AppImage`, `.deb`, Arch recipe in [`packaging/aur/`](../packaging/aur/) | **v3.7.0** |
+| **Windows** (x86_64) | `GrokHub-Shell-Setup-*.exe` | **v3.7.0** |
 
 Windows vs Linux in Loadout is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new Loadout work lands here.
 

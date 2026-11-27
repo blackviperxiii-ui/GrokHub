@@ -1,3 +1,0 @@
-- MCP Apps run again: each app loads in a sandboxed page of its own, with its own content policy, so its script starts in the desktop window and in a paired browser without loosening the chat page's policy.
-- The app reopens the chat you picked last, even when an earlier, slower chat load finishes after it.
-- Saving a custom personality edits the file it came from instead of writing a second copy.

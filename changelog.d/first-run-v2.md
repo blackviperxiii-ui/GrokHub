@@ -1,1 +1,0 @@
-- First run v2 after Get to know you: Simple/Advanced layout, connect up to 8 suggested apps, pick skills, local-model offer, import from Claude Code/Cursor/Codex, sandbox stays on, first task and tour (every step skippable; rerun from Settings → Personal).

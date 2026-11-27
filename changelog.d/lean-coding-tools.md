@@ -1,1 +1,0 @@
-- Local coding turns use a lean prompt and only code tools (read, find, edit, shell, test output); Hangout chat-only stays tool-free.

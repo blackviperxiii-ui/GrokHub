@@ -1,1 +1,0 @@
-- The sidebar no longer has Simple mode or a Simple/Advanced switch. The grouped rail is the only layout. Pins and folded groups stay.

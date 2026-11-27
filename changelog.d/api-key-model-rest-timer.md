@@ -1,1 +1,0 @@
-- With an API key, a model that rested after repeated failures comes back on its own once its rest is over, and its next real call decides whether it stays. No paid check runs on your key.

@@ -1,1 +1,0 @@
-- Fix the shell update manifest test so the shared AppImage alias still verifies after a tamper, and check the macOS `.app.tar.gz` signature the same way as Linux and Windows.

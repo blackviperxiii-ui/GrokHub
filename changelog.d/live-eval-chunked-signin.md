@@ -1,1 +1,0 @@
-- Live eval `--auth signin` reads the shell's chunked Windows keychain sign-in the same way the app does.

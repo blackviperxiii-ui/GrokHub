@@ -1,1 +1,0 @@
-- Skills: Skills Hub searches ClawHub, SkillsSH, GitHub, and `.well-known` hosts, and installs through the existing skill scanner and quarantine.
