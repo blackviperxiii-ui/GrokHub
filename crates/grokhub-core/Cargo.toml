@@ -39,6 +39,8 @@ ureq = { workspace = true }
 url = "2"
 # Routine `expect` steps: the same regex build as grokhub-agent.
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
+# Telegram (and later Signal) pairing QR, drawn as SVG. No dependencies with these features.
+qrcode = { version = "0.15", default-features = false, features = ["std", "svg"] }
 
 # `@file:` opens without waiting on a FIFO (`O_NONBLOCK`). Already in the tree.
 [target.'cfg(unix)'.dependencies]

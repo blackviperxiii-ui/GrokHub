@@ -4,6 +4,9 @@
 //! - [`DmTrust`]: a direct message from a sender nobody paired is never
 //!   handed to a model. The sender gets a pairing code; the user approves
 //!   that code in the app, and only then does the sender count as trusted.
+//!   A start link (a QR the app shows) pairs the one sender who opens it
+//!   first, within [`START_LINK_TTL_MS`].
+//! - [`qr_svg`]: a QR code as an SVG, drawn in Rust so the UI needs no package.
 //! - [`verify_webhook`]: an inbound webhook must carry an HMAC-SHA256
 //!   signature over `"{timestamp}.{body}"` from a fresh timestamp.
 //! - [`Filter`]: declarative pre-filters drop routine webhook noise before
@@ -130,6 +133,11 @@ pub const PAIR_CODE_TTL_MS: u64 = 60 * 60 * 1000;
 pub const MAX_PENDING: usize = 3;
 /// Wrong codes typed in the app before every waiting code is dropped.
 pub const MAX_WRONG: u32 = 10;
+/// How long a start link pairs whoever opens it first.
+pub const START_LINK_TTL_MS: u64 = 10 * 60 * 1000;
+/// A start link's secret: 16 random bytes as hex. Telegram allows 64 of
+/// `A-Z a-z 0-9 _ -` in a start payload, and hex is inside that.
+pub const START_SECRET_LEN: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,13 +151,24 @@ pub struct Pending {
     pub expires_ms: u64,
 }
 
-/// Paired senders per channel, and the codes waiting for the user.
+/// A link the app showed as a QR. The first sender to open it is paired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartLink {
+    pub channel: ChannelKind,
+    pub secret: String,
+    pub expires_ms: u64,
+}
+
+/// Paired senders per channel, the codes waiting for the user, and the one
+/// live start link per channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DmTrust {
     pub paired: BTreeMap<ChannelKind, BTreeSet<String>>,
     pub pending: Vec<Pending>,
     pub wrong: u32,
+    pub start_links: Vec<StartLink>,
 }
 
 /// What to do with one inbound direct message.
@@ -173,6 +192,52 @@ impl DmTrust {
 
     fn sweep(&mut self, now_ms: u64) {
         self.pending.retain(|p| p.expires_ms > now_ms);
+        self.start_links.retain(|l| l.expires_ms > now_ms);
+    }
+
+    /// A fresh start link for `channel`, replacing any earlier one, so only
+    /// the newest QR the app showed can pair. Returns the secret.
+    pub fn issue_start_link(&mut self, channel: ChannelKind, now_ms: u64) -> String {
+        self.sweep(now_ms);
+        self.start_links.retain(|l| l.channel != channel);
+        let mut bytes = [0u8; START_SECRET_LEN / 2];
+        crate::fill_random(&mut bytes);
+        let secret = hex::encode(bytes);
+        self.start_links.push(StartLink {
+            channel,
+            secret: secret.clone(),
+            expires_ms: now_ms + START_LINK_TTL_MS,
+        });
+        secret
+    }
+
+    /// `sender` opened a start link carrying `given`. When it matches the live
+    /// link for `channel`, the link is spent, the sender is paired and any code
+    /// they were waiting on is dropped. A wrong secret spends nothing, so a
+    /// stranger guessing can't use up the person's QR.
+    pub fn redeem_start_link(
+        &mut self,
+        channel: ChannelKind,
+        sender: &str,
+        given: &str,
+        now_ms: u64,
+    ) -> bool {
+        self.sweep(now_ms);
+        let Some(i) = self
+            .start_links
+            .iter()
+            .position(|l| l.channel == channel && ct_eq(l.secret.as_bytes(), given.as_bytes()))
+        else {
+            return false;
+        };
+        self.start_links.remove(i);
+        self.pending
+            .retain(|p| !(p.channel == channel && p.sender == sender));
+        self.paired
+            .entry(channel)
+            .or_default()
+            .insert(sender.to_string());
+        true
     }
 
     /// A direct message from `sender` on `channel` arrived.
@@ -262,6 +327,20 @@ impl DmTrust {
 }
 
 /// HMAC-SHA256 (RFC 2104).
+/// `text` as a QR code in SVG, dark modules on a white ground with the quiet
+/// zone kept, at least `min_px` wide.
+pub fn qr_svg(text: &str, min_px: u32) -> Result<String, String> {
+    let code = qrcode::QrCode::new(text.as_bytes())
+        .map_err(|e| format!("Couldn't draw that link as a QR code ({e})."))?;
+    Ok(code
+        .render::<qrcode::render::svg::Color<'_>>()
+        .min_dimensions(min_px, min_px)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .quiet_zone(true)
+        .build())
+}
+
 pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     const BLOCK: usize = 64;
     let mut k = [0u8; BLOCK];
@@ -634,6 +713,70 @@ mod tests {
         assert!(trust.is_paired(ChannelKind::Discord, "42"));
         assert!(!trust.is_paired(ChannelKind::Slack, "1001"));
         assert_eq!(trust.wrong, 2);
+    }
+
+    #[test]
+    fn a_start_link_pairs_its_first_opener_once() {
+        const NOW: u64 = 1_763_550_000_000;
+        let mut trust = DmTrust::default();
+        // A stranger already waiting on a code is paired by the link, and the
+        // code goes.
+        trust.inbound(ChannelKind::Telegram, "777", "@user", NOW);
+        let secret = trust.issue_start_link(ChannelKind::Telegram, NOW);
+        assert_eq!(secret.len(), START_SECRET_LEN);
+        assert!(secret.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(!trust.redeem_start_link(
+            ChannelKind::Telegram,
+            "666",
+            "0".repeat(32).as_str(),
+            NOW + 1
+        ));
+        assert!(!trust.redeem_start_link(ChannelKind::Discord, "777", &secret, NOW + 1));
+        assert!(trust.redeem_start_link(ChannelKind::Telegram, "777", &secret, NOW + 2));
+        assert!(trust.is_paired(ChannelKind::Telegram, "777"));
+        assert!(trust.pending.is_empty());
+        // Spent: the same link pairs nobody else.
+        assert!(!trust.redeem_start_link(ChannelKind::Telegram, "888", &secret, NOW + 3));
+        assert!(!trust.is_paired(ChannelKind::Telegram, "888"));
+    }
+
+    #[test]
+    fn a_start_link_expires_and_a_new_one_replaces_the_old() {
+        const NOW: u64 = 1_763_550_000_000;
+        let mut trust = DmTrust::default();
+        let old = trust.issue_start_link(ChannelKind::Telegram, NOW);
+        let new = trust.issue_start_link(ChannelKind::Telegram, NOW + 1);
+        assert_ne!(old, new);
+        assert_eq!(trust.start_links.len(), 1);
+        assert!(!trust.redeem_start_link(ChannelKind::Telegram, "1", &old, NOW + 2));
+        assert!(!trust.redeem_start_link(
+            ChannelKind::Telegram,
+            "1",
+            &new,
+            NOW + 1 + START_LINK_TTL_MS
+        ));
+        assert!(trust.start_links.is_empty());
+        // A trust file from before start links loads with none.
+        let back: DmTrust =
+            serde_json::from_str(r#"{"paired":{},"pending":[],"wrong":0}"#).unwrap();
+        assert!(back.start_links.is_empty());
+    }
+
+    #[test]
+    fn a_qr_is_an_svg_of_the_asked_size() {
+        let svg = qr_svg("https://t.me/example_bot?start=abc", 240).unwrap();
+        assert!(svg.starts_with("<?xml"), "{}", &svg[..40]);
+        assert!(svg.contains("<svg"));
+        assert!(svg.trim_end().ends_with("</svg>"));
+        assert!(svg.contains("width=\""));
+        assert!(!svg.contains("<script"));
+        let width: u32 = svg
+            .split("width=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .and_then(|w| w.parse().ok())
+            .unwrap();
+        assert!(width >= 240, "{width}");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Connectors → Phone and chat apps (messaging channels, part 6): connect a
 //! Telegram or Discord bot, approve the pairing codes strangers were sent,
-//! unpair senders, and add or remove signed webhooks. Each connected bot has one background worker; its
+//! unpair senders, show a QR that pairs a phone in one scan (Telegram), and
+//! add or remove signed webhooks. Each connected bot has one background worker; its
 //! token stays in the OS keychain, and what paired senders write is queued
 //! in `channels/inbox/`.
 
@@ -16,6 +17,7 @@ use grokhub_agent::channels_net::{
 use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust};
+use grokhub_core::msg_telegram;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -469,6 +471,45 @@ pub fn unpair(
     ))
 }
 
+/// A QR that pairs the phone which scans it. Shown only in the desktop app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartQr {
+    /// The `t.me` link the QR holds, for a phone that can't scan.
+    pub link: String,
+    /// The QR as an SVG document.
+    pub svg: String,
+    pub expires_ms: u64,
+}
+
+/// The QR's smallest width in pixels.
+const QR_PX: u32 = 240;
+
+/// A fresh Telegram start link as a QR. The bot's name comes from `getMe`,
+/// so the token must be saved and still work.
+pub fn telegram_qr(config_dir: &Path, store: &dyn Backend) -> Result<StartQr, String> {
+    let token = channels_net::load_token(store, ChannelKind::Telegram)?
+        .ok_or_else(|| "Connect Telegram first, then show the QR code.".to_string())?;
+    let bot = TelegramLink::new(&token)?.check(config_dir)?;
+    start_qr(config_dir, &bot, grokhub_core::now_ms())
+}
+
+/// The link for `bot` is saved before it is shown, so any QR the page shows
+/// can pair. Each one replaces the last.
+fn start_qr(config_dir: &Path, bot: &str, now_ms: u64) -> Result<StartQr, String> {
+    let mut trust = DmTrust::load(config_dir);
+    let secret = trust.issue_start_link(ChannelKind::Telegram, now_ms);
+    let link = msg_telegram::start_link_url(bot, &secret)
+        .ok_or_else(|| format!("Telegram's bot name {bot} can't make a link."))?;
+    let svg = msg_channels::qr_svg(&link, QR_PX)?;
+    trust.save(config_dir)?;
+    Ok(StartQr {
+        link,
+        svg,
+        expires_ms: now_ms + msg_channels::START_LINK_TTL_MS,
+    })
+}
+
 /// Turn approval asks on or off for one paired sender.
 pub fn set_asks(
     config_dir: &Path,
@@ -514,6 +555,30 @@ mod tests {
             self.0.lock().unwrap().remove(account);
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_qr_needs_a_bot_and_its_link_pairs_the_phone_that_opens_it() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-qr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MemoryStore::default();
+        assert_eq!(
+            telegram_qr(&dir, &store).unwrap_err(),
+            "Connect Telegram first, then show the QR code."
+        );
+        let now = 1_763_550_000_000;
+        let qr = start_qr(&dir, "@example_bot", now).unwrap();
+        assert!(qr.svg.contains("<svg"));
+        assert_eq!(qr.expires_ms, now + msg_channels::START_LINK_TTL_MS);
+        let secret = qr
+            .link
+            .strip_prefix("https://t.me/example_bot?start=")
+            .unwrap()
+            .to_string();
+        let mut trust = DmTrust::load(&dir);
+        assert!(trust.redeem_start_link(ChannelKind::Telegram, "777", &secret, now + 1));
+        assert!(start_qr(&dir, "@no", now).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

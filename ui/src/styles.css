@@ -9441,3 +9441,12 @@ fieldset.channel label {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* Connectors → Phone and chat apps: the Telegram pairing QR. The SVG carries
+   its own white ground so phones read it in either theme. */
+.channel-qr {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 8px 0 0;
+}

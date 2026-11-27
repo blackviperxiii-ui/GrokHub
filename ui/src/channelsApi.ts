@@ -70,6 +70,15 @@ export interface Channels {
   status: string | null;
 }
 
+/** A QR that pairs the phone which scans it with the Telegram bot. */
+export interface StartQr {
+  /** The `t.me` link the QR holds, for a phone that can't scan. */
+  link: string;
+  /** The QR as an SVG document. */
+  svg: string;
+  expiresMs: number;
+}
+
 export async function getChannels(): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("get_channels");
@@ -78,6 +87,12 @@ export async function getChannels(): Promise<Channels | null> {
 export async function connectChannel(kind: ChannelKind, token: string): Promise<Channels | null> {
   if (!inShell()) return null;
   return call<Channels>("connect_channel", { kind, token });
+}
+
+/** Desktop only: each call makes a new link and the last one stops working. */
+export async function telegramQr(): Promise<StartQr | null> {
+  if (!inShell()) return null;
+  return call<StartQr>("telegram_qr");
 }
 
 export async function disconnectChannel(kind: ChannelKind): Promise<Channels | null> {
