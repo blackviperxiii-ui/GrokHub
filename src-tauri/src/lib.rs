@@ -3343,6 +3343,13 @@ fn export_personal() -> Result<String, String> {
     memory::export_to(&dir)
 }
 
+/// The memory map's graph: nodes and the edges between them. Desktop only,
+/// like the wiki: it is not a web command.
+#[tauri::command]
+fn memory_graph() -> Result<grokhub_core::amr::MemoryGraph, String> {
+    memory::graph()
+}
+
 /// Updates the Obsidian-friendly wiki of the plain memory. Desktop only.
 #[tauri::command]
 fn export_memory_wiki() -> Result<String, String> {
@@ -9918,6 +9925,7 @@ pub fn run() {
             add_personal_fact,
             export_personal,
             export_memory_wiki,
+            memory_graph,
             wipe_personal,
             get_memory_files,
             save_memory_file,
