@@ -155,7 +155,8 @@ describe("MemoryMap", () => {
     renderMap();
     await userEvent.click(await screen.findByRole("button", { name: "Facts: Has a 4090, replaced" }));
     const panel = within(screen.getByRole("group", { name: "Picked: Has a 4090" }));
-    expect(panel.getByText("Has a 4090")).toBeVisible();
+    // A line with no card in the list shows its words in a note.
+    expect(panel.getByText("Has a 4090", { selector: "p" })).toBeVisible();
     await userEvent.click(panel.getByRole("button", { name: "Has a 5090" }));
     const newer = within(screen.getByRole("group", { name: "Picked: Has a 5090" }));
     expect(newer.getByRole("listitem", { name: "Card Has a 5090" })).toBeVisible();
@@ -199,7 +200,8 @@ describe("MemoryMap", () => {
   });
 
   it("says why when the map can't load", async () => {
-    api.getMemoryGraph.mockRejectedValue("memory store is off");
+    // Rejected only when called, so the map's own handler is the one that sees it.
+    api.getMemoryGraph.mockImplementation(() => Promise.reject("memory store is off"));
     renderMap();
     expect(await screen.findByText("The map couldn't load: memory store is off")).toBeVisible();
   });
