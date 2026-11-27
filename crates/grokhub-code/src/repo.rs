@@ -290,18 +290,18 @@ pub struct Builtin {
     pub overridden_by: Option<OverriddenBy>,
 }
 
-/// The built-in skills every Code tab session carries, in ship order, with
-/// whatever currently overrides each one (existing skill resolution). A built-in can't be deleted; removing
-/// the override brings it back.
+/// Every active built-in skill (synced vstack library, or the bundled
+/// snapshot when nothing is synced). Always-on skills stay first, in their
+/// ship order; the rest follow by name. A same-name project, user, cabin or
+/// plugin skill sets `overridden_by` and does not remove the row.
 pub fn builtins(workspace: &Path, home: Option<&Path>, config_dir: &Path) -> Vec<Builtin> {
     let _config = ConfigGuard::set(config_dir);
     let found =
         grokhub_agent::discover_all_skills(workspace, home, &plugins::skill_dirs(workspace));
-    let bodies = grokhub_agent::active_builtin_bodies();
-    grokhub_agent::active_always_on()
-        .into_iter()
-        .filter_map(|folder| {
-            let (_, text) = bodies.iter().find(|(n, _)| n == folder)?;
+    let always = grokhub_agent::active_always_on();
+    let mut rows: Vec<Builtin> = grokhub_agent::active_builtin_bodies()
+        .iter()
+        .filter_map(|(folder, text)| {
             let (name, description, body) = parse_builtin(folder, text)?;
             let overridden_by = found.iter().find_map(|skill| {
                 if skill.name != name || skill.source == SkillSource::Builtin {
@@ -319,7 +319,29 @@ pub fn builtins(workspace: &Path, home: Option<&Path>, config_dir: &Path) -> Vec
                 overridden_by,
             })
         })
-        .collect()
+        .collect();
+    rows.sort_by(|a, b| {
+        let rank = |name: &str| always.iter().position(|folder| *folder == name);
+        match (rank(&a.name), rank(&b.name)) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.cmp(&b.name),
+        }
+    });
+    rows
+}
+
+fn unquote(value: &str) -> String {
+    let value = value.trim();
+    let bytes = value.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    {
+        return value[1..value.len() - 1].to_string();
+    }
+    value.to_string()
 }
 
 fn parse_builtin(folder: &str, text: &str) -> Option<(String, String, String)> {
@@ -332,12 +354,12 @@ fn parse_builtin(folder: &str, text: &str) -> Option<(String, String, String)> {
         };
         match key.trim() {
             "name" => {
-                let trimmed = value.trim();
+                let trimmed = unquote(value);
                 if !trimmed.is_empty() {
-                    name = trimmed.to_string();
+                    name = trimmed;
                 }
             }
-            "description" => description = value.trim().to_string(),
+            "description" => description = unquote(value),
             _ => {}
         }
     }
@@ -528,15 +550,27 @@ mod tests {
         dir
     }
 
+    fn surrounded_by_quotes(value: &str) -> bool {
+        let bytes = value.as_bytes();
+        bytes.len() >= 2
+            && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+                || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    }
+
     #[test]
-    fn lists_the_five_built_ins_in_order_with_bodies_and_no_override() {
+    fn lists_the_full_bundled_vstack_library_always_on_first() {
         let root = scratch("list");
         let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
         let rows = builtins(&ws, Some(&home), &cfg);
+        assert!(
+            rows.len() > 50,
+            "bundled vstack library has {} skills",
+            rows.len()
+        );
         let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(
-            names,
-            vec![
+            &names[..5],
+            [
                 "qa-walkthrough",
                 "av-qa-walkthrough",
                 "create-verification-skill",
@@ -544,6 +578,8 @@ mod tests {
                 "follow-through",
             ]
         );
+        assert!(names.contains(&"viper-mode"), "{names:?}");
+        assert!(names.contains(&"qa-walkthrough"));
         let follow = rows.iter().find(|r| r.name == "follow-through").unwrap();
         assert_eq!(
             follow.description,
@@ -561,8 +597,81 @@ mod tests {
                 row.name,
                 &row.body[..row.body.len().min(40)]
             );
+            assert!(!surrounded_by_quotes(&row.name), "quoted name {}", row.name);
+            assert!(
+                !surrounded_by_quotes(&row.description),
+                "quoted description on {}: {}",
+                row.name,
+                row.description
+            );
             assert_eq!(row.overridden_by, None, "{}", row.name);
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_synced_library_strips_yaml_quotes_and_includes_arena() {
+        let root = scratch("synced");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        let skills = cfg.join("vstack/skills");
+        let mut count = 0usize;
+        let write_skill = |folder: &str, name: &str, description: &str| {
+            let path = skills.join(folder).join("SKILL.md");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                format!("---\nname: {name}\ndescription: {description}\n---\n# {folder}\n"),
+            )
+            .unwrap();
+        };
+        for folder in [
+            "qa-walkthrough",
+            "av-qa-walkthrough",
+            "create-verification-skill",
+            "maintain-verification-skill",
+            "follow-through",
+            "viper-mode",
+        ] {
+            write_skill(folder, folder, "plain description");
+            count += 1;
+        }
+        write_skill("arena", "\"arena\"", "\"Bake off two designs.\"");
+        count += 1;
+        for n in 1..=44 {
+            let folder = format!("skill-{n:02}");
+            write_skill(&folder, &folder, "'filler skill'");
+            count += 1;
+        }
+        assert_eq!(count, 51);
+        std::fs::create_dir_all(cfg.join("vstack")).unwrap();
+        std::fs::write(
+            cfg.join("vstack/state.json"),
+            format!(
+                r#"{{"repo":"https://github.com/blackviperxiii-ui/vstack","version":"9.9.9","tag":"v9.9.9","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bundleSha256":"abc","skillCount":{count},"lastSyncMs":1}}"#
+            ),
+        )
+        .unwrap();
+
+        let rows = builtins(&ws, Some(&home), &cfg);
+        assert_eq!(rows.len(), 51);
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            &names[..5],
+            [
+                "qa-walkthrough",
+                "av-qa-walkthrough",
+                "create-verification-skill",
+                "maintain-verification-skill",
+                "follow-through",
+            ]
+        );
+        assert!(names.contains(&"viper-mode"));
+        assert!(names.contains(&"arena"));
+        let arena = rows.iter().find(|r| r.name == "arena").unwrap();
+        assert_eq!(arena.description, "Bake off two designs.");
+        assert!(!surrounded_by_quotes(&arena.description));
+        let filler = rows.iter().find(|r| r.name == "skill-01").unwrap();
+        assert_eq!(filler.description, "filler skill");
         let _ = std::fs::remove_dir_all(&root);
     }
 

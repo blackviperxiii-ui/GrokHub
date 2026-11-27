@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodeBuiltin, CodeDeployPlan, CodeDiff, CodeFileListing, CodeRepo } from "./api";
+import type { CodeBuiltin, CodeDeployPlan, CodeDiff, CodeFileListing, CodeRepo, VstackStatus } from "./api";
 
 const api = vi.hoisted(() => ({
   codeRepo: vi.fn<() => Promise<CodeRepo>>(),
@@ -42,6 +42,8 @@ const api = vi.hoisted(() => ({
   codePanelState: vi.fn(),
   codePanelSettingsSave: vi.fn(),
   codePanelBackupRestore: vi.fn(),
+  vstackSyncStatus: vi.fn(),
+  vstackSyncNow: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -198,6 +200,18 @@ function barButton(name: string) {
   return within(screen.getByTestId("bar")).getByRole("button", { name, hidden: true });
 }
 
+const VSTACK: VstackStatus = {
+  repo: "https://github.com/blackviperxiii-ui/vstack",
+  source: "bundled",
+  version: "1.4.0",
+  tag: "v1.4.0",
+  commit: "11cca98b4a55da3118f51e749ac62faefbc21b3b",
+  lastSyncMs: null,
+  lastCheckMs: null,
+  lastError: null,
+  skillCount: 58,
+};
+
 describe("Code tab", () => {
   beforeEach(() => {
     // Most cases below exercise the Editor workspace. First-launch default
@@ -214,6 +228,10 @@ describe("Code tab", () => {
     api.codeDiff.mockReset();
     api.codeBuiltins.mockReset();
     api.codeBuiltins.mockResolvedValue([]);
+    api.vstackSyncStatus.mockReset();
+    api.vstackSyncStatus.mockResolvedValue(VSTACK);
+    api.vstackSyncNow.mockReset();
+    api.vstackSyncNow.mockResolvedValue(VSTACK);
     api.codeTestPlan.mockReset();
     api.codeTestRun.mockReset();
     api.onCodeRun.mockReset();
@@ -537,6 +555,48 @@ describe("Code tab", () => {
     await openSideTab("Skills");
     expect(await screen.findByText(overrideLabel(over))).toBeInTheDocument();
     expect(screen.getByText("overridden by project skill follow-through")).toBeInTheDocument();
+  });
+
+  it("filters the full vstack list and refreshes it after Sync now", async () => {
+    const many: CodeBuiltin[] = [
+      ...Array.from({ length: 68 }, (_, i) => ({
+        name: `skill-${String(i).padStart(2, "0")}`,
+        description: "A vstack skill",
+        body: "# Skill",
+        overriddenBy: null,
+      })),
+      { name: "viper-mode", description: "Viper mode.", body: "# Viper", overriddenBy: null },
+      { name: "qa-walkthrough", description: "Ship check.", body: "# QA", overriddenBy: null },
+      { name: "arena", description: "Bake off designs.", body: "# Arena", overriddenBy: null },
+    ];
+    const refreshed = many.map((row) =>
+      row.name === "arena" ? { ...row, description: "Bake off designs. refreshed" } : row,
+    );
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockReset();
+    api.codeBuiltins.mockResolvedValueOnce(many).mockResolvedValue(refreshed);
+    api.vstackSyncNow.mockResolvedValue({
+      ...VSTACK,
+      source: "synced",
+      version: "9.9.9",
+      tag: "v9.9.9",
+      commit: "abcdef1234567890abcd",
+      skillCount: 71,
+    });
+    render(<Code shown onOpenSettings={() => {}} />);
+    await openSideTab("Skills");
+    expect(await screen.findByText("bundled v1.4.0 · 11cca98b4a55 · 58 skills")).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: CODE_BUILTINS });
+    expect(list.querySelectorAll("li button").length).toBe(71);
+    expect(screen.getByRole("button", { name: /^viper-mode/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^qa-walkthrough/ })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Filter built-in skills"), "arena");
+    expect(screen.getByRole("list", { name: CODE_BUILTINS }).querySelectorAll("li button").length).toBe(1);
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(api.vstackSyncNow).toHaveBeenCalledTimes(1);
+    expect(api.codeBuiltins).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("Bake off designs. refreshed")).toBeInTheDocument();
+    expect(screen.getByText("synced v9.9.9 · abcdef123456 · 71 skills")).toBeInTheDocument();
   });
 
   it("names the app's own skills folder as app, not by its old source id", () => {
