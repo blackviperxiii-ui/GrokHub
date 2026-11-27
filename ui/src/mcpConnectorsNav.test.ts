@@ -17,14 +17,29 @@ const DESKTOP: Capabilities = {
 };
 
 describe("MCPs & Connectors nav", () => {
-  it("keeps the page on the Simple rail", () => {
+  it("keeps the page on the grouped rail", () => {
     expect(railViews(DESKTOP)).toEqual([
       "home",
+      "objectives",
       "chat",
       "code",
+      "command",
+      "history",
       "pulse",
-      "library",
+      "journal",
+      "meetings",
+      "automations",
+      "agents",
+      "team",
+      "memory",
+      "skills",
       "connectors",
+      "workboard",
+      "devices",
+      "fleet",
+      "library",
+      "mods",
+      "updates",
       "settings",
     ]);
     expect(VIEW_LABELS.connectors).toBe("MCPs & Connectors");

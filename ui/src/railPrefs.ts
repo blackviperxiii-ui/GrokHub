@@ -1,8 +1,7 @@
-/** Sidebar v2 prefs: Simple vs Advanced, pins, and which sections are folded.
- * Kept in localStorage so the rail remembers without a shell.json bump. */
+/** Sidebar prefs: pins, and which sections are folded.
+ * Kept in localStorage so the rail remembers without a shell.json bump.
+ * A legacy `mode` field is ignored. */
 import type { View } from "./Palette";
-
-export type RailMode = "simple" | "advanced";
 
 export type RailSectionId = "core" | "work" | "make" | "you" | "pc";
 
@@ -12,7 +11,7 @@ export interface RailSectionDef {
   views: readonly View[];
 }
 
-/** Advanced-mode groups. Settings stays at the rail foot, not in a group. */
+/** Groups on the rail. Settings stays at the rail foot, not in a group. */
 export const RAIL_SECTIONS: readonly RailSectionDef[] = [
   { id: "core", label: "Core", views: ["home", "chat", "code", "library"] },
   {
@@ -26,7 +25,6 @@ export const RAIL_SECTIONS: readonly RailSectionDef[] = [
 ];
 
 export interface RailPrefs {
-  mode: RailMode;
   /** Pages pinned to the top of the rail, in order. Settings cannot be pinned. */
   pinned: View[];
   /** Section ids the person folded shut. */
@@ -34,7 +32,6 @@ export interface RailPrefs {
 }
 
 export const DEFAULT_RAIL_PREFS: RailPrefs = {
-  mode: "simple",
   pinned: [],
   collapsed: [],
 };
@@ -64,10 +61,9 @@ export function loadRailPrefs(): RailPrefs {
       return { ...DEFAULT_RAIL_PREFS, pinned: [], collapsed: [] };
     }
     const obj = parsed as Record<string, unknown>;
-    const mode: RailMode = obj.mode === "advanced" ? "advanced" : "simple";
     const pinned = Array.isArray(obj.pinned) ? obj.pinned.filter(isView) : [];
     const collapsed = Array.isArray(obj.collapsed) ? obj.collapsed.filter(isSectionId) : [];
-    return { mode, pinned, collapsed };
+    return { pinned, collapsed };
   } catch {
     return { ...DEFAULT_RAIL_PREFS, pinned: [], collapsed: [] };
   }

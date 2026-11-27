@@ -110,10 +110,9 @@ function tab(name: string) {
   return within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name });
 }
 
-/** Opens a page that is not on the rail, through More. */
+/** Opens a page from the grouped rail. */
 async function openPage(name: string) {
-  await userEvent.click(tab("More"));
-  await userEvent.click(await within(screen.getByRole("dialog", { name: "More pages" })).findByRole("option", { name }));
+  await userEvent.click(tab(name));
 }
 
 describe("App pages with dockable panels", () => {

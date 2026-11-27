@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, QuickChip } from "./api";
 import {
   hasPage,
-  moreViews,
   NO_SOURCES,
   Palette,
   paletteRows,
@@ -256,22 +255,14 @@ describe("hasPage", () => {
   });
 });
 
-describe("the rail and its More list", () => {
-  it("puts MCPs & Connectors on the rail and the rest under More, by platform", () => {
-    expect(railViews(DESKTOP)).toEqual(["home", "chat", "pulse", "library", "connectors", "settings"]);
-    expect(railViews({ ...DESKTOP, code: true })).toEqual([
+describe("the grouped rail", () => {
+  it("puts every desktop page on the rail, in group order, with no More list", () => {
+    expect(railViews(DESKTOP)).toEqual([
       "home",
-      "chat",
-      "code",
-      "pulse",
-      "library",
-      "connectors",
-      "settings",
-    ]);
-    expect(railViews(WEB)).toEqual(["home", "chat", "connectors", "settings"]);
-    expect(moreViews(DESKTOP)).toEqual([
       "objectives",
+      "chat",
       "history",
+      "pulse",
       "journal",
       "meetings",
       "automations",
@@ -279,46 +270,34 @@ describe("the rail and its More list", () => {
       "team",
       "memory",
       "skills",
+      "connectors",
       "workboard",
       "devices",
       "fleet",
-      "updates",
-    ]);
-    expect(moreViews(WEB)).toEqual(["objectives", "automations", "agents", "memory", "skills", "workboard"]);
-  });
-
-  it("Simple mode pins a page onto the rail and drops it from More", () => {
-    const opts = { mode: "simple" as const, pinned: ["automations", "skills"] as const };
-    expect(railViews({ ...DESKTOP, code: true }, { ...opts, pinned: [...opts.pinned] })).toEqual([
-      "home",
-      "chat",
-      "code",
-      "pulse",
       "library",
-      "connectors",
-      "automations",
-      "skills",
+      "updates",
       "settings",
     ]);
-    expect(moreViews({ ...DESKTOP, code: true }, { ...opts, pinned: [...opts.pinned] })).toEqual([
+    expect(railViews(WEB)).toEqual([
+      "home",
       "objectives",
-      "command",
-      "history",
-      "journal",
-      "meetings",
+      "chat",
+      "automations",
       "agents",
-      "team",
       "memory",
+      "skills",
+      "connectors",
       "workboard",
-      "devices",
-      "fleet",
-      "updates",
+      "settings",
     ]);
+    expect(railSections(DESKTOP).map((s) => s.id)).toEqual(["core", "work", "make", "you", "pc"]);
   });
 
-  it("Advanced mode puts every page on the rail and leaves More empty", () => {
+  it("pins pages first and leaves them out of their group", () => {
     const desktop = { ...DESKTOP, code: true, mods: true };
-    expect(railViews(desktop, { mode: "advanced", pinned: [] })).toEqual([
+    expect(railViews(desktop, { pinned: ["automations", "skills"] })).toEqual([
+      "automations",
+      "skills",
       "home",
       "objectives",
       "chat",
@@ -328,11 +307,9 @@ describe("the rail and its More list", () => {
       "pulse",
       "journal",
       "meetings",
-      "automations",
       "agents",
       "team",
       "memory",
-      "skills",
       "connectors",
       "workboard",
       "devices",
@@ -342,62 +319,20 @@ describe("the rail and its More list", () => {
       "updates",
       "settings",
     ]);
-    expect(moreViews(desktop, { mode: "advanced", pinned: [] })).toEqual([]);
-    expect(moreViews(WEB, { mode: "advanced", pinned: [] })).toEqual([]);
-    expect(railSections(desktop, { mode: "advanced", pinned: ["automations"] }).map((s) => s.id)).toEqual([
+    expect(railSections(desktop, { pinned: ["automations"] }).map((s) => s.id)).toEqual([
       "core",
       "work",
       "make",
       "you",
       "pc",
     ]);
-    expect(railSections(desktop, { mode: "advanced", pinned: ["automations"] }).find((s) => s.id === "work")?.views).toEqual([
+    expect(railSections(desktop, { pinned: ["automations"] }).find((s) => s.id === "work")?.views).toEqual([
       "workboard",
       "agents",
       "team",
       "objectives",
       "command",
     ]);
-  });
-
-  it("lists only the given pages: no suggestions, commands, chats, sections or Ask", () => {
-    const extras = { ...EXTRAS, chips: [PLAN], chats: [{ id: "c1", title: "Journal trip" }], only: moreViews(DESKTOP) };
-    expect(withExtras(DESKTOP, "", extras)).toEqual([
-      "Objectives",
-      "History",
-      "Journal",
-      "Meetings",
-      "Automations",
-      "Agents",
-      "Team",
-      "Personal",
-      "Skills",
-      "Workboard",
-      "Devices",
-      "Fleet",
-      "Updates & Drivers",
-    ]);
-    expect(withExtras(DESKTOP, "jour", extras)).toEqual(["Journal"]);
-    expect(withExtras(DESKTOP, "zzz", extras)).toEqual([]);
-  });
-
-  it("opens as More pages, and an empty match says so without picking", async () => {
-    const onPick = vi.fn();
-    const onClose = vi.fn();
-    render(<Palette caps={DESKTOP} only={moreViews(DESKTOP)} onPick={onPick} onClose={onClose} />);
-    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
-    const search = screen.getByRole("combobox", { name: "Search pages" });
-    expect(search).toHaveAttribute("aria-activedescendant", "palette-row-0");
-    await userEvent.type(search, "zzz");
-    expect(screen.queryAllByRole("option")).toEqual([]);
-    expect(screen.getByText("No page matches “zzz”.")).toBeInTheDocument();
-    expect(search).not.toHaveAttribute("aria-activedescendant");
-    await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
-    expect(onPick).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    await userEvent.clear(search);
-    await userEvent.type(search, "upd{Enter}");
-    expect(onPick).toHaveBeenCalledExactlyOnceWith({ kind: "view", view: "updates" });
   });
 });
 
