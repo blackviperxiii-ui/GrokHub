@@ -43,7 +43,10 @@ impl LocalRuntime for Rt {
 }
 
 fn xai(id: &str) -> ModelMeta {
-    let reasoning = !id.contains("non-reasoning") && !id.contains("build");
+    // grok-code-fast-1 (and the retired grok-build ids) do not take a
+    // reasoning effort. Same split as `accepts_reasoning_effort`.
+    let reasoning =
+        !id.contains("non-reasoning") && !id.contains("build") && !id.contains("code-fast");
     ModelMeta {
         id: id.into(),
         efforts: reasoning
