@@ -34,9 +34,10 @@ export function HelperStrip({ conversationId }: { conversationId: string }) {
     function load() {
       const mine = ++asked.current;
       getQueue(conversationId).then(
-        (queue) => {
+        // A desktop or test harness that has no queue for this chat answers null.
+        (queue: Queue | null) => {
           if (!dropped && mine === asked.current) {
-            setRead({ chat: conversationId, helpers: liveHelpers(queue.tasks) });
+            setRead({ chat: conversationId, helpers: liveHelpers(queue?.tasks ?? []) });
           }
         },
         () => {},
