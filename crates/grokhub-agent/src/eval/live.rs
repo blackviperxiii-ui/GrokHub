@@ -26,8 +26,8 @@ use crate::{
 
 pub use super::live_guard::{CallDeadline, RetryPolicy, Retrying, DEFAULT_CALL_TIMEOUT};
 pub use super::live_shape::{
-    ab_flag, seed_lessons, write_ab, AbFlag, LocalClient, OpenRouterClient, Provider,
-    ScriptedPermits, AB_FLAGS, DREAM_LESSONS,
+    ab_flag, check_tool_calls, seed_lessons, write_ab, AbFlag, LocalClient, OpenRouterClient,
+    Provider, ScriptedPermits, AB_FLAGS, DREAM_LESSONS,
 };
 use super::live_shape::{
     seed_big_reports, seed_injected_copy, seed_injected_send, seed_long_logs, seed_shots,

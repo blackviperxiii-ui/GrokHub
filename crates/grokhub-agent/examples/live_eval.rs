@@ -19,6 +19,8 @@
 //! model id) with the key in GROKHUB_EVAL_OPENROUTER_KEY. `--provider local`
 //! sends them to the model server at GROKHUB_EVAL_LOCAL_URL (loopback only),
 //! model `--provider-model`, token GROKHUB_EVAL_LOCAL_TOKEN.
+//! It first asks that model for one `read_file` call and stops if the server
+//! doesn't return it as a structured tool call (llama-server needs `--jinja`).
 //!
 //! `--suite coding` runs the 30 fixed coding tasks instead of the chat set.
 //! Pass or fail is each task's own tests. `--out` is required: the run writes
@@ -82,8 +84,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use grokhub_agent::{
-    live_ab_flag as ab_flag, LiveLocalClient as LocalClient,
-    LiveOpenRouterClient as OpenRouterClient, LiveProvider as Provider,
+    check_live_tool_calls as check_tool_calls, live_ab_flag as ab_flag,
+    LiveLocalClient as LocalClient, LiveOpenRouterClient as OpenRouterClient,
+    LiveProvider as Provider,
 };
 
 fn main() {
@@ -239,11 +242,11 @@ fn main() {
                 provider_model.unwrap_or_else(|| fail("--provider local needs --provider-model"));
             opts.model = model.clone();
             let token = std::env::var("GROKHUB_EVAL_LOCAL_TOKEN").unwrap_or_default();
-            Arc::new(LocalClient::new(
-                &env("GROKHUB_EVAL_LOCAL_URL"),
-                token.trim(),
-                &model,
-            ))
+            let client = LocalClient::new(&env("GROKHUB_EVAL_LOCAL_URL"), token.trim(), &model);
+            if let Err(e) = check_tool_calls(&client, &model) {
+                fail(&format!("{model} can't make tool calls here: {e}"));
+            }
+            Arc::new(client)
         }
     };
     let tested = std::fs::read_to_string(lessons.join("SKILL.md")).ok();

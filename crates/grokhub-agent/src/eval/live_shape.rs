@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::client::{map_http_status, ClientError, InputItem, ResponsesRequest, StreamEvent};
+use crate::client::{
+    map_http_status, ClientError, ContentPart, InputItem, ResponsesRequest, StreamEvent,
+};
 use crate::gate::{PermAnswer, PermitWait, Waited};
 use crate::route::local::LocalRuntime;
 use crate::route::local_http::HttpLocalRuntime;
@@ -306,6 +308,61 @@ impl ModelClient for LocalClient {
         }
         Ok(turn)
     }
+}
+
+/// One small call that must come back as a structured `read_file` tool call.
+/// A local server that can't parse its model's tool calls fails every coding
+/// task after one call; this names that before a run spends its time.
+pub fn check_tool_calls(client: &dyn ModelClient, model: &str) -> Result<(), String> {
+    let text = |role: &str, body: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(body.into())],
+    };
+    let req = ResponsesRequest {
+        model: model.into(),
+        effort: None,
+        input: vec![
+            text(
+                "system",
+                "You are a coding agent. Use the tools to do the task.",
+            ),
+            text("user", "Read the file probe.txt with the read_file tool."),
+        ],
+        conversation_id: "tool-call-check".into(),
+        tools: vec![json!({
+            "type": "function",
+            "name": "read_file",
+            "description": "Read a file from the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {"target_file": {"type": "string"}},
+                "required": ["target_file"]
+            }
+        })],
+        hosted_search: false,
+        call_timeout: None,
+        text_format: None,
+    };
+    let turn = client
+        .stream(&req, &CancelToken::new(), &mut |_| {})
+        .map_err(|e| format!("the probe call failed: {e}"))?;
+    if turn.calls.iter().any(|c| c.name == "read_file") {
+        return Ok(());
+    }
+    if let Some(call) = turn.calls.first() {
+        return Err(format!("it called {} instead of read_file", call.name));
+    }
+    if turn.text.contains("read_file") {
+        return Err(
+            "it wrote the tool call as plain text, so the server isn't parsing tool calls; \
+                    start llama-server with --jinja and a chat template that supports tools"
+                .into(),
+        );
+    }
+    if turn.text.trim().is_empty() {
+        return Err("it replied with reasoning only, no answer and no tool call".into());
+    }
+    Err("it answered in text without calling read_file".into())
 }
 
 /// Files for the masking case: twelve logs, each big enough to be masked once

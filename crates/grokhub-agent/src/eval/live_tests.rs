@@ -1508,3 +1508,60 @@ fn the_report_prints_the_malformed_tool_call_rate() {
     let md = render_live(&report);
     assert!(md.contains("| malformed tool calls | n/a |"), "{md}");
 }
+
+/// Gives every request the same reply, or the same transport error.
+struct Replies(Result<TurnOutput, String>);
+
+impl ModelClient for Replies {
+    fn stream(
+        &self,
+        _req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        _sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        self.0.clone().map_err(ClientError::Transport)
+    }
+}
+
+fn reply(text: &str, call: Option<&str>) -> Replies {
+    Replies(Ok(TurnOutput {
+        text: text.into(),
+        calls: call
+            .map(|name| crate::client::FunctionCall {
+                call_id: "c1".into(),
+                name: name.into(),
+                arguments: r#"{"target_file":"probe.txt"}"#.into(),
+            })
+            .into_iter()
+            .collect(),
+        ..TurnOutput::default()
+    }))
+}
+
+#[test]
+fn the_tool_call_check_passes_a_structured_read_file_call() {
+    assert_eq!(check_tool_calls(&reply("", Some("read_file")), "m"), Ok(()));
+}
+
+#[test]
+fn the_tool_call_check_names_a_tool_call_written_as_text() {
+    let text = r#"<tool_call>{"name": "read_file", "arguments": {"target_file": "probe.txt"}}</tool_call>"#;
+    let err = check_tool_calls(&reply(text, None), "m").unwrap_err();
+    assert!(
+        err.contains("plain text") && err.contains("--jinja"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_tool_call_check_names_a_reasoning_only_reply() {
+    let err = check_tool_calls(&reply("", None), "m").unwrap_err();
+    assert!(err.contains("reasoning only"), "{err}");
+}
+
+#[test]
+fn the_tool_call_check_passes_on_the_server_error() {
+    let down = Replies(Err("connection refused".into()));
+    let err = check_tool_calls(&down, "m").unwrap_err();
+    assert!(err.contains("connection refused"), "{err}");
+}

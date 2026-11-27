@@ -1,0 +1,1 @@
+- Live eval `--provider local` first asks the model for one tool call and stops with the cause when the local server doesn't return it as a structured call, instead of scoring every coding task as failed.
