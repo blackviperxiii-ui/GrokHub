@@ -91,7 +91,7 @@ const GROK: &[&str] = &[
     "grok-4.3",
     "grok-4.20-0309-reasoning",
     "grok-4.20-0309-non-reasoning",
-    "grok-build-0.1",
+    "grok-code-fast-1",
 ];
 
 fn setup(label: &str, grok: bool, claude: bool, with_local: bool) -> std::path::PathBuf {

@@ -105,9 +105,10 @@ pub mod xai_keychain;
 
 pub use agent_message::MAX_MESSAGE as AGENT_MESSAGE_CHARS;
 pub use client::{
-    map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
-    ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
-    TurnOutput, Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
+    map_http_status, request_headers, resource_id_error, responses_body, take_watermarked,
+    xai_resource_path, AuthKind, CancelToken, ClientError, ContentPart, FunctionCall, InputItem,
+    ModelClient, ResponsesRequest, StreamEvent, TextFormat, TurnOutput, Usage, XaiClient,
+    DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
 pub use config_file::config_warnings;

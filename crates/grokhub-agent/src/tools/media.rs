@@ -1022,6 +1022,9 @@ fn poll_video(
         if std::time::Instant::now() >= deadline {
             return Err("video timed out".into());
         }
+        if let Some(why) = crate::client::resource_id_error(&id) {
+            return Err(why.to_string());
+        }
         let path = format!("videos/{id}");
         guard(&endpoint(&path), &[], stop)?;
         let body = api.get_json(&path)?;
