@@ -41,13 +41,26 @@ pub struct PluginInfo {
     pub mcp_servers: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MarketEntry {
     pub name: String,
     pub version: String,
     pub description: String,
     pub source: String,
+    /// The author's name: a plain string or `author.name` in the index.
+    pub author: String,
+    pub category: String,
+    /// An `https://` page about the plugin; anything else is dropped.
+    pub homepage: String,
+    /// At most [`MAX_KEYWORDS`] short words, from `keywords` or `tags`.
+    pub keywords: Vec<String>,
 }
+
+/// Keywords kept per index entry, and the longest one, in characters.
+const MAX_KEYWORDS: usize = 8;
+const MAX_KEYWORD_CHARS: usize = 32;
+/// The longest author, category or homepage kept, in characters.
+const MAX_FIELD_CHARS: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StateFile {
@@ -446,14 +459,68 @@ pub fn parse_marketplace(text: &str) -> Result<Vec<MarketEntry>, String> {
             .get("source")
             .and_then(source_string)
             .unwrap_or_default();
+        let author = item
+            .get("author")
+            .and_then(|value| value.as_str().or_else(|| value.get("name")?.as_str()))
+            .map(short_field)
+            .unwrap_or_default();
+        let category = item
+            .get("category")
+            .and_then(|value| value.as_str())
+            .map(short_field)
+            .unwrap_or_default();
+        let homepage = item
+            .get("homepage")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|url| url.starts_with("https://") && url.len() <= MAX_FIELD_CHARS)
+            .filter(|url| !url.chars().any(|c| c.is_whitespace() || c.is_control()))
+            .unwrap_or_default()
+            .to_string();
+        let keywords = item
+            .get("keywords")
+            .or_else(|| item.get("tags"))
+            .and_then(|value| value.as_array())
+            .map(|words| {
+                let mut kept: Vec<String> = Vec::new();
+                for word in words.iter().filter_map(|word| word.as_str()) {
+                    let word = word.trim();
+                    if word.is_empty()
+                        || word.chars().count() > MAX_KEYWORD_CHARS
+                        || word.chars().any(char::is_control)
+                        || kept.iter().any(|seen| seen.eq_ignore_ascii_case(word))
+                    {
+                        continue;
+                    }
+                    kept.push(word.to_string());
+                    if kept.len() == MAX_KEYWORDS {
+                        break;
+                    }
+                }
+                kept
+            })
+            .unwrap_or_default();
         out.push(MarketEntry {
             name: name.to_string(),
             version,
             description,
             source,
+            author,
+            category,
+            homepage,
+            keywords,
         });
     }
     Ok(out)
+}
+
+/// One line of an index field: trimmed, control characters out, cut short.
+fn short_field(text: &str) -> String {
+    text.trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_FIELD_CHARS)
+        .collect()
 }
 
 fn any_enabled() -> bool {
@@ -2841,6 +2908,11 @@ mod tests {
         .unwrap();
         let entries = load_marketplace_file(&fixture).unwrap();
         assert_eq!(entries.len(), 2);
+        assert_eq!(
+            (entries[0].author.as_str(), entries[0].category.as_str()),
+            ("", "")
+        );
+        assert!(entries[0].keywords.is_empty() && entries[0].homepage.is_empty());
         assert_eq!(entries[0].name, "demo");
         assert_eq!(entries[0].source, "https://example.invalid/demo.git");
         assert_eq!(entries[1].source, "./plugins/other");
@@ -2848,6 +2920,43 @@ mod tests {
         assert!(!install_root().join("demo").exists());
         assert!(list_plugins(&iso.workspace).is_empty());
         let _ = fs::remove_dir_all(&iso.root);
+    }
+
+    #[test]
+    fn marketplace_index_reads_author_category_homepage_and_keywords() {
+        let entries = parse_marketplace(
+            r#"{"plugins":[
+                {"name":"kit","source":"./kit","author":{"name":" Ada ","email":"a@example.invalid"},
+                 "category":"productivity","homepage":"https://example.invalid/kit",
+                 "keywords":["git"," Git ","review","","a\u0007b","x","y","z","w","v","u","t"]},
+                {"name":"tool","source":"./tool","author":"Bo","homepage":"http://example.invalid",
+                 "tags":["lint"]},
+                {"name":"odd","source":"./odd","author":7,"category":["no"],
+                 "homepage":"https://example.invalid/a b","keywords":"git"}
+            ]}"#,
+        )
+        .unwrap();
+        let kit = &entries[0];
+        assert_eq!(kit.author, "Ada");
+        assert_eq!(kit.category, "productivity");
+        assert_eq!(kit.homepage, "https://example.invalid/kit");
+        assert_eq!(
+            kit.keywords,
+            ["git", "review", "x", "y", "z", "w", "v", "u"]
+        );
+        let tool = &entries[1];
+        assert_eq!((tool.author.as_str(), tool.homepage.as_str()), ("Bo", ""));
+        assert_eq!(tool.keywords, ["lint"]);
+        let odd = &entries[2];
+        assert_eq!(
+            (
+                odd.author.as_str(),
+                odd.category.as_str(),
+                odd.homepage.as_str()
+            ),
+            ("", "", "")
+        );
+        assert!(odd.keywords.is_empty());
     }
 
     #[test]
