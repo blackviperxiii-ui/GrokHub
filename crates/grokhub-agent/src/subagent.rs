@@ -902,6 +902,29 @@ fn send(call: &SpawnCall<'_>) -> ToolOutput {
     ToolOutput::ok(format!("sent to {id}"))
 }
 
+/// The person's Steer on a helper: queues `text` for that helper's next step.
+/// True only while the helper, in this session's own task hub, still runs, so a
+/// finished helper, an unknown id or another session's helper never takes it.
+pub fn steer_task(session: &str, id: &str, text: &str) -> bool {
+    let (id, text) = (id.trim(), text.trim());
+    if id.is_empty() || text.is_empty() || !crate::tasks::session_is_live(session) {
+        return false;
+    }
+    let tasks = crate::tasks::hub_for(session);
+    let Some(steer) = lookup_steer(&steer_key(&tasks, id)) else {
+        return false;
+    };
+    let running = tasks
+        .rows()
+        .iter()
+        .any(|row| row.id == id && row.state == crate::tasks::TaskState::Running);
+    if !running {
+        return false;
+    }
+    steer.push(text);
+    true
+}
+
 struct ChildJob {
     client: Arc<dyn ModelClient + Send + Sync>,
     permits: Arc<dyn PermitWait + Send + Sync>,
@@ -3193,6 +3216,80 @@ mod tests {
             matches!(decision, crate::gate::Decision::Refuse(_)),
             "{decision:?}"
         );
+    }
+
+    #[test]
+    fn the_persons_steer_reaches_only_a_running_helper_of_its_own_session() {
+        let _ = drain_side_events();
+        let dir = scratch("person-steer");
+        let sid = session("person-steer");
+        let parent_id = sid.clone();
+        let release = Arc::new(AtomicBool::new(false));
+        let release_step = Arc::clone(&release);
+        let client = fake(&sid, move |req, cancel, n| {
+            let depth = depth_of(&parent_id, &req.conversation_id);
+            if depth == 0 && n == 0 {
+                return Ok(calls_turn(
+                    vec![call(
+                        "s",
+                        "spawn_subagent",
+                        &spawn_args("wait", "explore", true, "none"),
+                    )],
+                    Usage::default(),
+                ));
+            }
+            if depth == 0 {
+                return Ok(text_turn("parent-done", Usage::default()));
+            }
+            if n == 0 {
+                let start = Instant::now();
+                while !release_step.load(Ordering::SeqCst) {
+                    if cancel.is_cancelled() || start.elapsed() > Duration::from_secs(5) {
+                        return Err(ClientError::Cancelled);
+                    }
+                    thread::sleep(Duration::from_millis(15));
+                }
+                return Ok(text_turn("", Usage::default()));
+            }
+            let steered = req
+                .input
+                .iter()
+                .any(|item| crate::compact::message_text(item).contains("person-steer"));
+            assert!(steered, "the person's steer was not in the child history");
+            Ok(text_turn("STEERED", Usage::default()))
+        });
+        let (_out, history) = run_parent(
+            &client,
+            &dir,
+            &sid,
+            chat(PermMode::Always, false, true),
+            &closed(),
+            &CancelToken::new(),
+            &mut |_| {},
+        );
+        let id = task_line(&joined_outputs(&history), "task id:").expect("task id");
+        let other = session("person-steer-other");
+        let _ = crate::tasks::hub_for(&other);
+        assert!(!steer_task(&sid, &id, "   "));
+        assert!(!steer_task(&sid, "s999", "person-steer"));
+        assert!(!steer_task(&other, &id, "person-steer"));
+        assert!(!steer_task("no-such-session", &id, "person-steer"));
+        assert!(steer_task(&sid, &id, "person-steer"));
+        release.store(true, Ordering::SeqCst);
+        let hub = crate::tasks::hub_for(&sid);
+        let start = Instant::now();
+        let mut body = String::new();
+        while start.elapsed() < Duration::from_secs(5) {
+            body.push_str(&hub.read_output(&id, 0).unwrap_or_default());
+            if body.contains("STEERED") && body.contains("status: exited") {
+                break;
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+        assert!(body.contains("STEERED"), "{body}");
+        assert!(body.contains("status: exited"), "{body}");
+        assert!(!steer_task(&sid, &id, "too late"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

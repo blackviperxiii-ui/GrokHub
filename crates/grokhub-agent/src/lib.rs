@@ -6,6 +6,7 @@ pub mod batch;
 pub mod brain;
 mod builtin_skills;
 pub mod cache_watch;
+pub mod channels_email;
 pub mod channels_net;
 pub mod check_decide;
 mod checkpoint;
@@ -207,7 +208,8 @@ pub use skills::{
 };
 pub use sse::SseParser;
 pub use subagent::{
-    answer_peer, drain_side_events, peer_unanswered, requeue_side_events, PeerTurn, SideEvent,
+    answer_peer, drain_side_events, peer_unanswered, requeue_side_events, steer_task, PeerTurn,
+    SideEvent,
 };
 pub use tasks::{
     drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,

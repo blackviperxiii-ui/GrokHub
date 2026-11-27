@@ -3391,6 +3391,143 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   gap: 8px;
 }
 
+/* Personal → Map (MemoryMap.tsx): dots clustered by type, links by kind. */
+.memory-view-tabs {
+  margin: 8px 0;
+}
+
+.memory-map-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 8px 0;
+}
+
+.memory-map-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-map-canvas {
+  max-width: 100%;
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.memory-map-canvas svg {
+  display: block;
+}
+
+.memory-map-heading {
+  fill: var(--muted);
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+
+.memory-map-node {
+  cursor: pointer;
+}
+
+.memory-map-node circle {
+  fill: var(--muted);
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.memory-map-node text {
+  fill: var(--text);
+  font-size: var(--font-caption);
+}
+
+.memory-map-node.proposed circle {
+  fill: var(--bg);
+  stroke: var(--warn-text);
+  stroke-dasharray: 3 2;
+}
+
+.memory-map-node.paused,
+.memory-map-node.superseded {
+  opacity: 0.55;
+}
+
+.memory-map-node.sealed text {
+  fill: var(--muted);
+  font-style: italic;
+}
+
+.memory-map-node.picked circle,
+.memory-map-node:focus-visible circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.memory-map-node:focus-visible {
+  outline: none;
+}
+
+.memory-map-edge {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.memory-map-edge.edge-supersedes {
+  stroke: var(--muted);
+  stroke-dasharray: 4 3;
+}
+
+.memory-map-edge.edge-about_project,
+.memory-map-edge.edge-learned_from_span {
+  stroke: var(--muted);
+}
+
+.memory-map-edge.edge-contradicts {
+  stroke: var(--warn-text);
+  stroke-width: 2;
+}
+
+.memory-map-edge.lit {
+  stroke-width: 3;
+}
+
+.memory-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.memory-map-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-map-picked,
+.memory-map-disagree {
+  margin: 12px 0;
+}
+
+.memory-map-versions ol {
+  margin: 4px 0 0;
+}
+
+.memory-map-list summary {
+  cursor: pointer;
+  margin: 8px 0;
+}
+
+.memory-map-link {
+  color: var(--muted);
+}
+
 .automations .rows,
 .memory .rows {
   list-style: none;
@@ -8544,7 +8681,9 @@ fieldset.channel label {
 
 .code-agent {
   flex: 1 1 var(--code-agent-pct, 62%);
-  min-width: 420px;
+  /* Give way before the side column does: it keeps its 300px, plus the
+     handle, so a window just wide enough to split never scrolls sideways. */
+  min-width: min(420px, 100% - 310px);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -9291,4 +9430,160 @@ fieldset.channel label {
   .usage-ring--hot .usage-ring-fill {
     animation: none;
   }
+}
+
+/* vstack skill library: sync status on the Skills page and Code tab, and a scrolling filter list. */
+.vstack-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.vstack-sync .note {
+  margin: 0;
+}
+
+.code-skills .rows {
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.code-skills input[type="search"] {
+  flex: 1;
+  min-width: 12rem;
+}
+
+/* Order 0.08 — permanent grouped sidebar.
+   This is the only styles.css edit for that change. It sits last so it wins
+   over the Simple-mode switch and the phone tab bar above, and so another
+   styles.css edit can merge around it. */
+@media (max-width: 600px) {
+  .app {
+    --tabbar: 0px;
+    padding-bottom: 12px;
+  }
+
+  .app.bar-away {
+    padding-bottom: 12px;
+  }
+
+  .rail.rail-advanced {
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    width: 168px;
+    height: auto;
+    max-height: 100%;
+    min-height: 0;
+    flex: 0 0 168px;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    align-items: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 8px 8px 8px 0;
+    background: transparent;
+    border-top: none;
+    border-right: 1px solid var(--red-dim);
+    transform: none;
+  }
+
+  .rail.rail-advanced .rail-section {
+    display: flex;
+  }
+
+  .rail.rail-advanced .rail-end {
+    flex-direction: column;
+    margin-top: auto;
+  }
+
+  .rail.rail-advanced .rail-avatar {
+    display: inline-flex;
+  }
+
+  .rail.rail-advanced button:not(.rail-mode-btn):not(.rail-section-toggle) {
+    width: 100%;
+    height: 36px;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .rail.rail-advanced .rail-label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: nowrap;
+  }
+
+  .bar-away .rail.rail-advanced {
+    transform: none;
+  }
+}
+
+/* Running helpers above the composer: one quiet row each, Steer and Stop. */
+.helper-strip ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.helper-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.helper-strip-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.helper-strip-model,
+.helper-strip-progress,
+.helper-strip-note {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.helper-strip-steer {
+  flex-basis: 100%;
+}
+
+.helper-strip-steer input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.agent-steer {
+  margin: 8px 0 0;
+}
+
+.agent-steer input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Connectors → Phone and chat apps: the Telegram pairing QR. The SVG carries
+   its own white ground so phones read it in either theme. */
+.channel-qr {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 8px 0 0;
 }

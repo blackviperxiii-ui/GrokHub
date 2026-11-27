@@ -1,0 +1,1 @@
+- Connectors → Phone and chat apps: a connected Telegram bot can show a QR code that pairs the phone which scans it, with no code to type. Each QR works once, for 10 minutes, and only the newest one works. Everyone else who messages the bot still gets a pairing code.

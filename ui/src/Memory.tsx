@@ -30,6 +30,7 @@ import {
   type PersonalGroupKey,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { MemoryMap } from "./MemoryMap";
 import { OPEN_EVENT } from "./onboardApi";
 import { Toggle } from "./Toggle";
 import { inShell } from "./transport";
@@ -123,6 +124,7 @@ export function Memory() {
   const [fact, setFact] = useState("");
   const [factGroup, setFactGroup] = useState<PersonalGroupKey>("about");
   const [wipeAsk, setWipeAsk] = useState(false);
+  const [personalView, setPersonalView] = useState<"list" | "map">("list");
   const [busy, setBusy] = useState(false);
 
   function showFiles(next: MemoryFiles, keepDraft: boolean) {
@@ -383,6 +385,9 @@ export function Memory() {
   );
 
   const shown = searchRows(notes.rows, find);
+  // The map reads the memory store's links, which only the desktop has.
+  const mapped = inShell() && notes.amr;
+  const view = mapped ? personalView : "list";
   const row = (line: MemoryRow) => (
     <li key={line.id} className={line.paused ? "card paused" : "card"}>
       {editId === line.id ? (
@@ -533,21 +538,52 @@ export function Memory() {
         </p>
       ) : (
         <>
-          <input
-            aria-label="Search what it knows"
-            placeholder="Search"
-            value={find}
-            onChange={(e) => setFind(e.target.value)}
-          />
-          {shown.length === 0 && <p className="empty">None matched.</p>}
-          {groupRows(shown).map(([group, list]) => (
-            <div key={group} className="memory-group">
-              <h3>{group}</h3>
-              <ul className="rows" aria-label={group}>
-                {list.map(row)}
-              </ul>
+          {mapped && (
+            <div className="code-side-tabs memory-view-tabs" role="tablist" aria-label="Personal view">
+              {(["list", "map"] as const).map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === name}
+                  tabIndex={view === name ? 0 : -1}
+                  onClick={() => setPersonalView(name)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                    e.preventDefault();
+                    setPersonalView(view === "list" ? "map" : "list");
+                  }}
+                >
+                  {name === "list" ? "List" : "Map"}
+                </button>
+              ))}
             </div>
-          ))}
+          )}
+          {view === "map" ? (
+            <MemoryMap
+              rows={notes.rows}
+              renderRow={row}
+              onKeep={(_keep, drop) => void apply(forgetMemoryRow(drop), "Kept one line and forgot the other.")}
+            />
+          ) : (
+            <>
+              <input
+                aria-label="Search what it knows"
+                placeholder="Search"
+                value={find}
+                onChange={(e) => setFind(e.target.value)}
+              />
+              {shown.length === 0 && <p className="empty">None matched.</p>}
+              {groupRows(shown).map(([group, list]) => (
+                <div key={group} className="memory-group">
+                  <h3>{group}</h3>
+                  <ul className="rows" aria-label={group}>
+                    {list.map(row)}
+                  </ul>
+                </div>
+              ))}
+            </>
+          )}
         </>
       )}
       {inShell() && (

@@ -10,6 +10,7 @@ import type {
   SkillsHubHit,
   SkillsHubInstall,
   SkillLibraryInstall,
+  VstackStatus,
 } from "./api";
 
 const api = vi.hoisted(() => ({
@@ -32,6 +33,8 @@ const api = vi.hoisted(() => ({
   >(),
   searchSkillsHub: vi.fn<(query: string) => Promise<SkillsHubHit[]>>(),
   installSkillsHub: vi.fn<(hit: SkillsHubHit) => Promise<SkillsHubInstall>>(),
+  vstackSyncStatus: vi.fn(),
+  vstackSyncNow: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -106,9 +109,23 @@ describe("filterSkills", () => {
   });
 });
 
+const VSTACK: VstackStatus = {
+  repo: "https://github.com/blackviperxiii-ui/vstack",
+  source: "bundled",
+  version: "1.4.0",
+  tag: "v1.4.0",
+  commit: "11cca98b4a55da3118f51e749ac62faefbc21b3b",
+  lastSyncMs: null,
+  lastCheckMs: null,
+  lastError: null,
+  skillCount: 58,
+};
+
 describe("Skills", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    api.vstackSyncStatus.mockResolvedValue(VSTACK);
+    api.vstackSyncNow.mockResolvedValue(VSTACK);
   });
 
   it("groups skills by source and search filters by name, description and trigger", async () => {
@@ -127,7 +144,7 @@ describe("Skills", () => {
     expect(
       screen.getByRole("list", { name: "Plugin skills" }),
     ).toBeInTheDocument();
-    expect(SKILL_GROUPS.map((g) => g.source)).not.toContain("builtin");
+    expect(SKILL_GROUPS.map((g) => g.label)).toContain("Built-in (vstack)");
     expect(screen.queryByRole("list", { name: "User skills" })).toBeNull();
 
     const search = screen.getByLabelText("Search skills");
@@ -142,6 +159,66 @@ describe("Skills", () => {
     await userEvent.type(search, "zzz");
     expect(names()).toEqual([]);
     expect(screen.getByText(SKILLS_NONE_MATCHED)).toBeInTheDocument();
+  });
+
+  it("lists the vstack library, keeps it read-only, and refreshes after Sync now", async () => {
+    const builtins: SkillRow[] = [
+      ...Array.from({ length: 68 }, (_, i) =>
+        row({
+          name: `skill-${String(i).padStart(2, "0")}`,
+          description: "A vstack skill",
+          trigger: "Use the skill.",
+          source: "builtin",
+          folder: "",
+        }),
+      ),
+      row({
+        name: "viper-mode",
+        description: "Viper mode.",
+        trigger: "Use the viper-mode skill.",
+        source: "builtin",
+        folder: "",
+      }),
+      row({
+        name: "qa-walkthrough",
+        description: "Ship check.",
+        trigger: "Use the qa-walkthrough skill.",
+        source: "builtin",
+        folder: "",
+      }),
+      row({
+        name: "arena",
+        description: "Bake off designs.",
+        trigger: "Use the arena skill.",
+        source: "builtin",
+        folder: "",
+      }),
+    ];
+    const refreshed = builtins.map((item) =>
+      item.name === "arena" ? { ...item, description: "Bake off designs. refreshed" } : item,
+    );
+    api.getSkills.mockResolvedValueOnce({ rows: builtins }).mockResolvedValue({ rows: refreshed });
+    api.vstackSyncNow.mockResolvedValue({
+      ...VSTACK,
+      source: "synced",
+      version: "9.9.9",
+      tag: "v9.9.9",
+      commit: "abcdef1234567890abcd",
+      skillCount: 71,
+    });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    expect(await screen.findByText("bundled v1.4.0 · 11cca98b4a55 · 58 skills")).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Built-in (vstack)" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(71);
+    expect(within(list).getByRole("listitem", { name: "viper-mode" })).toHaveTextContent("Read-only.");
+    expect(within(list).queryByRole("switch")).toBeNull();
+    await userEvent.type(screen.getByLabelText("Search skills"), "arena");
+    expect(names()).toEqual(["arena"]);
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(api.vstackSyncNow).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Bake off designs. refreshed")).toBeInTheDocument();
+    expect(screen.getByText("synced v9.9.9 · abcdef123456 · 71 skills")).toBeInTheDocument();
   });
 
   it("Use hands the skill's trigger to the chat box", async () => {

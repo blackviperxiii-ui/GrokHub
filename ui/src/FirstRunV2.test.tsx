@@ -61,23 +61,23 @@ beforeEach(() => {
 describe("FirstRunV2", () => {
   it("waits while Get to know you is still pending", async () => {
     mock.onboard.mockResolvedValue({ ...DONE, pending: true, stage: "pending", step: "welcome" });
-    render(<FirstRunV2 after onAsk={() => {}} onLayout={() => {}} />);
+    render(<FirstRunV2 after onAsk={() => {}} />);
     await waitFor(() => expect(mock.onboard).toHaveBeenCalled());
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("shows after Get to know you is done and walks layout to apps", async () => {
-    render(<FirstRunV2 after onAsk={() => {}} onLayout={() => {}} />);
-    expect(await screen.findByRole("dialog", { name: "Pick a layout" })).toBeInTheDocument();
+  it("opens on Connect apps and does not offer a Simple or Advanced layout", async () => {
+    render(<FirstRunV2 after onAsk={() => {}} />);
+    expect(await screen.findByRole("dialog", { name: "Connect apps" })).toBeInTheDocument();
     expect(TITLE).toContain("Loadout");
-    await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
-    await userEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByRole("heading", { name: "Connect apps" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Simple" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Layout" })).not.toBeInTheDocument();
   });
 
   it("sandbox step never offers a turn-off control", async () => {
     saveAt("sandbox");
-    render(<FirstRunV2 after onAsk={() => {}} onLayout={() => {}} />);
+    render(<FirstRunV2 after onAsk={() => {}} />);
     expect(await screen.findByText(SANDBOX_NOTE)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /turn .*off|disable sandbox/i })).toBeNull();
   });
@@ -85,7 +85,7 @@ describe("FirstRunV2", () => {
   it("first task sends the prompt and finishes", async () => {
     const ask = vi.fn();
     saveAt("task");
-    render(<FirstRunV2 after onAsk={ask} onLayout={() => {}} />);
+    render(<FirstRunV2 after onAsk={ask} />);
     await userEvent.click(await screen.findByRole("button", { name: "Tour this app" }));
     expect(ask).toHaveBeenCalledWith(
       expect.stringContaining("Walk me through this app"),
@@ -95,10 +95,11 @@ describe("FirstRunV2", () => {
 
   it("Settings reopen event brings the wizard back", async () => {
     finishFirstRunV2(false);
-    render(<FirstRunV2 after onAsk={() => {}} onLayout={() => {}} />);
+    render(<FirstRunV2 after onAsk={() => {}} />);
     expect(screen.queryByRole("dialog")).toBeNull();
     window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { firstRunV2: true } }));
-    expect(await screen.findByRole("dialog", { name: "Pick a layout" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Connect apps" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Simple" })).not.toBeInTheDocument();
   });
 });
 

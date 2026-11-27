@@ -247,6 +247,14 @@ pub fn export_wiki() -> Result<String, String> {
     wiki_line(&grokhub_agent::amr_store())
 }
 
+/// The memory as a graph for the Memory page's map: live nodes, newest
+/// first, with their edges. A private line comes back with no words.
+pub fn graph() -> Result<grokhub_core::amr::MemoryGraph, String> {
+    grokhub_agent::amr_store()
+        .graph(grokhub_core::amr::GRAPH_NODE_CAP)
+        .map_err(|e| format!("{e:?}"))
+}
+
 fn wiki_line(store: &grokhub_core::amr::AmrStore) -> Result<String, String> {
     let done = store.export_wiki().map_err(|e| format!("{e:?}"))?;
     let pages = match done.pages {

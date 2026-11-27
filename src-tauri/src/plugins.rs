@@ -54,6 +54,10 @@ pub struct Entry {
     pub version: String,
     pub description: String,
     pub source: String,
+    pub author: String,
+    pub category: String,
+    pub homepage: String,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -172,6 +176,10 @@ fn entry(e: MarketEntry) -> Entry {
         version: e.version,
         description: e.description,
         source: e.source,
+        author: e.author,
+        category: e.category,
+        homepage: e.homepage,
+        keywords: e.keywords,
     }
 }
 
@@ -429,6 +437,7 @@ mod tests {
             version: "2.0".into(),
             description: "Tidy".into(),
             source: "https://h/kit.zip".into(),
+            ..MarketEntry::default()
         };
         let (entries, note, read) = market_outcome(Ok(()), "https://h/i.json", move |url| {
             assert_eq!(url, "https://h/i.json");

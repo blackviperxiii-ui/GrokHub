@@ -57,13 +57,12 @@ import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
-import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, moreViews, type PaletteAction, type View } from "./Palette";
+import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
 import {
   loadRailPrefs,
   RAIL_PREFS_EVENT,
   saveRailPrefs,
-  type RailMode,
   type RailPrefs,
   type RailSectionId,
 } from "./railPrefs";
@@ -101,6 +100,7 @@ const loaders = {
   code: () => import("./Code").then((m) => ({ default: m.Code })),
   command: () => import("./CommandBox").then((m) => ({ default: m.CommandBox })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
+  marketplace: () => import("./Marketplace").then((m) => ({ default: m.Marketplace })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
@@ -120,6 +120,7 @@ const loaders = {
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
+const Marketplace = lazy(loaders.marketplace);
 const Devices = lazy(loaders.devices);
 const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
@@ -212,18 +213,13 @@ export function App() {
   // A browser is the web app from its first render: it must not run a
   // desktop-only step (the last chat, say) while its capabilities load.
   const [caps, setCaps] = useState<Capabilities>(() => (inShell() ? CORE_ONLY : WEB));
-  // The palette: everything (Ctrl+K, Command), or the rail's More, pages only.
-  const [palette, setPalette] = useState<false | "all" | "more">(false);
-  // Sidebar v2: Simple (core + pins) or Advanced (every page grouped).
+  // The palette (Ctrl+K, Command).
+  const [palette, setPalette] = useState<false | "all">(false);
   const [railPrefs, setRailPrefs] = useState<RailPrefs>(() => loadRailPrefs());
   const setRail = useCallback((next: RailPrefs) => {
     setRailPrefs(next);
     saveRailPrefs(next);
   }, []);
-  const setRailMode = useCallback(
-    (mode: RailMode) => setRail({ ...railPrefs, mode }),
-    [railPrefs, setRail],
-  );
   const setRailPin = useCallback(
     (page: View, on: boolean) => {
       const pinned = on
@@ -252,20 +248,6 @@ export function App() {
     window.addEventListener(RAIL_PREFS_EVENT, onPrefs);
     return () => window.removeEventListener(RAIL_PREFS_EVENT, onPrefs);
   }, []);
-  // Phone tab bar keeps Simple overflow even when Advanced is saved.
-  const [railNarrow, setRailNarrow] = useState(() => window.matchMedia?.("(max-width: 600px)").matches ?? false);
-  useEffect(() => {
-    const mq = window.matchMedia?.("(max-width: 600px)");
-    if (!mq) return;
-    const sync = () => setRailNarrow(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
-  }, []);
-  const railNav = {
-    mode: (railNarrow ? "simple" : railPrefs.mode) as RailMode,
-    pinned: railPrefs.pinned,
-  };
   const [sheet, setSheet] = useState(false);
   const paletteChips = useChipRow({ surface: "palette", active: palette === "all" });
   const [signedOut, setSignedOut] = useState(false);
@@ -821,7 +803,10 @@ export function App() {
               onOpenSettings={() => setView("settings")}
               onSignIn={() => run({ kind: "settings", section: "account" })}
               onOpenView={openView}
-              onOpenSection={(section) => run({ kind: "settings", section })}
+              onOpenSection={(section) =>
+                // `/plugins` lands on the Marketplace, where plugins moved from Labs.
+                section === "labs" && openView("marketplace") ? undefined : run({ kind: "settings", section })
+              }
               onOpenPalette={() => setPalette("all")}
               onQueue={onQueue}
               queueAct={queueAct}
@@ -1015,6 +1000,12 @@ export function App() {
             <Connectors remote={Boolean(caps.remote)} />
           </Page>
         ) : null;
+      case "marketplace":
+        return opened.has("marketplace") && caps.plugins ? (
+          <Page key="marketplace" shown={shown}>
+            <Marketplace onUse={ask} remote={Boolean(caps.remote)} />
+          </Page>
+        ) : null;
       case "updates":
         return opened.has("updates") && !caps.remote ? (
           <Page key="updates" shown={shown}>
@@ -1042,7 +1033,6 @@ export function App() {
               onClose={() => setView(before)}
               backTo={VIEW_LABELS[before]}
               onProfile={setProfile}
-              onOpenConnectors={() => setView("connectors")}
             />
           </Page>
         ) : null;
@@ -1142,14 +1132,10 @@ export function App() {
         <Rail
           caps={caps}
           view={view}
-          mode={railPrefs.mode}
           pinned={railPrefs.pinned}
           collapsed={railPrefs.collapsed}
-          moreOpen={palette === "more"}
           onOpen={setView}
-          onMore={() => setPalette((open) => (open === "more" ? false : "more"))}
           onChatMenu={setTabMenu}
-          onMode={setRailMode}
           onPin={setRailPin}
           onToggleSection={toggleRailSection}
           profile={profile}
@@ -1161,11 +1147,7 @@ export function App() {
           {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
           {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} onSaved={readProfile} />}
           {caps.autoSetup && (
-            <FirstRunV2
-              after={auto.reply !== null && !auto.reply.firstRun}
-              onAsk={askNow}
-              onLayout={setRailMode}
-            />
+            <FirstRunV2 after={auto.reply !== null && !auto.reply.firstRun} onAsk={askNow} />
           )}
           {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
             <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
@@ -1181,14 +1163,6 @@ export function App() {
                 chips: paletteChips.chips,
                 onChip: paletteChips.picked,
               }}
-              onPick={run}
-              onClose={() => setPalette(false)}
-            />
-          )}
-          {palette === "more" && (
-            <Palette
-              caps={caps}
-              only={moreViews(caps, railNav)}
               onPick={run}
               onClose={() => setPalette(false)}
             />
@@ -1245,6 +1219,7 @@ export function App() {
                 {pageNode("history", view === "history")}
                 {pageNode("memory", view === "memory")}
                 {pageNode("connectors", view === "connectors")}
+                {pageNode("marketplace", view === "marketplace")}
                 {pageNode("updates", view === "updates")}
                 {pageNode("library", view === "library")}
                 {pageNode("mods", view === "mods")}
@@ -1279,6 +1254,7 @@ export function App() {
               {pageNode("memory", view === "memory")}
               {pageNode("skills", view === "skills")}
               {pageNode("connectors", view === "connectors")}
+              {pageNode("marketplace", view === "marketplace")}
               {pageNode("updates", view === "updates")}
               {pageNode("library", view === "library")}
               {pageNode("mods", view === "mods")}

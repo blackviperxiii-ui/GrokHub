@@ -1,8 +1,9 @@
 //! The Skills page (shell parity with the cabin's Skills page): the skills
 //! chat can use, each with an on/off switch. Cabin skills are
 //! `{config}/skills/*/SKILL.md`; the rest come from the native engine's own
-//! discovery (project, user and plugin skills). Built-in skills live in the
-//! Code tab, so they are not listed here, though they still run by name.
+//! discovery (project, user, plugin, and built-in vstack skills). Built-in
+//! skills are listed read-only: they are not edited, deleted, or switched
+//! off from this page, and they have no folder on disk to open.
 //! Creating and editing cabin skills happens here too, through the write
 //! path both apps share (`grokhub_agent::skill_write`), and a skill's
 //! verify script never runs from here.
@@ -310,13 +311,12 @@ fn gather(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Vec<(Row,
     out
 }
 
-/// The listed skills. Built-ins stay off this page; they live in the Code tab.
+/// The listed skills, including built-in vstack skills. Those stay read-only.
 pub fn load(config_dir: &Path, workspace: &Path, home: Option<&Path>) -> Page {
     Page {
         rows: gather(config_dir, workspace, home)
             .into_iter()
             .map(|(row, _)| row)
-            .filter(|row| row.source != Source::Builtin)
             .collect(),
     }
 }
@@ -335,6 +335,9 @@ pub fn set_on(
     let Some(row) = page.rows.iter().find(|row| row.name == name) else {
         return Err(format!("{name} isn't in the skills list any more."));
     };
+    if row.source == Source::Builtin {
+        return Err(format!("{name} is built in and stays read-only."));
+    }
     if on {
         if let Some(reason) = &row.quarantined {
             return Err(format!("{name} is quarantined ({reason})."));
@@ -1021,14 +1024,29 @@ mod tests {
         assert_eq!(notes.source, Source::User);
         assert_eq!(notes.description, "Take meeting notes");
 
-        // Built-ins live in the Code tab, so the Skills page leaves them out.
+        let builtins: Vec<_> = page
+            .rows
+            .iter()
+            .filter(|r| r.source == Source::Builtin)
+            .collect();
         assert!(
-            page.rows.iter().all(|r| r.source != Source::Builtin),
-            "{:?}",
-            page.rows
+            builtins.len() > 50,
+            "built-in vstack skills listed: {}",
+            builtins.len()
         );
-        assert!(!page.rows.iter().any(|r| r.name == "qa-walkthrough"));
-        assert!(page.rows.iter().all(|r| r.on));
+        let walk = find(&page, "qa-walkthrough");
+        assert_eq!(walk.source, Source::Builtin);
+        assert_eq!(walk.folder, "");
+        assert!(walk.on);
+        assert!(page
+            .rows
+            .iter()
+            .any(|r| r.name == "viper-mode" && r.source == Source::Builtin));
+        assert!(page
+            .rows
+            .iter()
+            .filter(|r| r.source != Source::Builtin)
+            .all(|r| r.on));
 
         // The engine also finds the cabin folder; it is listed once.
         let cabin: Vec<_> = page.rows.iter().filter(|r| r.name == "tidy").collect();
@@ -1057,8 +1075,43 @@ mod tests {
         assert!(!find(&page, "tidy").on);
         let page = set_on(&cfg, &ws, Some(&home), "lint-fix", true).expect("on");
         assert!(find(&page, "lint-fix").on);
-        assert!(set_on(&cfg, &ws, Some(&home), "qa-walkthrough", false).is_err());
+        let refused = set_on(&cfg, &ws, Some(&home), "qa-walkthrough", false).unwrap_err();
+        assert!(refused.contains("read-only"), "{refused}");
+        let off = fs::read_to_string(cfg.join("skills/.off")).unwrap_or_default();
+        assert!(
+            !off.lines().any(|line| line.trim() == "qa-walkthrough"),
+            "switching a built-in off must not write it to the off list: {off}"
+        );
         assert!(set_on(&cfg, &ws, Some(&home), "no-such-skill", false).is_err());
+    }
+
+    #[test]
+    fn builtin_skills_refuse_edit_and_leave_the_disk_alone() {
+        let root = scratch("builtin-readonly");
+        let (cfg, home, ws) = (root.join("cfg"), root.join("home"), root.join("ws"));
+        let page = load(&cfg, &ws, Some(&home));
+        let row = find(&page, "viper-mode");
+        assert_eq!(row.source, Source::Builtin);
+        assert_eq!(row.folder, "");
+
+        let err = edit(
+            &cfg,
+            &ws,
+            Some(&home),
+            "viper-mode",
+            "changed",
+            "when",
+            "steps",
+        )
+        .unwrap_err();
+        assert!(err.contains("isn't one of this computer's skills"), "{err}");
+        assert!(detail(&cfg, &ws, Some(&home), "viper-mode").is_err());
+        assert!(!cfg.join("skills/viper-mode/SKILL.md").exists());
+        assert_eq!(
+            folder(&cfg, &ws, Some(&home), Source::Builtin, "viper-mode"),
+            Err("viper-mode has no folder to open.".to_string())
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

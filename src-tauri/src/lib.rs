@@ -497,6 +497,39 @@ async fn disconnect_channel(
         .await?
 }
 
+/// A QR that pairs the phone which scans it with the Telegram bot. Desktop
+/// only: a browser on the hub never gets a link that pairs a stranger.
+#[tauri::command]
+async fn telegram_qr(state: State<'_, ShellState>) -> Result<channels::StartQr, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || channels::telegram_qr(&dir, &grokhub_agent::channels_net::os_keychain()))
+        .await?
+}
+
+/// A QR the Signal app scans to link the local signal-cli daemon to
+/// `number`'s account. Desktop only, like the Telegram QR.
+#[tauri::command]
+async fn signal_link_start(
+    state: State<'_, ShellState>,
+    number: String,
+) -> Result<channels::LinkQr, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || channels::signal_link_start(&dir, &number)).await?
+}
+
+/// Waits (up to three minutes) for the phone to scan the Signal QR, then
+/// connects. Desktop only.
+#[tauri::command]
+async fn signal_link_finish(
+    state: State<'_, ShellState>,
+) -> Result<channels::ChannelsView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        channels::signal_link_finish(&dir, &grokhub_agent::channels_net::os_keychain())
+    })
+    .await?
+}
+
 /// The code a stranger was sent: they count as paired from now on.
 #[tauri::command]
 fn approve_channel_code(
@@ -561,6 +594,19 @@ fn unpair_channel_sender(
         &state.config_dir,
         &grokhub_agent::channels_net::os_keychain(),
         kind,
+        &sender,
+    )
+}
+
+/// Let mail from one sender reach the assistant (the email channel).
+#[tauri::command]
+fn allow_email_sender(
+    state: State<'_, ShellState>,
+    sender: String,
+) -> Result<channels::ChannelsView, String> {
+    channels::allow_email_sender(
+        &state.config_dir,
+        &grokhub_agent::channels_net::os_keychain(),
         &sender,
     )
 }
@@ -2432,6 +2478,23 @@ async fn stop_task(
     .await?
 }
 
+/// Tasks → Steer: text for a running helper's next step. Desktop only, like
+/// the chat it steers: it is not a web command.
+#[tauri::command]
+async fn steer_task(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    task_id: String,
+    text: String,
+) -> Result<queue::Queue, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || {
+        queue::steer(&conversation_id, &task_id, &text)?;
+        Ok(queue::queue(&dir, &conversation_id))
+    })
+    .await?
+}
+
 /// Tasks → the checks on the session's change before it can be committed.
 /// Read only: nothing is committed, staged or pushed. `message` and
 /// `allowed` are what the Commit card holds: the confirm text is for that
@@ -3324,6 +3387,13 @@ fn export_personal() -> Result<String, String> {
     let dir = grokhub_core::diagnostics::downloads_dir()
         .ok_or_else(|| "Couldn't find your Downloads folder.".to_string())?;
     memory::export_to(&dir)
+}
+
+/// The memory map's graph: nodes and the edges between them. Desktop only,
+/// like the wiki: it is not a web command.
+#[tauri::command]
+fn memory_graph() -> Result<grokhub_core::amr::MemoryGraph, String> {
+    memory::graph()
 }
 
 /// Updates the Obsidian-friendly wiki of the plain memory. Desktop only.
@@ -9913,6 +9983,7 @@ pub fn run() {
             add_personal_fact,
             export_personal,
             export_memory_wiki,
+            memory_graph,
             wipe_personal,
             get_memory_files,
             save_memory_file,
@@ -10223,8 +10294,12 @@ pub fn run() {
             get_channels,
             connect_channel,
             disconnect_channel,
+            telegram_qr,
+            signal_link_start,
+            signal_link_finish,
             approve_channel_code,
             unpair_channel_sender,
+            allow_email_sender,
             set_channel_asks,
             add_channel_webhook,
             remove_channel_webhook,
@@ -10255,6 +10330,7 @@ pub fn run() {
             desktop_nyx_talk,
             get_queue,
             stop_task,
+            steer_task,
             ship_status,
             ship_commit,
             ship_waive,

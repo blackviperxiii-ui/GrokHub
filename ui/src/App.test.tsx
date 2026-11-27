@@ -333,20 +333,10 @@ function view(name: string) {
   return within(screen.getByRole("navigation", { name: "Views" })).getByRole("button", { name });
 }
 
-/** The pages More lists, in order; the list is closed again after. */
-async function morePages() {
-  await userEvent.click(view("More"));
-  const more = screen.getByRole("dialog", { name: "More pages" });
-  const names = within(more).getAllByRole("option").map((row) => row.textContent);
-  await userEvent.keyboard("{Escape}");
-  return names;
-}
-
-/** Opens a page that is not on the rail, through More. */
+/** Opens a page from the grouped rail, after capabilities have painted it. */
 async function openPage(name: string) {
-  await userEvent.click(view("More"));
-  const more = screen.getByRole("dialog", { name: "More pages" });
-  await userEvent.click(await within(more).findByRole("option", { name }));
+  const nav = await screen.findByRole("navigation", { name: "Views" });
+  await userEvent.click(await within(nav).findByRole("button", { name }));
 }
 
 describe("App", () => {
@@ -359,31 +349,39 @@ describe("App", () => {
     ]);
   });
 
-  it("puts the main pages on the rail and the rest under More on a desktop, and hands Settings the report", async () => {
+  it("puts every page in the five groups, with no Simple or Advanced switch, and hands Settings the report", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
     expect(await screen.findByText("Pulse page")).toBeInTheDocument();
-    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "MCPs & Connectors", "More", "Settings"]);
-    expect(await morePages()).toEqual([
-      "Objectives",
-      "History",
-      "Journal",
-      "Meetings",
+    expect(screen.queryByRole("button", { name: "Simple" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+    for (const group of ["Core", "Work", "Make", "You", "PC"]) {
+      expect(screen.getByRole("button", { name: group })).toHaveAttribute("aria-expanded", "true");
+    }
+    expect(rail()).toEqual([
+      "Home",
+      "Chat",
+      "Library",
+      "Workboard",
       "Automations",
       "Agents",
       "Team",
-      "Personal",
+      "Objectives",
       "Skills",
-      "Workboard",
+      "MCPs & Connectors",
+      "Marketplace",
+      "Personal",
+      "Pulse",
+      "Journal",
+      "Meetings",
+      "History",
       "Devices",
       "Fleet",
       "Updates & Drivers",
+      "Settings",
     ]);
-    // Escape closed More and gave the focus back to it.
-    expect(screen.queryByRole("dialog", { name: "More pages" })).toBeNull();
-    expect(view("More")).toHaveFocus();
-    expect(view("More")).toHaveAttribute("aria-haspopup", "dialog");
     await userEvent.click(screen.getByRole("button", { name: "Library" }));
     expect(await screen.findByText("Library page")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -397,8 +395,7 @@ describe("App", () => {
     expect(rail()[0]).toBe("Home");
     expect(view("Chat")).toHaveAttribute("aria-current", "page");
     expect(screen.queryByText(/Home page/)).toBeNull();
-    // Objectives is not on the rail; Home, More and the palette open it.
-    expect(rail()).not.toContain("Objectives");
+    expect(rail()).toContain("Objectives");
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
     expect(await screen.findByText("Home page for the last chat")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Objectives tile" }));
@@ -407,19 +404,19 @@ describe("App", () => {
     expect(view("Home")).toHaveAttribute("aria-current", "page");
   });
 
-  it("gives a page opened from More a rail slot while it is open, so one item always marks where you are", async () => {
+  it("marks the open page on the rail and keeps every other page there", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await screen.findByRole("button", { name: "Pulse" });
     await openPage("Workboard");
-    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "MCPs & Connectors", "Workboard", "More", "Settings"]);
     expect(view("Workboard")).toHaveAttribute("aria-current", "page");
     const nav = screen.getByRole("navigation", { name: "Views" });
     expect(nav.querySelectorAll("[aria-current]")).toHaveLength(1);
+    expect(rail()).toContain("Workboard");
     await userEvent.click(view("Chat"));
-    expect(rail()).toEqual(["Home", "Chat", "Pulse", "Library", "MCPs & Connectors", "More", "Settings"]);
     expect(view("Chat")).toHaveAttribute("aria-current", "page");
     expect(nav.querySelectorAll("[aria-current]")).toHaveLength(1);
+    expect(rail()).toContain("Workboard");
   });
 
   it("moves through the rail with the arrow keys, Home and End", async () => {
@@ -548,19 +545,23 @@ describe("App", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
-    expect(rail()).toEqual(["Home", "Chat", "MCPs & Connectors", "More", "Settings"]);
-    expect(await morePages()).toEqual([
-      "Objectives",
-      "History",
-      "Journal",
-      "Meetings",
+    expect(screen.queryByRole("button", { name: "Pulse" })).not.toBeInTheDocument();
+    expect(rail()).toEqual([
+      "Home",
+      "Chat",
+      "Workboard",
       "Automations",
       "Agents",
       "Team",
-      "Personal",
+      "Objectives",
       "Skills",
-      "Workboard",
+      "MCPs & Connectors",
+      "Personal",
+      "Journal",
+      "Meetings",
+      "History",
       "Updates & Drivers",
+      "Settings",
     ]);
   });
 
@@ -568,8 +569,20 @@ describe("App", () => {
     api.getCapabilities.mockResolvedValue({ ...api.CORE_ONLY, remote: true });
     render(<App />);
     await waitFor(() => expect(api.getCapabilities).toHaveBeenCalled());
-    expect(rail()).toEqual(["Home", "Chat", "MCPs & Connectors", "More", "Settings"]);
-    expect(await morePages()).toEqual(["Objectives", "Automations", "Agents", "Personal", "Skills", "Workboard"]);
+    expect(rail()).toEqual([
+      "Home",
+      "Chat",
+      "Workboard",
+      "Automations",
+      "Agents",
+      "Objectives",
+      "Skills",
+      "MCPs & Connectors",
+      "Personal",
+      "Settings",
+    ]);
+    expect(rail()).not.toContain("Journal");
+    expect(rail()).not.toContain("History");
     await openPage("Workboard");
     expect(await screen.findByText("Workboard page without Resume")).toBeVisible();
   });
@@ -619,7 +632,8 @@ describe("App", () => {
   it("right-clicking the Chat tab offers Clear chat, which asks first and says it's permanent", async () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
-    const tab = await screen.findByRole("button", { name: "Chat" });
+    await screen.findByRole("button", { name: "Pulse" });
+    const tab = view("Chat");
     await userEvent.pointer({ keys: "[MouseRight]", target: tab });
     await userEvent.click(screen.getByRole("menuitem", { name: "Clear chat…" }));
     const ask = screen.getByRole("alertdialog", { name: "Clear this chat?" });
@@ -714,7 +728,8 @@ describe("App", () => {
     api.getCapabilities.mockResolvedValue(DESKTOP);
     render(<App />);
     await openPage("Workboard");
-    await userEvent.click(await screen.findByRole("button", { name: "Work" }));
+    const page = document.querySelector("main") as HTMLElement;
+    await userEvent.click(await within(page).findByRole("button", { name: "Work" }));
     expect(screen.getByText("Chat page: Work on this workboard card: Ship it in this chat")).toBeVisible();
     expect(view("Chat")).toHaveAttribute("aria-current", "page");
   });
@@ -760,17 +775,20 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Open in Settings" })).toBeNull();
   });
 
-  it("Ctrl+K over the More list swaps it for the full palette, and again closes it", async () => {
-    api.getCapabilities.mockResolvedValue(DESKTOP);
+  it("keeps a pin and a folded group from a legacy simple-mode save", async () => {
+    localStorage.setItem(
+      "shell.railPrefs",
+      JSON.stringify({ mode: "simple", pinned: ["mods"], collapsed: ["pc"] }),
+    );
+    api.getCapabilities.mockResolvedValue({ ...DESKTOP, mods: true });
     render(<App />);
-    await screen.findByRole("button", { name: "Pulse" });
-    await userEvent.click(view("More"));
-    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
-    await userEvent.keyboard("{Control>}k{/Control}");
-    expect(screen.queryByRole("dialog", { name: "More pages" })).toBeNull();
-    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
-    await userEvent.keyboard("{Control>}k{/Control}");
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Mods" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Simple" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "PC" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Devices" })).not.toBeInTheDocument();
+    expect(rail()[0]).toBe("Mods");
+    localStorage.removeItem("shell.railPrefs");
   });
 
   it("the Command button opens it too, and Ask Loadout fills the chat box", async () => {

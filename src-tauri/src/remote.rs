@@ -1194,7 +1194,15 @@ mod tests {
 
     #[test]
     fn a_browser_never_halts_the_computer() {
-        for name in ["halt_desktop", "get_halt_keys"] {
+        for name in [
+            "halt_desktop",
+            "get_halt_keys",
+            "steer_task",
+            "memory_graph",
+            "telegram_qr",
+            "signal_link_start",
+            "signal_link_finish",
+        ] {
             assert!(!web_command(name), "{name} must stay on the desktop");
         }
     }
@@ -1463,6 +1471,7 @@ mod tests {
             "disconnect_channel",
             "approve_channel_code",
             "unpair_channel_sender",
+            "allow_email_sender",
             "set_channel_asks",
             "add_channel_webhook",
             "remove_channel_webhook",

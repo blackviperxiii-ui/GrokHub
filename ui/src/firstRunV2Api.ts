@@ -1,10 +1,8 @@
-/** First run v2 progress: layout, apps, skills, local model, import, sandbox
+/** First run v2 progress: apps, skills, local model, import, sandbox
  * note, first task and tour. Prefs live in localStorage so the shell does not
  * need a new config file; Settings → Personal can reopen it. */
-import type { RailMode } from "./railPrefs";
 
 export type FirstRunV2Step =
-  | "layout"
   | "apps"
   | "skills"
   | "local"
@@ -23,11 +21,10 @@ export interface FirstRunV2Progress {
 
 export const DEFAULT_FIRST_RUN_V2: FirstRunV2Progress = {
   stage: "pending",
-  step: "layout",
+  step: "apps",
 };
 
 export const FIRST_RUN_V2_ORDER: FirstRunV2Step[] = [
-  "layout",
   "apps",
   "skills",
   "local",
@@ -39,7 +36,6 @@ export const FIRST_RUN_V2_ORDER: FirstRunV2Step[] = [
 ];
 
 export const FIRST_RUN_V2_LABELS: Record<FirstRunV2Step, string> = {
-  layout: "Layout",
   apps: "Apps",
   skills: "Skills",
   local: "Local AI",
@@ -104,7 +100,8 @@ export function loadFirstRunV2(): FirstRunV2Progress {
     const obj = parsed as Record<string, unknown>;
     const stage: FirstRunV2Stage =
       obj.stage === "done" || obj.stage === "skipped" ? obj.stage : "pending";
-    const step = isStep(obj.step) ? obj.step : "layout";
+    // A saved "layout" step is from the removed Simple/Advanced picker.
+    const step = obj.step === "layout" ? "apps" : isStep(obj.step) ? obj.step : "apps";
     return { stage, step };
   } catch {
     return { ...DEFAULT_FIRST_RUN_V2 };
@@ -124,7 +121,7 @@ export function saveFirstRunV2(progress: FirstRunV2Progress): void {
 }
 
 export function reopenFirstRunV2(): FirstRunV2Progress {
-  const next: FirstRunV2Progress = { stage: "pending", step: "layout" };
+  const next: FirstRunV2Progress = { stage: "pending", step: "apps" };
   saveFirstRunV2(next);
   return next;
 }
@@ -149,9 +146,3 @@ export function prevStep(step: FirstRunV2Step): FirstRunV2Step | null {
   return FIRST_RUN_V2_ORDER[at - 1] ?? null;
 }
 
-/** Layout copy for the Simple / Advanced pick (matches Sidebar v2). */
-export function layoutBlurb(mode: RailMode): string {
-  return mode === "advanced"
-    ? "Every page sits on the rail in groups. Right-click to pin favourites."
-    : "Home, Chat, Code, Pulse, Library and Settings stay on the rail. The rest live under More.";
-}

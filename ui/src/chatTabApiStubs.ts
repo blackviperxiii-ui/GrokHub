@@ -46,5 +46,10 @@ export function chatTabApiStubs() {
     // The top bar's pills read these; a suite that cares mocks its own.
     getPersonalities: () => Promise.reject(new Error("not mocked")),
     getPrivacy: () => Promise.reject(new Error("not mocked")),
+    // The helper strip above the composer: no helper runs unless a suite says so.
+    getQueue: () => Promise.resolve({ todos: [], tasks: [] }),
+    onTasksChanged: () => Promise.resolve(() => {}),
+    steerTask: () => Promise.resolve({ todos: [], tasks: [] }),
+    stopTask: () => Promise.resolve({ todos: [], tasks: [] }),
   };
 }

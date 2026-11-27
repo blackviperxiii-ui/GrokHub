@@ -39,6 +39,7 @@ import { CodeShip } from "./CodeShip";
 import { CodeRevert } from "./CodeRevert";
 import { inShell } from "./transport";
 import { useCardFocus } from "./ui";
+import { VstackSyncBar } from "./VstackSync";
 
 /** Right-column panes (former under-stack panels). */
 export type CodeSideTab = "projects" | "editor" | "tests" | "skills" | "helpers" | "settings";
@@ -130,6 +131,17 @@ export function overrideLabel(over: CodeOverriddenBy): string {
   // The app's own skills folder keeps its old source id.
   const scope = over.scope === "cabin" ? "app" : over.scope;
   return `overridden by ${scope} skill ${over.name}`;
+}
+
+export const CODE_SKILLS_NONE = "No built-in skills match that search.";
+
+/** Built-in rows whose name or description hold `query`, ignoring case. */
+export function filterBuiltins(rows: CodeBuiltin[], query: string): CodeBuiltin[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return rows;
+  return rows.filter((row) =>
+    [row.name, row.description].some((text) => text.toLowerCase().includes(q)),
+  );
 }
 
 interface Props {
@@ -520,6 +532,7 @@ function CodeWorkspace({
   const [repo, setRepo] = useState<CodeRepo | null>(null);
   const [diff, setDiff] = useState<CodeDiff | null>(null);
   const [builtins, setBuiltins] = useState<CodeBuiltin[] | null>(null);
+  const [skillQuery, setSkillQuery] = useState("");
   const [openSkill, setOpenSkill] = useState<CodeBuiltin | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -783,35 +796,59 @@ function CodeWorkspace({
   }
 
   if (tab === "skills") {
-    // A failed read shows its note above; the tab stops saying it still loads.
-    if (!builtins) return note ? null : <p className="empty">Loading skills…</p>;
-    if (builtins.length === 0) return <p className="empty">No built-in skills in this project.</p>;
+    const shown = builtins ? filterBuiltins(builtins, skillQuery) : [];
     return (
       <div className="code-skills">
         <h3>{CODE_BUILTINS}</h3>
-        <div className={openSkill ? "code-split" : undefined}>
-          <ul className="rows" aria-label={CODE_BUILTINS}>
-            {builtins.map((skill) => (
-              <li key={skill.name}>
-                <button
-                  type="button"
-                  className="code-skill quiet"
-                  aria-pressed={openSkill?.name === skill.name}
-                  onClick={() => setOpenSkill(skill)}
-                >
-                  <span className="card-title">{skill.name}</span>
-                  {skill.description && <span className="note">{skill.description}</span>}
-                  {skill.overriddenBy && <span className="note">{overrideLabel(skill.overriddenBy)}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {openSkill && (
-            <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
-              {openSkill.body}
-            </pre>
-          )}
+        <VstackSyncBar
+          onSynced={() => {
+            codeBuiltins().then(setBuiltins, (err) => setNote(String(err)));
+          }}
+        />
+        <div className="card-buttons">
+          <input
+            type="search"
+            aria-label="Filter built-in skills"
+            placeholder="Filter by name or description"
+            value={skillQuery}
+            onChange={(event) => setSkillQuery(event.target.value)}
+          />
         </div>
+        {note && (
+          <p className="note" role="status">
+            {note}
+          </p>
+        )}
+        {!builtins && !note && <p className="empty">Loading skills…</p>}
+        {builtins && builtins.length === 0 && <p className="empty">No built-in skills in this project.</p>}
+        {builtins && builtins.length > 0 && shown.length === 0 && (
+          <p className="empty">{CODE_SKILLS_NONE}</p>
+        )}
+        {shown.length > 0 && (
+          <div className={openSkill ? "code-split" : undefined}>
+            <ul className="rows" aria-label={CODE_BUILTINS}>
+              {shown.map((skill) => (
+                <li key={skill.name}>
+                  <button
+                    type="button"
+                    className="code-skill quiet"
+                    aria-pressed={openSkill?.name === skill.name}
+                    onClick={() => setOpenSkill(skill)}
+                  >
+                    <span className="card-title">{skill.name}</span>
+                    {skill.description && <span className="note">{skill.description}</span>}
+                    {skill.overriddenBy && <span className="note">{overrideLabel(skill.overriddenBy)}</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {openSkill && shown.some((skill) => skill.name === openSkill.name) && (
+              <pre className="code-diff" tabIndex={0} role="region" aria-label={`Built-in skill ${openSkill.name}`}>
+                {openSkill.body}
+              </pre>
+            )}
+          </div>
+        )}
       </div>
     );
   }

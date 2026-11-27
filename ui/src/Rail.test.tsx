@@ -19,50 +19,56 @@ const DESKTOP: Capabilities = {
 };
 
 describe("Rail", () => {
-  it("Simple mode shows core pages and More for the rest", () => {
-    render(
-      <Rail
-        caps={DESKTOP}
-        view="chat"
-        mode="simple"
-        pinned={[]}
-        collapsed={[]}
-        moreOpen={false}
-        onOpen={() => {}}
-        onMore={() => {}}
-        onChatMenu={() => {}}
-        onMode={() => {}}
-        onPin={() => {}}
-        onToggleSection={() => {}}
-      />,
-    );
-    expect(screen.getByRole("navigation", { name: "Views" })).toHaveAttribute("data-rail-mode", "simple");
-    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "MCPs & Connectors" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Automations" })).not.toBeInTheDocument();
-  });
-
-  it("Advanced mode lists Automations, Skills, Workboard and Mods in one click", async () => {
+  it("shows the five groups and their pages, with no Simple or Advanced switch", async () => {
     const onOpen = vi.fn();
     render(
       <Rail
         caps={DESKTOP}
-        view="home"
-        mode="advanced"
+        view="chat"
         pinned={[]}
         collapsed={[]}
-        moreOpen={false}
         onOpen={onOpen}
-        onMore={() => {}}
         onChatMenu={() => {}}
-        onMode={() => {}}
         onPin={() => {}}
         onToggleSection={() => {}}
       />,
     );
-    expect(screen.getByRole("navigation", { name: "Views" })).toHaveClass("rail-advanced");
+    const nav = screen.getByRole("navigation", { name: "Views" });
+    expect(nav).not.toHaveAttribute("data-rail-mode");
+    expect(screen.queryByRole("button", { name: "Simple" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Advanced" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+    for (const group of ["Core", "Work", "Make", "You", "PC"]) {
+      expect(screen.getByRole("button", { name: group })).toHaveAttribute("aria-expanded", "true");
+    }
+    for (const page of [
+      "Home",
+      "Chat",
+      "Code",
+      "Library",
+      "Workboard",
+      "Automations",
+      "Agents",
+      "Team",
+      "Objectives",
+      "Command line",
+      "Skills",
+      "MCPs & Connectors",
+      "Marketplace",
+      "Mods",
+      "Personal",
+      "Pulse",
+      "Journal",
+      "Meetings",
+      "History",
+      "Devices",
+      "Fleet",
+      "Updates & Drivers",
+      "Settings",
+    ]) {
+      expect(screen.getByRole("button", { name: page })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
     await userEvent.click(screen.getByRole("button", { name: "Automations" }));
     await userEvent.click(screen.getByRole("button", { name: "Skills" }));
     await userEvent.click(screen.getByRole("button", { name: "Workboard" }));
@@ -76,14 +82,10 @@ describe("Rail", () => {
       <Rail
         caps={DESKTOP}
         view="chat"
-        mode="advanced"
         pinned={[]}
         collapsed={["make"]}
-        moreOpen={false}
         onOpen={() => {}}
-        onMore={() => {}}
         onChatMenu={() => {}}
-        onMode={() => {}}
         onPin={() => {}}
         onToggleSection={onToggle}
       />,
