@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelKind, Channels as Shape } from "./channelsApi";
+import type { ChannelKind, ChannelState, Channels as Shape } from "./channelsApi";
 
 const api = vi.hoisted(() => ({
   getChannels: vi.fn<() => Promise<Shape | null>>(),
@@ -17,10 +17,24 @@ vi.mock("./channelsApi", () => api);
 
 import { Channels } from "./Channels";
 
+const row = (kind: ChannelKind, name: string, live: boolean, setupLabel = `${name} bot token`): ChannelState => ({
+  kind,
+  name,
+  setupLabel,
+  setupHint: live ? "Paste the token." : "Coming next.",
+  live,
+  connected: false,
+  running: false,
+  problem: null,
+});
+
 const none: Shape = {
   channels: [
-    { kind: "telegram", connected: false, running: false, problem: null },
-    { kind: "discord", connected: false, running: false, problem: null },
+    row("telegram", "Telegram", true),
+    row("discord", "Discord", true),
+    row("slack", "Slack", false, "Slack tokens"),
+    row("signal", "Signal", false, "Signal"),
+    row("email", "Email", false, "Email"),
   ],
   pending: [],
   paired: [],
@@ -48,7 +62,7 @@ describe("Phone and chat apps", () => {
     api.getChannels.mockResolvedValue(none);
     api.connectChannel.mockResolvedValue({
       ...none,
-      channels: [{ kind: "telegram", connected: true, running: true, problem: null }, none.channels[1]],
+      channels: [{ ...none.channels[0], connected: true, running: true }, ...none.channels.slice(1)],
       status: "Connected Telegram as @my_app_bot. Strangers who message it get a pairing code.",
     });
     render(<Channels />);
@@ -62,6 +76,18 @@ describe("Phone and chat apps", () => {
     ).toBeTruthy();
     expect(screen.getByText("Listening for messages")).toBeTruthy();
     expect(screen.queryByLabelText("Telegram bot token")).toBeNull();
+  });
+
+  it("lists every kind from the table and offers setup only for live ones", async () => {
+    api.getChannels.mockResolvedValue(none);
+    render(<Channels />);
+    for (const name of ["Telegram", "Discord", "Slack", "Signal", "Email"]) {
+      expect(await screen.findByRole("listitem", { name })).toBeTruthy();
+    }
+    expect(screen.getAllByText("Coming next")).toHaveLength(3);
+    expect(screen.getAllByText("Not connected")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(2);
+    expect(screen.queryByLabelText("Slack tokens")).toBeNull();
   });
 
   it("pairs a waiting sender by code, shows a wrong code, and unpairs", async () => {

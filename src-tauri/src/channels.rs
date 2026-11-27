@@ -22,6 +22,12 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct ChannelView {
     pub kind: ChannelKind,
+    /// What the page calls it, and what its setup box asks for.
+    pub name: &'static str,
+    pub setup_label: &'static str,
+    pub setup_hint: &'static str,
+    /// It can be connected in this build; the others show as coming next.
+    pub live: bool,
     /// A token is saved.
     pub connected: bool,
     /// Its worker is listening now.
@@ -93,11 +99,11 @@ fn recent(config_dir: &Path) -> Vec<RecentView> {
                     .unwrap_or_default()
                     .to_string()
             };
-            let source = match field("channel").as_str() {
-                "telegram" => "Telegram",
-                "discord" => "Discord",
-                "webhook" => "Webhook",
-                _ => "Unknown",
+            let channel = field("channel");
+            let source = match ChannelKind::from_key(&channel) {
+                Some(kind) => kind.name(),
+                None if channel == "webhook" => "Webhook",
+                None => "Unknown",
             };
             RecentView {
                 source: source.into(),
@@ -142,6 +148,9 @@ pub fn send_answer(
         ChannelKind::Discord => {
             DiscordLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
         }
+        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+            Err(channels_net::coming_next(to.channel))
+        }
     }
 }
 
@@ -155,13 +164,10 @@ pub struct WebhookView {
     pub path: String,
 }
 
-const KINDS: [ChannelKind; 2] = [ChannelKind::Telegram, ChannelKind::Discord];
+const KINDS: [ChannelKind; 5] = ChannelKind::ALL;
 
 fn name(kind: ChannelKind) -> &'static str {
-    match kind {
-        ChannelKind::Telegram => "Telegram",
-        ChannelKind::Discord => "Discord",
-    }
+    kind.name()
 }
 
 struct Worker {
@@ -183,8 +189,13 @@ pub fn view(config_dir: &Path, store: &dyn Backend, status: Option<String>) -> C
         .iter()
         .map(|&kind| {
             let worker = running.get(&kind);
+            let spec = kind.spec();
             ChannelView {
                 kind,
+                name: spec.name,
+                setup_label: spec.setup_label,
+                setup_hint: spec.setup_hint,
+                live: spec.live,
                 connected: matches!(channels_net::load_token(store, kind), Ok(Some(_))),
                 running: worker.is_some_and(|w| w.running.load(Ordering::SeqCst)),
                 problem: worker
@@ -339,6 +350,9 @@ fn start(config_dir: &Path, kind: ChannelKind, token: &str) -> Result<(), String
                 })
                 .map_err(|e| e.to_string())?;
         }
+        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+            return Err(channels_net::coming_next(kind));
+        }
     }
     workers().insert(
         kind,
@@ -385,6 +399,9 @@ pub fn connect(
     let bot = match kind {
         ChannelKind::Telegram => TelegramLink::new(token)?.check(config_dir)?,
         ChannelKind::Discord => DiscordLink::new(token)?.check(config_dir)?,
+        ChannelKind::Slack | ChannelKind::Signal | ChannelKind::Email => {
+            return Err(channels_net::coming_next(kind));
+        }
     };
     channels_net::save_token(store, kind, token)?;
     start(config_dir, kind, token)?;
@@ -512,23 +529,28 @@ mod tests {
         let code = trust.pending[0].code.clone();
 
         let before = view(&dir, &store, None);
+        let listed: Vec<(&str, bool, bool)> = before
+            .channels
+            .iter()
+            .map(|c| {
+                (
+                    c.name,
+                    c.live,
+                    c.connected || c.running || c.problem.is_some(),
+                )
+            })
+            .collect();
         assert_eq!(
-            before.channels,
-            vec![
-                ChannelView {
-                    kind: ChannelKind::Telegram,
-                    connected: false,
-                    running: false,
-                    problem: None
-                },
-                ChannelView {
-                    kind: ChannelKind::Discord,
-                    connected: false,
-                    running: false,
-                    problem: None
-                },
+            listed,
+            [
+                ("Telegram", true, false),
+                ("Discord", true, false),
+                ("Slack", false, false),
+                ("Signal", false, false),
+                ("Email", false, false),
             ]
         );
+        assert_eq!(before.channels[0].setup_label, "Telegram bot token");
         assert_eq!(
             before.pending,
             vec![PendingView {
@@ -603,6 +625,12 @@ mod tests {
             connect(&dir, &store, ChannelKind::Discord, "nope").unwrap_err(),
             "That isn't a Discord bot token."
         );
+        for kind in [ChannelKind::Slack, ChannelKind::Signal, ChannelKind::Email] {
+            assert_eq!(
+                connect(&dir, &store, kind, "anything").unwrap_err(),
+                channels_net::coming_next(kind)
+            );
+        }
         assert!(store.0.lock().unwrap().is_empty());
         assert!(workers().is_empty());
     }
