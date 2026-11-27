@@ -163,6 +163,7 @@ pub mod model_registry;
 pub mod mods;
 pub mod msg_channels;
 pub mod msg_discord;
+pub mod msg_email;
 pub mod msg_signal;
 pub mod msg_slack;
 pub mod msg_telegram;
