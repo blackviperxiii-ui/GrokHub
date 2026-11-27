@@ -19,7 +19,7 @@ export const RAIL_SECTIONS: readonly RailSectionDef[] = [
     label: "Work",
     views: ["workboard", "automations", "agents", "team", "objectives", "command"],
   },
-  { id: "make", label: "Make", views: ["skills", "connectors", "mods"] },
+  { id: "make", label: "Make", views: ["skills", "connectors", "marketplace", "mods"] },
   { id: "you", label: "You", views: ["memory", "pulse", "journal", "meetings", "history"] },
   { id: "pc", label: "PC", views: ["devices", "fleet", "updates"] },
 ];

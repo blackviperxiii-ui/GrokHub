@@ -371,6 +371,7 @@ describe("App", () => {
       "Objectives",
       "Skills",
       "MCPs & Connectors",
+      "Marketplace",
       "Personal",
       "Pulse",
       "Journal",

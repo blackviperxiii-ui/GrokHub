@@ -1,0 +1,1 @@
+- Added a Marketplace page with Plugins, Skills and Connectors tabs. Plugins moved there from Settings → Labs, and `/plugins` opens it. The plugin index now has a search box, a category filter, and Installed or Update marks on each entry.

@@ -34,6 +34,7 @@ describe("MCPs & Connectors nav", () => {
       "memory",
       "skills",
       "connectors",
+      "marketplace",
       "workboard",
       "devices",
       "fleet",

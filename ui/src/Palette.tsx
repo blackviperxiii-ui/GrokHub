@@ -40,6 +40,7 @@ export type View =
   | "memory"
   | "skills"
   | "connectors"
+  | "marketplace"
   | "settings"
   | "library"
   | "mods"
@@ -116,6 +117,7 @@ export const VIEW_LABELS: Record<View, string> = {
   memory: "Personal",
   skills: "Skills",
   connectors: "MCPs & Connectors",
+  marketplace: "Marketplace",
   settings: "Settings",
   workboard: "Workboard",
   devices: "Devices",
@@ -144,6 +146,7 @@ export function views(caps: Capabilities): View[] {
     "memory",
     "skills",
     "connectors",
+    ...(caps.plugins ? (["marketplace"] as const) : []),
     "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices", "fleet"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),

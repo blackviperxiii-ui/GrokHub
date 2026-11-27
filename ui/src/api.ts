@@ -1383,7 +1383,7 @@ export type SlashEffect =
   | { kind: "openNote"; view: "settings"; text: string }
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
-  /** `/plugins`: Settings → Labs. `/download` alone: Settings → Local AI. */
+  /** `/plugins`: the Marketplace page. `/download` alone: Settings → Local AI. */
   | { kind: "openSection"; section: "labs" | "localAi" }
   /** `/download <model>`: that model's download starts on this computer. */
   | { kind: "downloadModel"; id: string; name: string }
