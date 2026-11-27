@@ -530,15 +530,16 @@ impl WebAccess {
                 };
                 let port = inner.port();
                 let mut allowed_origins = vec![
-                    format!("http://{}", SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)),
+                    format!(
+                        "http://{}",
+                        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+                    ),
                     format!("http://localhost:{port}"),
                 ];
                 if let Some((front, _)) = &front {
                     if let Some(ip) = lan_ip() {
-                        allowed_origins.push(format!(
-                            "https://{}",
-                            SocketAddr::new(ip, front.port)
-                        ));
+                        allowed_origins
+                            .push(format!("https://{}", SocketAddr::new(ip, front.port)));
                     }
                     allowed_origins.push(format!("https://127.0.0.1:{}", front.port));
                     allowed_origins.push(format!("https://localhost:{}", front.port));
@@ -948,10 +949,7 @@ fn proxy_node(mut req: Request, job: &Job, slot: Slot, subpath: &str) {
             );
         }
     }
-    let port = *job
-        .companion_port
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let port = *job.companion_port.lock().unwrap_or_else(|e| e.into_inner());
     let Some(port) = port else {
         return send_json(
             req,
@@ -1012,7 +1010,10 @@ fn proxy_node(mut req: Request, job: &Job, slot: Slot, subpath: &str) {
                 extra.push(("Vary", "Origin"));
                 if status == 204 {
                     extra.push(("Access-Control-Allow-Methods", "GET, POST, OPTIONS"));
-                    extra.push(("Access-Control-Allow-Headers", "Authorization, Content-Type"));
+                    extra.push((
+                        "Access-Control-Allow-Headers",
+                        "Authorization, Content-Type",
+                    ));
                 }
             }
             send(req, status, resp_body, &resp_ctype, &extra);
@@ -2484,15 +2485,36 @@ mod tests {
 
     #[test]
     fn companion_proxy_routes_client_paths_only_and_blocks_mcp() {
-        assert_eq!(route(&Method::Post, "/node/v1/pair"), Route::Node("/pair".into()));
-        assert_eq!(route(&Method::Post, "/node/v1/hello"), Route::Node("/hello".into()));
-        assert_eq!(route(&Method::Get, "/node/v1/next"), Route::Node("/next".into()));
-        assert_eq!(route(&Method::Post, "/node/v1/reply"), Route::Node("/reply".into()));
-        assert_eq!(route(&Method::Post, "/node/v1/event"), Route::Node("/event".into()));
-        assert_eq!(route(&Method::Options, "/node/v1/pair"), Route::Node("/pair".into()));
+        assert_eq!(
+            route(&Method::Post, "/node/v1/pair"),
+            Route::Node("/pair".into())
+        );
+        assert_eq!(
+            route(&Method::Post, "/node/v1/hello"),
+            Route::Node("/hello".into())
+        );
+        assert_eq!(
+            route(&Method::Get, "/node/v1/next"),
+            Route::Node("/next".into())
+        );
+        assert_eq!(
+            route(&Method::Post, "/node/v1/reply"),
+            Route::Node("/reply".into())
+        );
+        assert_eq!(
+            route(&Method::Post, "/node/v1/event"),
+            Route::Node("/event".into())
+        );
+        assert_eq!(
+            route(&Method::Options, "/node/v1/pair"),
+            Route::Node("/pair".into())
+        );
         assert_eq!(route(&Method::Get, "/node/v1/pair"), Route::Wrong(405));
         assert_eq!(route(&Method::Post, "/node/v1/next"), Route::Wrong(405));
-        assert_eq!(route(&Method::Post, "/node/v1/mcp/phone"), Route::Wrong(404));
+        assert_eq!(
+            route(&Method::Post, "/node/v1/mcp/phone"),
+            Route::Wrong(404)
+        );
         assert_eq!(route(&Method::Get, "/node/v1/health"), Route::Wrong(404));
     }
 
@@ -2576,7 +2598,10 @@ mod tests {
         s.write_all(req.as_bytes()).expect("write");
         let mut resp = String::new();
         s.read_to_string(&mut resp).expect("read");
-        assert!(resp.starts_with("HTTP/1.0 404") || resp.starts_with("HTTP/1.1 404"), "{resp}");
+        assert!(
+            resp.starts_with("HTTP/1.0 404") || resp.starts_with("HTTP/1.1 404"),
+            "{resp}"
+        );
 
         access.stop();
         let _ = std::fs::remove_dir_all(&dir);

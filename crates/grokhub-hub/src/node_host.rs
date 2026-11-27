@@ -228,10 +228,9 @@ pub fn normalize_origin(raw: &str) -> Option<String> {
     }
     let (scheme, rest) = if let Some(rest) = trimmed.strip_prefix("https://") {
         ("https", rest)
-    } else if let Some(rest) = trimmed.strip_prefix("http://") {
-        ("http", rest)
     } else {
-        return None;
+        let rest = trimmed.strip_prefix("http://")?;
+        ("http", rest)
     };
     if rest.is_empty() || rest.contains(['/', '?', '#', '@']) {
         return None;
@@ -455,10 +454,7 @@ fn send_node_json(
         }
     }
     if let Some(origin) = cors_origin {
-        for (name, value) in [
-            ("access-control-allow-origin", origin),
-            ("vary", "Origin"),
-        ] {
+        for (name, value) in [("access-control-allow-origin", origin), ("vary", "Origin")] {
             if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
                 headers.push(h);
             }
@@ -540,10 +536,9 @@ fn handle(shared: &Shared, mut req: Request) -> Result<(), ()> {
     let method = req.method().clone();
     if method == Method::Options {
         return match (cors, rest.as_str()) {
-            (
-                Some(origin),
-                "/health" | "/pair" | "/hello" | "/next" | "/reply" | "/event",
-            ) => send_preflight(req, origin),
+            (Some(origin), "/health" | "/pair" | "/hello" | "/next" | "/reply" | "/event") => {
+                send_preflight(req, origin)
+            }
             _ => error(req, 404, "Unknown route.", cors),
         };
     }
@@ -1262,14 +1257,8 @@ mod tests {
         assert!(host.set_allowed_origin(Some(origin)));
         assert_eq!(host.allowed_origin().as_deref(), Some(origin));
 
-        let (status, head, _) = http_with_origin(
-            host.port(),
-            "OPTIONS",
-            "/node/v1/pair",
-            origin,
-            "",
-            "",
-        );
+        let (status, head, _) =
+            http_with_origin(host.port(), "OPTIONS", "/node/v1/pair", origin, "", "");
         assert_eq!(status, 204);
         assert!(
             head.to_ascii_lowercase()
@@ -1278,9 +1267,8 @@ mod tests {
         );
 
         let code = host.open_pairing().code;
-        let body = format!(
-            r#"{{"code":"{code}","id":"phone-web","name":"Phone","platform":"browser"}}"#
-        );
+        let body =
+            format!(r#"{{"code":"{code}","id":"phone-web","name":"Phone","platform":"browser"}}"#);
         let (status, head, v) =
             http_with_origin(host.port(), "POST", "/node/v1/pair", origin, "", &body);
         assert_eq!(status, 200, "{v}");
@@ -1297,8 +1285,14 @@ mod tests {
             http_with_origin(host.port(), "GET", "/node/v1/next", origin, &token, "");
         assert_eq!((status, v["pending"].clone()), (200, json!(true)));
         let hello = json!({ "offers": ["camera", "location"] }).to_string();
-        let (status, _, v) =
-            http_with_origin(host.port(), "POST", "/node/v1/hello", origin, &token, &hello);
+        let (status, _, v) = http_with_origin(
+            host.port(),
+            "POST",
+            "/node/v1/hello",
+            origin,
+            &token,
+            &hello,
+        );
         assert_eq!((status, v["approved"].clone()), (200, json!(false)));
         assert!(host.approve("phone-web", &["camera".into()]));
 
@@ -1306,33 +1300,53 @@ mod tests {
         let list = json!({"jsonrpc":"2.0","id":9,"method":"tools/list"}).to_string();
         let port = host.port();
         let poll_token = token.clone();
-        let caller =
-            std::thread::spawn(move || http(port, "POST", "/node/v1/mcp/phone-web", KEY, &list));
-        std::thread::sleep(Duration::from_millis(50));
-        let (status, _, got) =
-            http_with_origin(port, "GET", "/node/v1/next", origin, &poll_token, "");
-        assert_eq!(status, 200, "{got}");
-        let mut reply = json!({
-            "jsonrpc": "2.0",
-            "id": got["rpc"]["id"].clone(),
-            "result": { "tools": [
-                { "name": "camera_snap" },
-                { "name": "location_get" }
-            ] }
+        let poller_origin = origin.to_string();
+        let poller = std::thread::spawn(move || {
+            let (status, _, got) = http_with_origin(
+                port,
+                "GET",
+                "/node/v1/next",
+                &poller_origin,
+                &poll_token,
+                "",
+            );
+            assert_eq!(status, 200, "{got}");
+            let mut reply = json!({
+                "jsonrpc": "2.0",
+                "id": got["rpc"]["id"].clone(),
+                "result": { "tools": [
+                    { "name": "camera_snap" },
+                    { "name": "location_get" }
+                ] }
+            });
+            let reply_body = json!({ "rpc": reply.take() }).to_string();
+            let (status, _, v) = http_with_origin(
+                port,
+                "POST",
+                "/node/v1/reply",
+                &poller_origin,
+                &poll_token,
+                &reply_body,
+            );
+            assert_eq!((status, v["taken"].clone()), (200, json!(true)));
         });
-        let reply_body = json!({ "rpc": reply.take() }).to_string();
-        let (status, _, v) = http_with_origin(
-            port,
-            "POST",
-            "/node/v1/reply",
-            origin,
-            &poll_token,
-            &reply_body,
+        for _ in 0..200 {
+            if host.shared.relay.online("phone-web") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            host.shared.relay.online("phone-web"),
+            "phone-web never polled"
         );
-        assert_eq!((status, v["taken"].clone()), (200, json!(true)));
-        let (status, mcp_ans) = caller.join().expect("caller");
+        let (status, mcp_ans) = http(port, "POST", "/node/v1/mcp/phone-web", KEY, &list);
+        poller.join().expect("poller");
         assert_eq!(status, 200);
-        assert_eq!(mcp_ans["result"]["tools"], json!([{ "name": "camera_snap" }]));
+        assert_eq!(
+            mcp_ans["result"]["tools"],
+            json!([{ "name": "camera_snap" }])
+        );
 
         let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
     }
