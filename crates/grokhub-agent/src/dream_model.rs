@@ -9,7 +9,7 @@ use grokhub_core::amr::{
     allows_lesson_write, approval_samples, calibrate_reflect_min, memory_rows, morning_text,
     reflect_threshold_log, stage_core_line, unsafe_to_learn, CoreWriter, DreamOpts, DreamPhase,
     DreamReport, DreamStep, LineWrite, ModelDreamOpts, ModelDreamReport, MorningNote, Noted,
-    StagedCore,
+    StagedCore, MORNING_CARD_SOURCE,
 };
 use grokhub_core::{automation_done_card, skill_dir_name, UpdateCard};
 
@@ -121,7 +121,7 @@ pub fn sleep_dream(
     phase = phase
         .advance(DreamStep::Summarize { text: text.clone() })
         .map_err(|err| err.to_string())?;
-    let card = automation_done_card("dream-model", "Memory dream", &text, now_ms);
+    let card = automation_done_card(MORNING_CARD_SOURCE, "Memory dream", &text, now_ms);
     Ok(SleepDreamOut {
         note: MorningNote { text },
         card,

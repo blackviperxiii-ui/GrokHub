@@ -153,8 +153,10 @@ export type ChatEvent =
       title: string;
       status: string;
       detail: string;
-      /** The picture file a finished image_generate made; read it with `chatPicture`. */
+      /** The picture file a finished image_generate or image_edit made; read it with `chatPicture`. */
       picture?: string;
+      /** The video file a finished video_generate/edit/extend made; read it with `chatMedia`. */
+      video?: string;
     }
   | {
       kind: "permission";
@@ -200,6 +202,20 @@ export type ChatEvent =
   /** A panel the agent drew with show_panel (generative UI), keyed by the
    * call that made it. The shell sends only specs the core rules allow. */
   | { kind: "panel"; id: string; spec: PanelSpec }
+  /** An MCP App view for the sandboxed in-chat host. */
+  | {
+      kind: "mcpApp";
+      id: string;
+      app: {
+        server: string;
+        tool: string;
+        resourceUri: string;
+        html: string;
+        prefersBorder?: boolean;
+        toolInput: unknown;
+        toolResult: unknown;
+      };
+    }
   /** A report_findings card: one pill per fix; a pill fills the composer. */
   | {
       kind: "findings";
@@ -253,7 +269,8 @@ export interface QuickChip {
 }
 
 /** The composer's row, Home's row and the empty palette's, as the log names them. */
-export type ChipSurface = "composer" | "home" | "palette";
+/** Where a chip row shows; "code" is the Code agent's composer, with coding starters. */
+export type ChipSurface = "composer" | "code" | "home" | "palette";
 
 /** The row for the open chat and its draft, or Home's. Empty with Settings →
  * Behavior → Suggestions off. */
@@ -405,12 +422,16 @@ export function clearApiKey(): Promise<Settings> {
 /** Runs one prompt through the agent loop; resolves with the stop reason.
  * `attachments`: paths from `stageAttachment`, in the chips' order. */
 /** Sends one message. With no `mode` the app reads the message and picks:
- * a big multi-step job plans first, anything else is answered. */
+ * a big multi-step job plans first, anything else is answered. `untyped`:
+ * texts the window put in its box for the app, a card or a model (a fix
+ * button's prompt, a Pulse card's offer), which the person didn't type, so
+ * their `@` references stay text. */
 export function sendChat(
   conversationId: string,
   text: string,
   mode?: SessionMode,
   attachments: string[] = [],
+  untyped: string[] = [],
 ): Promise<string> {
   return invoke<string>("send_chat", {
     conversationId,
@@ -418,6 +439,7 @@ export function sendChat(
     mode,
     attachments,
     clock: wallClock(),
+    ...(untyped.length ? { untyped } : {}),
   });
 }
 
@@ -448,6 +470,8 @@ export function sideChat(
   question: string,
   ask: string,
   soFar: string,
+  /** What of `question` the window put in its box for the app (see `sendChat`). */
+  untyped: string[] = [],
 ): Promise<string> {
   return invoke<string>("side_chat", {
     conversationId,
@@ -455,6 +479,7 @@ export function sideChat(
     question,
     ask,
     soFar,
+    ...(untyped.length ? { untyped } : {}),
   });
 }
 
@@ -646,6 +671,57 @@ export function getVoiceRoute(): Promise<VoiceRouteConfig> {
 
 export function setVoiceRoute(config: VoiceRouteConfig): Promise<VoiceRouteConfig> {
   return invoke<VoiceRouteConfig>("set_voice_route", { config });
+}
+
+/** Always-listening on-device wake word (Order 970). Mic opt-in; matching stays local. */
+export interface WakeWordRoute {
+  phrase: string;
+  profileId: string;
+}
+
+export interface WakeWordPage {
+  micConsent: boolean;
+  enabled: boolean;
+  phrases: string[];
+  stopPhrases: string[];
+  routes: WakeWordRoute[];
+  defaultProfile: string;
+  phase: string;
+  voiceBusy: boolean;
+  defaultPhrases: string[];
+  defaultStop: string[];
+  privacy: string;
+}
+
+export type WakeWordAct =
+  | { kind: "setMicConsent"; on: boolean }
+  | { kind: "setEnabled"; on: boolean }
+  | { kind: "setPhrases"; phrases: string[] }
+  | { kind: "setStopPhrases"; phrases: string[] }
+  | { kind: "setRoutes"; routes: WakeWordRoute[] }
+  | { kind: "setDefaultProfile"; profileId: string }
+  | { kind: "arm" }
+  | { kind: "disarm" }
+  | { kind: "setVoiceBusy"; busy: boolean };
+
+export interface WakeWordFeedResult {
+  kind: "none" | "start_turn" | "stop" | string;
+  phrase?: string | null;
+  profileId?: string | null;
+  phase: string;
+}
+
+export function getWakeWord(): Promise<WakeWordPage> {
+  return invoke<WakeWordPage>("get_wake_word");
+}
+
+export function wakeWordAct(act: WakeWordAct): Promise<WakeWordPage> {
+  return invoke<WakeWordPage>("wake_word_act", { act });
+}
+
+/** Feed an on-device transcript into the wake matcher. Never pass cloud STT. */
+export function wakeWordFeedLocal(text: string): Promise<WakeWordFeedResult> {
+  return invoke<WakeWordFeedResult>("wake_word_feed_local", { text });
 }
 
 /** Answers a plan, a question or a connector form; `value` goes under `field`. */
@@ -1024,6 +1100,10 @@ export interface AutomationRow {
   /** The job's check command; empty when it has none. */
   checkCommand: string;
   gate: AutomationGate;
+  /** Condition / event-stream wait summary; empty when none. */
+  wait: string;
+  /** Delivery · run · completion line; empty while clear. */
+  lifecycle: string;
 }
 
 export interface RunResult {
@@ -1303,8 +1383,10 @@ export type SlashEffect =
   | { kind: "openNote"; view: "settings"; text: string }
   /** `/imagine` and `/imagine-video`. An empty prompt just opens the page. */
   | { kind: "imagine"; media: "image" | "video"; prompt: string }
-  /** `/plugins`: Settings → Labs. */
-  | { kind: "openSection"; section: "labs" }
+  /** `/plugins`: the Marketplace page. `/download` alone: Settings → Local AI. */
+  | { kind: "openSection"; section: "labs" | "localAi" }
+  /** `/download <model>`: that model's download starts on this computer. */
+  | { kind: "downloadModel"; id: string; name: string }
   /** `/sh <line>` or `$ <line>`: the Command page's checks on the line. */
   | { kind: "shell"; check: CommandBoxVerdict }
   /** `/sync` or `/inhabit <computer>`: a send to a paired computer asks
@@ -1392,6 +1474,47 @@ export function exportPersonal(): Promise<string> {
 /** Updates the Obsidian-friendly wiki of the plain memory; returns the page's line. Desktop only. */
 export function exportMemoryWiki(): Promise<string> {
   return invoke<string>("export_memory_wiki");
+}
+
+/** One live memory line on the map. `label` is empty for a private line. */
+export interface MemoryGraphNode {
+  id: string;
+  kind: string;
+  label: string;
+  confidence: number;
+  updated: string;
+  sealed: boolean;
+  proposed: boolean;
+  paused: boolean;
+  superseded: boolean;
+}
+
+export type MemoryEdgeKind =
+  | "references"
+  | "supersedes"
+  | "learned_from_span"
+  | "about_project"
+  | "contradicts";
+
+export interface MemoryGraphEdge {
+  from: string;
+  to: string;
+  kind: MemoryEdgeKind;
+}
+
+/** The memory map: newest nodes first, edges only between nodes shown. */
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  /** Private lines that could not be opened, so are not on the map. */
+  locked: number;
+  /** More lines than the map holds; the oldest are left off. */
+  truncated: boolean;
+}
+
+/** Desktop only: the memory as nodes and edges for the Memory map. */
+export function getMemoryGraph(): Promise<MemoryGraph> {
+  return invoke<MemoryGraph>("memory_graph");
 }
 
 export interface PersonalWiped {
@@ -1496,11 +1619,19 @@ export function setChatArchive(days: number): Promise<ChatArchive> {
   return invoke<ChatArchive>("set_chat_archive", { days });
 }
 
+/** One tool on a connector, for the per-tool on/off switch. */
+export interface ConnectorToolRow {
+  name: string;
+  /** False when the Connectors page turned it off for chat. */
+  enabled: boolean;
+}
+
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
 export interface ConnectorRow {
   name: string;
   /** "connected", "error", "stopped", "not checked" or "disabled". */
   status: string;
+  /** How many tools chat can use (off tools are not counted). */
   tools: number;
   error: string;
   /** The command or URL the entry runs. */
@@ -1511,6 +1642,8 @@ export interface ConnectorRow {
   canDisconnect: boolean;
   /** False once its switch turned it off. */
   enabled: boolean;
+  /** Tools from the last Check / connect; empty until then. */
+  toolRows: ConnectorToolRow[];
 }
 
 export interface ConnectorsChanged {
@@ -1551,6 +1684,10 @@ export interface CatalogRow {
   keyHint: string;
   target: string;
   installed: boolean;
+  source: string;
+  permissions: string;
+  /** Known tool names for the install picker (may be empty). */
+  tools: string[];
 }
 
 export interface CatalogView {
@@ -1571,8 +1708,14 @@ export function connectorCatalog(refresh = false): Promise<CatalogView> {
   return invoke<CatalogView>("connector_catalog", { refresh });
 }
 
-export function addCatalogConnector(id: string): Promise<ConnectorsChanged> {
-  return invoke<ConnectorsChanged>("add_catalog_connector", { id });
+export function addCatalogConnector(
+  id: string,
+  includeTools?: string[] | null,
+): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("add_catalog_connector", {
+    id,
+    includeTools: includeTools ?? null,
+  });
 }
 
 /** A pasted `mcpServers` config; names already set up are kept. */
@@ -1585,6 +1728,15 @@ export function setConnectorEnabled(
   on: boolean,
 ): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("set_connector_enabled", { name, on });
+}
+
+/** Turn one tool of a connector off or back on for chat. */
+export function setConnectorToolEnabled(
+  name: string,
+  tool: string,
+  on: boolean,
+): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("set_connector_tool_enabled", { name, tool, on });
 }
 
 /** Opens the server's sign-in page in the browser and waits for it. */
@@ -2022,6 +2174,45 @@ export function chatPicture(path: string): Promise<string> {
   return invoke<string>("chat_picture", { path });
 }
 
+/** A picture or short video a chat's tool made, as a data URL. */
+export function chatMedia(path: string): Promise<string> {
+  return invoke<string>("chat_media", { path });
+}
+
+/** Saves an inline chat image or video to Library → Creations. */
+export function saveChatMediaToLibrary(path: string, prompt: string): Promise<ImagineTile> {
+  return invoke<ImagineTile>("save_chat_media_to_library", { path, prompt });
+}
+
+/** One item in Library → Artifacts (src-tauri/src/artifacts.rs). */
+export type ArtifactKind = "image" | "video" | "file" | "link";
+
+export interface ChatArtifact {
+  id: string;
+  kind: ArtifactKind;
+  name: string;
+  /** Absolute file path, or the https URL for a link. */
+  path: string;
+  chatId: string;
+  chatTitle: string;
+  created: number;
+}
+
+/** Images, videos, files and links from every shell chat. */
+export function listChatArtifacts(): Promise<ChatArtifact[]> {
+  return invoke<ChatArtifact[]>("list_chat_artifacts");
+}
+
+/** Open a listed artifact: file in its app, or link in the browser. */
+export function openChatArtifact(path: string): Promise<void> {
+  return invoke<void>("open_chat_artifact", { path });
+}
+
+/** Show a listed file in the file manager. */
+export function revealChatArtifact(path: string): Promise<void> {
+  return invoke<void>("reveal_chat_artifact", { path });
+}
+
 /** Imagine's own Sign in with Grok (the cabin's "Use a code"), step one. */
 export function imagineSignInStart(): Promise<GrokSignInStart> {
   return invoke<GrokSignInStart>("imagine_sign_in_start");
@@ -2089,6 +2280,135 @@ export function journalToMission(
   conversationId: string,
 ): Promise<JournalMission> {
   return invoke<JournalMission>("journal_to_mission", { id, conversationId });
+}
+
+/** One meeting transcript line (src-tauri/src/meetings.rs). */
+export interface MeetingLine {
+  id: string;
+  atMs: number;
+  kind: string;
+  speaker: string;
+  text: string;
+}
+
+export interface MeetingRow {
+  id: string;
+  title: string;
+  status: string;
+  startedMs: number;
+  endedMs: number | null;
+  liveNotes: string;
+  transcript: MeetingLine[];
+}
+
+export interface MeetingHit {
+  meetingId: string;
+  meetingTitle: string;
+  lineId: string;
+  kind: string;
+  speaker: string;
+  text: string;
+  atMs: number;
+}
+
+export interface MeetingsPage {
+  consent: { join: boolean; record: boolean };
+  live: MeetingRow | null;
+  past: MeetingRow[];
+  hits: MeetingHit[];
+  query: string;
+}
+
+export type MeetingsAct =
+  | { kind: "setJoin"; on: boolean }
+  | { kind: "setRecord"; on: boolean }
+  | { kind: "start"; title: string }
+  | { kind: "followNotes"; notes: string }
+  | { kind: "talk"; text: string }
+  | { kind: "speech"; speaker: string; text: string }
+  | { kind: "end" }
+  | { kind: "search"; query: string };
+
+export function getMeetings(query = ""): Promise<MeetingsPage> {
+  return invoke<MeetingsPage>("get_meetings", { query });
+}
+
+export function meetingsAct(act: MeetingsAct, query = ""): Promise<MeetingsPage> {
+  return invoke<MeetingsPage>("meetings_act", { act, query });
+}
+
+/** Sessions board (src-tauri/src/sessions_board.rs): conversations by rules/pins. */
+export type SessionsFilter = "everyone" | "involvingMe";
+
+export interface SessionsPrLink {
+  url: string;
+  state: string;
+}
+
+export interface SessionsTile {
+  id: string;
+  title: string;
+  preview: string;
+  run: "waiting" | "failed" | "running" | "idle" | string;
+  prs: SessionsPrLink[];
+  updatedMs: number;
+  pinned: boolean;
+  columnId: string;
+}
+
+export interface SessionsColumn {
+  id: string;
+  label: string;
+  rule: string;
+  fallback: boolean;
+  tiles: SessionsTile[];
+}
+
+export interface SessionsBoardPage {
+  name: string;
+  columns: SessionsColumn[];
+  filter: SessionsFilter;
+  query: string;
+  stamp: number;
+  total: number;
+  shown: number;
+}
+
+export interface SessionsReshapeResult {
+  note: string;
+  page: SessionsBoardPage;
+}
+
+export function getSessionsBoard(
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsBoardPage> {
+  return invoke<SessionsBoardPage>("get_sessions_board", { filter, query });
+}
+
+export function sessionsBoardStamp(): Promise<number> {
+  return invoke<number>("sessions_board_stamp");
+}
+
+export function sessionsBoardPin(
+  id: string,
+  columnId: string,
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsBoardPage> {
+  return invoke<SessionsBoardPage>("sessions_board_pin", { id, columnId, filter, query });
+}
+
+export function sessionsBoardReshape(
+  instruction: string,
+  filter: SessionsFilter = "everyone",
+  query = "",
+): Promise<SessionsReshapeResult> {
+  return invoke<SessionsReshapeResult>("sessions_board_reshape", {
+    instruction,
+    filter,
+    query,
+  });
 }
 
 /** The workboard (src-tauri/src/workboard.rs), from the cabin's workboard.json. */
@@ -2827,6 +3147,8 @@ export interface LibraryRow {
   id: string;
   name: string;
   line: string;
+  /** Catalog job: General chat, Coding, Reasoning, Vision, Image gen, Video gen, or Voice. */
+  useCase: string;
   about: string;
   state: LibraryRowState;
 }
@@ -3049,6 +3371,77 @@ export function newShareCode(): Promise<Share> {
   return invoke<Share>("new_share_code");
 }
 
+/** A phone or computer paired as a companion (src-tauri/src/companions.rs). */
+export interface Companion {
+  id: string;
+  name: string;
+  /** `android`, `linux`, `macos`, `windows` or `other`, as the companion says. */
+  platform: string;
+  /** The user said yes. Until then it lends nothing. */
+  approved: boolean;
+  /** What its person offers: camera, screen, location, sms, talk, wake, canvas, mcp, skills. */
+  offers: string[];
+  /** What the user allows, out of `offers`. */
+  allowed: string[];
+  online: boolean;
+  /** Unix ms. */
+  pairedAt: number;
+}
+
+/** Devices → Companions; desktop only. */
+export interface Companions {
+  on: boolean;
+  port: number;
+  /** The live pairing code; empty when none is open. Never log it. */
+  code: string;
+  /** This computer's number address on the network; empty while off or unknown. */
+  address: string;
+  companions: Companion[];
+}
+
+/** A wake or a heard line from a companion. */
+export interface CompanionEvent {
+  companion: string;
+  name: string;
+  kind: "wake" | "heard";
+  text: string;
+}
+
+export const COMPANION_EVENT = "companion-event";
+
+export function getCompanions(): Promise<Companions> {
+  return invoke<Companions>("get_companions");
+}
+
+export function startCompanions(): Promise<Companions> {
+  return invoke<Companions>("start_companions");
+}
+
+export function stopCompanions(): Promise<Companions> {
+  return invoke<Companions>("stop_companions");
+}
+
+export function newCompanionCode(): Promise<Companions> {
+  return invoke<Companions>("new_companion_code");
+}
+
+export function approveCompanion(id: string, allowed: string[]): Promise<Companions> {
+  return invoke<Companions>("approve_companion", { id, allowed });
+}
+
+export function setCompanionAllowed(id: string, allowed: string[]): Promise<Companions> {
+  return invoke<Companions>("set_companion_allowed", { id, allowed });
+}
+
+export function removeCompanion(id: string): Promise<Companions> {
+  return invoke<Companions>("remove_companion", { id });
+}
+
+/** A companion's wake or heard line, whichever page is open. */
+export function onCompanionEvent(handler: (event: CompanionEvent) => void): Promise<UnlistenFn> {
+  return subscribe<CompanionEvent>(COMPANION_EVENT, handler);
+}
+
 /** A computer on the Fleet page (src-tauri/src/fleet.rs); desktop only. */
 export interface FleetMachine {
   id: string;
@@ -3205,6 +3598,12 @@ export interface PluginEntry {
   version: string;
   description: string;
   source: string;
+  /** Empty when the index names none. */
+  author?: string;
+  category?: string;
+  /** An https page about the plugin, or empty. */
+  homepage?: string;
+  keywords?: string[];
 }
 
 export interface PluginMarket {
@@ -3753,7 +4152,7 @@ export function onUpdateAvailable(
   return subscribe<UpdateView>(UPDATE_EVENT, handler);
 }
 
-/** The Skills page (src-tauri/src/skills.rs). Built-in skills stay off it. */
+/** The Skills page (src-tauri/src/skills.rs), including read-only built-in vstack skills. */
 export type SkillSource = "cabin" | "project" | "user" | "plugin" | "builtin";
 
 export interface SkillRow {
@@ -3766,6 +4165,57 @@ export interface SkillRow {
   folder: string;
   /** False when it's switched off: it stays listed but chat won't use it. */
   on: boolean;
+  quarantined?: string;
+  category?: string;
+  tags?: string[];
+  pack?: string;
+  /** Curator: Skills-page views. */
+  views?: number;
+  /** Curator: runtime uses. */
+  uses?: number;
+  /** Curator: create/modify ledger lines. */
+  patches?: number;
+  lastUsedMs?: number;
+  pinned?: boolean;
+  locked?: boolean;
+  archived?: boolean;
+  /** `active` / `stale` / `archived`. */
+  lifecycle?: string;
+  curatorEnabled?: boolean;
+}
+
+export interface SkillLibraryPack {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  total: number;
+  installed: number;
+}
+
+export interface SkillLibraryItem {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  tags: string[];
+  pack: string;
+  trigger: string;
+  instructions: string;
+  pitfalls: string;
+  installed: boolean;
+}
+
+export interface SkillLibraryPage {
+  packs: SkillLibraryPack[];
+  categories: string[];
+  items: SkillLibraryItem[];
+}
+
+export interface SkillLibraryInstall {
+  page: SkillPage;
+  library: SkillLibraryPage;
+  note: string;
 }
 
 export interface SkillPage {
@@ -3779,6 +4229,29 @@ export function getSkills(): Promise<SkillPage> {
 /** Switch a skill on or off for chat. Desktop only; returns the new page. */
 export function setSkillOn(name: string, on: boolean): Promise<SkillPage> {
   return invoke<SkillPage>("set_skill_on", { name, on });
+}
+
+/** Archive a cabin skill (never deletes). Desktop only. */
+export function archiveSkill(name: string): Promise<SkillPage> {
+  return invoke<SkillPage>("archive_skill", { name });
+}
+
+/** Restore an archived cabin skill in one click. Desktop only. */
+export function restoreSkill(name: string): Promise<SkillPage> {
+  return invoke<SkillPage>("restore_skill", { name });
+}
+
+export function setSkillPinned(name: string, pinned: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_pinned", { name, pinned });
+}
+
+export function setSkillLocked(name: string, locked: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_locked", { name, locked });
+}
+
+/** Curator master switch in app.json; applies without restart. */
+export function setSkillCuratorEnabled(enabled: boolean): Promise<SkillPage> {
+  return invoke<SkillPage>("set_skill_curator_enabled", { enabled });
 }
 
 /** The shell finds the folder from the source and name itself. */
@@ -3815,6 +4288,87 @@ export function editSkill(
   instructions: string,
 ): Promise<SkillPage> {
   return invoke<SkillPage>("edit_skill", { name, description, trigger, instructions });
+}
+
+/** Skills Hub discovery hit (ClawHub, SkillsSH, GitHub, well-known). */
+export interface SkillsHubHit {
+  source: string;
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface SkillsHubInstall {
+  page: SkillPage;
+  note: string;
+}
+
+export function searchSkillsHub(query: string): Promise<SkillsHubHit[]> {
+  return invoke<SkillsHubHit[]>("search_skills_hub", { query });
+}
+
+export function installSkillsHub(hit: SkillsHubHit): Promise<SkillsHubInstall> {
+  return invoke<SkillsHubInstall>("install_skills_hub", {
+    source: hit.source,
+    id: hit.id,
+    name: hit.name,
+    description: hit.description,
+  });
+}
+
+export function getSkillLibrary(): Promise<SkillLibraryPage> {
+  return invoke<SkillLibraryPage>("get_skill_library");
+}
+
+export function installLibrarySkill(id: string): Promise<SkillLibraryInstall> {
+  return invoke<SkillLibraryInstall>("install_library_skill", { id });
+}
+
+export function installLibraryPack(
+  packId: string,
+): Promise<SkillLibraryInstall> {
+  return invoke<SkillLibraryInstall>("install_library_pack", { packId });
+}
+
+/** Confirm dialog for `loadout://skill/install?identifier=`. */
+export interface SkillInstallPreview {
+  identifier: string;
+  source: string;
+  name: string;
+  description: string;
+  destination: string;
+  kind: string;
+  skills?: string[];
+}
+
+export interface SkillLinkInstall {
+  page: SkillPage;
+  note: string;
+  preview: SkillInstallPreview;
+}
+
+export const SKILL_INSTALL_OFFER_EVENT = "skill-install://offer";
+
+export function previewSkillInstall(
+  identifier: string,
+): Promise<SkillInstallPreview> {
+  return invoke<SkillInstallPreview>("preview_skill_install", { identifier });
+}
+
+export function confirmSkillInstall(
+  identifier: string,
+): Promise<SkillLinkInstall> {
+  return invoke<SkillLinkInstall>("confirm_skill_install", { identifier });
+}
+
+export function takeSkillInstallOffer(): Promise<SkillInstallPreview | null> {
+  return invoke<SkillInstallPreview | null>("take_skill_install_offer");
+}
+
+export function onSkillInstallOffer(
+  handler: (preview: SkillInstallPreview) => void,
+): Promise<UnlistenFn> {
+  return subscribe<SkillInstallPreview>(SKILL_INSTALL_OFFER_EVENT, handler);
 }
 
 /** A background task's status on the Agents page (src-tauri/src/queue.rs). */
@@ -3968,6 +4522,16 @@ export function stopTask(
   taskId?: string,
 ): Promise<Queue> {
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
+}
+
+/** Steer: text for a running helper's next step. Rejects when the helper has
+ * already finished, so the box can say the text never reached it. */
+export function steerTask(
+  conversationId: string,
+  taskId: string,
+  text: string,
+): Promise<Queue> {
+  return invoke<Queue>("steer_task", { conversationId, taskId, text });
 }
 
 /** How the session's review stands against the change that is there now.
@@ -5408,6 +5972,74 @@ export function codeDeployRun(
   confirmed: boolean,
 ): Promise<CodeTestResult> {
   return invoke<CodeTestResult>("code_deploy_run", { command, confirmed });
+}
+
+/** Code tab Settings panel (src-tauri/src/code_panel_cmd.rs). */
+export type CodeRiskyActionKind =
+  | "delete"
+  | "overwrite"
+  | "massEdit"
+  | "gitDiscard"
+  | "packageInstall";
+
+export type CodeBackupStrategy =
+  | "git_commit"
+  | "git_stash"
+  | "git_head_ref"
+  | "folder_copy";
+
+export interface CodePanelSettings {
+  localOnlyNonstop: boolean;
+  backupBeforeRisky: boolean;
+  maxRepeatedFailures: number;
+  stallTimeoutMins: number;
+  backupRetentionWarn: number;
+}
+
+export interface CodeBackupEntry {
+  id: string;
+  createdAtMs: number;
+  label: string;
+  actionKind: CodeRiskyActionKind;
+  strategy: CodeBackupStrategy;
+  refValue: string;
+  branch?: string | null;
+  filesCount: number;
+  restoredAtMs?: number | null;
+}
+
+export interface CodePanelState {
+  workspace: string;
+  isRepo: boolean;
+  branch: string | null;
+  settings: CodePanelSettings;
+  backups: CodeBackupEntry[];
+  retentionWarnLimit: number;
+  retentionWarning: string | null;
+}
+
+export interface CodeBackupRestoreResult {
+  id: string;
+  summary: string;
+  restoredFiles: number;
+}
+
+export function codePanelState(): Promise<CodePanelState> {
+  return invoke<CodePanelState>("code_panel_state");
+}
+
+export function codePanelSettingsSave(
+  settings: CodePanelSettings,
+): Promise<CodePanelState> {
+  return invoke<CodePanelState>("code_panel_settings_save", { settings });
+}
+
+export function codePanelBackupRestore(
+  backupId: string,
+): Promise<CodeBackupRestoreResult> {
+  return invoke<CodeBackupRestoreResult>("code_panel_backup_restore", {
+    backupId,
+  });
 }
 
 /** Settings → Code → Coding skills (vstack): active version/commit and sync state. */

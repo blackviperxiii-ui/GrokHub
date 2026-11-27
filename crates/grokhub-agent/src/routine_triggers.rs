@@ -43,6 +43,11 @@ pub struct RoutineState {
     /// File path to modified time (ms), once primed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<BTreeMap<String, u64>>,
+    /// The timers `next_run` was worked out for, as written in the
+    /// routine. When the routine's timers change, the slot is worked out
+    /// again instead of firing at the old time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timers: Option<String>,
     /// Switched off on the Routines list: no trigger starts it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub off: bool,
@@ -127,8 +132,17 @@ pub fn due(config_dir: &Path, clock: LocalClock) -> Vec<Start> {
         }
         // Several timers share one next slot: the soonest.
         let next = timers.iter().map(|t| next_slot(*t, clock)).min();
+        let key = timers
+            .iter()
+            .map(|t| String::from(*t))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // A state file from before timers were kept has none: its slot stays.
+        let edited = row.timers.as_ref().is_some_and(|was| *was != key);
+        row.timers = (!timers.is_empty()).then_some(key);
         match row.next_run {
             _ if next.is_none() => row.next_run = None,
+            _ if edited => row.next_run = next,
             Some(at) if clock.now_ms >= at => {
                 row.next_run = next;
                 starts.push(start(dir, r, Map::new(), "timer"));

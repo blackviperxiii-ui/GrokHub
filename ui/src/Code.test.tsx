@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodeBuiltin, CodeDeployPlan, CodeDiff, CodeFileListing, CodeRepo } from "./api";
+import type { CodeBuiltin, CodeDeployPlan, CodeDiff, CodeFileListing, CodeRepo, VstackStatus } from "./api";
 
 const api = vi.hoisted(() => ({
   codeRepo: vi.fn<() => Promise<CodeRepo>>(),
@@ -39,6 +39,11 @@ const api = vi.hoisted(() => ({
   codeSessionLead: vi.fn<(conversationId: string) => Promise<boolean>>(),
   codeSessionLeft: vi.fn<(conversationId: string) => Promise<{ goal: string; next: string; blocker: string } | null>>(),
   codeSessionResume: vi.fn<(conversationId: string) => Promise<string>>(),
+  codePanelState: vi.fn(),
+  codePanelSettingsSave: vi.fn(),
+  codePanelBackupRestore: vi.fn(),
+  vstackSyncStatus: vi.fn(),
+  vstackSyncNow: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -186,7 +191,7 @@ function Tab({ shown }: { shown: boolean }) {
 const settle = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
 
 
-async function openSideTab(name: "Projects" | "Editor" | "Tests" | "Skills" | "Helpers") {
+async function openSideTab(name: "Projects" | "Editor" | "Tests" | "Skills" | "Helpers" | "Settings") {
   await userEvent.click(await screen.findByRole("tab", { name }));
 }
 
@@ -194,6 +199,18 @@ async function openSideTab(name: "Projects" | "Editor" | "Tests" | "Skills" | "H
 function barButton(name: string) {
   return within(screen.getByTestId("bar")).getByRole("button", { name, hidden: true });
 }
+
+const VSTACK: VstackStatus = {
+  repo: "https://github.com/blackviperxiii-ui/vstack",
+  source: "bundled",
+  version: "1.4.0",
+  tag: "v1.4.0",
+  commit: "11cca98b4a55da3118f51e749ac62faefbc21b3b",
+  lastSyncMs: null,
+  lastCheckMs: null,
+  lastError: null,
+  skillCount: 58,
+};
 
 describe("Code tab", () => {
   beforeEach(() => {
@@ -211,6 +228,10 @@ describe("Code tab", () => {
     api.codeDiff.mockReset();
     api.codeBuiltins.mockReset();
     api.codeBuiltins.mockResolvedValue([]);
+    api.vstackSyncStatus.mockReset();
+    api.vstackSyncStatus.mockResolvedValue(VSTACK);
+    api.vstackSyncNow.mockReset();
+    api.vstackSyncNow.mockResolvedValue(VSTACK);
     api.codeTestPlan.mockReset();
     api.codeTestRun.mockReset();
     api.onCodeRun.mockReset();
@@ -232,6 +253,24 @@ describe("Code tab", () => {
       mode: "ask",
       blocked: "Deploy is off for this project. Turn it on in Settings → Code.",
     });
+    api.codePanelState.mockReset();
+    api.codePanelState.mockResolvedValue({
+      workspace: "/work/demo",
+      isRepo: true,
+      branch: "beta",
+      settings: {
+        localOnlyNonstop: false,
+        backupBeforeRisky: false,
+        maxRepeatedFailures: 3,
+        stallTimeoutMins: 15,
+        backupRetentionWarn: 20,
+      },
+      backups: [],
+      retentionWarnLimit: 20,
+      retentionWarning: null,
+    });
+    api.codePanelSettingsSave.mockReset();
+    api.codePanelBackupRestore.mockReset();
   });
 
   afterEach(() => {
@@ -487,6 +526,15 @@ describe("Code tab", () => {
     expect(screen.queryByRole("button", { name: /edit/i })).not.toBeInTheDocument();
   });
 
+  it("a skills list that fails to load says why, and the tab stops saying Loading", async () => {
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockRejectedValue("couldn't read the skills folder");
+    render(<Code shown onOpenSettings={() => {}} />);
+    expect(await screen.findByText("couldn't read the skills folder")).toBeInTheDocument();
+    await openSideTab("Skills");
+    expect(screen.queryByText("Loading skills…")).toBeNull();
+  });
+
   it("opens a built-in and shows its body", async () => {
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
@@ -507,6 +555,48 @@ describe("Code tab", () => {
     await openSideTab("Skills");
     expect(await screen.findByText(overrideLabel(over))).toBeInTheDocument();
     expect(screen.getByText("overridden by project skill follow-through")).toBeInTheDocument();
+  });
+
+  it("filters the full vstack list and refreshes it after Sync now", async () => {
+    const many: CodeBuiltin[] = [
+      ...Array.from({ length: 68 }, (_, i) => ({
+        name: `skill-${String(i).padStart(2, "0")}`,
+        description: "A vstack skill",
+        body: "# Skill",
+        overriddenBy: null,
+      })),
+      { name: "viper-mode", description: "Viper mode.", body: "# Viper", overriddenBy: null },
+      { name: "qa-walkthrough", description: "Ship check.", body: "# QA", overriddenBy: null },
+      { name: "arena", description: "Bake off designs.", body: "# Arena", overriddenBy: null },
+    ];
+    const refreshed = many.map((row) =>
+      row.name === "arena" ? { ...row, description: "Bake off designs. refreshed" } : row,
+    );
+    api.codeRepo.mockResolvedValue(repo({ files: [] }));
+    api.codeBuiltins.mockReset();
+    api.codeBuiltins.mockResolvedValueOnce(many).mockResolvedValue(refreshed);
+    api.vstackSyncNow.mockResolvedValue({
+      ...VSTACK,
+      source: "synced",
+      version: "9.9.9",
+      tag: "v9.9.9",
+      commit: "abcdef1234567890abcd",
+      skillCount: 71,
+    });
+    render(<Code shown onOpenSettings={() => {}} />);
+    await openSideTab("Skills");
+    expect(await screen.findByText("bundled v1.4.0 · 11cca98b4a55 · 58 skills")).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: CODE_BUILTINS });
+    expect(list.querySelectorAll("li button").length).toBe(71);
+    expect(screen.getByRole("button", { name: /^viper-mode/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^qa-walkthrough/ })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Filter built-in skills"), "arena");
+    expect(screen.getByRole("list", { name: CODE_BUILTINS }).querySelectorAll("li button").length).toBe(1);
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(api.vstackSyncNow).toHaveBeenCalledTimes(1);
+    expect(api.codeBuiltins).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("Bake off designs. refreshed")).toBeInTheDocument();
+    expect(screen.getByText("synced v9.9.9 · abcdef123456 · 71 skills")).toBeInTheDocument();
   });
 
   it("names the app's own skills folder as app, not by its old source id", () => {
@@ -851,10 +941,17 @@ describe("Code tab", () => {
   });
 
   
-  it("puts Projects first, then Editor/Tests/Skills/Helpers, with Projects the default open tab", async () => {
+  it("puts Projects first, then Editor/Tests/Skills/Helpers/Settings, with Projects the default open tab", async () => {
     localStorage.removeItem(CODE_SIDE_TAB_KEY);
     expect(readSideTab()).toBe("projects");
-    expect(CODE_SIDE_TABS.map((t) => t.id)).toEqual(["projects", "editor", "tests", "skills", "helpers"]);
+    expect(CODE_SIDE_TABS.map((t) => t.id)).toEqual([
+      "projects",
+      "editor",
+      "tests",
+      "skills",
+      "helpers",
+      "settings",
+    ]);
     api.codeRepo.mockResolvedValue(repo({ files: [] }));
     api.codeBuiltins.mockResolvedValue(BUILTINS);
     render(<Code shown onOpenSettings={() => {}} />);
@@ -865,12 +962,13 @@ describe("Code tab", () => {
     expect(children.some((c) => c.includes("code-side") || c.includes("code"))).toBe(true);
     expect(screen.getByRole("separator", { name: "Resize agent and editor" })).toBeInTheDocument();
     const labels = screen.getAllByRole("tab").map((el) => el.textContent);
-    expect(labels).toEqual(["Projects", "Editor", "Tests", "Skills", "Helpers"]);
+    expect(labels).toEqual(["Projects", "Editor", "Tests", "Skills", "Helpers", "Settings"]);
     expect(screen.getByRole("tab", { name: "Projects" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Editor" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Tests" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Skills" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("tab", { name: "Helpers" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByTestId("bar").closest("[hidden]")).toBeNull();
     expect(screen.queryByRole("heading", { name: CODE_TESTS })).toBeNull();
     // Helpers stay mounted (hidden) so live updates continue off-tab.
@@ -1045,5 +1143,33 @@ describe("Code tab", () => {
     expect(chat).toHaveTextContent("session chat-7");
     expect(screen.getByTestId("agent-tasks")).toHaveAttribute("data-active", "false");
     expect(chat.closest(".code-tab")).toHaveAttribute("hidden");
+  });
+
+  it("opens the Settings side tab and shows the Local route chip when Local models only is turned on", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.codePanelSettingsSave.mockResolvedValue({
+      workspace: "/work/demo",
+      isRepo: true,
+      branch: "beta",
+      settings: {
+        localOnlyNonstop: true,
+        backupBeforeRisky: false,
+        maxRepeatedFailures: 3,
+        stallTimeoutMins: 15,
+        backupRetentionWarn: 20,
+      },
+      backups: [],
+      retentionWarnLimit: 20,
+      retentionWarning: null,
+    });
+    render(<Tab shown />);
+    expect(screen.queryByLabelText("Model route: Local")).toBeNull();
+    await openSideTab("Settings");
+    const toggle = await screen.findByRole("switch", {
+      name: "Local models only and nonstop coding",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(toggle);
+    expect(await screen.findByLabelText("Model route: Local")).toHaveTextContent("Local");
   });
 });

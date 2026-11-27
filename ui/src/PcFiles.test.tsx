@@ -17,6 +17,10 @@ const api = vi.hoisted(() => ({
   pcResumeRows: vi.fn(),
   pcSpeedTest: vi.fn(),
   pcNetCsv: vi.fn(),
+  getHomeAssistant: vi.fn(),
+  setHomeAssistant: vi.fn(),
+  setHomeAssistantToken: vi.fn(),
+  testHomeAssistant: vi.fn(),
 }));
 
 vi.mock("./pcFilesApi", () => api);
@@ -48,12 +52,22 @@ const SWITCHES = [
   "Pick up where I left off in code",
   "Log internet drops",
   "Watch 3D printers on my network",
+  "Let chat control Home Assistant devices",
 ];
+
+const HOME_OFF = {
+  enabled: false,
+  baseUrl: "",
+  hasToken: false,
+  urlHint: "http://homeassistant.local:8123",
+  note: "",
+};
 
 describe("PcFiles", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.getPcFiles.mockResolvedValue(FRESH);
+    api.getHomeAssistant.mockResolvedValue(HOME_OFF);
   });
 
   it("shows every switch off, as in the cabin, and none of their extras", async () => {
@@ -167,5 +181,33 @@ describe("PcFiles", () => {
     await userEvent.type(await screen.findByLabelText("Models folder"), "/models");
     await userEvent.click(screen.getByRole("button", { name: "Save folder" }));
     expect(api.setPcModelsFolder).toHaveBeenCalledWith("/models");
+  });
+
+  it("turns on Home Assistant with consent, saves address and token, and tests", async () => {
+    const on = {
+      ...HOME_OFF,
+      enabled: true,
+      baseUrl: "http://127.0.0.1:8123",
+      hasToken: true,
+    };
+    // Turning it on with no address saves no address; Save address saves one.
+    api.setHomeAssistant.mockResolvedValueOnce({ ...HOME_OFF, enabled: true });
+    api.setHomeAssistant.mockResolvedValue({ ...on, hasToken: false });
+    api.setHomeAssistantToken.mockResolvedValue(on);
+    api.testHomeAssistant.mockResolvedValue("Connected. Home Assistant API is reachable.");
+    render(<PcFiles />);
+    await userEvent.click(await screen.findByRole("switch", { name: "Let chat control Home Assistant devices" }));
+    expect(api.setHomeAssistant).toHaveBeenCalledWith(true, null);
+    expect(await screen.findByLabelText("Home Assistant address")).toBeVisible();
+    await userEvent.type(screen.getByLabelText("Home Assistant address"), "http://127.0.0.1:8123");
+    await userEvent.click(screen.getByRole("button", { name: "Save address" }));
+    expect(api.setHomeAssistant).toHaveBeenCalledWith(true, "http://127.0.0.1:8123");
+    await userEvent.type(screen.getByLabelText("Long-lived access token"), "sk-abcdefghijklmnopqrstuv");
+    await userEvent.click(screen.getByRole("button", { name: "Save token" }));
+    expect(api.setHomeAssistantToken).toHaveBeenCalledWith("sk-abcdefghijklmnopqrstuv");
+    expect(await screen.findByText("A token is saved on this computer.")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(api.testHomeAssistant).toHaveBeenCalled();
+    expect(await screen.findByText("Connected. Home Assistant API is reachable.")).toBeVisible();
   });
 });

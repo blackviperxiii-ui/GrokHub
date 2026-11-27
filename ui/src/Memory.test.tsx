@@ -53,6 +53,18 @@ vi.mock("./api", () => ({
   ],
 }));
 
+// The map draws from the memory store's links; MemoryMap.test.tsx covers it.
+vi.mock("./MemoryMap", () => ({
+  MemoryMap: ({ rows, onKeep }: { rows: { id: string }[]; onKeep: (keep: string, drop: string) => void }) => (
+    <div>
+      Map of {rows.length} lines
+      <button type="button" onClick={() => onKeep("mem-dog", "mem-lunch")}>
+        Keep the dog line
+      </button>
+    </div>
+  ),
+}));
+
 import { Memory } from "./Memory";
 
 function memFiles(over: Partial<MemoryFiles> = {}): MemoryFiles {
@@ -433,6 +445,34 @@ describe("Memory", () => {
       expect(api.wipePersonal).toHaveBeenCalledTimes(1);
       expect(await screen.findByText("Wiped 1 lines. Personal is empty.")).toBeInTheDocument();
       expect(screen.getByLabelText("Global notes")).toHaveValue("# MEMORY.md\n");
+    } finally {
+      delete w.__TAURI_INTERNALS__;
+    }
+  });
+
+  it("keeps the map off the web app, where the store's links can't be read", async () => {
+    api.getMemory.mockResolvedValue(notes({ amr: true, rows: [DOG] }));
+    render(<Memory />);
+    await screen.findByRole("list", { name: "About you" });
+    expect(screen.queryByRole("tab", { name: "Map" })).toBeNull();
+  });
+
+  it("on the desktop with the memory store on, switches to the map and settles a disagreement", async () => {
+    const w = window as unknown as Record<string, unknown>;
+    w.__TAURI_INTERNALS__ = {};
+    try {
+      api.getMemory.mockResolvedValue(notes({ amr: true, rows: [DOG, LUNCH] }));
+      api.forgetMemoryRow.mockResolvedValue(notes({ amr: true, rows: [DOG] }));
+      render(<Memory />);
+      expect(await screen.findByRole("tab", { name: "List" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("list", { name: "About you" })).toBeVisible();
+      await userEvent.click(screen.getByRole("tab", { name: "Map" }));
+      expect(screen.getByText("Map of 2 lines")).toBeVisible();
+      expect(screen.queryByLabelText("Search what it knows")).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Keep the dog line" }));
+      expect(api.forgetMemoryRow).toHaveBeenCalledWith("mem-lunch");
+      expect(await screen.findByText("Kept one line and forgot the other.")).toBeInTheDocument();
+      expect(screen.getByText("Map of 1 lines")).toBeVisible();
     } finally {
       delete w.__TAURI_INTERNALS__;
     }

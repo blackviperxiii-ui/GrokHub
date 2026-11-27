@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use grokhub_agent::route::local_sidecar;
 use grokhub_core::local_picker::{BenchCache, Profile};
 use grokhub_core::local_setup::{self as ls, LocalModel, ModelKind, ModelTab};
+use grokhub_core::local_skills::TaskKind;
 use grokhub_core::model_download::{self as md, Control, Outcome, Progress, Step};
 use grokhub_core::model_library::{self as lib, Fit, Row, RowError};
 use grokhub_core::model_lineup as lineup;
+use grokhub_core::model_offer as offer;
 use grokhub_core::runtime_download as rd;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::local_engine::{self, Busy, HfFetch, DRAFTER_BUSY};
@@ -27,8 +29,10 @@ const MIB: u64 = 1_024 * 1_024;
 pub struct LibraryRow {
     pub id: String,
     pub name: String,
-    /// Name, size, fit, Uncensored, licence.
+    /// Name, size, fit, job, Uncensored, licence.
     pub line: String,
+    /// The catalog job, in the words the row shows (`Coding`, `Video gen`).
+    pub use_case: String,
     /// What it is for, and why when the fit isn't clean.
     pub about: String,
     /// `download`, `resume`, `queued`, `downloading`, `downloaded`, `inUse`
@@ -122,6 +126,98 @@ fn on_disk(config_dir: &Path, m: &LocalModel) -> bool {
     md::complete(&dir_for(config_dir, m), m)
 }
 
+/// When each model, and any model for each task kind, was last offered
+/// (ms), so neither is asked about again within [`offer::OFFER_EVERY_MS`].
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Offered {
+    #[serde(default)]
+    models: BTreeMap<String, u64>,
+    #[serde(default)]
+    kinds: BTreeMap<String, u64>,
+}
+
+fn offers_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("local").join("install_offers.json")
+}
+
+fn read_offers(config_dir: &Path) -> Offered {
+    std::fs::read_to_string(offers_path(config_dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// A model nothing on this PC fits well is looked for again at most this
+/// often per task kind, since reading this PC runs the GPU probes.
+const FIT_CHECK_EVERY_MS: u64 = 60 * 60 * 1000;
+
+/// The question and the line its Yes runs, for the chat model not on this
+/// PC that would do `kind` clearly better than every chat model here and
+/// fits this PC well. Whatever the answer, neither that model nor another
+/// one for `kind` is offered again for 30 days; a model already queued or
+/// downloading isn't offered. Reads this
+/// PC only when the disk leaves one worth offering, so call it off the main
+/// thread.
+pub fn install_offer(config_dir: &Path, kind: TaskKind, now_ms: u64) -> Option<(String, String)> {
+    let here = |m: &LocalModel| on_disk(config_dir, m);
+    offer_with(config_dir, kind, now_ms, here, || {
+        let p = crate::local_ai::read_machine(config_dir).profile();
+        lib::rows(&p, &BenchCache::new(), here)
+    })
+}
+
+/// [`install_offer`] with what's downloaded told by `on_disk` and this PC's
+/// rows read by `rows`, only when needed.
+fn offer_with(
+    config_dir: &Path,
+    kind: TaskKind,
+    now_ms: u64,
+    on_disk: impl Fn(&LocalModel) -> bool,
+    rows: impl FnOnce() -> Vec<Row>,
+) -> Option<(String, String)> {
+    static CHECKED: Mutex<BTreeMap<(PathBuf, &'static str), u64>> = Mutex::new(BTreeMap::new());
+    let mut shown = read_offers(config_dir);
+    if !offer::due(&shown.kinds, kind.key(), now_ms) {
+        return None;
+    }
+    let pending: Vec<&str> = match state().lock() {
+        Ok(s) => s
+            .queue
+            .iter()
+            .map(|m| m.id)
+            .chain(s.run.as_ref().map(|r| r.model.id))
+            .collect(),
+        Err(_) => return None,
+    };
+    let wanted: Vec<&'static LocalModel> = offer::worth_offering(ls::local_models(), kind, on_disk)
+        .into_iter()
+        .filter(|m| offer::due(&shown.models, m.id, now_ms) && !pending.contains(&m.id))
+        .collect();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut checked = CHECKED.lock().ok()?;
+    let key = (config_dir.to_path_buf(), kind.key());
+    if checked
+        .get(&key)
+        .is_some_and(|&at| now_ms >= at && now_ms - at < FIT_CHECK_EVERY_MS)
+    {
+        return None;
+    }
+    let Some(m) = offer::first_fitting(&wanted, &rows()) else {
+        checked.insert(key, now_ms);
+        return None;
+    };
+    shown.models.insert(m.id.to_string(), now_ms);
+    shown.kinds.insert(kind.key().to_string(), now_ms);
+    let path = offers_path(config_dir);
+    let text = serde_json::to_string_pretty(&shown).ok()?;
+    // Asked only once it is kept: an offer that can't be remembered would
+    // come back after every reply.
+    grokhub_core::pulse_writer::write_atomic(&path, &text).ok()?;
+    Some((offer::prompt(m, kind), format!("/download {}", m.id)))
+}
+
 fn status_of(s: &State) -> LibraryStatus {
     LibraryStatus {
         job: s.run.as_ref().map(|r| LibraryJob {
@@ -191,6 +287,7 @@ fn build(
             id: m.id.into(),
             name: m.name.into(),
             line: lib::row_line(r),
+            use_case: ls::use_case(m.id).label().into(),
             about,
             state,
         }
@@ -338,10 +435,24 @@ fn settle(s: &mut State, m: &'static LocalModel, end: Result<String, Halt>) {
     }
 }
 
+/// The worker's next model. With none left the worker stops in the same
+/// lock, so a download clicked just then starts a new worker instead of
+/// waiting behind one that is leaving.
+fn next_or_stop(
+    s: &mut State,
+    on_disk: impl Fn(&LocalModel) -> bool,
+) -> Option<&'static LocalModel> {
+    let next = take_next(&mut s.queue, on_disk);
+    if next.is_none() {
+        s.worker = false;
+    }
+    next
+}
+
 fn work(app: &AppHandle, config_dir: &Path) {
     loop {
         let next = match state().lock() {
-            Ok(mut s) => take_next(&mut s.queue, |m| on_disk(config_dir, m)),
+            Ok(mut s) => next_or_stop(&mut s, |m| on_disk(config_dir, m)),
             Err(_) => None,
         };
         let Some(m) = next else { break };
@@ -350,9 +461,6 @@ fn work(app: &AppHandle, config_dir: &Path) {
             settle(&mut s, m, end);
         }
         emit(app);
-    }
-    if let Ok(mut s) = state().lock() {
-        s.worker = false;
     }
     emit(app);
 }
@@ -588,7 +696,54 @@ pub fn hf_files(config_dir: &Path, repo: &str) -> Result<Vec<HfFileRow>, String>
 /// Download one GGUF (first path of a group) into the models folder and add it
 /// to the Auto pool (`ownFiles`). No runtime model picker.
 pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, String> {
-    use md::Fetch as _;
+    let dest_dir = crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"));
+    download_hf_into(config_dir, &dest_dir, repo, path, &HfFetch)
+}
+
+/// The models folder already holds `name` from this repo: a file of the same
+/// name that matches the publisher's checksum, or the one saved under this
+/// repo's name after a clash. `None` when nothing of this repo's is there,
+/// with the place to save it (beside a same-named file from another repo,
+/// under this repo's name).
+fn hf_dest(
+    dest_dir: &Path,
+    repo: &str,
+    path: &str,
+    fetch: &dyn md::Fetch,
+) -> Result<(PathBuf, bool), String> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let plain = dest_dir.join(name);
+    if !plain.exists() {
+        return Ok((plain, false));
+    }
+    let same = fetch
+        .sha256(repo, path)
+        .is_ok_and(|want| md::sha256_file(&plain).is_ok_and(|got| got.eq_ignore_ascii_case(&want)));
+    if same {
+        return Ok((plain, true));
+    }
+    let tag: String = repo
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let named = dest_dir.join(format!("{tag}_{name}"));
+    let there = named.exists();
+    Ok((named, there))
+}
+
+fn download_hf_into(
+    config_dir: &Path,
+    dest_dir: &Path,
+    repo: &str,
+    path: &str,
+    fetch: &dyn md::Fetch,
+) -> Result<String, String> {
     use std::io::{Read, Write};
     let repo = repo.trim().trim_matches('/');
     let path = path.trim().trim_start_matches('/');
@@ -599,15 +754,13 @@ pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, 
         return Err("That file path isn't allowed.".into());
     }
     let name = path.rsplit('/').next().unwrap_or(path);
-    let dest_dir = crate::local_ai::models_dir().unwrap_or_else(|| config_dir.join("models"));
-    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
-    let dest = dest_dir.join(name);
-    if dest.exists() {
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    let (dest, here) = hf_dest(dest_dir, repo, path, fetch)?;
+    if here {
         register_own_file(config_dir, &dest)?;
         return Ok(format!("{name} is already on this PC. Added to Auto."));
     }
     let url = grokhub_core::hf_gguf::file_url(repo, path);
-    let fetch = HfFetch;
     let (mut reader, _, total) = fetch.open(&url, 0)?;
     let part = {
         let mut s = dest.as_os_str().to_owned();
@@ -645,7 +798,27 @@ pub fn download_hf(config_dir: &Path, repo: &str, path: &str) -> Result<String, 
     Ok(format!("Downloaded {name} into Auto."))
 }
 
+/// Part 2 or later of a split GGUF (`-00002-of-00003.gguf`): the engine
+/// loads the first part and reads the rest beside it.
+fn later_split_part(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase());
+    let Some(stem) = name.as_deref().and_then(|n| n.strip_suffix(".gguf")) else {
+        return false;
+    };
+    let Some((left, of)) = stem.rsplit_once("-of-") else {
+        return false;
+    };
+    let part = left.rsplit_once('-').map_or("", |(_, p)| p);
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    digits(part) && digits(of) && part.parse::<u32>().is_ok_and(|n| n > 1)
+}
+
 fn register_own_file(config_dir: &Path, path: &Path) -> Result<(), String> {
+    if later_split_part(path) {
+        return Ok(());
+    }
     let shown = path.display().to_string();
     let mut config = crate::local_ai::load(config_dir);
     if !config.own_files.iter().any(|f| f == &shown) {
@@ -803,5 +976,243 @@ mod tests {
             .insert(MID, lib::row_error(mid, &Outcome::BadChecksum).unwrap());
         settle(&mut s, mid, Ok("Downloaded Gemma 4 12B.".into()));
         assert!(s.errors.is_empty());
+    }
+
+    /// An empty config folder for the offer record.
+    fn config(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gh-offer-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn on(ids: &'static [&'static str]) -> impl Fn(&LocalModel) -> bool {
+        move |m| ids.contains(&m.id)
+    }
+
+    #[test]
+    fn a_device_reply_offers_one_better_model_per_task_and_reads_this_pc_only_when_needed() {
+        // Qwen3 Coder 30B codes at 90, ahead of Qwen 3.6 at 85, and this
+        // 12 GB GPU still has room for it.
+        const CODER: &str = "qwen3-coder-30b-a3b-heretic-q4_k_m";
+        let dir = config("offer");
+        let read = std::cell::Cell::new(0);
+        let pc_rows = || {
+            read.set(read.get() + 1);
+            rows(&[MID])
+        };
+        // Everyday chat stays on the model here, and this PC isn't read.
+        assert_eq!(
+            offer_with(&dir, TaskKind::Chat, 1_000, on(&[MID]), pc_rows),
+            None
+        );
+        assert_eq!(read.get(), 0);
+        let coder = ls::model_by_id(CODER).unwrap();
+        assert_eq!(
+            offer_with(&dir, TaskKind::Code, 1_000, on(&[MID]), pc_rows),
+            Some((
+                format!(
+                    "{} would handle coding better than the models on this computer. Download it? ({})",
+                    coder.name,
+                    ls::size_label(coder.download_mb)
+                ),
+                format!("/download {CODER}"),
+            ))
+        );
+        assert_eq!(read.get(), 1);
+        // Asked once: no other coding offer for 30 days, and no PC read for it.
+        assert_eq!(
+            offer_with(&dir, TaskKind::Code, 2_000, on(&[MID]), pc_rows),
+            None
+        );
+        assert_eq!(read.get(), 1);
+        // Another task has its own offer.
+        assert_eq!(
+            offer_with(&dir, TaskKind::Reason, 3_000, on(&[MID]), pc_rows).map(|(_, yes)| yes),
+            Some("/download qwen3.8-27b-heretic-q4_k_m".to_string())
+        );
+        // Kept on disk, so a restart doesn't ask again.
+        let kept = read_offers(&dir);
+        assert_eq!(kept.kinds.get("code"), Some(&1_000));
+        assert_eq!(kept.models.get(CODER), Some(&1_000));
+        // Thirty days on, coding is due again and the same model with it.
+        let later = 1_000 + offer::OFFER_EVERY_MS;
+        assert_eq!(
+            offer_with(&dir, TaskKind::Code, later, on(&[MID]), pc_rows).map(|(_, yes)| yes),
+            Some(format!("/download {CODER}"))
+        );
+        // Downloaded now: nothing beats it at coding by enough to ask.
+        let dir2 = config("offer-have");
+        assert_eq!(
+            offer_with(&dir2, TaskKind::Code, later, on(&[MID, CODER]), || {
+                rows(&[MID, CODER])
+            }),
+            None
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn when_nothing_fits_well_this_pc_is_read_again_only_after_an_hour() {
+        let dir = config("offer-none");
+        let read = std::cell::Cell::new(0);
+        let none_fit = || {
+            read.set(read.get() + 1);
+            Vec::new()
+        };
+        assert_eq!(
+            offer_with(&dir, TaskKind::Long, 1_000, on(&[MID]), none_fit),
+            None
+        );
+        assert_eq!(
+            offer_with(&dir, TaskKind::Long, 2_000, on(&[MID]), none_fit),
+            None
+        );
+        assert_eq!(read.get(), 1);
+        assert_eq!(
+            offer_with(
+                &dir,
+                TaskKind::Long,
+                1_000 + FIT_CHECK_EVERY_MS,
+                on(&[MID]),
+                none_fit
+            ),
+            None
+        );
+        assert_eq!(read.get(), 2);
+        // Nothing was offered, so nothing was kept.
+        assert!(!offers_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_download_clicked_as_the_worker_exits_still_downloads() {
+        let mut s = State::default();
+        let m = ls::model_by_id(MID).unwrap();
+        assert!(
+            enqueue(&mut s, vec![m]),
+            "the first click starts the worker"
+        );
+        assert_eq!(next_or_stop(&mut s, |_| false).map(|m| m.id), Some(MID));
+        // The worker finds nothing more and leaves in that same look.
+        assert_eq!(next_or_stop(&mut s, |_| false).map(|m| m.id), None);
+        // A click right then starts a worker of its own.
+        assert!(enqueue(&mut s, vec![m]));
+        assert_eq!(next_or_stop(&mut s, |_| false).map(|m| m.id), Some(MID));
+    }
+
+    /// A Hugging Face repo whose files all hold `body`.
+    struct OneRepo {
+        repo: &'static str,
+        body: &'static [u8],
+        opens: std::cell::Cell<usize>,
+    }
+
+    impl md::Fetch for OneRepo {
+        fn open(&self, _url: &str, _offset: u64) -> Result<md::Opened, String> {
+            self.opens.set(self.opens.get() + 1);
+            let len = self.body.len() as u64;
+            Ok((
+                Box::new(std::io::Cursor::new(self.body.to_vec())),
+                0,
+                Some(len),
+            ))
+        }
+        fn sha256(&self, repo: &str, _file: &str) -> Result<String, String> {
+            assert_eq!(repo, self.repo);
+            Ok(md::sha256_hex(self.body))
+        }
+    }
+
+    #[test]
+    fn a_quant_from_another_repo_with_the_same_file_name_is_downloaded() {
+        let dir = std::env::temp_dir().join(format!("gh-hf-same-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("Qwen3-8B-Q4_K_M.gguf"), b"bartowski bytes").unwrap();
+        let other = OneRepo {
+            repo: "unsloth/Qwen3-8B-GGUF",
+            body: b"unsloth bytes",
+            opens: std::cell::Cell::new(0),
+        };
+        let said = download_hf_into(
+            &dir,
+            &models,
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            &other,
+        );
+        assert_eq!(
+            said,
+            Ok("Downloaded Qwen3-8B-Q4_K_M.gguf into Auto.".to_string())
+        );
+        assert_eq!(other.opens.get(), 1);
+        let saved = models.join("unsloth_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf");
+        assert_eq!(std::fs::read(&saved).unwrap(), b"unsloth bytes");
+        assert_eq!(
+            std::fs::read(models.join("Qwen3-8B-Q4_K_M.gguf")).unwrap(),
+            b"bartowski bytes"
+        );
+        assert_eq!(
+            crate::local_ai::load(&dir).own_files,
+            [saved.display().to_string()]
+        );
+        // Asked again, both copies are known: nothing downloads.
+        let again = download_hf_into(
+            &dir,
+            &models,
+            "unsloth/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            &other,
+        );
+        assert_eq!(
+            again,
+            Ok("Qwen3-8B-Q4_K_M.gguf is already on this PC. Added to Auto.".to_string())
+        );
+        let same = OneRepo {
+            repo: "bartowski/Qwen3-8B-GGUF",
+            body: b"bartowski bytes",
+            opens: std::cell::Cell::new(0),
+        };
+        let mine = download_hf_into(
+            &dir,
+            &models,
+            "bartowski/Qwen3-8B-GGUF",
+            "Qwen3-8B-Q4_K_M.gguf",
+            &same,
+        );
+        assert_eq!(
+            mine,
+            Ok("Qwen3-8B-Q4_K_M.gguf is already on this PC. Added to Auto.".to_string())
+        );
+        assert_eq!((other.opens.get(), same.opens.get()), (1, 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_the_first_part_of_a_split_quant_joins_auto() {
+        let dir = std::env::temp_dir().join(format!("gh-hf-split-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        let repo = OneRepo {
+            repo: "unsloth/Big-GGUF",
+            body: b"part",
+            opens: std::cell::Cell::new(0),
+        };
+        for path in [
+            "Q4_K_M/Big-Q4_K_M-00002-of-00002.gguf",
+            "Q4_K_M/Big-Q4_K_M-00001-of-00002.gguf",
+        ] {
+            download_hf_into(&dir, &models, "unsloth/Big-GGUF", path, &repo).unwrap();
+        }
+        assert!(models.join("Big-Q4_K_M-00002-of-00002.gguf").exists());
+        assert_eq!(
+            crate::local_ai::load(&dir).own_files,
+            [models
+                .join("Big-Q4_K_M-00001-of-00002.gguf")
+                .display()
+                .to_string()]
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

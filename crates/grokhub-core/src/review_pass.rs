@@ -206,11 +206,13 @@ pub fn automation_from_seed(seed: &str) -> Option<Automation> {
                 heartbeat_every_min: mins as u32,
                 check_command: String::new(),
                 gate: Default::default(),
+                wait: Default::default(),
                 enabled: true,
                 last_run: None,
                 next_run: None,
                 run_count: 0,
                 health: AutoHealth::default(),
+                lifecycle: Default::default(),
             })
         }
     }

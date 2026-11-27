@@ -171,7 +171,24 @@ async function run() {
     const check = async (page, where) => {
       for (const hit of await page.evaluate(sweep)) outlines.push({ where, ...hit });
       const [wide, fits] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
-      if (wide > fits) errors.push(`${where}: the page scrolls sideways, ${wide}px wide in a ${fits}px window`);
+      if (wide > fits) {
+        // Name what sticks out, so a failure says which element to fix.
+        const past = await page.evaluate((edge) => {
+          const name = (el) => el.tagName.toLowerCase() + (el.id ? `#${el.id}` : "") + [...el.classList].map((c) => `.${c}`).join("");
+          const out = [];
+          for (const el of document.querySelectorAll("body *")) {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.right <= edge + 1) continue;
+            // Keep the outermost element past the edge whose parent fits.
+            const up = el.parentElement?.getBoundingClientRect();
+            if (up && up.right > edge + 1) continue;
+            out.push(`${name(el)} ${Math.round(r.width)}px wide, right edge ${Math.round(r.right)}px`);
+            if (out.length >= 5) break;
+          }
+          return out;
+        }, fits);
+        errors.push(`${where}: the page scrolls sideways, ${wide}px wide in a ${fits}px window${past.length ? `; past the edge: ${past.join("; ")}` : ""}`);
+      }
     };
     try {
       for (const theme of THEMES) {
@@ -218,15 +235,22 @@ async function run() {
               manifest.push({ file, theme: theme.id, viewport: vp.name, view });
             }
           }
-          // The rest of the rail, then every page More lists: swept, not shot.
+          // The rest of the grouped rail: swept, not shot.
           const shot = new Set(VIEWS.map((v) => (v === "settings" ? "Settings" : v[0].toUpperCase() + v.slice(1))));
           const slug = (label) => `${theme.label}_${vp.name}_${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
           const rail = page.getByRole("navigation", { name: "Views" });
           const labels = await rail
             .getByRole("button")
             .evaluateAll((buttons) =>
-              // The profile avatar is not a page: it opens Settings › Account, swept below.
-              buttons.filter((b) => !b.classList.contains("rail-avatar")).map((b) => b.getAttribute("title") || b.textContent.trim()),
+              // Avatar, mode switch and section headers are not pages.
+              buttons
+                .filter(
+                  (b) =>
+                    !b.classList.contains("rail-avatar") &&
+                    !b.classList.contains("rail-mode-btn") &&
+                    !b.classList.contains("rail-section-toggle"),
+                )
+                .map((b) => b.getAttribute("title") || b.textContent.trim()),
             );
           for (const label of labels.filter((l) => !shot.has(l) && l !== "More")) {
             at = label;
@@ -239,19 +263,6 @@ async function run() {
             await avatar.click({ timeout: 15_000 });
             await page.getByRole("group", { name: "Profile" }).waitFor({ timeout: 15_000 });
             await check(page, slug("profile"));
-          }
-          at = "More";
-          await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });
-          const more = page.getByRole("dialog", { name: "More pages" });
-          const pages = await more.getByRole("option").allTextContents();
-          await check(page, slug("more"));
-          await page.keyboard.press("Escape");
-          for (const label of pages) {
-            at = label;
-            await rail.getByRole("button", { name: "More", exact: true }).click({ timeout: 15_000 });
-            await more.getByRole("option", { name: label, exact: true }).click({ timeout: 15_000 });
-            await sleep(400);
-            await check(page, slug(label));
           }
           await context.close();
         }

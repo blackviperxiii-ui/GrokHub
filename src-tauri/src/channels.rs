@@ -1,6 +1,9 @@
 //! Connectors → Phone and chat apps (messaging channels, part 6): connect a
-//! Telegram or Discord bot, approve the pairing codes strangers were sent,
-//! unpair senders, and add or remove signed webhooks. Each connected bot has one background worker; its
+//! Telegram, Discord or Slack bot, the person's own Signal account (its
+//! Note to Self only) or their own mailbox (only senders they allow),
+//! approve the pairing codes strangers were sent,
+//! unpair senders, show a QR that pairs a phone in one scan (Telegram), and
+//! add or remove signed webhooks. Each connected bot has one background worker; its
 //! token stays in the OS keychain, and what paired senders write is queued
 //! in `channels/inbox/`.
 
@@ -10,18 +13,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use grokhub_agent::channels_email::EmailLink;
 use grokhub_agent::channels_net::{
-    self, DiscordLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
+    self, DiscordLink, SignalLink, SlackLink, TelegramLink, POLL_WAIT_S, TELEGRAM_TOKEN_REFUSED,
 };
 use grokhub_agent::harness::DataClass;
 use grokhub_agent::keyring_blob::Backend;
 use grokhub_core::msg_channels::{self, ChannelKind, DmTrust};
+use grokhub_core::{msg_email, msg_signal, msg_telegram};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelView {
     pub kind: ChannelKind,
+    /// What the page calls it, and what its setup box asks for.
+    pub name: &'static str,
+    pub setup_label: &'static str,
+    pub setup_hint: &'static str,
+    /// It can be connected in this build; the others show as coming next.
+    pub live: bool,
     /// A token is saved.
     pub connected: bool,
     /// Its worker is listening now.
@@ -93,11 +104,11 @@ fn recent(config_dir: &Path) -> Vec<RecentView> {
                     .unwrap_or_default()
                     .to_string()
             };
-            let source = match field("channel").as_str() {
-                "telegram" => "Telegram",
-                "discord" => "Discord",
-                "webhook" => "Webhook",
-                _ => "Unknown",
+            let channel = field("channel");
+            let source = match ChannelKind::from_key(&channel) {
+                Some(kind) => kind.name(),
+                None if channel == "webhook" => "Webhook",
+                None => "Unknown",
             };
             RecentView {
                 source: source.into(),
@@ -142,6 +153,16 @@ pub fn send_answer(
         ChannelKind::Discord => {
             DiscordLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
         }
+        ChannelKind::Slack => {
+            SlackLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
+        }
+        ChannelKind::Signal => {
+            SignalLink::new(&token)?.send(config_dir, &to.to, text, &[DataClass::Chat])
+        }
+        // `to.to` is the thread the message kept: its id, references and subject.
+        ChannelKind::Email => {
+            EmailLink::new(&token)?.send(config_dir, &to.sender, &to.to, text, &[DataClass::Chat])
+        }
     }
 }
 
@@ -155,13 +176,10 @@ pub struct WebhookView {
     pub path: String,
 }
 
-const KINDS: [ChannelKind; 2] = [ChannelKind::Telegram, ChannelKind::Discord];
+const KINDS: [ChannelKind; 5] = ChannelKind::ALL;
 
 fn name(kind: ChannelKind) -> &'static str {
-    match kind {
-        ChannelKind::Telegram => "Telegram",
-        ChannelKind::Discord => "Discord",
-    }
+    kind.name()
 }
 
 struct Worker {
@@ -183,8 +201,13 @@ pub fn view(config_dir: &Path, store: &dyn Backend, status: Option<String>) -> C
         .iter()
         .map(|&kind| {
             let worker = running.get(&kind);
+            let spec = kind.spec();
             ChannelView {
                 kind,
+                name: spec.name,
+                setup_label: spec.setup_label,
+                setup_hint: spec.setup_hint,
+                live: spec.live,
                 connected: matches!(channels_net::load_token(store, kind), Ok(Some(_))),
                 running: worker.is_some_and(|w| w.running.load(Ordering::SeqCst)),
                 problem: worker
@@ -339,6 +362,48 @@ fn start(config_dir: &Path, kind: ChannelKind, token: &str) -> Result<(), String
                 })
                 .map_err(|e| e.to_string())?;
         }
+        ChannelKind::Slack => {
+            let mut link = SlackLink::new(token)?;
+            std::thread::Builder::new()
+                .name("channel-slack".into())
+                .spawn(move || {
+                    if let Err(why) = link.run(&dir, &|| s.load(Ordering::SeqCst)) {
+                        *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+                    }
+                    r.store(false, Ordering::SeqCst);
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        ChannelKind::Signal => {
+            let mut link = SignalLink::new(token)?;
+            std::thread::Builder::new()
+                .name("channel-signal".into())
+                .spawn(move || {
+                    let report = |why: Option<&str>| {
+                        *p.lock().unwrap_or_else(|e| e.into_inner()) = why.map(str::to_string);
+                    };
+                    if let Err(why) = link.run(&dir, &|| s.load(Ordering::SeqCst), &report) {
+                        report(Some(&why));
+                    }
+                    r.store(false, Ordering::SeqCst);
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        ChannelKind::Email => {
+            let link = EmailLink::new(token)?;
+            std::thread::Builder::new()
+                .name("channel-email".into())
+                .spawn(move || {
+                    let report = |why: Option<&str>| {
+                        *p.lock().unwrap_or_else(|e| e.into_inner()) = why.map(str::to_string);
+                    };
+                    if let Err(why) = link.run(&dir, &|| s.load(Ordering::SeqCst), &report) {
+                        report(Some(&why));
+                    }
+                    r.store(false, Ordering::SeqCst);
+                })
+                .map_err(|e| e.to_string())?;
+        }
     }
     workers().insert(
         kind,
@@ -385,6 +450,36 @@ pub fn connect(
     let bot = match kind {
         ChannelKind::Telegram => TelegramLink::new(token)?.check(config_dir)?,
         ChannelKind::Discord => DiscordLink::new(token)?.check(config_dir)?,
+        ChannelKind::Slack => SlackLink::new(token)?.check(config_dir)?,
+        ChannelKind::Signal => {
+            let link = SignalLink::new(token)?;
+            let account = link.check(config_dir)?;
+            pair_owner(config_dir, &account)?;
+            let saved = link.config().saved();
+            channels_net::save_token(store, kind, &saved)?;
+            start(config_dir, kind, &saved)?;
+            return Ok(view(
+                config_dir,
+                store,
+                Some(format!(
+                    "Connected Signal as {account}. Only your Note to Self is read, and answers go back there."
+                )),
+            ));
+        }
+        ChannelKind::Email => {
+            let link = EmailLink::new(token)?;
+            let address = link.check(config_dir)?;
+            let saved = link.saved();
+            channels_net::save_token(store, kind, &saved)?;
+            start(config_dir, kind, &saved)?;
+            return Ok(view(
+                config_dir,
+                store,
+                Some(format!(
+                    "Connected {address}. Mail is read from now on, only from senders you allow, and only when your mail server vouches for them."
+                )),
+            ));
+        }
     };
     channels_net::save_token(store, kind, token)?;
     start(config_dir, kind, token)?;
@@ -396,6 +491,14 @@ pub fn connect(
             name(kind)
         )),
     ))
+}
+
+/// Signal reads only the person's own Note to Self, so their number is
+/// paired with no code: there is nobody else to approve.
+fn pair_owner(config_dir: &Path, account: &str) -> Result<(), String> {
+    let mut trust = DmTrust::load(config_dir);
+    trust.pair(ChannelKind::Signal, account);
+    trust.save(config_dir)
 }
 
 /// Stop listening and forget the token. Paired senders stay paired.
@@ -432,6 +535,29 @@ pub fn approve(config_dir: &Path, store: &dyn Backend, code: &str) -> Result<Cha
     ))
 }
 
+/// Let mail from `sender` reach the assistant. Email has no pairing code:
+/// a stranger is never written to, so the person adds each sender here.
+pub fn allow_email_sender(
+    config_dir: &Path,
+    store: &dyn Backend,
+    sender: &str,
+) -> Result<ChannelsView, String> {
+    let sender = sender.trim().to_ascii_lowercase();
+    if !msg_email::valid_address(&sender) {
+        return Err("That isn't an email address.".into());
+    }
+    let mut trust = DmTrust::load(config_dir);
+    trust.pair(ChannelKind::Email, &sender);
+    trust.save(config_dir)?;
+    Ok(view(
+        config_dir,
+        store,
+        Some(format!(
+            "Mail from {sender} now reaches you here when its server vouches for it."
+        )),
+    ))
+}
+
 /// Unpair a sender: their next message gets a new pairing code.
 pub fn unpair(
     config_dir: &Path,
@@ -450,6 +576,96 @@ pub fn unpair(
         store,
         Some(format!("Unpaired {sender} on {}.", name(kind))),
     ))
+}
+
+/// A QR that pairs the phone which scans it. Shown only in the desktop app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartQr {
+    /// The `t.me` link the QR holds, for a phone that can't scan.
+    pub link: String,
+    /// The QR as an SVG document.
+    pub svg: String,
+    pub expires_ms: u64,
+}
+
+/// The QR's smallest width in pixels.
+const QR_PX: u32 = 240;
+
+/// A fresh Telegram start link as a QR. The bot's name comes from `getMe`,
+/// so the token must be saved and still work.
+pub fn telegram_qr(config_dir: &Path, store: &dyn Backend) -> Result<StartQr, String> {
+    let token = channels_net::load_token(store, ChannelKind::Telegram)?
+        .ok_or_else(|| "Connect Telegram first, then show the QR code.".to_string())?;
+    let bot = TelegramLink::new(&token)?.check(config_dir)?;
+    start_qr(config_dir, &bot, grokhub_core::now_ms())
+}
+
+/// The link for `bot` is saved before it is shown, so any QR the page shows
+/// can pair. Each one replaces the last.
+fn start_qr(config_dir: &Path, bot: &str, now_ms: u64) -> Result<StartQr, String> {
+    let mut trust = DmTrust::load(config_dir);
+    let secret = trust.issue_start_link(ChannelKind::Telegram, now_ms);
+    let link = msg_telegram::start_link_url(bot, &secret)
+        .ok_or_else(|| format!("Telegram's bot name {bot} can't make a link."))?;
+    let svg = msg_channels::qr_svg(&link, QR_PX)?;
+    trust.save(config_dir)?;
+    Ok(StartQr {
+        link,
+        svg,
+        expires_ms: now_ms + msg_channels::START_LINK_TTL_MS,
+    })
+}
+
+/// The Signal link the page is showing: the account it must end up linked
+/// to, and the `sgnl://linkdevice` address in the QR. One at a time.
+static SIGNAL_LINKING: Mutex<Option<(msg_signal::Config, String)>> = Mutex::new(None);
+
+/// A QR the Signal app scans to link signal-cli as one more device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkQr {
+    /// The QR as an SVG document. The address itself isn't shown.
+    pub svg: String,
+    /// The number the phone must be signed in to.
+    pub account: String,
+}
+
+/// Ask the local signal-cli daemon for a device link for `number`'s account
+/// and show it as a QR. Desktop only.
+pub fn signal_link_start(config_dir: &Path, number: &str) -> Result<LinkQr, String> {
+    let config = msg_signal::parse_config(number)?;
+    let uri = SignalLink::daemon(&config.daemon)?.start_link(config_dir)?;
+    let svg = msg_channels::qr_svg(&uri, QR_PX)?;
+    let account = config.account.clone();
+    *SIGNAL_LINKING.lock().unwrap_or_else(|e| e.into_inner()) = Some((config, uri));
+    Ok(LinkQr { svg, account })
+}
+
+/// Wait for the phone to scan the QR, then connect as [`connect`] does. A
+/// phone signed in to another number is refused: the QR only links the
+/// account the person typed.
+pub fn signal_link_finish(config_dir: &Path, store: &dyn Backend) -> Result<ChannelsView, String> {
+    let (config, uri) = SIGNAL_LINKING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .ok_or("Show the QR code first, then scan it.")?;
+    let device = grokhub_core::brand::product_name();
+    let linked = SignalLink::daemon(&config.daemon)?.finish_link(config_dir, &uri, device)?;
+    check_linked(&config, &linked)?;
+    connect(config_dir, store, ChannelKind::Signal, &config.saved())
+}
+
+fn check_linked(config: &msg_signal::Config, linked: &str) -> Result<(), String> {
+    if linked == config.account {
+        Ok(())
+    } else {
+        Err(format!(
+            "That phone is signed in to {linked}, not {}, so Signal wasn't connected. Unlink the new device in that phone's Signal settings.",
+            config.account
+        ))
+    }
 }
 
 /// Turn approval asks on or off for one paired sender.
@@ -500,6 +716,30 @@ mod tests {
     }
 
     #[test]
+    fn a_qr_needs_a_bot_and_its_link_pairs_the_phone_that_opens_it() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-qr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MemoryStore::default();
+        assert_eq!(
+            telegram_qr(&dir, &store).unwrap_err(),
+            "Connect Telegram first, then show the QR code."
+        );
+        let now = 1_763_550_000_000;
+        let qr = start_qr(&dir, "@example_bot", now).unwrap();
+        assert!(qr.svg.contains("<svg"));
+        assert_eq!(qr.expires_ms, now + msg_channels::START_LINK_TTL_MS);
+        let secret = qr
+            .link
+            .strip_prefix("https://t.me/example_bot?start=")
+            .unwrap()
+            .to_string();
+        let mut trust = DmTrust::load(&dir);
+        assert!(trust.redeem_start_link(ChannelKind::Telegram, "777", &secret, now + 1));
+        assert!(start_qr(&dir, "@no", now).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_code_is_approved_listed_and_unpaired() {
         let dir =
             std::env::temp_dir().join(format!("grokhub-shell-channels-{}", std::process::id()));
@@ -512,23 +752,28 @@ mod tests {
         let code = trust.pending[0].code.clone();
 
         let before = view(&dir, &store, None);
+        let listed: Vec<(&str, bool, bool)> = before
+            .channels
+            .iter()
+            .map(|c| {
+                (
+                    c.name,
+                    c.live,
+                    c.connected || c.running || c.problem.is_some(),
+                )
+            })
+            .collect();
         assert_eq!(
-            before.channels,
-            vec![
-                ChannelView {
-                    kind: ChannelKind::Telegram,
-                    connected: false,
-                    running: false,
-                    problem: None
-                },
-                ChannelView {
-                    kind: ChannelKind::Discord,
-                    connected: false,
-                    running: false,
-                    problem: None
-                },
+            listed,
+            [
+                ("Telegram", true, false),
+                ("Discord", true, false),
+                ("Slack", true, false),
+                ("Signal", true, false),
+                ("Email", true, false),
             ]
         );
+        assert_eq!(before.channels[0].setup_label, "Telegram bot token");
         assert_eq!(
             before.pending,
             vec![PendingView {
@@ -591,6 +836,25 @@ mod tests {
     }
 
     #[test]
+    fn a_signal_link_needs_a_number_first_and_only_links_that_number() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-signal-{}", std::process::id()));
+        let store = MemoryStore::default();
+        assert!(signal_link_start(&dir, "not a number")
+            .unwrap_err()
+            .starts_with("That isn't a phone number."));
+        assert_eq!(
+            signal_link_finish(&dir, &store).unwrap_err(),
+            "Show the QR code first, then scan it."
+        );
+        let config = msg_signal::parse_config("+15551234567").unwrap();
+        assert_eq!(check_linked(&config, "+15551234567"), Ok(()));
+        assert!(check_linked(&config, "+15559876543")
+            .unwrap_err()
+            .starts_with("That phone is signed in to +15559876543, not +15551234567"));
+        assert!(store.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn a_bad_token_is_refused_before_anything_is_saved() {
         let dir =
             std::env::temp_dir().join(format!("grokhub-shell-channels-bad-{}", std::process::id()));
@@ -603,8 +867,53 @@ mod tests {
             connect(&dir, &store, ChannelKind::Discord, "nope").unwrap_err(),
             "That isn't a Discord bot token."
         );
+        assert_eq!(
+            connect(&dir, &store, ChannelKind::Slack, "nope").unwrap_err(),
+            "Those aren't Slack's two tokens."
+        );
+        assert!(connect(&dir, &store, ChannelKind::Signal, "nope")
+            .unwrap_err()
+            .starts_with("That isn't a phone number."));
+        assert!(connect(
+            &dir,
+            &store,
+            ChannelKind::Signal,
+            "+15551234567 http://10.0.0.2:8080"
+        )
+        .unwrap_err()
+        .starts_with("The Signal daemon must run on this computer"));
+        assert_eq!(
+            connect(&dir, &store, ChannelKind::Email, "anything").unwrap_err(),
+            "That isn't an email address."
+        );
+        assert_eq!(
+            connect(&dir, &store, ChannelKind::Email, "me@example.org s3cr3t").unwrap_err(),
+            "For this provider, type the address, its IMAP server, its SMTP server and the server name its Authentication-Results header starts with, separated by spaces."
+        );
         assert!(store.0.lock().unwrap().is_empty());
+        assert!(DmTrust::load(&dir).paired.is_empty());
         assert!(workers().is_empty());
+    }
+
+    #[test]
+    fn an_email_sender_is_allowed_by_address_and_unpaired_like_any_other() {
+        let dir = std::env::temp_dir().join(format!("grokhub-shell-email-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = MemoryStore::default();
+        assert_eq!(
+            allow_email_sender(&dir, &store, "jane at example.com").unwrap_err(),
+            "That isn't an email address."
+        );
+        assert!(DmTrust::load(&dir).paired.is_empty());
+        let shown = allow_email_sender(&dir, &store, " Jane@Example.com ").unwrap();
+        assert!(DmTrust::load(&dir).is_paired(ChannelKind::Email, "jane@example.com"));
+        assert!(shown
+            .paired
+            .iter()
+            .any(|p| p.channel == ChannelKind::Email && p.sender == "jane@example.com"));
+        unpair(&dir, &store, ChannelKind::Email, "jane@example.com").unwrap();
+        assert!(!DmTrust::load(&dir).is_paired(ChannelKind::Email, "jane@example.com"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -629,7 +938,7 @@ mod tests {
             Some("Added deploys. Copy the secret now: it isn't shown again.")
         );
         let later = view(&dir, &store, None);
-        assert_eq!(later.new_secret, None);
+        assert!(later.new_secret.is_none());
         assert!(!serde_json::to_string(&later).unwrap().contains(&secret));
         let removed = remove_webhook(&dir, &store, "deploys").unwrap();
         assert_eq!(removed.webhooks, vec![]);

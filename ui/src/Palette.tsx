@@ -18,7 +18,11 @@ import {
 import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { PRODUCT_NAME } from "./brand";
+import { RAIL_SECTIONS, type RailPrefs, type RailSectionDef, type RailSectionId } from "./railPrefs";
 import { useModalFocus } from "./ui";
+
+export type { RailPrefs, RailSectionDef, RailSectionId };
+export { RAIL_SECTIONS };
 
 export type View =
   | "home"
@@ -28,13 +32,15 @@ export type View =
   | "command"
   | "history"
   | "pulse"
-  | "imagine"
   | "journal"
+  | "meetings"
   | "automations"
   | "agents"
+  | "team"
   | "memory"
   | "skills"
   | "connectors"
+  | "marketplace"
   | "settings"
   | "library"
   | "mods"
@@ -82,8 +88,6 @@ export interface PaletteExtras {
   chats: readonly ChatHit[];
   slash: readonly SlashHit[];
   chips?: readonly QuickChip[];
-  /** Only these pages, and nothing else: the rail's More list. */
-  only?: readonly View[];
 }
 
 const NO_EXTRAS: PaletteExtras = { runners: {}, signedOut: false, chats: [], slash: [] };
@@ -105,13 +109,15 @@ export const VIEW_LABELS: Record<View, string> = {
   command: "Command line",
   history: "History",
   pulse: "Pulse",
-  imagine: "Imagine",
   journal: "Journal",
+  meetings: "Meetings",
   automations: "Automations",
   agents: "Agents",
+  team: "Team",
   memory: "Personal",
   skills: "Skills",
-  connectors: "Connectors",
+  connectors: "MCPs & Connectors",
+  marketplace: "Marketplace",
   settings: "Settings",
   workboard: "Workboard",
   devices: "Devices",
@@ -133,13 +139,14 @@ export function views(caps: Capabilities): View[] {
     ...(caps.code && !caps.remote ? (["code"] as const) : []),
     ...(caps.remote ? [] : (["history"] as const)),
     ...(caps.pulse ? (["pulse"] as const) : []),
-    "imagine",
-    ...(caps.remote ? [] : (["journal"] as const)),
+    ...(caps.remote ? [] : (["journal", "meetings"] as const)),
     "automations",
     "agents",
+    ...(caps.remote ? [] : (["team"] as const)),
     "memory",
     "skills",
     "connectors",
+    ...(caps.plugins ? (["marketplace"] as const) : []),
     "workboard",
     ...(caps.webAccess && !caps.remote ? (["devices", "fleet"] as const) : []),
     ...(caps.library ? (["library"] as const) : []),
@@ -168,20 +175,41 @@ export function hasPage(caps: Capabilities, view: View): boolean {
   return pageViews(caps).includes(view);
 }
 
-/** The pages on the left rail, top to bottom; Settings sits at the rail's foot. */
-export const RAIL: readonly View[] = ["home", "chat", "code", "pulse", "library", "settings"];
+/** Pins for the rail. Omitted means nothing is pinned. */
+export type RailNavOpts = Pick<RailPrefs, "pinned">;
 
-/** The rail pages this platform has. */
-export function railViews(caps: Capabilities): View[] {
-  const shown = views(caps);
-  return RAIL.filter((view) => shown.includes(view));
+/** Pages available on this platform, minus Settings (foot) and already listed. */
+function availablePages(caps: Capabilities, skip: ReadonlySet<string>): View[] {
+  return pageViews(caps).filter((view) => view !== "settings" && !skip.has(view));
 }
 
-/** The pages the rail's More opens: every page that is not on the rail. */
-export function moreViews(caps: Capabilities): View[] {
-  const rail = railViews(caps);
-  return pageViews(caps).filter((view) => !rail.includes(view));
+/** The rail pages this platform has. Pins sit first. Settings stays at the foot. */
+export function railViews(caps: Capabilities, opts: RailNavOpts = { pinned: [] }): View[] {
+  const shown = new Set<string>(pageViews(caps));
+  const pinned: View[] = opts.pinned.filter((view) => shown.has(view) && view !== "settings");
+  const rest = availablePages(caps, new Set(pinned));
+  return shown.has("settings") ? [...pinned, ...rest, "settings"] : [...pinned, ...rest];
 }
+
+/** Groups with only the pages this platform has. Pins are omitted
+ * (they sit above the groups). Empty groups are dropped. */
+export function railSections(caps: Capabilities, opts: RailNavOpts = { pinned: [] }): RailSectionDef[] {
+  const pinned = new Set<string>(opts.pinned);
+  const shown = new Set<string>(pageViews(caps));
+  return RAIL_SECTIONS.map((section) => ({
+    ...section,
+    views: section.views.filter((view) => shown.has(view) && !pinned.has(view)),
+  })).filter((section) => section.views.length > 0);
+}
+
+/** Words a Settings section answers to beyond its name, so "dark" or "theme"
+ * finds Appearance instead of only offering to ask. Shell-only: the cabin's
+ * table in paletteSynonyms.json stays as the cabin had it. */
+const SECTION_WORDS: Partial<Record<Section, readonly string[]>> = {
+  appearance: ["theme", "dark mode", "light mode", "colors", "text size", "reduce motion"],
+  account: ["api key"],
+  aiModels: ["provider"],
+};
 
 /** The rows for `query`, in order: suggestions (while nothing is typed),
  * pages, commands, slash commands (for a query that starts with `/`), recent
@@ -201,10 +229,6 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     action: { kind: "settings", section },
   }));
   const named = (rows: PaletteRow[]) => (q ? rows.filter((row) => answersTo(row.label, q)) : rows);
-  if (extras.only) {
-    const only = extras.only;
-    return named(pages.filter((row) => row.action.kind === "view" && only.includes(row.action.view)));
-  }
   const views = pageViews(caps);
   const suggested = q ? [] : (extras.chips ?? []).flatMap((chip) => chipRow(chip, views) ?? []);
   const all = [
@@ -213,7 +237,13 @@ export function paletteRows(caps: Capabilities, query: string, extras: PaletteEx
     ...named(commandRows(caps, extras)),
     ...(slash ? slashRows(extras.slash) : []),
     ...(slash ? [] : chatRows(extras.chats)),
-    ...named(settings),
+    ...(q
+      ? settings.filter(
+          (row) =>
+            answersTo(row.label, q) ||
+            (row.action.kind === "settings" && (SECTION_WORDS[row.action.section] ?? []).some((w) => w.startsWith(q))),
+        )
+      : settings),
   ];
   if (!q) return all;
   return [...all, { label: `Ask ${PRODUCT_NAME}: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
@@ -240,14 +270,11 @@ const paletteRoom = () => window.innerHeight * 0.5;
 export function Palette({
   caps,
   sources = NO_SOURCES,
-  only,
   onPick,
   onClose,
 }: {
   caps: Capabilities;
   sources?: PaletteSources;
-  /** Only these pages: the rail's More list, with no commands, chats or Ask. */
-  only?: readonly View[];
   onPick: (action: PaletteAction) => void;
   onClose: () => void;
 }) {
@@ -263,7 +290,6 @@ export function Palette({
   // row opens Chat, where the inbox sits.
   const [waiting, setWaiting] = useState(0);
   useEffect(() => {
-    if (only) return;
     let live = true;
     Promise.resolve()
       .then(() => decisionInbox())
@@ -274,15 +300,13 @@ export function Palette({
     return () => {
       live = false;
     };
-  }, [only]);
+  }, []);
   const inboxLabel = `Decisions waiting · ${waiting}`;
   const inboxRow: PaletteRow[] =
     waiting > 0 && (!query.trim() || answersTo(inboxLabel, query.trim().toLowerCase()))
       ? [{ label: inboxLabel, action: { kind: "view", view: "chat" } }]
       : [];
-  const rows = only
-    ? paletteRows(caps, query, { ...NO_EXTRAS, only })
-    : [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
+  const rows = [...inboxRow, ...paletteRows(caps, query, { ...sources, ...found })];
   const none = rows.length === 0;
   const { onChip } = sources;
   const { chats: findChats, slash: findSlash } = sources;
@@ -297,7 +321,6 @@ export function Palette({
   // Chats and slash commands come from the desktop, so they arrive a moment
   // later; an answer for an older query is dropped.
   useEffect(() => {
-    if (only) return;
     let live = true;
     const q = query.trim();
     const keep = (next: typeof found) => {
@@ -310,7 +333,7 @@ export function Palette({
     return () => {
       live = false;
     };
-  }, [query, findChats, findSlash, only]);
+  }, [query, findChats, findSlash]);
 
   useEffect(() => {
     const dir = moved.current;
@@ -352,14 +375,14 @@ export function Palette({
         className="palette"
         role="dialog"
         aria-modal="true"
-        aria-label={only ? "More pages" : "Command palette"}
+        aria-label="Command palette"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <input
           ref={input}
-          aria-label={only ? "Search pages" : "Search pages and commands"}
-          placeholder={only ? "Search pages" : "Search pages and commands"}
+          aria-label="Search pages and commands"
+          placeholder="Search pages and commands"
           value={query}
           role="combobox"
           aria-expanded="true"
@@ -371,7 +394,7 @@ export function Palette({
             setPick(0);
           }}
         />
-        <ul ref={list} id="palette-rows" role="listbox" aria-label={only ? "Pages" : "Pages and commands"}>
+        <ul ref={list} id="palette-rows" role="listbox" aria-label="Pages and commands">
           {rows.map((row, i) => (
             <li
               key={rowKey(row)}

@@ -21,13 +21,13 @@
 - Adding a Grok Build CLI install or update step: `crates/grokhub-core/tests/no_grok_cli.rs` fails when packaging or an install script installs or bundles the CLI, or a deleted CLI installer comes back.
 - A remembered channel that does not match the checkout: `install.sh` refuses so a build is not labeled for the wrong channel.
 ## What depends on it
-- The README install docs and `grokhub-hub --update`, which tells a source install to run `scripts/install.sh --channel <channel>`.
-- The desktop app's Updates page: it shares the `channel` receipt, and its note for a build that can't update itself reads the clone path from the `source` receipt (keep both files' names and one-line format).
+- The README install docs and `grokhub-hub --update`, which tells a source install to run `scripts/install.sh --channel <channel>`, and a prebuilt user AppImage (Arch/CachyOS) to use Settings → Updates.
+- The desktop app's Updates page: it shares the `channel` receipt; prebuilt `…/bin` installs without a live `source` receipt self-update via the AppImage; a clone receipt still points at `scripts/install.sh --from-source` (keep both files' names and one-line format).
 ## Non-obvious
 - The `--dry-run` line (`channel=… branch=… switch=… prefix=… receipt=…`) is asserted literally by `install_sh_parses_channel_flags_and_follows_the_receipt`, which runs the real script on unix.
 - No `--channel`: the receipt wins, missing means stable (`main`). `--channel` refuses a dirty tree (except a lone Cargo.lock), fetches `origin/$BRANCH` by refspec, `checkout -B --track` when the local branch is missing, and otherwise fast-forwards only (refuses when local is ahead).
 - `GROKHUB_CHANNEL` is exported into `cargo build` and `tauri build` so the shell's build.rs labels the binary for the saved channel.
-- The desktop entry's `Exec=grokhub-shell` is rewritten to the absolute prefix path, so launch works without `~/.local/bin` on PATH.
+- The desktop entry's `Exec=grokhub-shell %u` is rewritten to the absolute prefix path (keeps `%u` for `loadout://` links), so launch works without `~/.local/bin` on PATH.
 - `.cursor/install.sh` is the Cloud Agent bootstrap, not an installer: apt build deps plus `cargo build --workspace --locked`.
 ## See also
 - [versions-and-channels](versions-and-channels.md), [grokhub-hub](grokhub-hub.md), grokhub-shell

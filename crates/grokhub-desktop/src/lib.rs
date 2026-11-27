@@ -85,10 +85,11 @@ pub fn run_stdio() -> i32 {
     0
 }
 
-/// Spike-2a: `grokhub --mcp-cua`. The cabin's gate proxy in front of a
-/// `cua-driver mcp` child (Linux only, `cuaDriver` flag). Every call goes
-/// through `harness::decide` before it is forwarded; the child starts on the
-/// first call that may use it, so with the flag or the switch off none starts.
+/// Spike-2a: `grokhub --mcp-cua`. The cabin's gate proxy in front of
+/// `cua-driver serve` plus `cua-driver mcp` (Linux/macOS, `cuaDriver` flag).
+/// Every call goes through `harness::decide` before it is forwarded; both
+/// start on the first call that may use them, so with the flag or the switch
+/// off none starts.
 pub fn run_cua_stdio() -> i32 {
     use grokhub_agent::harness as hx;
     let started = process_started_ms();
@@ -916,6 +917,7 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
         text,
         image_data_url: image,
         failed,
+        mcp_app: None,
     }
 }
 
@@ -1189,8 +1191,11 @@ mod tests {
     fn desktop_entry_allows_kwin_screenshot2() {
         let text = include_str!("../../../packaging/grokhub-shell.desktop");
         assert!(text.lines().any(|line| line == "Version=1.5"));
-        assert!(text.lines().any(|line| line == "Name=GrokHub Shell"));
-        assert!(text.lines().any(|line| line == "Exec=grokhub-shell"));
+        assert!(text.lines().any(|line| line == "Name=Loadout"));
+        assert!(text.lines().any(|line| line == "Exec=grokhub-shell %u"));
+        assert!(text
+            .lines()
+            .any(|line| line == "MimeType=x-scheme-handler/loadout;"));
         assert!(text
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));

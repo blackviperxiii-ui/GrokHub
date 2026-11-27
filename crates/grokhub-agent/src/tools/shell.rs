@@ -59,11 +59,12 @@ pub(crate) fn too_long(command: &str) -> Option<String> {
 
 /// Tools a model sometimes types into the shell as if they were programs
 /// (`bash: web_search: command not found`, then the same call twice more).
-const TOOLS_NOT_COMMANDS: [&str; 6] = [
+const TOOLS_NOT_COMMANDS: [&str; 7] = [
     "web_search",
     "web_fetch",
     "report_findings",
     "todo_write",
+    "tool_search",
     "load_tool_schema",
     "search_replace",
 ];
@@ -334,8 +335,10 @@ fn is_http_url(arg: &str) -> bool {
     rest.is_some_and(|r| !r.is_empty() && !r.contains(char::is_whitespace))
 }
 
+/// [`run_adoptable`] with no chat and nothing to adopt a slow command, for tests.
+#[cfg(test)]
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
-    run_adoptable(workspace, args, stop, None)
+    run_adoptable(workspace, None, args, stop, None)
 }
 
 /// What [`run_adoptable`] hands a command that outlived its timeout to: the
@@ -355,9 +358,11 @@ pub(crate) type Feed = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
 /// [`run`], with a command that outlives its timeout handed to `adopt` in
 /// place of being killed. The answer then holds the output so far and the
-/// background task's id.
+/// background task's id. `session` is the chat, whose held secrets stay out
+/// of a long output's saved copy.
 pub(crate) fn run_adoptable(
     workspace: &Path,
+    session: Option<&str>,
     args: &Value,
     stop: &dyn Fn() -> bool,
     adopt: Option<Adopt<'_>>,
@@ -383,7 +388,7 @@ pub(crate) fn run_adoptable(
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
         Ok(path) => path,
-        Err(err) => return ToolOutput::err(format!("workspace is not available: {err}")),
+        Err(err) => return ToolOutput::err(super::workspace_unavailable_error(workspace, &err)),
     };
     let plan = crate::sandbox::plan_for_call("run_terminal_command", args, &cwd);
     let mut guard = plan
@@ -405,12 +410,23 @@ pub(crate) fn run_adoptable(
     let handover = handover
         .as_mut()
         .map(|f| f as &mut dyn FnMut(BgProc) -> Result<(String, Feed), BgProc>);
-    // Snapshot referenced workspace files before potentially mutating shell
-    // commands so `/rewind step` can undo shell edits/deletions (Card 957).
+    // Snapshot the whole workspace before any command that isn't a plain
+    // read, so `/rewind step` can undo whatever it did to the tree.
     crate::file_checkpoint::before_shell(&cwd, &command);
-    // The output is fenced first; the sandbox's own note stays outside the fence.
-    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref(), handover)
-        .map(|o| fence_if_fetched(o, let_out));
+    // Long output is cut here, where the workspace and whether the command
+    // fetched anything are known, and saved whole first. Then it is fenced;
+    // the sandbox's own note stays outside the fence.
+    let result = spawn_and_wait(&cwd, &command, timeout_ms, stop, plan.as_ref(), handover).map(
+        |mut output| {
+            let keep = super::spool::Keep {
+                workspace: &cwd,
+                session,
+                outside: crate::sandbox::proxy::let_out_count() > let_out,
+            };
+            output.text = cap_output(&output.text, Some(&keep));
+            fence_if_fetched(output, let_out)
+        },
+    );
     let note = guard
         .as_ref()
         .and_then(crate::sandbox::git_guard::restore)
@@ -455,22 +471,45 @@ fn timeout_ms(args: &Value) -> u64 {
     }
 }
 
-/// Keeps the head and tail of long output; shell and background tasks share it.
-pub(crate) fn cap_output(raw: &str) -> String {
+/// Keeps the head and tail of long output; shell and background tasks share
+/// it. With `keep`, the whole text is saved first and the marker says where.
+pub(crate) fn cap_output(raw: &str, keep: Option<&super::spool::Keep<'_>>) -> String {
     let text = raw.trim();
     if text.chars().count() <= OUTPUT_CHARS {
         return text.to_string();
     }
+    let saved = keep.and_then(|keep| super::spool::save(keep, text));
+    cut_middle(text, saved.as_deref())
+}
+
+/// `text`'s first and last `OUTPUT_CHARS / 2` characters. With `saved`, the
+/// marker between them names the lines it cut (as `read_file` counts them)
+/// and the file that holds them all.
+fn cut_middle(text: &str, saved: Option<&str>) -> String {
     let half = OUTPUT_CHARS / 2;
     let total = text.chars().count();
     let front: String = text.chars().take(half).collect();
-    let back: String = text.chars().skip(total - half).collect();
-    format!("{front}{MARKER}{back}")
+    let back: String = text.chars().skip(total.saturating_sub(half)).collect();
+    let Some(path) = saved else {
+        return format!("{front}{MARKER}{back}");
+    };
+    let lines = text.matches('\n').count() + 1;
+    let first = front.matches('\n').count() + 1;
+    let last = lines - back.matches('\n').count();
+    let cut = if first == last {
+        format!("line {first} of {lines} is cut")
+    } else {
+        format!("lines {first}-{last} of {lines} are cut")
+    };
+    format!(
+        "{front}\n\n... (output truncated: {cut}. The whole output is in `{path}`; read_file it with offset {first}.) ...\n\n{back}"
+    )
 }
 
 fn finish(status: &str, raw: &[u8], failed: bool) -> ToolOutput {
     let text_raw = String::from_utf8_lossy(raw);
-    let body = cap_output(&text_raw);
+    // Cut later, in `run_adoptable`, where the whole text can be saved.
+    let body = text_raw.trim();
     let text = if body.is_empty() {
         status.to_string()
     } else {
@@ -480,6 +519,7 @@ fn finish(status: &str, raw: &[u8], failed: bool) -> ToolOutput {
         text,
         image_data_url: None,
         failed,
+        mcp_app: None,
     }
 }
 
@@ -487,6 +527,8 @@ struct CapBuf {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     overflow: bool,
+    /// Bytes that fell out between head and tail.
+    dropped: usize,
     /// Set once the command was handed to a background task: what arrives
     /// from then on goes there.
     forward: Option<Feed>,
@@ -500,6 +542,7 @@ impl CapBuf {
             head: Vec::new(),
             tail: std::collections::VecDeque::new(),
             overflow: false,
+            dropped: 0,
             forward: None,
         }
     }
@@ -527,17 +570,21 @@ impl CapBuf {
         for byte in data {
             if self.tail.len() == Self::KEEP {
                 self.tail.pop_front();
+                self.dropped += 1;
             }
             self.tail.push_back(*byte);
         }
     }
 
+    /// Head and tail, with a line between them saying how much fell out.
     fn bytes(self) -> Vec<u8> {
-        if !self.overflow {
-            return self.head;
-        }
         let mut out = self.head;
-        out.extend(self.tail.iter().copied());
+        if self.dropped > 0 {
+            out.extend_from_slice(
+                format!("\n... ({} bytes not kept) ...\n", self.dropped).as_bytes(),
+            );
+        }
+        out.extend(self.tail);
         out
     }
 }
@@ -1582,6 +1629,9 @@ mod tests {
             started.elapsed()
         );
 
+        // A long output is saved whole in the config folder, pinned here.
+        let cfg = scratch("echo-cfg");
+        let _cfg = crate::perm::ConfigGuard::set(&cfg);
         let noisy = run(
             &dir,
             &json!({"command": "dd if=/dev/zero bs=30000 count=1 status=none | tr '\\0' 'x'"}),
@@ -1589,7 +1639,9 @@ mod tests {
         );
         assert!(!noisy.failed, "{}", noisy.text);
         assert!(
-            noisy.text.contains("\n\n... (output truncated) ...\n\n"),
+            noisy.text.contains(
+                "\n\n... (output truncated: line 2 of 2 is cut. The whole output is in `"
+            ),
             "{}",
             noisy.text.chars().take(80).collect::<String>()
         );
@@ -1697,6 +1749,127 @@ mod tests {
         assert!(String::from_utf8(merged)
             .unwrap()
             .starts_with("out\nAt line:2"));
+    }
+
+    #[test]
+    fn a_cut_names_the_lines_it_left_out_and_the_file_that_has_them() {
+        let numbers: Vec<String> = (1..=6000).map(|n| n.to_string()).collect();
+        let text = format!("exit 0\n{}", numbers.join("\n"));
+        assert_eq!(text.chars().count(), 28_899);
+        let cut = super::cut_middle(&text, Some("/c/tool-output/ab/shell-1.txt"));
+        assert!(
+            cut.contains("\n\n... (output truncated: lines 2222-4001 of 6001 are cut. The whole output is in `/c/tool-output/ab/shell-1.txt`; read_file it with offset 2222.) ...\n\n"),
+            "{}",
+            &cut[9_990..10_200]
+        );
+        assert!(cut.starts_with("exit 0\n1\n2\n3\n"), "{}", &cut[..20]);
+        assert!(cut.ends_with("5999\n6000"), "{}", &cut[cut.len() - 20..]);
+        let plain = super::cut_middle(&text, None);
+        assert!(plain.contains(super::MARKER));
+        assert_eq!(plain.chars().count(), 20_030);
+        let one_line = format!("exit 0\n{}", "x".repeat(30_000));
+        assert!(
+            super::cut_middle(&one_line, Some("/p"))
+                .contains("(output truncated: line 2 of 2 is cut."),
+            "one long line"
+        );
+        // Short output is never cut, so nothing is saved for it.
+        assert_eq!(super::cap_output("  short\n", None), "short");
+    }
+
+    #[test]
+    fn a_buffer_past_its_size_says_how_many_bytes_fell_out() {
+        let mut buf = super::CapBuf::new();
+        buf.push(&vec![b'a'; 204_800]);
+        let bytes = buf.bytes();
+        let marker = b"\n... (8192 bytes not kept) ...\n";
+        assert_eq!(bytes.len(), 196_608 + marker.len());
+        assert_eq!(&bytes[98_304..98_304 + marker.len()], marker);
+        assert!(bytes[..98_304].iter().all(|b| *b == b'a'));
+        assert!(bytes[98_304 + marker.len()..].iter().all(|b| *b == b'a'));
+        let mut small = super::CapBuf::new();
+        small.push(b"abc");
+        assert_eq!(small.bytes(), b"abc");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_long_output_is_saved_whole_and_read_file_reads_its_middle() {
+        let root = crate::harness::test_dir("shell-spool");
+        let cfg = root.join("cfg");
+        let _cfg = crate::perm::ConfigGuard::set(&cfg);
+        let (ws, ws2) = (root.join("ws"), root.join("ws2"));
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&ws2).unwrap();
+        let session = format!("shell-spool-{}", std::process::id());
+        let ctx = crate::tools::ToolCtx {
+            workspace: &ws,
+            desktop: None,
+            stop: &|| false,
+            tasks: None,
+            owner: None,
+            session: Some(&session),
+        };
+        let short =
+            crate::tools::dispatch(&ctx, "run_terminal_command", r#"{"command":"seq 1 3"}"#);
+        assert_eq!(short.text, "exit 0\n1\n2\n3");
+        assert!(
+            !cfg.join("tool-output").exists(),
+            "a short output is not saved"
+        );
+
+        let out =
+            crate::tools::dispatch(&ctx, "run_terminal_command", r#"{"command":"seq 1 6000"}"#);
+        assert!(!out.failed, "{}", out.text);
+        assert!(
+            out.text
+                .contains("(output truncated: lines 2222-4001 of 6001 are cut."),
+            "{}",
+            &out.text[9_990..10_200]
+        );
+        let path = out
+            .text
+            .split("The whole output is in `")
+            .nth(1)
+            .and_then(|rest| rest.split('`').next())
+            .expect("the marker names the file");
+        let numbers: Vec<String> = (1..=6000).map(|n| n.to_string()).collect();
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            format!("exit 0\n{}", numbers.join("\n"))
+        );
+
+        let read = |ws: &std::path::Path, target: &str| {
+            crate::tools::execute(
+                ws,
+                &session,
+                "read_file",
+                &json!({"target_file": target, "offset": 2222, "limit": 3}).to_string(),
+            )
+        };
+        let middle = read(&ws, path);
+        assert!(!middle.failed, "{}", middle.text);
+        assert_eq!(middle.text, "2222|2221\n2223|2222\n2224|2223\n");
+        assert!(!crate::tools::fence::looks_fenced(&middle.text));
+
+        // Another workspace can't read it, and no other config file is reachable.
+        let elsewhere = read(&ws2, path);
+        assert!(elsewhere.failed, "{}", elsewhere.text);
+        assert!(
+            elsewhere.text.contains("path escapes the workspace"),
+            "{}",
+            elsewhere.text
+        );
+        let consent = cfg.join("consent.jsonl");
+        std::fs::write(&consent, "{}\n").unwrap();
+        let config_file = read(&ws, &consent.display().to_string());
+        assert!(config_file.failed, "{}", config_file.text);
+        assert!(
+            config_file.text.contains("path escapes the workspace"),
+            "{}",
+            config_file.text
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 

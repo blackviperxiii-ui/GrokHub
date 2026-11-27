@@ -53,9 +53,11 @@ fn an_8gb_gpu_gets_a_quick_model_an_everyday_one_a_step_up_and_pictures() {
     assert!(est_tok_s(&p, slot(&l, Goal::Performance).pick.unwrap()) >= PERFORMANCE_FLOOR_TOK_S);
     assert_eq!(id(slot(&l, Goal::Image)), Some("z-image-turbo-q4_k"));
     assert_eq!(slot(&l, Goal::Image).extras[0].kind, ModelKind::ImageGuard);
-    let video = slot(&l, Goal::Video);
-    assert!(video.pick.is_none());
-    assert_eq!(video.note, "No on-device video models yet.");
+    assert_eq!(
+        id(slot(&l, Goal::Video)),
+        Some("wan2.2-ti2v-5b-q4_k_m"),
+        "an 8 GB GPU is the smallest card the 5B video model targets"
+    );
     // Hot-swap fit: Speed is smaller than Balance, Performance bigger.
     let run = |g| slot(&l, g).pick.unwrap().run_mb;
     assert!(run(Goal::Speed) < run(Goal::Everyday));

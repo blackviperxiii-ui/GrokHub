@@ -16,6 +16,7 @@ const VIEW: OnboardReply = {
   drafts: null,
   amr: true,
   openclaw: false,
+  importSources: [],
   saved: null,
   note: null,
 };
@@ -32,8 +33,12 @@ describe("openImport (/import)", () => {
 
   it("with no workspace on this computer, opens nothing and gives the line for the chat", async () => {
     shell.call.mockResolvedValue(VIEW);
-    expect(await openImport()).toBe("No OpenClaw or Hermes workspace on this computer.");
-    expect(NO_WORKSPACE).toBe("No OpenClaw or Hermes workspace on this computer.");
+    expect(await openImport()).toBe(
+      "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer.",
+    );
+    expect(NO_WORKSPACE).toBe(
+      "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer.",
+    );
     expect(opened).not.toHaveBeenCalled();
     // It only looked: nothing was opened again, drafted or saved.
     expect(shell.call.mock.calls).toEqual([["onboard_identity", { act: { act: "view" } }]]);

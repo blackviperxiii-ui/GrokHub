@@ -44,6 +44,7 @@
 
 mod dream;
 mod dream_model;
+mod graph;
 mod import;
 mod index;
 mod schema;
@@ -61,8 +62,9 @@ pub use dream::{
 pub use dream_model::{
     allows_direct_core_write, allows_lesson_write, morning_text, stage_core_line, CoreWriter,
     DreamPhase, DreamPhaseError, DreamStep, ModelDreamOpts, ModelDreamReport, MorningNote,
-    StagedCore, MODEL_DREAM_OUTPUT_TOKEN_CAP,
+    StagedCore, MODEL_DREAM_OUTPUT_TOKEN_CAP, MORNING_CARD_SOURCE,
 };
+pub use graph::{GraphEdge, GraphNode, MemoryGraph, GRAPH_NODE_CAP};
 pub use import::{
     durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally,
 };

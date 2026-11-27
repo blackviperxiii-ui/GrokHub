@@ -5,7 +5,7 @@ import type { CatalogRow, ConnectorRow, ConnectorsChanged } from "./api";
 
 const api = vi.hoisted(() => ({
   connectorCatalog: vi.fn(),
-  addCatalogConnector: vi.fn<(id: string) => Promise<ConnectorsChanged>>(),
+  addCatalogConnector: vi.fn<(id: string, includeTools?: string[] | null) => Promise<ConnectorsChanged>>(),
   addConnectorConfig: vi.fn<(text: string) => Promise<ConnectorsChanged>>(),
   saveConnectorKey: vi.fn(),
   answerConnectorKey: vi.fn<(id: string, approve: boolean) => Promise<ConnectorsChanged>>(),
@@ -26,6 +26,9 @@ function entry(over: Partial<CatalogRow>): CatalogRow {
     keyHint: "Get one at the Brave dashboard.",
     target: "npx brave",
     installed: false,
+    source: "https://github.com/brave/brave-search-mcp-server",
+    permissions: "Sends search queries to Brave with your API key.",
+    tools: [],
     ...over,
   };
 }
@@ -41,6 +44,7 @@ function row(name: string): ConnectorRow {
     needsSignIn: false,
     canDisconnect: true,
     enabled: true,
+    toolRows: [],
   };
 }
 
@@ -49,9 +53,20 @@ describe("ConnectorAdd", () => {
     for (const fn of Object.values(api)) fn.mockReset();
   });
 
-  it("searches the catalog, adds one and saves its key after the card", async () => {
+  it("searches the catalog, picks tools, adds one and saves its key after the card", async () => {
     api.connectorCatalog.mockResolvedValue({
-      rows: [entry({}), entry({ id: "exa", name: "Exa", description: "Code search", auth: "none" })],
+      rows: [
+        entry({}),
+        entry({
+          id: "deepwiki",
+          name: "DeepWiki",
+          description: "Repo wiki",
+          auth: "none",
+          tools: ["ask_wiki_question", "read_wiki_contents", "read_wiki_structure"],
+          source: "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
+          permissions: "Sends public GitHub repo questions to DeepWiki.",
+        }),
+      ],
       note: null,
     });
     api.addCatalogConnector.mockResolvedValue({
@@ -71,14 +86,17 @@ describe("ConnectorAdd", () => {
     render(<ConnectorAdd onChanged={onChanged} onClose={() => {}} />);
     expect(api.connectorCatalog).toHaveBeenCalledWith(false);
     await screen.findByRole("listitem", { name: "Brave Search" });
-    await userEvent.type(screen.getByRole("textbox", { name: "Search connectors" }), "code");
+    await userEvent.type(screen.getByRole("textbox", { name: "Search connectors" }), "wiki");
     expect(screen.queryByRole("listitem", { name: "Brave Search" })).not.toBeInTheDocument();
     await userEvent.clear(screen.getByRole("textbox", { name: "Search connectors" }));
 
     const brave = screen.getByRole("listitem", { name: "Brave Search" });
     expect(brave).toHaveTextContent("Needs an API key");
     await userEvent.click(within(brave).getByRole("button", { name: "Add" }));
-    expect(api.addCatalogConnector).toHaveBeenCalledWith("brave-search");
+    const picker = await screen.findByRole("dialog", { name: "Pick tools for Brave Search" });
+    expect(picker).toHaveTextContent("Tools load after connect");
+    await userEvent.click(within(picker).getByRole("button", { name: "Add with selected tools" }));
+    expect(api.addCatalogConnector).toHaveBeenCalledWith("brave-search", null);
     expect(onChanged).toHaveBeenCalled();
     const field = await within(brave).findByLabelText("Brave Search API key");
     expect(field).toHaveAttribute("type", "password");
@@ -92,6 +110,36 @@ describe("ConnectorAdd", () => {
     await userEvent.click(within(card).getByRole("button", { name: "Deny" }));
     expect(api.answerConnectorKey).toHaveBeenCalledWith("mcp-key-brave-search-1", false);
     expect(await screen.findByRole("status")).toHaveTextContent("brave-search's key was denied");
+  });
+
+  it("writes an include list when a subset of tools is picked", async () => {
+    api.connectorCatalog.mockResolvedValue({
+      rows: [
+        entry({
+          id: "deepwiki",
+          name: "DeepWiki",
+          auth: "none",
+          tools: ["ask_wiki_question", "read_wiki_contents", "read_wiki_structure"],
+          source: "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
+          permissions: "Sends public GitHub repo questions to DeepWiki.",
+        }),
+      ],
+      note: null,
+    });
+    api.addCatalogConnector.mockResolvedValue({
+      status: "Added DeepWiki",
+      rows: [row("deepwiki")],
+    });
+    render(<ConnectorAdd onChanged={() => {}} onClose={() => {}} />);
+    const deep = await screen.findByRole("listitem", { name: "DeepWiki" });
+    await userEvent.click(within(deep).getByRole("button", { name: "Add" }));
+    const picker = await screen.findByRole("dialog", { name: "Pick tools for DeepWiki" });
+    await userEvent.click(within(picker).getByRole("switch", { name: "DeepWiki read_wiki_contents on" }));
+    await userEvent.click(within(picker).getByRole("button", { name: "Add with selected tools" }));
+    expect(api.addCatalogConnector).toHaveBeenCalledWith("deepwiki", [
+      "ask_wiki_question",
+      "read_wiki_structure",
+    ]);
   });
 
   it("refreshes only on click and adds from a pasted config", async () => {

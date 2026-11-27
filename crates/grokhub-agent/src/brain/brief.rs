@@ -306,8 +306,10 @@ const CREATIVE_WORDS: &[&str] = &[
 /// something new ("draw me a fox", not "draw the curtains").
 const DRAW_VERBS: &[&str] = &["draw", "sketch", "paint"];
 /// These verbs ask for a picture when a picture word follows soon after
-/// ("make a picture of", "generate an image").
-const PICTURE_VERBS: &[&str] = &["make", "create", "generate", "render", "produce", "give"];
+/// ("make a picture of", "generate an image", "send me a selfie").
+const PICTURE_VERBS: &[&str] = &[
+    "make", "create", "generate", "render", "produce", "give", "send", "show", "take", "snap",
+];
 const PICTURE_NOUNS: &[&str] = &[
     "picture",
     "pictures",
@@ -317,6 +319,9 @@ const PICTURE_NOUNS: &[&str] = &[
     "images",
     "photo",
     "photos",
+    "selfie",
+    "selfies",
+    "snapshot",
     "drawing",
     "drawings",
     "illustration",
@@ -324,6 +329,19 @@ const PICTURE_NOUNS: &[&str] = &[
     "painting",
     "portrait",
     "wallpaper",
+];
+/// Verbs that ask for a new short video when a video word follows soon after.
+const VIDEO_VERBS: &[&str] = &[
+    "make", "create", "generate", "render", "produce", "give", "send", "film",
+];
+const VIDEO_NOUNS: &[&str] = &[
+    "video",
+    "videos",
+    "clip",
+    "clips",
+    "animation",
+    "animations",
+    "reel",
 ];
 /// A line that opens with these asks about something, never for a picture.
 const ASKS_ABOUT: &[&str] = &[
@@ -349,6 +367,8 @@ const TASK_VERBS: &[&str] = &[
     "sort", "copy", "schedule", "edit", "change", "turn", "close", "start", "stop", "restart",
     "click",
 ];
+/// After a leading "do", these make the line a question.
+const DO_SUBJECTS: &[&str] = &["you", "u", "ya", "i", "we", "they", "yall", "y'all"];
 const QUESTION_WORDS: &[&str] = &[
     "what", "why", "how", "when", "where", "who", "which", "is", "are", "can", "could", "does",
     "do", "should", "will", "would", "explain",
@@ -1088,6 +1108,17 @@ pub fn is_picture_ask(text: &str) -> bool {
     picture_ask(&t, &words(rest))
 }
 
+/// A message that clearly asks for a new short video ("make a short video of
+/// waves", "generate a video of a fox", "animate a lighthouse").
+pub fn is_video_ask(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    let mut rest = t.as_str();
+    for p in POLITE {
+        rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
+    }
+    video_ask(&t, &words(rest))
+}
+
 /// A clear ask for a new picture. `ws` is the ask without its "can you"
 /// opener. "I like this picture", "describe the image" and "can you make
 /// images?" are not asks.
@@ -1105,7 +1136,7 @@ fn picture_ask(t: &str, ws: &[&str]) -> bool {
                 .get(i + 1)
                 .is_some_and(|next| !PICTURE_THERE.contains(next))
     });
-    // "make me a picture of a fox", "generate an image".
+    // "make me a picture of a fox", "generate an image", "send me a selfie".
     let make = ws.iter().enumerate().any(|(i, w)| {
         PICTURE_VERBS.contains(w)
             && ws
@@ -1114,9 +1145,46 @@ fn picture_ask(t: &str, ws: &[&str]) -> bool {
                 .skip(i + 1)
                 .take(4)
                 .take_while(|(_, n)| !PICTURE_THERE.contains(n))
-                .any(|(j, n)| PICTURE_NOUNS.contains(n) && (!question || j + 1 < ws.len()))
+                .any(|(j, n)| {
+                    PICTURE_NOUNS.contains(n)
+                        && (!question
+                            || j + 1 < ws.len()
+                            || j > 0 && matches!(ws[j - 1], "a" | "an"))
+                })
     });
     draw || make
+}
+
+/// A clear ask for a new short video. "watch a video", "how do I make a
+/// video?", "make the video shorter", and "can you make videos?" are not asks.
+fn video_ask(t: &str, ws: &[&str]) -> bool {
+    if ws.first().is_some_and(|w| ASKS_ABOUT.contains(w)) {
+        return false;
+    }
+    let question = t.trim_end().ends_with('?');
+    let animate = ws.iter().enumerate().any(|(i, w)| {
+        *w == "animate"
+            && (i == 0 || matches!(ws[i - 1], "to" | "please" | "pls" | "and"))
+            && ws
+                .get(i + 1)
+                .is_some_and(|next| !PICTURE_THERE.contains(next))
+    });
+    let make = ws.iter().enumerate().any(|(i, w)| {
+        VIDEO_VERBS.contains(w)
+            && ws
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .take(5)
+                .take_while(|(_, n)| !PICTURE_THERE.contains(n))
+                .any(|(j, n)| {
+                    VIDEO_NOUNS.contains(n)
+                        && (!question
+                            || j + 1 < ws.len()
+                            || j > 0 && matches!(ws[j - 1], "a" | "an"))
+                })
+    });
+    animate || make
 }
 
 /// "check into it for me", "why does it do that": a short ask whose only
@@ -1240,7 +1308,9 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         || (ws.len() <= 6 && any_word(&ws, BANTER_WORDS))
         // Talking games while hanging out is still hanging out.
         || (chatting && matches!(topic, "general" | "gaming") && ws.len() <= 8);
-    let task_verb = TASK_VERBS.contains(&first) && acted_on;
+    // "do the thing" is an order; "do you like games?" asks.
+    let do_order = first == "do" && !rest_words.get(1).is_some_and(|w| DO_SUBJECTS.contains(w));
+    let task_verb = (TASK_VERBS.contains(&first) || do_order) && acted_on;
     // "use X for Y", with X up to four words.
     let use_for = ws
         .iter()
@@ -1988,6 +2058,8 @@ mod tests {
             ("could you set a timer for ten minutes", Intent::Task),
             ("make me a playlist of chill songs", Intent::Task),
             ("start the backup now", Intent::Task),
+            ("do the thing", Intent::Task),
+            ("please do a backup of my documents", Intent::Task),
             ("can you explain how you work?", Intent::Question),
             ("what do you know about black holes?", Intent::Question),
         ] {
@@ -2530,5 +2602,38 @@ mod pc_health_tests {
         }
         assert_eq!(Intent::parse("image"), Some(Intent::Image));
         assert_eq!(Intent::Image.as_str(), "image");
+    }
+
+    #[test]
+    fn hangout_character_picture_and_video_asks_are_recognized() {
+        for ask in [
+            "Nyx send me a picture of yourself",
+            "send a selfie",
+            "can you send a selfie?",
+            "show me a photo of a neon alley",
+            "take a selfie at the arcade",
+        ] {
+            assert!(is_picture_ask(ask), "{ask}");
+            assert_eq!(sort(ask).intent, Intent::Image, "{ask}");
+        }
+        for ask in [
+            "make a short video of ocean waves",
+            "generate a video of a fox running",
+            "create a 5 second clip of rain on glass",
+            "animate a lighthouse in a storm",
+            "can you make a video?",
+        ] {
+            assert!(is_video_ask(ask), "{ask}");
+        }
+        for not in [
+            "watch a video",
+            "how do I make a video?",
+            "make the video shorter",
+            "can you make videos?",
+            "send me that photo",
+        ] {
+            assert!(!is_video_ask(not), "{not}");
+            assert!(!is_picture_ask(not), "{not}");
+        }
     }
 }

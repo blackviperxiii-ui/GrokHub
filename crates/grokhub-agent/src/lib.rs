@@ -1,10 +1,12 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
+mod agent_message;
 mod auto_review;
 pub mod batch;
 pub mod brain;
 mod builtin_skills;
 pub mod cache_watch;
+pub mod channels_email;
 pub mod channels_net;
 pub mod check_decide;
 mod checkpoint;
@@ -12,6 +14,7 @@ pub mod claude_plan;
 mod client;
 mod close_check;
 pub mod code_guard;
+pub mod code_panel;
 mod compact;
 mod config_file;
 mod denials;
@@ -20,6 +23,7 @@ mod diet;
 pub mod dream_gate;
 mod dream_model;
 mod drive;
+pub mod edit_verify;
 pub mod elevate;
 pub mod episode;
 mod eval;
@@ -43,6 +47,7 @@ mod memory_embed;
 mod models;
 pub mod mods_net;
 pub mod onboard;
+pub mod outbound_hooks;
 mod pace;
 pub mod package_age;
 pub mod perm;
@@ -53,8 +58,8 @@ mod post_check;
 mod prefix_cache;
 pub mod prefix_guard;
 mod prompt;
-mod recovery;
 pub mod repair;
+pub mod repo_map;
 mod repo_rules;
 pub mod research;
 mod retry;
@@ -74,7 +79,9 @@ pub mod scratch;
 pub mod self_manage;
 mod session;
 mod session_tools;
+mod shell_redirect;
 pub mod ship_tree;
+pub mod skill_curator;
 pub mod skill_write;
 mod skills;
 mod sse;
@@ -83,6 +90,7 @@ mod subagent;
 mod subagent_policy;
 pub mod sudo_pass;
 pub mod tasks;
+pub mod telephony_net;
 pub mod timing;
 pub mod tokens;
 mod tools;
@@ -90,10 +98,12 @@ mod turn_budget;
 mod unattended;
 pub mod voice_session;
 pub mod vstack_sync;
+pub mod web_origin;
 mod work;
 mod ws_mode;
 pub mod xai_keychain;
 
+pub use agent_message::MAX_MESSAGE as AGENT_MESSAGE_CHARS;
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
     ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TextFormat,
@@ -106,12 +116,18 @@ pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
     ab_flag as live_ab_flag, ab_passed as live_ab_passed, dream_lessons_passed,
     parse_budget as parse_live_budget, read_progress as read_live_progress, render_live, run_live,
-    run_live_with, write_atomic as write_live_atomic, write_progress as write_live_progress,
-    LiveOpts, LiveReport, LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
+    run_live_with, write_atomic as write_live_atomic, write_coding_results,
+    write_progress as write_live_progress, EvalSuite, LiveOpts, LiveReport,
+    LocalClient as LiveLocalClient, OpenRouterClient as LiveOpenRouterClient,
     Provider as LiveProvider, RetryPolicy as LiveRetryPolicy, AB_FLAGS as LIVE_AB_FLAGS,
     DEFAULT_K as LIVE_DEFAULT_K,
 };
 pub use eval::memory_index::{render_memory_index_bench, run_memory_index_bench, MemoryIndexBench};
+pub use eval::skills::{
+    fixtures as skill_ablation_fixtures, render_report as render_skill_ablation,
+    run_skill_ablation, run_skill_ablation_with, write_results as write_skill_ablation_results,
+    SkillAblationOpts, SkillAblationReport, SkillArm, SkillAttempt,
+};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     live_budget_ticks, load_tasks, parse_args, reject_live, render_markdown, render_report,
@@ -135,15 +151,17 @@ pub use hooks::{
 pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use lead::{lead_on, set_lead_session, LeadPhase};
 pub use mcp::{
-    alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
-    restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
-    ElicitView,
+    alias_elicit, app_call_tool, app_host_initialize, attach_elicit, configured, detach_elicit,
+    doctor, import_documents, import_paths, restart, set_workspace, shutdown_all, unalias_elicit,
+    DoctorRow, ElicitInbox, ElicitNote, ElicitView, McpAppView,
 };
 pub use memory::{
-    amr_enabled, amr_store, dream, dream_model_enabled, first_turn_injection, flush_pending,
-    global_memory_path, is_dream_command, is_flush_command, memory_writes_enabled,
-    queue_memory_status, remember, remember_note_text, search as search_memory, set_memory_writes,
-    take_memory_status, workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
+    amr_enabled, amr_store, dream, dream_model_enabled, drop_global_copies, first_turn_injection,
+    flush_pending, forget_session_topic, global_memory_path, is_dream_command, is_flush_command,
+    lock_notes, memory_writes_enabled, note_forgotten_lines, queue_memory_status, remember,
+    remember_note_text, search as search_memory, session_lines_about, set_memory_writes,
+    take_memory_status, without_forgotten_lines, workspace_memory_path, Hit as MemoryHit,
+    NotesLock, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use memory_embed::embedder as text_embedder;
 pub use models::{
@@ -157,12 +175,8 @@ pub use plan_skills::{
     CREATE_VERIFICATION, FOLLOW_THROUGH, MAINTAIN_VERIFICATION, QA_WALKTHROUGH,
 };
 pub use prompt::{
-    chat_volatile_tail, prompt_need_from_job, system_prompt, system_prompt_parts,
+    chat_volatile_tail, paths_block, prompt_need_from_job, system_prompt, system_prompt_parts,
     system_prompt_with, tool_set_from_job, ChatTail, PromptNeed, PromptProfile,
-};
-pub use recovery::{
-    project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
-    RecoveryState,
 };
 pub use repo_rules::{
     discover as discover_repo_rules, resolve_preferred_branch,
@@ -181,10 +195,10 @@ pub use run::{
 pub use session::{
     attach_run, cancel_session, compacted_messages, delete_forks_of, delete_session,
     export_markdown, forget_message, fork_session, format_cost_ticks, history_generation,
-    list_sessions, load_session, local_title, merge_history, message_pairs, record_compaction,
-    record_turn, rename_session, resume_input, session_file, session_intact, shown_pairs,
-    transcript_pairs, usage_label, user_lines, Forget, Forgotten, HistoryRow, RunGuard,
-    SessionInfo, TurnThought, UserKind, UserLine, FORGET_BUSY,
+    list_session_heads, list_sessions, load_session, local_title, merge_history, message_pairs,
+    record_compaction, record_turn, rename_session, resume_input, session_file, session_intact,
+    shown_pairs, transcript_pairs, usage_label, user_lines, Forget, Forgotten, HistoryRow,
+    RunGuard, SessionHead, SessionInfo, TurnThought, UserKind, UserLine, FORGET_BUSY,
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{
@@ -194,16 +208,24 @@ pub use skills::{
     SkillSource, BUILTIN_ALWAYS_ON, BUILTIN_SKILL_BODIES,
 };
 pub use sse::SseParser;
-pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
+pub use subagent::{
+    answer_peer, drain_side_events, peer_unanswered, requeue_side_events, steer_task, PeerTurn,
+    SideEvent,
+};
 pub use tasks::{
     drain_task_changes, forget_session, halt_all_sessions, halt_session, halt_tree, hub_for,
     link_child, session_is_live, set_task_watch, watch_cancel, TaskPeek, TaskProgress, TaskRow,
     TaskState,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
+pub use tools::home_assistant::{
+    available as home_assistant_available, clear_host as clear_home_assistant_host,
+    set_host as set_home_assistant_host, HomeAssistantOps, OFF_MSG as HOME_ASSISTANT_OFF,
+};
 pub use tools::mods::{set_host as set_mods_host, ModsOps};
 pub use tools::{
-    brave_key_present, deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute,
+    brave_key_present, confine as confine_workspace, deferred_tools_enabled,
+    deferred_tools_settings, dispatch_for_job, execute, fetch_public_markdown,
     generative_ui_enabled, imagine_client, is_readonly, public_only_resolve, run_media_tool,
     schemas_for, schemas_for_job, seal_brave_key, searxng_url_problem, tool_schemas,
     tool_set_for_kind, tool_set_refusal, DeferredToolsSettings, DesktopOps, ImagineApi,

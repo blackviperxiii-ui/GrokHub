@@ -23,7 +23,7 @@ if [[ ! -x "$PREFIX/bin/grokhub-shell" ]]; then
   exit 1
 fi
 
-sed -e "s|^Exec=grokhub-shell\$|Exec=$PREFIX/bin/grokhub-shell|" \
+sed -e "s|^Exec=grokhub-shell\\( %u\\)\\?\$|Exec=$PREFIX/bin/grokhub-shell %u|" \
     -e "s|^TryExec=grokhub-shell\$|TryExec=$PREFIX/bin/grokhub-shell|" \
     "$ROOT/packaging/grokhub-shell.desktop" \
   | install -Dm644 /dev/stdin "$PREFIX/share/applications/grokhub-shell.desktop"

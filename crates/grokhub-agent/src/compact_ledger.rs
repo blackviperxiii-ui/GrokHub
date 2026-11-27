@@ -78,26 +78,121 @@ fn prior_ledger(items: &[InputItem]) -> Ledger {
     ledger
 }
 
-/// How a shell call ended, read from the first lines of its result.
-fn shell_status(output: Option<&str>, background: bool) -> String {
+/// What [`shell_status`] says when a result holds no line saying how it ended.
+pub(crate) const NOT_KEPT: &str = "result not kept";
+
+/// How a shell call ended, read from its result by [`ended_line`].
+pub(crate) fn shell_status(output: Option<&str>, background: bool) -> String {
     if background {
         return "started in the background".into();
     }
-    let Some(output) = output else {
-        return "no result".into();
-    };
-    for line in output.lines().take(3) {
-        let line = line.trim();
-        if let Some(code) = line.strip_prefix("exit ") {
-            if code.parse::<i64>().is_ok() {
-                return format!("exit {code}");
-            }
-        }
-        if line.starts_with("timed out after") || line == "killed" {
-            return line.to_string();
-        }
+    match output {
+        None => "no result".into(),
+        Some(output) => ended_line(output).unwrap_or_else(|| NOT_KEPT.into()),
     }
-    "result not kept".into()
+}
+
+/// The shell tool's own line saying how a command ended, in its own shapes
+/// only (`exit 0`, `timed out after 120000ms`, `killed`): the result's first
+/// line, or the one right after the fence or the compaction header that
+/// opens it. A line further on is the command's own output, so it is never
+/// taken for one.
+pub(crate) fn ended_line(output: &str) -> Option<String> {
+    let line = head_line(output)?;
+    if let Some(code) = line.strip_prefix("exit ") {
+        return code.parse::<i64>().ok().map(|code| format!("exit {code}"));
+    }
+    if let Some(ms) = line
+        .strip_prefix("timed out after ")
+        .and_then(|rest| rest.strip_suffix("ms"))
+    {
+        return ms
+            .parse::<u64>()
+            .ok()
+            .map(|ms| format!("timed out after {ms}ms"));
+    }
+    (line == "killed").then(|| line.to_string())
+}
+
+/// The first line of a tool's result that the tool wrote: line 1, or the
+/// line after the fence or the compaction header that opens the result.
+pub(crate) fn head_line(output: &str) -> Option<&str> {
+    let mut lines = output.lines().map(str::trim);
+    let first = lines.next()?;
+    if first.starts_with("<<<UNTRUSTED source=") || first.starts_with("<tool_output_compact ") {
+        lines.next()
+    } else {
+        Some(first)
+    }
+}
+
+/// `output`'s lines outside its fences, trimmed: the lines our own code
+/// wrote, never a page's, a task's or a helper's words.
+pub(crate) fn outside_fences(output: &str) -> impl Iterator<Item = &str> {
+    let mut fenced = false;
+    output.lines().map(str::trim).filter(move |line| {
+        let open = line.starts_with("<<<UNTRUSTED source=");
+        let was = fenced;
+        fenced = if was {
+            !line.starts_with("<<<END_UNTRUSTED ")
+        } else {
+            open
+        };
+        !was && !open
+    })
+}
+
+/// The lines of a background read that the read wrote: each task's `id:`
+/// header when it read several, and the task's `status:` and `exit_code:`
+/// lines. A header opens the read or a block after a blank line, or comes
+/// right after the task before it; what a task printed is fenced.
+pub(crate) fn read_head(output: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut fenced, mut block_start, mut in_head) = (false, true, true);
+    for (n, line) in output.lines().map(str::trim).enumerate() {
+        if n == 0 && line.starts_with("<tool_output_compact ") {
+            continue;
+        }
+        if fenced {
+            fenced = !line.starts_with("<<<END_UNTRUSTED ");
+            continue;
+        }
+        let header = line.strip_suffix(':').is_some_and(|id| {
+            !id.is_empty() && id != "output" && !id.contains(char::is_whitespace)
+        });
+        let status = line.starts_with("status: ") || line.starts_with("exit_code: ");
+        if (header && (block_start || in_head)) || (status && in_head) {
+            out.push(line);
+            in_head = true;
+        } else {
+            in_head = false;
+            fenced = line.starts_with("<<<UNTRUSTED source=");
+        }
+        block_start = line.is_empty();
+    }
+    out
+}
+
+/// The lines of `tool`'s result that the tool wrote and a compacted result
+/// keeps above its summary: how a command ended or where it went on
+/// (`exit 0`, `… moved to the background as task t1`), a background read's
+/// headers and statuses, and a subagent's `status:` and `task id:` lines.
+pub(crate) fn own_head<'a>(tool: &str, output: &'a str) -> Vec<&'a str> {
+    match tool {
+        "run_terminal_command" => head_line(output)
+            .filter(|line| {
+                ended_line(line).is_some()
+                    || line.starts_with("still running after ")
+                    || line.starts_with("task id: ")
+            })
+            .into_iter()
+            .collect(),
+        "get_command_or_subagent_output" => read_head(output),
+        "spawn_subagent" => outside_fences(output)
+            .filter(|line| line.starts_with("status: ") || line.starts_with("task id: "))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn is_background(arguments: &serde_json::Value) -> bool {

@@ -35,9 +35,10 @@ impl GovState {
         }
     }
 
-    fn ctx_cap(self) -> u32 {
+    fn ctx_cap_for(self, coding: bool) -> u32 {
         match self {
             GovState::RampUp => u32::MAX,
+            GovState::Normal if coding => CODING_CTX_TARGET,
             GovState::Normal => 32_768,
             GovState::Throttle => 8_192,
         }
@@ -280,6 +281,8 @@ pub fn gaming_launch(prev: &LaunchArgs) -> LaunchArgs {
 
 /// Context sizes tried, biggest first.
 const CTX_STEPS: [u32; 6] = [131_072, 65_536, 32_768, 16_384, 8_192, 4_096];
+/// Target context window for local coding models in [`GovState::Normal`].
+pub const CODING_CTX_TARGET: u32 = 65_536;
 /// The smallest context worth keeping q8 KV for; below it q4 buys room.
 const Q8_FLOOR_CTX: u32 = 8_192;
 /// Share of MoE weights that are experts (and may stay in RAM).
@@ -353,14 +356,28 @@ fn ctx_steps(
     meta: &GgufMeta,
     state: GovState,
     want: Option<u32>,
+    coding: bool,
 ) -> impl Iterator<Item = u32> + use<> {
     let model_max = if meta.context_length > 0 {
         meta.context_length
     } else {
         4_096
     };
-    let cap = state.ctx_cap().min(model_max).min(want.unwrap_or(u32::MAX));
+    let cap = state
+        .ctx_cap_for(coding)
+        .min(model_max)
+        .min(want.unwrap_or(u32::MAX));
     CTX_STEPS.into_iter().filter(move |c| *c <= cap.max(4_096))
+}
+
+/// What a launch loads beside the model: the drafter it must load with,
+/// the MB of a vision projector (0 without one), and whether the model
+/// serves coding turns (which raise the Normal target context to 64K).
+#[derive(Clone, Copy, Default)]
+struct Beside<'a> {
+    drafter: Option<&'a GgufMeta>,
+    projector_mb: u64,
+    coding: bool,
 }
 
 /// MB one model (or drafter) takes at `ctx`: its file, KV cache and buffers.
@@ -371,14 +388,6 @@ fn need_mb(meta: &GgufMeta, ctx: u32, kv: KvType, seqs: u32) -> u64 {
 /// MB the drafter in `reserve` takes beside the model at `ctx`.
 fn reserve_mb(reserve: Option<&GgufMeta>, ctx: u32, kv: KvType, seqs: u32) -> u64 {
     reserve.map_or(0, |d| need_mb(d, ctx, kv, seqs))
-}
-
-/// What a launch loads beside the model: the drafter it must load with, and
-/// the MB of a vision projector (0 without one).
-#[derive(Clone, Copy, Default)]
-struct Beside<'a> {
-    drafter: Option<&'a GgufMeta>,
-    projector_mb: u64,
 }
 
 impl Beside<'_> {
@@ -456,6 +465,31 @@ pub fn autoconfig(
         Beside {
             drafter: reserve,
             projector_mb: 0,
+            coding: false,
+        },
+    )
+}
+
+/// [`autoconfig`] for coding models: raises the Normal cap to 64K and allows
+/// q4 KV (and single-slot allocation) when needed to fit 64K on 16 GB cards.
+pub fn autoconfig_coding(
+    p: &LocalProfile,
+    meta: &GgufMeta,
+    backend: Backend,
+    state: GovState,
+    o: &Overrides,
+    reserve: Option<&GgufMeta>,
+) -> LaunchArgs {
+    autoconfig_beside(
+        p,
+        meta,
+        backend,
+        state,
+        o,
+        Beside {
+            drafter: reserve,
+            projector_mb: 0,
+            coding: true,
         },
     )
 }
@@ -472,18 +506,32 @@ fn autoconfig_beside(
 ) -> LaunchArgs {
     let reserve = beside.drafter;
     let (gpu_mb, ram_mb) = budgets(p, backend, state);
-    let steps: Vec<u32> = ctx_steps(meta, state, o.ctx).collect();
-    let floor = Q8_FLOOR_CTX
+    let steps: Vec<u32> = ctx_steps(meta, state, o.ctx, beside.coding).collect();
+    let base_floor = Q8_FLOOR_CTX
         .min(meta.context_length.max(4_096))
         .min(o.ctx.unwrap_or(u32::MAX).max(4_096));
+    let cap_top = steps.first().copied().unwrap_or(4_096);
+    let floor = if beside.coding {
+        CODING_CTX_TARGET.min(cap_top).max(4_096)
+    } else {
+        base_floor
+    };
     let on_cpu = gpu_mb == 0;
     let slots = |ctx: u32| super::local_flags::slot_count(state, ctx, on_cpu);
-    let full = (gpu_mb > 0)
+    let mut full = (gpu_mb > 0)
         .then(|| pick_ctx(meta, beside, &steps, gpu_mb, floor, o.kv, &slots))
-        .flatten()
-        // A model split across GPU and RAM can't run its drafter, so a pair
-        // takes a shorter context to stay whole on the GPU.
-        .filter(|(c, _)| *c >= floor || reserve.is_some());
+        .flatten();
+    let mut single_slot = false;
+    let single = (beside.coding && gpu_mb > 0 && full.map_or(0, |(c, _)| c) < floor)
+        .then(|| pick_ctx(meta, beside, &steps, gpu_mb, floor, o.kv, &|_| 1))
+        .flatten();
+    if let Some((c1, kv1)) = single.filter(|(c1, _)| *c1 > full.map_or(0, |(c, _)| c)) {
+        full = Some((c1, kv1));
+        single_slot = true;
+    }
+    // A model split across GPU and RAM can't run its drafter, so a pair
+    // takes a shorter context to stay whole on the GPU.
+    let full = full.filter(|(c, _)| *c >= base_floor || reserve.is_some());
     let cap = if gpu_mb > 0 {
         PARTIAL_CTX_CAP
     } else {
@@ -494,7 +542,11 @@ fn autoconfig_beside(
         .or_else(|| pick_ctx(meta, beside, &capped, gpu_mb + ram_mb, floor, o.kv, &slots))
         .unwrap_or((4_096, o.kv.unwrap_or(KvType::Q4)));
     let all_layers = meta.block_count + 1;
-    let seqs = slots(ctx);
+    let seqs = if single_slot && full.is_some() {
+        1
+    } else {
+        slots(ctx)
+    };
     // The drafter (and a projector) sit on the GPU beside a whole model, so
     // the layers get what they leave.
     let gpu_left = gpu_mb.saturating_sub(beside.mb(ctx, kv, seqs));
@@ -1335,9 +1387,11 @@ fn planned_as(
     // projector when it loads one.
     let pairing = local_spec::pairing(&flags, model, &meta, &dir, &device);
     let projector_mb = projector.map_or(0, |v| v.mb);
+    let coding = is_coding_model(model);
     let beside = Beside {
         drafter: pairing.reserve(),
         projector_mb,
+        coding,
     };
     let args = autoconfig_beside(&p, &meta, backend, state, &o, beside);
     let mut args = match load_tuned(&dir).get(&key) {
@@ -1391,6 +1445,7 @@ fn planned_as(
             let beside = Beside {
                 drafter: Some(d),
                 projector_mb,
+                coding,
             };
             let ram = autoconfig_beside(&p, &meta, Backend::Cpu, state, &capped, beside);
             args.ctx = ram.ctx;
@@ -1480,6 +1535,12 @@ fn tune(
         base,
         cands,
     }));
+}
+
+/// Whether `model`'s catalog entry serves coding turns.
+pub fn is_coding_model(model: &Path) -> bool {
+    catalog_model_for(model)
+        .is_some_and(|m| local_setup::use_case(m.id) == local_setup::UseCase::Coding)
 }
 
 /// The catalog row for a model file, for [`next_smaller`].

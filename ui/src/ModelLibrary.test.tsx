@@ -32,14 +32,16 @@ function library(over: Partial<LibraryView> = {}): LibraryView {
           {
             id: "g12",
             name: "Gemma 4 12B",
-            line: "Gemma 4 12B · 6.9 GB · Fits this PC · Uncensored · Gemma",
+            line: "Gemma 4 12B · 6.9 GB · Fits this PC · General chat · Uncensored · Gemma",
+            useCase: "General chat",
             about: "Longer tasks and stronger answers.",
             state: "download",
           },
           {
             id: "e2b",
             name: "Gemma 4 E2B",
-            line: "Gemma 4 E2B · 3.2 GB · Fits this PC · Uncensored · Gemma",
+            line: "Gemma 4 E2B · 3.2 GB · Fits this PC · General chat · Uncensored · Gemma",
+            useCase: "General chat",
             about: "Quick chats and background tasks, even on a laptop.",
             state: "inUse",
           },
@@ -53,7 +55,8 @@ function library(over: Partial<LibraryView> = {}): LibraryView {
           {
             id: "e2b-mtp",
             name: "Gemma 4 E2B draft model",
-            line: "Gemma 4 E2B draft model · 0.4 GB · Fits this PC · Uncensored · Gemma",
+            line: "Gemma 4 E2B draft model · 0.4 GB · Fits this PC · General chat · Uncensored · Gemma",
+            useCase: "General chat",
             about: "Makes Gemma 4 E2B reply faster.",
             state: "downloaded",
           },
@@ -67,7 +70,7 @@ function library(over: Partial<LibraryView> = {}): LibraryView {
     ],
     lineup: {
       ids: ["g12", "g12-mtp", "zimg"],
-      line: "3 models, 14.6 GB in all. Speed: Gemma 4 E2B (downloaded) · Everyday: Gemma 4 12B · Video: No on-device video models yet.",
+      line: "3 models, 14.6 GB in all. Speed: Gemma 4 E2B (downloaded) · Everyday: Gemma 4 12B · Video: Wan 2.2 5B video",
     },
     everything: { ids: ["g12", "g12-mtp"], line: "2 models, 8.4 GB in all." },
     status: idle,
@@ -108,6 +111,7 @@ describe("ModelLibrary", () => {
       "Other (0)",
     ]);
     const inUse = screen.getByRole("listitem", { name: "Gemma 4 E2B" });
+    expect(inUse).toHaveTextContent("General chat");
     expect(inUse).toHaveTextContent("In use.");
     await userEvent.click(screen.getByRole("tab", { name: "Image (0)" }));
     expect(screen.getByText(/No image models yet/)).toBeInTheDocument();
@@ -279,5 +283,33 @@ describe("ModelLibrary", () => {
     expect(await screen.findByText("Downloaded Qwen3-8B-Q4_K_M.gguf into Auto.")).toBeInTheDocument();
     // No runtime / chat model picker.
     expect(screen.queryByRole("combobox", { name: /model/i })).toBeNull();
+  });
+
+  it("downloads every part of a split quant, the first part last", async () => {
+    api.getModelLibrary.mockResolvedValue(library());
+    api.searchHfGguf.mockResolvedValue([
+      { repo: "unsloth/Big-GGUF", downloads: 3, likes: 0, updated: "2026-01-01", gated: false },
+    ]);
+    api.listHfGgufFiles.mockResolvedValue([
+      {
+        label: "Q4_K_M",
+        paths: ["Q4_K_M/Big-Q4_K_M-00001-of-00003.gguf", "Q4_K_M/Big-Q4_K_M-00002-of-00003.gguf", "Q4_K_M/Big-Q4_K_M-00003-of-00003.gguf"],
+        size: "120 GB",
+        fit: "Fits this PC",
+        fitKind: "yes",
+      },
+    ]);
+    api.downloadHfGguf.mockImplementation(async (_repo: string, path: string) => `Downloaded ${path.split("/").pop()} into Auto.`);
+    render(<ModelLibrary />);
+    await userEvent.type(await screen.findByLabelText("Search Hugging Face for GGUF models"), "big");
+    await userEvent.click(screen.getByRole("button", { name: "Search" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Show quants" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Download into Auto" }));
+    expect(await screen.findByText("Downloaded Big-Q4_K_M-00001-of-00003.gguf into Auto.")).toBeInTheDocument();
+    expect(api.downloadHfGguf.mock.calls).toEqual([
+      ["unsloth/Big-GGUF", "Q4_K_M/Big-Q4_K_M-00002-of-00003.gguf"],
+      ["unsloth/Big-GGUF", "Q4_K_M/Big-Q4_K_M-00003-of-00003.gguf"],
+      ["unsloth/Big-GGUF", "Q4_K_M/Big-Q4_K_M-00001-of-00003.gguf"],
+    ]);
   });
 });

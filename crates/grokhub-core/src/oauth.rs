@@ -821,19 +821,18 @@ mod tests {
 
     #[test]
     fn device_poll_honors_interval_and_slow_down() {
-        assert_eq!(next_oauth_poll_secs(5, PollStatus::Pending), Some(5));
-        assert_eq!(next_oauth_poll_secs(0, PollStatus::Pending), Some(1));
-        assert_eq!(
-            next_oauth_poll_secs(5, PollStatus::SlowDown),
-            Some(10),
+        assert!((next_oauth_poll_secs(5, PollStatus::Pending)) == (Some(5)));
+        assert!((next_oauth_poll_secs(0, PollStatus::Pending)) == (Some(1)));
+        assert!(
+            (next_oauth_poll_secs(5, PollStatus::SlowDown)) == (Some(10)),
             "RFC 8628 increases the interval by 5 seconds"
         );
-        assert_eq!(next_oauth_poll_secs(5, PollStatus::Ready), None);
-        assert_eq!(next_oauth_poll_secs(5, PollStatus::Expired), None);
-        assert_eq!(next_oauth_poll_secs(5, PollStatus::Denied), None);
+        assert!(next_oauth_poll_secs(5, PollStatus::Ready).is_none());
+        assert!(next_oauth_poll_secs(5, PollStatus::Expired).is_none());
+        assert!(next_oauth_poll_secs(5, PollStatus::Denied).is_none());
         let slow = parse_poll_result(false, &json!({"error": "slow_down"}), 1);
         assert_eq!(slow.status, PollStatus::SlowDown);
-        assert_eq!(next_oauth_poll_secs(2, slow.status), Some(7));
+        assert!((next_oauth_poll_secs(2, slow.status)) == (Some(7)));
     }
 
     fn now_far() -> u64 {
@@ -984,11 +983,11 @@ mod tests {
         assert!(get_started_oauth_error("Invalid device code response from xAI").is_some());
         assert!(get_started_oauth_error("xAI discovery missing device endpoint").is_some());
         assert!(get_started_oauth_error("https://auth.x.ai: Connection failed").is_some());
-        assert_eq!(
-            oauth_error_status("Connection reset by peer"),
-            "oauth error (Connection reset by peer)"
+        assert!(
+            (oauth_error_status("Connection reset by peer"))
+                == ("oauth error (Connection reset by peer)")
         );
-        assert_eq!(oauth_error_status("access_denied"), "access_denied");
+        assert!((oauth_error_status("access_denied")) == ("access_denied"));
         assert!(
             get_started_oauth_error("Grok OAuth connected").is_none(),
             "success is not an error on Get Started"

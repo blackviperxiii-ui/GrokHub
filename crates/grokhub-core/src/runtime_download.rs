@@ -125,11 +125,20 @@ pub fn manifest_for_host() -> Option<Manifest> {
     manifest_for_key(key)
 }
 
+/// The pinned URL is HTTPS on the allowlist. Offline only refuses the
+/// download itself ([`download_engine`]), not knowing which engine is pinned.
+fn pinned_url_ok(url: &str) -> Option<()> {
+    match runtime_download_url_ok(url) {
+        Err(e) if !crate::offline::is_refusal(&e) => None,
+        _ => Some(()),
+    }
+}
+
 pub fn manifest_for_key(key: &str) -> Option<Manifest> {
     let file = parse_manifest().ok()?;
     let asset = file.platforms.get(key)?.clone();
     asset.archive_format()?;
-    runtime_download_url_ok(&asset.url).ok()?;
+    pinned_url_ok(&asset.url)?;
     Some(Manifest {
         version: file.version,
         asset,
@@ -149,7 +158,7 @@ pub fn variant_for_key(key: &str, backend: &str) -> Option<(Manifest, u32)> {
         .find(|v| v.platform == key && v.backend == backend)?;
     for a in &v.assets {
         a.archive_format()?;
-        runtime_download_url_ok(&a.url).ok()?;
+        pinned_url_ok(&a.url)?;
     }
     let (asset, extras) = v.assets.split_first()?;
     Some((
@@ -734,6 +743,30 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::sync::Mutex;
+
+    #[test]
+    fn offline_only_still_shows_the_pinned_engine() {
+        let _off = crate::offline::force_for_thread(true);
+        assert_eq!(
+            manifest_for_key("linux-x86_64").map(|m| m.version),
+            Some("b12017".to_string())
+        );
+        assert_eq!(
+            variant_for_key("linux-x86_64", "cuda").map(|(m, _)| m.version),
+            Some("b12017".to_string())
+        );
+        // Downloading it is still refused.
+        let m = manifest_for_key("linux-x86_64").unwrap();
+        let dir = std::env::temp_dir().join(format!("gh-rt-offline-{}", std::process::id()));
+        let srv = FakeServer::new(b"never sent");
+        let out = download_engine(&dir, &m, &srv, &Control::default(), &mut |_| {});
+        assert_eq!(
+            out,
+            Outcome::Failed(crate::offline::OFFLINE_MSG.to_string())
+        );
+        assert!(srv.urls.lock().unwrap().is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn manifest_parses_and_every_url_is_https_and_allowlisted() {

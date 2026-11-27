@@ -22,7 +22,7 @@ pub fn schema() -> Value {
     })
 }
 
-pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
+pub fn run(workspace: &Path, session: Option<&str>, args: &Value) -> ToolOutput {
     let raw = path_arg(args);
     if raw.is_empty() {
         return ToolOutput::err("path is required");
@@ -48,7 +48,14 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         ""
     };
     crate::checkpoint::before_write(&path);
-    let written = with_file_lock(&path, || write_at(&path, &stored));
+    let written = with_file_lock(&path, || {
+        if super::seen::changed_on_disk(session, &path) {
+            return Err(super::seen::refusal(&raw));
+        }
+        let bytes = write_at(&path, &stored)?;
+        super::seen::note(session, &path, stored.as_bytes());
+        Ok(bytes)
+    });
     match written {
         Ok(bytes) => {
             crate::memory::after_model_write(workspace, &path);
@@ -163,7 +170,7 @@ mod tests {
         let body = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap();
         assert!(
             !body.contains(secret) && body.contains("[redacted]"),
-            "{body}"
+            "the memory file still holds a secret"
         );
         let out = dispatch(
             &ctx,
@@ -171,10 +178,7 @@ mod tests {
             &serde_json::json!({"path": "fixture.txt", "content": secret}).to_string(),
         );
         assert!(!out.failed, "{}", out.text);
-        assert_eq!(
-            std::fs::read_to_string(dir.join("fixture.txt")).unwrap(),
-            secret
-        );
+        assert!((std::fs::read_to_string(dir.join("fixture.txt")).unwrap()) == (secret));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

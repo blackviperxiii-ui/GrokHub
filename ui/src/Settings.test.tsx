@@ -83,6 +83,12 @@ vi.mock("./Privacy", () => ({
   Privacy: ({ readOnly }: { readOnly?: boolean }) => <p>{readOnly ? "Privacy read-only" : "Privacy panel"}</p>,
 }));
 vi.mock("./Background", () => ({ Background: () => <p>Background panel</p> }));
+// Auto setup has its own tests (AutoSetup.test.tsx); here it stands for a page
+// that saves settings on its own.
+vi.mock(import("./AutoSetup"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  AutoSetupPage: () => <p>Auto setup panel</p>,
+}));
 
 import {
   ABOUT_STACK,
@@ -178,9 +184,23 @@ describe("Settings", () => {
 
     await openSection("General");
     await userEvent.click(screen.getByLabelText("Let Loadout control the desktop"));
-    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
     expect(api.saveSettings).toHaveBeenCalledWith(false, "/work", "always", true);
-    expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+  });
+
+  it("after Auto setup changes approvals, desktop control saves the new approvals", async () => {
+    api.getSettings.mockResolvedValue(shape({ approvals: "auto" }));
+    api.saveSettings.mockResolvedValue(shape({ approvals: "ask", desktopControl: true }));
+    render(<Settings caps={DESKTOP} />);
+    await screen.findByLabelText("Let Loadout control the desktop");
+
+    await openSection("Auto setup");
+    expect(screen.getByText("Auto setup panel")).toBeInTheDocument();
+    // Auto setup's Undo puts approvals back to Ask on disk.
+    api.getSettings.mockResolvedValue(shape({ approvals: "ask" }));
+    await openSection("General");
+    await userEvent.click(screen.getByLabelText("Let Loadout control the desktop"));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    expect(api.saveSettings).toHaveBeenCalledWith(true, "", "ask", true);
   });
 
   it("a Pulse model card opens Local AI on its model; the palette opens it plain", async () => {
@@ -206,7 +226,7 @@ describe("Settings", () => {
     expect(screen.queryByText("Local models source")).toBeNull();
   });
 
-  it("desktop control starts off, says what still asks, and saves", async () => {
+  it("desktop control starts off, saves on the flip, and then says what still asks", async () => {
     api.saveSettings.mockResolvedValue(shape({ desktopControl: true }));
     render(<Settings caps={DESKTOP} />);
 
@@ -214,12 +234,23 @@ describe("Settings", () => {
     expect(desk).not.toBeChecked();
     expect(screen.queryByText(DESKTOP_NOTE)).not.toBeInTheDocument();
     await userEvent.click(desk);
-    expect(screen.getByText(DESKTOP_NOTE)).toHaveClass("warn");
-    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
     expect(api.saveSettings).toHaveBeenCalledWith(true, "", "ask", true);
-    expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+    expect(await screen.findByText(DESKTOP_NOTE)).toHaveClass("warn");
     expect(screen.getByLabelText("Let Loadout control the desktop")).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
+  });
+
+  it("a desktop control save that fails says why and leaves the switch off", async () => {
+    api.saveSettings.mockRejectedValue("Couldn't save the settings file");
+    render(<Settings caps={DESKTOP} />);
+
+    const desk = await screen.findByLabelText("Let Loadout control the desktop");
+    await userEvent.click(desk);
+
+    expect(await screen.findByText("Couldn't save the settings file")).toBeInTheDocument();
+    expect(desk).not.toBeChecked();
+    expect(screen.queryByText(DESKTOP_NOTE)).not.toBeInTheDocument();
   });
 
   it("General names the Halt keys, and says when Super+Shift+Esc isn't system-wide", async () => {
@@ -242,15 +273,10 @@ describe("Settings", () => {
     expect(api.getHaltKeys).not.toHaveBeenCalled();
   });
 
-  it("Save settings is the one call to action in Settings, and only while there is a change to save", async () => {
+  it("General has no Save button, and Save key is not a call to action", async () => {
     render(<Settings caps={DESKTOP} />);
-    const save = await screen.findByRole("button", { name: "Save settings" });
-    expect(save).not.toHaveClass("cta");
-    const control = screen.getByRole("switch", { name: /control the desktop/ });
-    await userEvent.click(control);
-    expect(save).toHaveClass("cta");
-    await userEvent.click(control);
-    expect(save).not.toHaveClass("cta");
+    await screen.findByRole("switch", { name: /control the desktop/ });
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
     await openSection("Account");
     await userEvent.type(await screen.findByLabelText("API key"), "sk-abcdefghijklmnopqrstuv");
     expect(screen.getByRole("button", { name: "Save key" })).not.toHaveClass("cta");
@@ -315,15 +341,12 @@ describe("Settings", () => {
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
 
-  it("the hotkey and notifications apply at once and keep an unsaved edit", async () => {
+  it("the hotkey and notifications apply at once", async () => {
     api.setSummonHotkey.mockResolvedValue(shape({ summonHotkey: true }));
     api.setNotifications.mockResolvedValue(shape({ summonHotkey: true, notifications: false }));
     render(<Settings caps={BASICS} />);
 
-    // Unsaved: the desktop switch saves with the button.
-    const desk = await screen.findByLabelText("Let Loadout control the desktop");
-    await userEvent.click(desk);
-    const hotkey = screen.getByLabelText(/from anywhere with Ctrl\+Shift\+Space/);
+    const hotkey = await screen.findByLabelText(/from anywhere with Ctrl\+Shift\+Space/);
     const notify = screen.getByLabelText(/Notify me when the agent needs an OK/);
     expect(hotkey).not.toBeChecked();
     expect(notify).toBeChecked();
@@ -334,7 +357,6 @@ describe("Settings", () => {
     await userEvent.click(notify);
     expect(api.setNotifications).toHaveBeenCalledWith(false);
     await waitFor(() => expect(notify).not.toBeChecked());
-    expect(desk).toBeChecked();
     expect(api.saveSettings).not.toHaveBeenCalled();
   });
 

@@ -87,6 +87,8 @@ struct Fake {
     calls: RefCell<Vec<String>>,
     states: RefCell<Vec<BatchState>>,
     cancel_state: RefCell<BatchState>,
+    /// Every cancel fails with this text.
+    cancel_err: RefCell<Option<String>>,
     add_err: RefCell<Option<ClientError>>,
     reply: RefCell<Option<Value>>,
     /// The request id `add` saw (results answer it).
@@ -147,6 +149,9 @@ impl BatchApi for Fake {
     }
     fn cancel(&self, batch_id: &str) -> Result<BatchState, ClientError> {
         self.calls.borrow_mut().push(format!("cancel {batch_id}"));
+        if let Some(err) = self.cancel_err.borrow().clone() {
+            return Err(ClientError::Transport(err));
+        }
         Ok(self.cancel_state.borrow().clone())
     }
 }
@@ -656,5 +661,72 @@ fn a_plain_client_and_a_tool_turn_never_touch_the_batch_api() {
         "{seen:?}"
     );
     assert_eq!(seen.len(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_failed_cancel_keeps_the_batch_on_record() {
+    let dir = tmp("cancel-fails");
+    let fake = Fake::answering(vec![pending()], "late");
+    *fake.cancel_err.borrow_mut() = Some("connection reset".into());
+    let clock = Cell::new(1_000u64);
+    let now = || {
+        clock.set(clock.get() + 30_000);
+        clock.get()
+    };
+    let Deferred::Fallback(why) = go(&fake, &dir, &ask("dream"), &now) else {
+        panic!("expected a fallback");
+    };
+    assert_eq!(
+        why,
+        "batch took too long; its cancel failed: transport: connection reset"
+    );
+    let jobs: Vec<String> = load(&dir).jobs.iter().map(|j| j.batch_id.clone()).collect();
+    assert_eq!(jobs, ["batch_1"], "the batch may still run and bill");
+
+    // The same ask later picks that batch back up and uses its answer.
+    let back = Fake::answering(vec![settled(1)], "kept");
+    *back.added.borrow_mut() = fake.added.borrow().clone();
+    let Deferred::Done(turn) = go(&back, &dir, &ask("dream"), &|| 2_000) else {
+        panic!("expected the kept batch's answer");
+    };
+    assert_eq!(turn.text, "kept");
+    assert_eq!(back.called("create"), 0);
+    assert!(load(&dir).jobs.is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_left_behind_batch_whose_cancel_fails_is_tried_again_for_a_week() {
+    let dir = tmp("stale-cancel-fails");
+    update(&dir, |s| {
+        s.jobs.push(Job {
+            batch_id: "batch_old".into(),
+            request_id: "loadout-old".into(),
+            key: "old".into(),
+            model: "grok-4.3".into(),
+            submitted_ms: 0,
+        })
+    });
+    let stale_at = 60_000 + STALE_GRACE_MS + 1;
+    let fake = Fake::answering(vec![settled(1)], "ok");
+    *fake.cancel_err.borrow_mut() = Some("connection reset".into());
+    assert!(matches!(
+        go(&fake, &dir, &ask("dream"), &|| stale_at),
+        Deferred::Done(_)
+    ));
+    assert_eq!(fake.called("cancel batch_old"), 1);
+    let jobs: Vec<String> = load(&dir).jobs.iter().map(|j| j.batch_id.clone()).collect();
+    assert_eq!(jobs, ["batch_old"]);
+
+    // A week after it went in, it is let go.
+    let later = Fake::answering(vec![settled(1)], "ok");
+    *later.cancel_err.borrow_mut() = Some("connection reset".into());
+    assert!(matches!(
+        go(&later, &dir, &ask("dream"), &|| WEEK_MS),
+        Deferred::Done(_)
+    ));
+    assert_eq!(later.called("cancel batch_old"), 1);
+    assert!(load(&dir).jobs.is_empty());
     let _ = fs::remove_dir_all(&dir);
 }

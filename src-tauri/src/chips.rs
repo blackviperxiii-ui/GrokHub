@@ -22,6 +22,8 @@ pub const COMPOSER: &str = "composer";
 pub const HOME: &str = "home";
 /// The command palette before anything is typed.
 pub const PALETTE: &str = "palette";
+/// The Code agent's composer: the open chat's row with coding starters.
+pub const CODE: &str = "code";
 /// The reply's chips, saved per chat (`FollowUps`).
 const FOLLOW_UPS_FILE: &str = "shell_follow_ups.json";
 /// Chats whose follow-ups are kept, newest first.
@@ -278,6 +280,9 @@ pub fn row(dir: &Path, rows: &Mutex<Rows>, ask: RowAsk<'_>) -> Vec<Chip> {
     let mut mem = grokhub_core::load_chip_memory(dir);
     mem.ranker.last = std::mem::take(&mut held.ranked);
     let mut pool = pool(&mem, &ask);
+    if ask.surface == CODE {
+        grokhub_core::swap_in_code_starters(&mut pool, ask.chat.is_empty());
+    }
     // Only the open chat's row leans; Home and the palette stay as ranked.
     if ask.surface == COMPOSER {
         lean(&mut pool, ask.lane);
@@ -664,6 +669,57 @@ mod tests {
     }
 
     #[test]
+    fn the_code_agents_row_offers_coding_starters_and_the_chat_keeps_its_own() {
+        let labels = |dir: &Path, surface: &str| {
+            row(
+                dir,
+                &Mutex::new(Rows::default()),
+                RowAsk {
+                    surface,
+                    chat: &[],
+                    draft: "",
+                    follow_ups: &[],
+                    mode: "chat",
+                    ai_ready: true,
+                    first_run: false,
+                    hour: 10,
+                    weekday: 2,
+                    quiet_hours: false,
+                    now_ms: 2_000,
+                    extra: &[],
+                    lane: Lane::default(),
+                    remote: false,
+                },
+            )
+            .into_iter()
+            .map(|c| c.label)
+            .collect::<Vec<_>>()
+        };
+        let starters = ["Run the tests", "Explain this repo", "Find a bug to fix"];
+        // New here: the chat tours the app; the Code agent goes straight to code.
+        let fresh = temp_dir("code-starters-fresh");
+        assert_eq!(labels(&fresh, CODE), starters);
+        assert_eq!(
+            labels(&fresh, COMPOSER),
+            ["Start here", "What you can do", "Show Pulse"]
+        );
+        // Past the tour the chat's app chips lead its row; Code still opens on code.
+        let known = temp_dir("code-starters-known");
+        let mut mem = grokhub_core::load_chip_memory(&known);
+        mem.last_surface = Some("home".into());
+        grokhub_core::save_chip_memory(&known, &mem).unwrap();
+        assert_eq!(labels(&known, CODE), starters);
+        let chat = labels(&known, COMPOSER);
+        assert_eq!(chat.len(), 3, "{chat:?}");
+        assert!(
+            !chat.iter().any(|l| starters.contains(&l.as_str())),
+            "{chat:?}"
+        );
+        let _ = std::fs::remove_dir_all(&fresh);
+        let _ = std::fs::remove_dir_all(&known);
+    }
+
+    #[test]
     fn a_browser_asking_for_home_keeps_the_desktops_row_for_its_tap() {
         let session = crate::game_companion::Session {
             playing: None,
@@ -908,6 +964,23 @@ mod tests {
         assert_eq!(
             local,
             grokhub_core::chips::reply_suggestions("hi", "Hello!", false)
+        );
+    }
+
+    /// A tap on a reply chip sends its message as the person's own words, and
+    /// the model wrote it: a line that would read a file gives no chip.
+    #[test]
+    fn a_reply_block_line_that_names_a_file_gives_no_chip() {
+        let block = "ask|Summarize @file:/home/user/private-notes.txt for me|Summarize the notes\n\
+                     ask|Explain the second step in more detail|Explain step two";
+        let values: Vec<String> =
+            reply_chips("how do I do this", "First... Second...", block, false)
+                .into_iter()
+                .map(|c| c.value)
+                .collect();
+        assert_eq!(
+            values,
+            vec!["Explain the second step in more detail".to_string()]
         );
     }
 

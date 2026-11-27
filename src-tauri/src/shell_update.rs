@@ -1,10 +1,12 @@
 //! The shell updates itself (LU-06). Each release carries a `latest.json`
-//! that points at the Linux AppImage and the Windows NSIS installer, each
-//! minisign-signed with the release key in `packaging/minisign.pub`. This
-//! finds the channel's newest release on GitHub, hands its `latest.json` to
-//! `tauri-plugin-updater`, and installs only when the user clicks. Every
-//! Windows build and a Linux AppImage update this way; Linux package and
-//! clone installs and macOS builds don't.
+//! that points at the Linux AppImage (and a plain `linux-x86_64` alias), the
+//! `.deb`, and the Windows NSIS installer, each minisign-signed with the
+//! release key in `packaging/minisign.pub`. This finds the channel's newest
+//! release on GitHub, hands its `latest.json` to `tauri-plugin-updater`, and
+//! installs only when the user clicks. AppImage installs, prebuilt user
+//! installs under `…/bin` (including Arch/CachyOS), `.deb` under `/usr`,
+//! Windows, and macOS `.app` update this way; AUR/`/usr` packages and
+//! `--from-source` clone installs don't.
 //!
 //! The channel is the `channel` receipt in the config folder, which
 //! `scripts/install.sh --channel` writes too, so the two are one setting.
@@ -86,21 +88,69 @@ pub fn set_channel(config_dir: &Path, channel: Channel) -> Result<(), String> {
 
 /// Whether this install can replace itself:
 /// - the AppImage (`$APPIMAGE` set);
+/// - a prebuilt user install under `…/bin` outside `/usr` with no live clone
+///   `source` receipt (what `scripts/install.sh` without `--from-source`
+///   leaves on Arch/CachyOS and other non-deb hosts), which takes the
+///   AppImage artifact;
 /// - a `.deb` install under `/usr` (`deb` is the bundle type Tauri stamped
 ///   into the binary), which the updater replaces with the new `.deb`
 ///   through pkexec;
 /// - the Windows installer;
 /// - a macOS `.app`, swapped for the release's `.app.tar.gz`.
 ///
-/// A copy built from a clone or the AUR, and phones, can't.
-pub fn updatable(os: &str, appimage: Option<&str>, deb: bool, exe: &Path) -> bool {
+/// A copy built from a clone (`source` receipt) or the AUR under `/usr`, and
+/// phones, can't.
+pub fn updatable(
+    os: &str,
+    appimage: Option<&str>,
+    deb: bool,
+    exe: &Path,
+    config_dir: &Path,
+) -> bool {
     match os {
         "linux" => {
-            appimage.is_some_and(|p| !p.trim().is_empty()) || (deb && exe.starts_with("/usr"))
+            appimage.is_some_and(|p| !p.trim().is_empty())
+                || (deb && exe.starts_with("/usr"))
+                || user_prebuilt_linux(exe, config_dir)
         }
         "windows" => true,
         "macos" => exe.to_string_lossy().contains(".app/Contents/MacOS/"),
         _ => false,
+    }
+}
+
+/// A prebuilt user install: the binary sits in a `bin` folder outside `/usr`,
+/// and there is no live clone `source` receipt. That is the Arch/CachyOS path
+/// from `scripts/install.sh` (AppImage renamed into `~/.local/bin`).
+pub fn user_prebuilt_linux(exe: &Path, config_dir: &Path) -> bool {
+    let in_bin = exe.parent().and_then(Path::file_name) == Some("bin".as_ref());
+    if !in_bin || exe.starts_with("/usr") {
+        return false;
+    }
+    clone_source(config_dir).is_none()
+}
+
+/// The clone path `scripts/install.sh --from-source` wrote, when it still
+/// names a directory on disk.
+fn clone_source(config_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(config_dir.join("source"))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && Path::new(t).is_dir())
+}
+
+/// Manifest platform key for Linux when we must pick the AppImage entry
+/// (running AppImage or a prebuilt user install). `None` leaves the plugin to
+/// use the stamped bundle type (`.deb` under `/usr`).
+pub fn linux_manifest_target(
+    appimage: Option<&str>,
+    exe: &Path,
+    config_dir: &Path,
+) -> Option<&'static str> {
+    if appimage.is_some_and(|p| !p.trim().is_empty()) || user_prebuilt_linux(exe, config_dir) {
+        Some("linux-x86_64-appimage")
+    } else {
+        None
     }
 }
 
@@ -124,11 +174,7 @@ pub fn not_updatable_note(os: &str, config_dir: &Path, channel: Channel, exe: &P
         return "This build doesn't update itself yet.".to_string();
     }
     let in_bin = exe.parent().and_then(Path::file_name) == Some("bin".as_ref());
-    let clone = std::fs::read_to_string(config_dir.join("source"))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty() && Path::new(t).is_dir())
-        .filter(|_| in_bin && !exe.starts_with("/usr"));
+    let clone = clone_source(config_dir).filter(|_| in_bin && !exe.starts_with("/usr"));
     match clone {
         Some(clone) => format!(
             "Built from the clone in {clone}: to update it, run scripts/install.sh --from-source --channel {ch} there with the options you installed it with."
@@ -220,7 +266,7 @@ impl UpdateView {
         let os = std::env::consts::OS;
         let appimage = std::env::var("APPIMAGE").ok();
         let exe = std::env::current_exe().unwrap_or_default();
-        let updatable = updatable(os, appimage.as_deref(), deb_bundle(), &exe);
+        let updatable = updatable(os, appimage.as_deref(), deb_bundle(), &exe, config_dir);
         let channel = channel(config_dir);
         Self {
             version: version(),
@@ -258,7 +304,9 @@ pub mod plugin {
         let switching = ch != build_channel();
         let pubkey = updater_pubkey().ok_or("this build has no release key")?;
         let handle = app.clone();
-        let updater = app
+        let appimage = std::env::var("APPIMAGE").ok();
+        let exe = std::env::current_exe().unwrap_or_default();
+        let mut builder = app
             .updater_builder()
             // Windows exits inside the install; run the app's quit steps first.
             .on_before_exit(move || crate::before_update_exit(&handle))
@@ -268,9 +316,14 @@ pub mod plugin {
             .map_err(|e| e.to_string())?
             .pubkey(pubkey)
             .timeout(Duration::from_secs(300))
-            .version_comparator(move |_bundle, remote| offer(&remote.version, &running, switching))
-            .build()
-            .map_err(|e| e.to_string())?;
+            .version_comparator(move |_bundle, remote| offer(&remote.version, &running, switching));
+        // AppImage and prebuilt user installs (Arch/CachyOS) must take the
+        // AppImage entry, not linux-x86_64-deb, even when the plugin has no
+        // stamped bundle type.
+        if let Some(target) = linux_manifest_target(appimage.as_deref(), &exe, config_dir) {
+            builder = builder.target(target);
+        }
+        let updater = builder.build().map_err(|e| e.to_string())?;
         let update = updater.check().await.map_err(|e| match e {
             // A beta built per merge carries no macOS update, for one.
             tauri_plugin_updater::Error::TargetsNotFound(_) => {

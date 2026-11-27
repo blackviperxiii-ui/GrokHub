@@ -2,7 +2,9 @@
 //! a `getUpdates` reply into the direct messages it holds and decides each
 //! one through [`DmTrust`]: a paired sender's text is handed on, a new
 //! sender gets a pairing code, and everything else is dropped. Group chats
-//! and other bots are never read.
+//! and other bots are never read. A `/start` carrying the app's live start
+//! link pairs that sender with no code to type (the QR the app shows is a
+//! `t.me` link with that payload).
 
 use serde_json::{json, Value};
 
@@ -96,9 +98,53 @@ pub fn pairing_text(code: &str) -> String {
     )
 }
 
+/// The reply to a sender a start link just paired.
+pub const PAIRED_BY_LINK: &str =
+    "You're paired. Messages you send here now reach the assistant on your computer.";
+
+/// The payload of a `/start <payload>` message (or `/start@bot <payload>`),
+/// when it is one Telegram could have sent: 1 to 64 of `A-Z a-z 0-9 _ -`.
+pub fn start_payload(text: &str) -> Option<&str> {
+    let (command, payload) = text.trim().split_once(char::is_whitespace)?;
+    let bot_ok = match command.strip_prefix("/start")? {
+        "" => true,
+        rest => rest.starts_with('@'),
+    };
+    let payload = payload.trim();
+    (bot_ok
+        && (1..=64).contains(&payload.len())
+        && payload
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+    .then_some(payload)
+}
+
+/// The `t.me` link that opens `bot` (with or without its `@`) and sends it
+/// `/start <payload>`. `None` for a name Telegram wouldn't give a bot.
+pub fn start_link_url(bot: &str, payload: &str) -> Option<String> {
+    let bot = bot.strip_prefix('@').unwrap_or(bot);
+    let bot_ok = (5..=32).contains(&bot.len())
+        && bot.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    let payload_ok = start_payload(&format!("/start {payload}")) == Some(payload);
+    (bot_ok && payload_ok).then(|| format!("https://t.me/{bot}?start={payload}"))
+}
+
 /// The decision for `msg`. A sender who already has a live code hears
-/// nothing more, so a stranger can't make the bot repeat itself.
+/// nothing more, so a stranger can't make the bot repeat itself. A `/start`
+/// with a payload is never handed on: it either redeems the start link or
+/// is treated as any other first message.
 pub fn step(trust: &mut DmTrust, msg: Incoming, now_ms: u64) -> Step {
+    if let Some(payload) = start_payload(&msg.text) {
+        if trust.redeem_start_link(ChannelKind::Telegram, &msg.sender, payload, now_ms) {
+            return Step::Reply {
+                chat_id: msg.chat_id,
+                text: PAIRED_BY_LINK.into(),
+            };
+        }
+        if trust.is_paired(ChannelKind::Telegram, &msg.sender) {
+            return Step::Drop;
+        }
+    }
     match trust.inbound(ChannelKind::Telegram, &msg.sender, &msg.label, now_ms) {
         Inbound::Trusted => Step::Forward(msg),
         Inbound::Pair { code, fresh: true } => Step::Reply {
@@ -210,6 +256,72 @@ mod tests {
         trust.approve(&code, NOW + 2).unwrap();
         assert_eq!(step(&mut trust, msg.clone(), NOW + 3), Step::Forward(msg));
         assert_eq!(trust.pending.len(), 0);
+    }
+
+    #[test]
+    fn a_start_payload_is_read_only_from_a_start_command() {
+        assert_eq!(start_payload("/start abc_DEF-123"), Some("abc_DEF-123"));
+        assert_eq!(start_payload(" /start@my_bot  abc "), Some("abc"));
+        assert_eq!(
+            start_payload(&format!("/start {}", "a".repeat(64))).map(str::len),
+            Some(64)
+        );
+        for bad in [
+            "/start",
+            "/start ",
+            "/starter abc",
+            "start abc",
+            "/start a b",
+            "/start a.b",
+            "/start é",
+            &format!("/start {}", "a".repeat(65)),
+        ] {
+            assert_eq!(start_payload(bad), None, "{bad}");
+        }
+        assert_eq!(
+            start_link_url("@example_bot", "abc").as_deref(),
+            Some("https://t.me/example_bot?start=abc")
+        );
+        assert_eq!(start_link_url("bot", "abc"), None);
+        assert_eq!(start_link_url("example/bot", "abc"), None);
+        assert_eq!(start_link_url("example_bot", "a b"), None);
+        assert_eq!(start_link_url("example_bot", ""), None);
+    }
+
+    #[test]
+    fn the_live_start_link_pairs_its_sender_and_others_get_a_code() {
+        let mut trust = DmTrust::default();
+        let secret = trust.issue_start_link(ChannelKind::Telegram, NOW);
+        let msg = |text: &str| Incoming {
+            update_id: 1,
+            chat_id: 5001,
+            sender: "777".into(),
+            label: "@user".into(),
+            text: text.into(),
+        };
+        // A wrong payload is a first message like any other.
+        let Step::Reply { text, .. } = step(&mut trust, msg("/start deadbeef"), NOW) else {
+            panic!("a wrong payload gets the normal code");
+        };
+        assert_eq!(text, pairing_text(&trust.pending[0].code));
+        assert_eq!(
+            step(&mut trust, msg(&format!("/start {secret}")), NOW + 1),
+            Step::Reply {
+                chat_id: 5001,
+                text: PAIRED_BY_LINK.into()
+            }
+        );
+        assert!(trust.is_paired(ChannelKind::Telegram, "777"));
+        assert!(trust.pending.is_empty());
+        // Opening it again is never handed on to the assistant.
+        assert_eq!(
+            step(&mut trust, msg(&format!("/start {secret}")), NOW + 2),
+            Step::Drop
+        );
+        assert_eq!(
+            step(&mut trust, msg("hi"), NOW + 3),
+            Step::Forward(msg("hi"))
+        );
     }
 
     #[test]

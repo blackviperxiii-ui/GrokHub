@@ -237,6 +237,14 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
             let id = cx.conversation_id.filter(|id| !id.is_empty());
             notice(crate::memory::reflect(cx.config_dir, id)?.status)
         }
+        Op::LearnSkill(rest) => {
+            let _config = ConfigGuard::set(cx.config_dir);
+            let id = cx.conversation_id.filter(|id| !id.is_empty());
+            Ok(Applied {
+                effect: crate::learn_skill::run(cx.config_dir, &work, id, &rest)?,
+                workspace: None,
+            })
+        }
         Op::Skill(name) => {
             let _config = ConfigGuard::set(cx.config_dir);
             let home = grokhub_core::user_home();
@@ -258,7 +266,65 @@ pub fn run(op: Op, cx: &Ctx) -> Result<Applied, String> {
                     workspace: None,
                 }),
                 Some(r) => Err(format!("{} is switched off. Turn it on in Skills.", r.name)),
-                None => Err(format!("No skill {}", name.trim())),
+                None => {
+                    if let Some(bundle) = grokhub_core::bundle_by_slug(cx.config_dir, want) {
+                        Ok(Applied {
+                            effect: Effect::Mode {
+                                mode: "chat",
+                                text: Some(grokhub_core::bundle_load_prompt(&bundle, "")),
+                            },
+                            workspace: None,
+                        })
+                    } else {
+                        Err(format!("No skill {}", name.trim()))
+                    }
+                }
+            }
+        }
+        Op::SkillBundle { slug, args } => {
+            let _config = ConfigGuard::set(cx.config_dir);
+            // (1) skill bundle, (2) loaded skill (respect on), (3) Unknown command.
+            if let Some(bundle) = grokhub_core::bundle_by_slug(cx.config_dir, &slug) {
+                return Ok(Applied {
+                    effect: Effect::Mode {
+                        mode: "chat",
+                        text: Some(grokhub_core::bundle_load_prompt(&bundle, &args)),
+                    },
+                    workspace: None,
+                });
+            }
+            let home = grokhub_core::user_home();
+            let page = crate::skills::load(cx.config_dir, &work, home.as_deref());
+            let want = slug.trim().trim_start_matches('/');
+            let row = page.rows.iter().find(|r| {
+                r.name.eq_ignore_ascii_case(want)
+                    || r.trigger
+                        .trim()
+                        .trim_start_matches('/')
+                        .eq_ignore_ascii_case(want)
+            });
+            match row {
+                Some(r) if r.on => {
+                    let slash = if r.trigger.trim().starts_with('/') {
+                        r.trigger.trim().to_string()
+                    } else {
+                        format!("/{}", r.name)
+                    };
+                    let mut prompt = grokhub_core::skill_use_in_chat_prompt(&slash, &r.name);
+                    let args = args.trim();
+                    if !args.is_empty() {
+                        prompt = format!("{prompt} {args}");
+                    }
+                    Ok(Applied {
+                        effect: Effect::Mode {
+                            mode: "chat",
+                            text: Some(prompt),
+                        },
+                        workspace: None,
+                    })
+                }
+                Some(r) => Err(format!("{} is switched off. Turn it on in Skills.", r.name)),
+                None => Err(format!("Unknown command /{slug}. Type /help for the list.")),
             }
         }
         Op::SkillChanges => notice(crate::changes::report(
@@ -844,6 +910,68 @@ mod tests {
     }
 
     #[test]
+    fn backend_dev_bundle_loads_its_three_skills_at_once() {
+        let h = home("backend-dev-bundle");
+        match go(&h, "/backend-dev refactor the auth middleware") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("bundle prompt");
+                assert!(body.contains("1. tdd"), "{body}");
+                assert!(body.contains("2. land-it"), "{body}");
+                assert!(body.contains("3. follow-through"), "{body}");
+                assert!(
+                    body.contains("User request: refactor the auth middleware"),
+                    "{body}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_skill_slug_loads_builtin_and_keeps_args() {
+        let h = home("slash-skill-slug");
+        match go(&h, "/qa-walkthrough") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("skill prompt");
+                assert!(
+                    body.contains("qa-walkthrough"),
+                    "expected qa-walkthrough in {body}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match go(&h, "/qa-walkthrough check the Code tab") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("skill prompt");
+                assert!(
+                    body.contains("check the Code tab"),
+                    "args must be preserved: {body}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match go(&h, "/arena") {
+            Ok(Effect::Mode { mode, text }) => {
+                assert_eq!(mode, "chat");
+                let body = text.expect("skill prompt");
+                assert!(body.contains("arena"), "expected arena in {body}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            go(&h, "/hepl"),
+            Err("Unknown command /hepl. Type /help for the list.".into())
+        );
+        assert_eq!(
+            go(&h, "/not-a-real-skill"),
+            Err("Unknown command /not-a-real-skill. Type /help for the list.".into())
+        );
+    }
+
+    #[test]
     fn goal_pins_shows_and_clears_and_keeps_the_other_settings() {
         let h = home("goal");
         std::fs::write(h.config.join("app.json"), r#"{"weeklySpendCapUsd": 20}"#).expect("seed");
@@ -966,6 +1094,52 @@ mod tests {
         let h = home("learn");
         assert_eq!(text(go(&h, "/learn")), "Reflect: nothing new");
         assert_eq!(text(go(&h, "/learn reflect")), "Reflect: nothing new");
+    }
+
+    #[test]
+    fn learn_folder_asks_to_save_then_writes_through_scanner() {
+        let h = home("learn-skill");
+        let docs = h.ws.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(
+            docs.join("setup.md"),
+            "# Setup\n\n1. Open Connectors\n2. Paste the config\n3. Save and restart chat\n",
+        )
+        .unwrap();
+        let asked = go(&h, "/learn docs").expect("confirm");
+        let Effect::Confirm { prompt, yes } = asked else {
+            panic!("expected confirm, got {asked:?}");
+        };
+        assert!(prompt.contains("Save these steps as the skill"), "{prompt}");
+        assert!(yes.starts_with("/learn --save "), "{yes}");
+        assert!(
+            !h.config.join("skills").exists()
+                || std::fs::read_dir(h.config.join("skills"))
+                    .map(|d| d.count() == 0)
+                    .unwrap_or(true),
+            "nothing saved before yes"
+        );
+        let saved = text(go(&h, &yes));
+        assert!(saved.starts_with("Saved the skill /"), "{saved}");
+        let skill = h.config.join("skills/docs/SKILL.md");
+        assert!(skill.is_file(), "{}", skill.display());
+        let body = std::fs::read_to_string(&skill).unwrap();
+        assert!(body.contains("origin: learn-folder"), "{body}");
+        assert!(body.contains("## Steps"), "{body}");
+        assert!(body.contains("Open Connectors"), "{body}");
+        let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
+    }
+
+    #[test]
+    fn learn_path_outside_workspace_is_refused() {
+        let h = home("learn-escape");
+        let err = go(&h, "/learn /etc").expect_err("escape");
+        assert!(
+            err.to_ascii_lowercase().contains("workspace")
+                || err.to_ascii_lowercase().contains("escape"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(h.config.parent().expect("root"));
     }
 
     #[test]

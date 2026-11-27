@@ -24,7 +24,7 @@ use std::sync::Arc;
 use grokhub_core::amr::{line_id, AmrError, AmrStore, NodeDraft, NodeType, Noted, Sensitivity};
 use grokhub_core::card_signals::{CardEvent, CardSignal};
 
-use crate::harness::approval::{decide, GateOutcome, Step};
+use crate::harness::approval::GateOutcome;
 use crate::harness::changes::{Change, ChangeOp};
 use crate::harness::hard::HardClass;
 use crate::harness::span::Span;
@@ -41,9 +41,6 @@ pub const MIND_ASK_AT: u32 = 20;
 pub const MIND_ASK_FIRST_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 /// The skill-patch class an Undo in `changes/skills.jsonl` counts against.
 pub const SKILL_CHANGE_KEY: &str = "self_manage:skill_change";
-/// Tool name an agent-started forget is checked as: `delete` makes it hard
-/// class Delete, so it parks a card no prior or Always can skip.
-pub const AGENT_FORGET_TOOL: &str = "memory_delete";
 
 /// What happened, as MindCheck reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,18 +328,9 @@ pub fn learn(
     Ok(out)
 }
 
-/// An agent-started forget of `count` learned notes: always a hard delete
-/// card. The user's own Forget click never comes here.
-pub fn agent_forget(count: usize) -> GateOutcome {
-    let action = format!("forget {count} learned notes");
-    decide(Step::Ask {
-        title: AGENT_FORGET_TOOL,
-        action: &action,
-    })
-}
-
-/// The soft-path verdict for a proactive candidate: [`decide`] with
-/// [`Step::Proactive`].
+/// The soft-path verdict for a proactive candidate:
+/// [`decide`](crate::harness::decide) with
+/// [`Step::Proactive`](crate::harness::Step::Proactive).
 pub(crate) fn proactive_outcome(name: &str, key: &str, mind: &MindCheck) -> GateOutcome {
     match mind.mind_route(&Candidate { key, hard: None }) {
         MindRoute::MayAuto => GateOutcome::Allow,
@@ -362,8 +350,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+    use crate::harness::approval::{decide, Step};
+    use crate::harness::hard_card_key;
     use crate::harness::span::Origin;
-    use crate::harness::{hard_card_key, HardAnswer};
 
     const DAY: u64 = 24 * 60 * 60 * 1000;
     const T0: u64 = 1_791_374_400_000;
@@ -628,20 +617,6 @@ mod tests {
         let plain = Span::deny("s", "read_file", "{}", "", "soft");
         assert_eq!(mind_key(&plain), "tool:read_file");
         assert_eq!(mind_key(&tidy("deny", 1)), "proactive:tidy_downloads");
-    }
-
-    #[test]
-    fn agent_forget_parks_a_hard_delete_card() {
-        assert_eq!(
-            agent_forget(3),
-            GateOutcome::Park {
-                reason: "hard-class delete: Delete — Always cannot skip".into(),
-                hard: Some(HardClass::Delete),
-                needs_user: true,
-            }
-        );
-        assert_eq!(hard_card_key(true, false, false), None);
-        assert_eq!(hard_card_key(false, true, false), Some(HardAnswer::Deny));
     }
 
     #[test]

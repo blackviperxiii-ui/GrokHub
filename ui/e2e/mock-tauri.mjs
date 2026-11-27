@@ -117,11 +117,18 @@ const EMPTY_TRANSCRIPT = {
 const EMPTY_TAB = { id: "shot-chat", title: "Hangout", pinned: false, updated: 0, main: false };
 const SECOND_TAB = { id: "shot-chat-2", title: "Fan curve", pinned: false, updated: 0, main: false };
 
-/** Composer and Home chip row: two plain chips and the one primary. */
+/** Composer and Home chip row: three starter chips, ids as the app gives them (Code drops these), two plain and the one primary. */
 const QUICK_CHIPS = [
-  { id: "c1", label: "Plan my weekend", value: "Plan my weekend", action: "ask", hint: "", primary: false },
-  { id: "c2", label: "Roast my build", value: "Roast my build", action: "ask", hint: "", primary: false },
-  { id: "c3", label: "Fix my stutter", value: "Fix my stutter", action: "ask", hint: "", primary: true },
+  { id: "seed-weekend", label: "Plan my weekend", value: "Plan my weekend", action: "ask", hint: "", primary: false },
+  { id: "seed-roast", label: "Roast my build", value: "Roast my build", action: "ask", hint: "", primary: false },
+  { id: "seed-stutter", label: "Fix my stutter", value: "Fix my stutter", action: "ask", hint: "", primary: true },
+];
+
+// The Code agent's own row (the `code` chip surface).
+const CODE_CHIPS = [
+  { id: "seed-code-tests", label: "Run the tests", value: "Run the tests and tell me what fails.", action: "ask", hint: "", primary: false },
+  { id: "seed-code-explain", label: "Explain this repo", value: "Explain what this repo does and how it is laid out.", action: "ask", hint: "", primary: false },
+  { id: "seed-code-bug", label: "Find a bug to fix", value: "Find a likely bug in this repo and propose a fix.", action: "ask", hint: "", primary: false },
 ];
 
 const XP = {
@@ -562,6 +569,7 @@ export function initScript(theme = "ops-dark") {
     tab: EMPTY_TAB,
     tab2: SECOND_TAB,
     chips: QUICK_CHIPS,
+    codeChips: CODE_CHIPS,
     home: HOME,
     behavior: BEHAVIOR,
     memory: EMPTY_MEMORY,
@@ -846,6 +854,29 @@ export function initScript(theme = "ops-dark") {
             rows: [],
             said: null,
           };
+        case "get_team":
+          return {
+            agents: [
+              { id: "planner", name: "Planner", kind: "role", access: "ask", about: "Plans the week and hands out the work.", team: "home", desktop: false, talks_to: ["researcher"], share: false },
+              { id: "researcher", name: "Researcher", kind: "role", access: "read_only", about: "Finds sources and sums them up.", desktop: false, share: false },
+              { id: "front-desk", name: "Front desk", kind: "customer", access: "read_only", about: "Answers questions about opening hours.", team: "home", desktop: false, share: true, share_with: ["laptop-1"] },
+            ],
+            teams: [{ id: "home", name: "Home", lead: "planner" }],
+            problem: null,
+            tiers: ["workhorse"],
+          };
+        case "team_computers":
+          return [
+            { id: "laptop-1", name: "Laptop", lastSeen: Date.now() - 300_000 },
+            { id: "tablet-2", name: "Tablet", lastSeen: 0 },
+          ];
+        case "get_agent_tasks":
+          return [
+            { id: "task-2", from: { agent: "planner" }, to: "researcher", state: "TASK_STATE_COMPLETED", asked: "Which router has the best range for a two-floor house?", reply: "A mesh kit with two units, one on each floor.", started_ms: Date.now() - 120_000, ended_ms: Date.now() - 90_000 },
+            { id: "task-1", from: "person", to: "front-desk", state: "TASK_STATE_REJECTED", asked: "Book a table for Friday.", reply: "Front desk only answers; it can't start a booking.", started_ms: Date.now() - 600_000, ended_ms: Date.now() - 599_000 },
+          ];
+        case "get_meetings":
+          return { consent: { join: false, record: false }, live: null, past: [], hits: [], query: "" };
         case "list_automations":
         case "list_connectors":
         case "list_skills":
@@ -875,7 +906,7 @@ export function initScript(theme = "ops-dark") {
         case "list_mods":
           return emptyList;
         case "quick_chips":
-          return fix.chips;
+          return args.surface === "code" ? fix.codeChips : fix.chips;
         case "get_home":
         case "home_view":
           return fix.home;
@@ -917,6 +948,32 @@ export function initScript(theme = "ops-dark") {
           return fix.codeDeploy;
         case "code_deploy_save":
           return fix.codeDeploy;
+        case "code_panel_state":
+        case "code_panel_settings_save":
+          return {
+            workspace: "/work/demo",
+            isRepo: true,
+            branch: "beta",
+            settings: args?.settings ?? {
+              localOnlyNonstop: false,
+              backupBeforeRisky: false,
+              maxRepeatedFailures: 3,
+              stallTimeoutMins: 15,
+              backupRetentionWarn: 20,
+            },
+            backups: [],
+            retentionWarnLimit: 20,
+            retentionWarning: null,
+          };
+        case "code_panel_backups":
+          return {
+            workspace: "/work/demo",
+            backups: [],
+            retentionWarnLimit: 20,
+            retentionWarning: null,
+          };
+        case "code_panel_backup_restore":
+          return { id: args?.backupId ?? "", summary: "Restored.", restoredFiles: 0 };
         case "code_secret_list":
         case "code_secret_set":
         case "code_secret_delete":
@@ -933,10 +990,78 @@ export function initScript(theme = "ops-dark") {
           return { model: "grok", temperature: 0.7 };
         case "get_skills":
           return fix.skills;
+        case "get_skill_library":
+          return {
+            packs: [
+              {
+                id: "everyday-life",
+                name: "Everyday Life Pack",
+                description:
+                  "Twelve practical workflows for meals, home upkeep, budgets, trips, tough messages, habits, and PC tidying.",
+                category: "Everyday Life",
+                total: 2,
+                installed: 0,
+              },
+            ],
+            categories: ["Finance & Shopping", "Home & Meals"],
+            items: [
+              {
+                id: "weekly-meal-plan",
+                name: "Weekly Meal Plan",
+                description:
+                  "Build a 7-day meal plan around dietary needs, budget, and a grouped grocery list.",
+                category: "Home & Meals",
+                tags: ["meals", "groceries"],
+                pack: "everyday-life",
+                trigger: "plan meals for the week",
+                instructions: "1. Ask about servings and dietary needs.\\n2. Draft 7-day plan with grouped list.",
+                pitfalls: "Do not invent specialty ingredients when staples work.",
+                installed: false,
+              },
+              {
+                id: "monthly-budget-check",
+                name: "Monthly Budget Check",
+                description:
+                  "Group expenses into fixed needs, flexible spending, and savings targets.",
+                category: "Finance & Shopping",
+                tags: ["budget", "savings"],
+                pack: "everyday-life",
+                trigger: "review my monthly budget and spending",
+                instructions: "1. Group expenses cleanly.\\n2. Highlight top categories to trim.",
+                pitfalls: "Never give regulated tax or investment advice.",
+                installed: false,
+              },
+            ],
+          };
+        case "install_library_skill":
+        case "install_library_pack":
+          return {
+            page: fix.skills,
+            library: { packs: [], categories: [], items: [] },
+            note: "Installed from Skills Library. Chat can use it.",
+          };
         case "get_memory_files":
           return fix.memoryFiles;
         case "get_battlenet":
           return { found: false, games: [] };
+        case "get_imagine":
+          return { tiles: [], ready: true, account: null, canSignIn: false };
+        case "imagine_cancel":
+          return true;
+        case "imagine_image":
+        case "chat_picture":
+        case "chat_media":
+          return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        case "save_chat_media_to_library":
+          return {
+            id: "saved-1",
+            name: "saved-1_a.png",
+            title: args?.prompt || "Saved creation",
+            prompt: args?.prompt || "Saved creation",
+            createdMs: 1,
+            video: false,
+            tall: false,
+          };
         case "nyx_look":
           // The companion docked beside the chat, as on a desktop with her art.
           return { set: "hanging-out", poses: ["brand/nyx-hanging-out.jpg"], explicit: false, mood: "hanging-out" };

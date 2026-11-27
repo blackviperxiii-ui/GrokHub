@@ -3,7 +3,16 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities, QuickChip } from "./api";
-import { hasPage, moreViews, NO_SOURCES, Palette, paletteRows, railViews, type PaletteExtras, type PaletteSources } from "./Palette";
+import {
+  hasPage,
+  NO_SOURCES,
+  Palette,
+  paletteRows,
+  railSections,
+  railViews,
+  type PaletteExtras,
+  type PaletteSources,
+} from "./Palette";
 import { answersTo, PALETTE_SYNONYMS, shellKeys, type ChatHit, type CommandRunners } from "./paletteCommands";
 
 vi.mock("./api", () => ({}));
@@ -42,13 +51,15 @@ describe("paletteRows", () => {
       "Chat",
       "History",
       "Pulse",
-      "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
+      "Team",
       "Personal",
       "Skills",
-      "Connectors",
+      "MCPs & Connectors",
+      "Marketplace",
       "Workboard",
       "Devices",
       "Fleet",
@@ -79,13 +90,14 @@ describe("paletteRows", () => {
       "Objectives",
       "Chat",
       "History",
-      "Imagine",
       "Journal",
+      "Meetings",
       "Automations",
       "Agents",
+      "Team",
       "Personal",
       "Skills",
-      "Connectors",
+      "MCPs & Connectors",
       "Workboard",
       "Updates & Drivers",
       "Settings",
@@ -101,7 +113,7 @@ describe("paletteRows", () => {
       "Settings: Background",
       "Settings: About",
     ]);
-    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Imagine", "Automations", "Agents", "Personal", "Skills", "Connectors", "Workboard", "Settings"]);
+    expect(labels(WEB, "")).toEqual(["Home", "Objectives", "Chat", "Automations", "Agents", "Personal", "Skills", "MCPs & Connectors", "Workboard", "Settings"]);
   });
 
   it("lists Mods right after Library on a desktop that has it, never on the web", () => {
@@ -142,17 +154,16 @@ describe("paletteRows", () => {
   });
 
   it("hides Halt without desktop control, and Halt and Sign in on the web", () => {
-    expect(withExtras(PHONE, "").slice(14, 17)).toEqual(["New chat", "Sign in", "Shortcuts"]);
+    expect(withExtras(PHONE, "").slice(15, 18)).toEqual(["New chat", "Sign in", "Shortcuts"]);
     expect(withExtras(WEB, "")).toEqual([
       "Home",
       "Objectives",
       "Chat",
-      "Imagine",
       "Automations",
       "Agents",
       "Personal",
       "Skills",
-      "Connectors",
+      "MCPs & Connectors",
       "Workboard",
       "Settings",
       "New chat",
@@ -205,7 +216,7 @@ describe("paletteRows", () => {
   it("lists recent chats, five at most, before the Settings sections", () => {
     const chats = Array.from({ length: 7 }, (_, i) => ({ id: `c${i}`, title: `Trip ${i}` }));
     const rows = paletteRows(PHONE, "", { ...EXTRAS, chats }).map((r) => r.label);
-    expect(rows.slice(17, 23)).toEqual([
+    expect(rows.slice(18, 24)).toEqual([
       "Chat: Trip 0",
       "Chat: Trip 1",
       "Chat: Trip 2",
@@ -213,6 +224,13 @@ describe("paletteRows", () => {
       "Chat: Trip 4",
       "Settings: General",
     ]);
+  });
+
+  it("finds Appearance for dark, theme or text size, and Account for api", () => {
+    expect(labels(DESKTOP, "dark")).toEqual(["Settings: Appearance", "Ask Loadout: dark"]);
+    expect(labels(DESKTOP, "Theme")).toEqual(["Settings: Appearance", "Ask Loadout: Theme"]);
+    expect(labels(DESKTOP, "text size")).toEqual(["Settings: Appearance", "Ask Loadout: text size"]);
+    expect(labels(DESKTOP, "api")).toEqual(["Settings: Account", "Ask Loadout: api"]);
   });
 
   it("filters by the typed text and ends with Ask Loadout", () => {
@@ -238,67 +256,86 @@ describe("hasPage", () => {
   });
 });
 
-describe("the rail and its More list", () => {
-  it("puts six pages on the rail and the rest under More, by platform", () => {
-    expect(railViews(DESKTOP)).toEqual(["home", "chat", "pulse", "library", "settings"]);
-    expect(railViews({ ...DESKTOP, code: true })).toEqual(["home", "chat", "code", "pulse", "library", "settings"]);
-    expect(railViews(WEB)).toEqual(["home", "chat", "settings"]);
-    expect(moreViews(DESKTOP)).toEqual([
+describe("the grouped rail", () => {
+  it("puts every desktop page on the rail, in group order, with no More list", () => {
+    expect(railViews(DESKTOP)).toEqual([
+      "home",
       "objectives",
+      "chat",
       "history",
-      "imagine",
+      "pulse",
       "journal",
+      "meetings",
+      "automations",
+      "agents",
+      "team",
+      "memory",
+      "skills",
+      "connectors",
+      "marketplace",
+      "workboard",
+      "devices",
+      "fleet",
+      "library",
+      "updates",
+      "settings",
+    ]);
+    expect(railViews(WEB)).toEqual([
+      "home",
+      "objectives",
+      "chat",
       "automations",
       "agents",
       "memory",
       "skills",
       "connectors",
       "workboard",
+      "settings",
+    ]);
+    expect(railSections(DESKTOP).map((s) => s.id)).toEqual(["core", "work", "make", "you", "pc"]);
+  });
+
+  it("pins pages first and leaves them out of their group", () => {
+    const desktop = { ...DESKTOP, code: true, mods: true };
+    expect(railViews(desktop, { pinned: ["automations", "skills"] })).toEqual([
+      "automations",
+      "skills",
+      "home",
+      "objectives",
+      "chat",
+      "code",
+      "command",
+      "history",
+      "pulse",
+      "journal",
+      "meetings",
+      "agents",
+      "team",
+      "memory",
+      "connectors",
+      "marketplace",
+      "workboard",
       "devices",
       "fleet",
+      "library",
+      "mods",
       "updates",
+      "settings",
     ]);
-    expect(moreViews(WEB)).toEqual(["objectives", "imagine", "automations", "agents", "memory", "skills", "connectors", "workboard"]);
-  });
-
-  it("lists only the given pages: no suggestions, commands, chats, sections or Ask", () => {
-    const extras = { ...EXTRAS, chips: [PLAN], chats: [{ id: "c1", title: "Journal trip" }], only: moreViews(DESKTOP) };
-    expect(withExtras(DESKTOP, "", extras)).toEqual([
-      "Objectives",
-      "History",
-      "Imagine",
-      "Journal",
-      "Automations",
-      "Agents",
-      "Personal",
-      "Skills",
-      "Connectors",
-      "Workboard",
-      "Devices",
-      "Fleet",
-      "Updates & Drivers",
+    expect(railSections(desktop, { pinned: ["automations"] }).map((s) => s.id)).toEqual([
+      "core",
+      "work",
+      "make",
+      "you",
+      "pc",
     ]);
-    expect(withExtras(DESKTOP, "jour", extras)).toEqual(["Journal"]);
-    expect(withExtras(DESKTOP, "zzz", extras)).toEqual([]);
-  });
-
-  it("opens as More pages, and an empty match says so without picking", async () => {
-    const onPick = vi.fn();
-    const onClose = vi.fn();
-    render(<Palette caps={DESKTOP} only={moreViews(DESKTOP)} onPick={onPick} onClose={onClose} />);
-    expect(screen.getByRole("dialog", { name: "More pages" })).toBeInTheDocument();
-    const search = screen.getByRole("combobox", { name: "Search pages" });
-    expect(search).toHaveAttribute("aria-activedescendant", "palette-row-0");
-    await userEvent.type(search, "zzz");
-    expect(screen.queryAllByRole("option")).toEqual([]);
-    expect(screen.getByText("No page matches “zzz”.")).toBeInTheDocument();
-    expect(search).not.toHaveAttribute("aria-activedescendant");
-    await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
-    expect(onPick).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    await userEvent.clear(search);
-    await userEvent.type(search, "upd{Enter}");
-    expect(onPick).toHaveBeenCalledExactlyOnceWith({ kind: "view", view: "updates" });
+    expect(railSections(desktop, { pinned: ["automations"] }).find((s) => s.id === "work")?.views).toEqual([
+      "workboard",
+      "agents",
+      "team",
+      "objectives",
+      "command",
+    ]);
   });
 });
 
@@ -474,8 +511,8 @@ describe("Palette", () => {
     it("wrapping up to the last row lands at the bottom, instantly with reduced motion", async () => {
       const { scrollTo } = layout(true);
       await userEvent.keyboard("{ArrowUp}");
-      // Row 24, the last, ends at 996.
-      expect(scrollTo).toHaveBeenLastCalledWith({ top: 896, behavior: "auto" });
+      // Row 25, the last, ends at 1036.
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 936, behavior: "auto" });
     });
 
     it("a hover picks without scrolling", async () => {

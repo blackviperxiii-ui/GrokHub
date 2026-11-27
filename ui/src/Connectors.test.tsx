@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   signOutConnector: vi.fn<(name: string) => Promise<ConnectorsChanged>>(),
   disconnectConnector: vi.fn<(name: string) => Promise<ConnectorsChanged>>(),
   setConnectorEnabled: vi.fn<(name: string, on: boolean) => Promise<ConnectorsChanged>>(),
+  setConnectorToolEnabled: vi.fn<(name: string, tool: string, on: boolean) => Promise<ConnectorsChanged>>(),
   signInConnector: vi.fn<(name: string) => Promise<ConnectorsChanged>>(),
   connectorCatalog: vi.fn(),
   addCatalogConnector: vi.fn(),
@@ -25,7 +26,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { Connectors } from "./Connectors";
+import { Connectors, PAGE_TITLE } from "./Connectors";
 
 function row(over: Partial<ConnectorRow>): ConnectorRow {
   return {
@@ -38,6 +39,7 @@ function row(over: Partial<ConnectorRow>): ConnectorRow {
     needsSignIn: false,
     canDisconnect: true,
     enabled: true,
+    toolRows: [],
     ...over,
   };
 }
@@ -51,17 +53,62 @@ describe("Connectors", () => {
 
   it("lists entries without starting them, then Check all connects them", async () => {
     api.listConnectors.mockResolvedValue([row({})]);
-    api.checkConnectors.mockResolvedValue([row({ status: "connected", tools: 3 })]);
+    api.checkConnectors.mockResolvedValue([
+      row({
+        status: "connected",
+        tools: 2,
+        toolRows: [
+          { name: "search", enabled: true },
+          { name: "create", enabled: false },
+        ],
+      }),
+    ]);
     render(<Connectors />);
 
+    expect(screen.getByRole("region", { name: PAGE_TITLE })).toBeInTheDocument();
     const box = await screen.findByRole("listitem", { name: "box" });
     expect(box).toHaveTextContent("Not checked");
     expect(box).toHaveTextContent("node fake-mcp.mjs");
     expect(api.checkConnectors).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole("button", { name: "Check all" }));
-    expect(await within(box).findByText("Connected · 3 tools")).toBeInTheDocument();
+    expect(await within(box).findByText("Connected · 2 tools")).toBeInTheDocument();
     expect(api.checkConnectors).toHaveBeenCalledTimes(1);
+    const tools = within(box).getByRole("list", { name: "box tools" });
+    expect(within(tools).getByRole("switch", { name: "box search on" })).toBeChecked();
+    expect(within(tools).getByRole("switch", { name: "box create on" })).not.toBeChecked();
+  });
+
+  it("turns one tool off for chat", async () => {
+    api.listConnectors.mockResolvedValue([
+      row({
+        status: "connected",
+        tools: 2,
+        toolRows: [
+          { name: "search", enabled: true },
+          { name: "create", enabled: true },
+        ],
+      }),
+    ]);
+    api.setConnectorToolEnabled.mockResolvedValue({
+      status: "Turned off box's create",
+      rows: [
+        row({
+          status: "connected",
+          tools: 1,
+          toolRows: [
+            { name: "search", enabled: true },
+            { name: "create", enabled: false },
+          ],
+        }),
+      ],
+    });
+    render(<Connectors />);
+    const box = await screen.findByRole("listitem", { name: "box" });
+    await userEvent.click(within(box).getByRole("switch", { name: "box create on" }));
+    expect(api.setConnectorToolEnabled).toHaveBeenCalledWith("box", "create", false);
+    expect(await screen.findByRole("status")).toHaveTextContent("Turned off box's create");
+    expect(within(box).getByRole("switch", { name: "box create on" })).not.toBeChecked();
   });
 
   it("shows a server's error and reconnects it", async () => {

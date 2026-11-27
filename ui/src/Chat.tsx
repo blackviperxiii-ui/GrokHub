@@ -16,17 +16,22 @@ import {
   codeSessionPlan,
   answerPermission,
   cancelChat,
+  chatMedia,
   chatPicture,
   closeChat,
   clearChat,
   exportChat,
   forgetMessage,
   composerGhostSuggest,
+  downloadModels,
   getBehavior,
   getHangoutMode,
   getStartChat,
   getSettings,
   helperQuestions,
+  imagineCancel,
+  imagineGenerate,
+  imagineImage,
   loadChat,
   onChatEvent,
   onEventGap,
@@ -35,6 +40,7 @@ import {
   commandBoxApprove,
   hubSendApprove,
   runSlash,
+  saveChatMediaToLibrary,
   saveSettings,
   sendChat,
   setHangoutMode,
@@ -46,6 +52,8 @@ import {
   type ElicitAction,
   type HangoutMode,
   type HubSend,
+  type ImagineKind,
+  type ImagineTile,
   type SavedFile,
   type SessionMode,
   type Settings,
@@ -69,7 +77,7 @@ import {
   MessageMenu,
   withoutCut,
 } from "./DeleteMessage";
-import { requestImagine } from "./imagineAsk";
+import { Lightbox } from "./FeedCard";
 import type { View } from "./Palette";
 import { Markdown } from "./Markdown";
 import { displayText } from "./md";
@@ -108,12 +116,14 @@ import { modelResume, onModelBack, type ModelResume } from "./modelWait";
 import { BudgetCard } from "./BudgetCard";
 import { DeviceGlanceRow } from "./DeviceGlance";
 import { PanelCard, panelActionText } from "./PanelCard";
+import { McpAppHost } from "./McpAppHost";
 import { ChatFindBar } from "./ChatFindBar";
 import { findLabel, findRows, findStep, itemText } from "./chatFind";
 import { scrubHeld } from "./heldScrub";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { splitSources } from "./replySources";
 import { SourceChips } from "./SourceChips";
+import { HelperStrip } from "./HelperStrip";
 import {
   collapseAll,
   COLLAPSE,
@@ -136,7 +146,25 @@ export type Item =
    * person collapses or expands it (thoughts.ts). The chat saves its text,
    * never its fold. */
   | { kind: "thought"; text: string; fold?: Fold }
-  | { kind: "tool"; id: string; title: string; status: string; detail: string; picture?: string }
+  | {
+      kind: "tool";
+      id: string;
+      title: string;
+      status: string;
+      detail: string;
+      picture?: string;
+      video?: string;
+    }
+  | {
+      kind: "media";
+      id: string;
+      media: ImagineKind;
+      prompt: string;
+      status: "running" | "done" | "error";
+      note?: string;
+      error?: string;
+      tiles?: ImagineTile[];
+    }
   | {
       kind: "permission";
       id: string;
@@ -170,6 +198,8 @@ export type Item =
   /** A show_panel panel. Dismissed stays in the list, so the same panel
    * sent again stays hidden; a changed one comes back. */
   | (Extract<ChatEvent, { kind: "panel" }> & { dismissed?: boolean })
+  /** An MCP App iframe hosted from a tool's ui:// resource. */
+  | Extract<ChatEvent, { kind: "mcpApp" }>
   /** A report_findings card under the reply (Order 733). */
   | Extract<ChatEvent, { kind: "findings" }>
   /** The reply's Finished block as a card (Order 733). */
@@ -219,6 +249,8 @@ const PLACEHOLDER = `Message ${PRODUCT_NAME}`;
 
 /** `/view-plan` before any plan was made. */
 export const NO_PLAN = "No plan yet. Use Plan mode.";
+/** Said once a `/download` is queued: the page that shows its progress. */
+export const downloadingLine = (name: string) => `Downloading ${name}. Settings → Local AI shows how it's going.`;
 
 /** Bare `/plan`: the next message plans first. */
 export const PLAN_NEXT = "Your next message gets a plan first.";
@@ -395,6 +427,8 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
       if (was.kind === "panel" && JSON.stringify(was.spec) === JSON.stringify(event.spec)) return items;
       return items.map((item, i) => (i === at ? { ...event } : item));
     }
+    case "mcpApp":
+      return [...items, { ...event }];
     case "findings":
     case "evidence":
       return [...items, { ...event }];
@@ -599,39 +633,180 @@ const ThoughtCard = memo(function ThoughtCard({
   );
 });
 
+export function makingLine(kind: ImagineKind, count: number): string {
+  if (kind === "video") return "Making a video… this can take a few minutes.";
+  return count === 1 ? "Making 1 image…" : `Making ${count} images…`;
+}
+
+export const IMAGINE_PROMPT_HINT =
+  "Type a prompt after /imagine to generate an image in chat (or /imagine-video for a short video).";
+
 const ToolCard = memo(function ToolCard({
   title,
   status,
   detail,
   picture,
+  video,
 }: {
   title: string;
   status: string;
   detail?: string;
   /** The made picture's file; shown above the detail once it loads. */
   picture?: string;
+  /** The made video's file; shown above the detail once it loads. */
+  video?: string;
 }) {
+  const mediaPath = picture ?? video;
+  const isVideo = !picture && Boolean(video);
   const [shown, setShown] = useState<{ path: string; url: string } | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState(false);
   useEffect(() => {
-    if (!picture) return;
+    if (!mediaPath) return;
     let live = true;
-    chatPicture(picture).then(
+    const loader = isVideo ? chatMedia : chatPicture;
+    if (typeof loader !== "function") return;
+    loader(mediaPath).then(
       (url) => {
-        if (live) setShown({ path: picture, url });
+        if (live) setShown({ path: mediaPath, url });
       },
       () => {},
     );
     return () => {
       live = false;
     };
-  }, [picture]);
-  const url = shown && shown.path === picture ? shown.url : null;
+  }, [mediaPath, isVideo]);
+  const url = shown && shown.path === mediaPath ? shown.url : null;
+  const fileName = mediaPath?.split(/[/\\]/).pop() || (isVideo ? "video.mp4" : "image.png");
+  async function saveToLibrary() {
+    if (!mediaPath || saving || saved || typeof saveChatMediaToLibrary !== "function") return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      await saveChatMediaToLibrary(mediaPath, title);
+      setSaved(true);
+    } catch (err) {
+      setSaveErr(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
   return (
     <div className="card tool" data-status={status}>
       <span className="card-title">{title}</span>
       <span className="card-status">{status}</span>
-      {url && <img className="card-picture" src={url} alt="The picture this made" />}
+      {url &&
+        (isVideo ? (
+          <video className="card-video" src={url} controls playsInline aria-label="The video this made" />
+        ) : (
+          <img className="card-picture" src={url} alt="The picture this made" />
+        ))}
+      {url && mediaPath && (
+        <div className="card-media-actions">
+          <button
+            type="button"
+            className="quiet"
+            disabled={saving || saved}
+            onClick={() => void saveToLibrary()}
+          >
+            {saved ? "Saved to Library" : saving ? "Saving…" : "Save to Library"}
+          </button>
+          <button type="button" className="quiet" onClick={() => setLightbox(true)}>
+            Open
+          </button>
+          {saveErr && (
+            <span className="error" role="alert">
+              {saveErr}
+            </span>
+          )}
+        </div>
+      )}
+      {lightbox && url && (
+        <Lightbox src={url} name={fileName} video={isVideo} onClose={() => setLightbox(false)} />
+      )}
       {detail && <pre className="card-detail">{detail}</pre>}
+    </div>
+  );
+});
+
+function ChatMediaTile({ tile }: { tile: ImagineTile }) {
+  const [src, setSrc] = useState("");
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (typeof imagineImage !== "function") return;
+    let live = true;
+    imagineImage(tile.name).then(
+      (url) => {
+        if (live) setSrc(url);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [tile.name]);
+  const label = tile.title || tile.prompt || (tile.video ? "Generated video" : "Generated image");
+  if (!src) return null;
+  return (
+    <div className="chat-media-result">
+      {tile.video ? (
+        <video className="card-video" src={src} controls playsInline aria-label={label} />
+      ) : (
+        <img className="card-picture" src={src} alt={label} />
+      )}
+      <div className="card-media-actions">
+        <button type="button" className="quiet" onClick={() => setOpen(true)}>
+          Open
+        </button>
+        <span className="card-status">Saved to Library</span>
+      </div>
+      {open && <Lightbox src={src} name={tile.name} video={tile.video} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+const ChatMediaCard = memo(function ChatMediaCard({
+  item,
+}: {
+  item: Extract<Item, { kind: "media" }>;
+}) {
+  return (
+    <div
+      className="card tool chat-media-card"
+      data-status={item.status}
+      aria-label={item.media === "video" ? "Generated video" : "Generated image"}
+    >
+      <span className="card-title">{item.media === "video" ? "/imagine-video" : "/imagine"}</span>
+      <span className="card-status">{item.prompt}</span>
+      {item.status === "running" && (
+        <div className="card-media-actions">
+          <p className="note" role="status" aria-busy="true">
+            {makingLine(item.media, 1)}
+          </p>
+          <button type="button" className="quiet" onClick={() => void imagineCancel()}>
+            Stop
+          </button>
+        </div>
+      )}
+      {item.status === "error" && item.error && (
+        <p className="error" role="alert">
+          {item.error}
+        </p>
+      )}
+      {item.status === "done" && (
+        <>
+          {item.note && (
+            <p className="note" role="status">
+              {item.note}
+            </p>
+          )}
+          {(item.tiles ?? []).map((tile) => (
+            <ChatMediaTile key={tile.id} tile={tile} />
+          ))}
+        </>
+      )}
     </div>
   );
 });
@@ -761,7 +936,17 @@ function LogItem({
     case "thought":
       return <ThoughtCard text={item.text} fold={foldOf(item.fold, thoughtsFolded)} onFold={onFold} />;
     case "tool":
-      return <ToolCard title={item.title} status={item.status} detail={item.detail} picture={item.picture} />;
+      return (
+        <ToolCard
+          title={item.title}
+          status={item.status}
+          detail={item.detail}
+          picture={item.picture}
+          video={item.video}
+        />
+      );
+    case "media":
+      return <ChatMediaCard item={item} />;
     case "permission":
       return (
         <PermissionCard
@@ -789,6 +974,8 @@ function LogItem({
           onDismiss={onPanelDismiss}
         />
       );
+    case "mcpApp":
+      return <McpAppHost id={item.id} app={item.app} />;
     case "findings":
       return <FindingsCard event={item} onFix={onFix} />;
     case "recap":
@@ -934,8 +1121,8 @@ export function Chat({
   /** `/memory`, `/connectors` and the like open their page, and so does a
    * chip that goes somewhere. `false` back: this app has no such page. */
   onOpenView?: (view: View) => boolean | void;
-  /** `/plugins` opens Settings → Labs. */
-  onOpenSection?: (section: "labs") => void;
+  /** `/plugins` opens the Marketplace page where plugins are on; the rest open their Settings section. */
+  onOpenSection?: (section: "labs" | "localAi") => void;
   /** `/palette` opens the command palette. */
   onOpenPalette?: () => void;
   /** The messages waiting behind the running reply, for the Activity menu. */
@@ -1000,6 +1187,8 @@ export function Chat({
   const busyHere = busy && runIn === conversationId;
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  /** Counts chat picks, so only the newest pick's load is shown. */
+  const opening = useRef(0);
   /** The running reply already sent its last event (`done`): only the app's
    * own wrap-up after it is left. */
   const replyDone = useRef(false);
@@ -1010,6 +1199,19 @@ export function Chat({
    * the Activity menu. The next one sends when the reply ends. */
   const [queue, setQueue] = useState<string[]>([]);
   const queueRef = useRef<string[]>([]);
+  /** Texts the window put in the box for the app, a card or a model (a fix
+   * button's prompt, a Pulse card's offer, a resume block Stop put back).
+   * Sent from the box they aren't typed, so their `@` references stay text
+   * (`send_chat`'s `untyped`). A stale one only keeps a reference to the
+   * same thing unread. */
+  const boxUntyped = useRef<string[]>([]);
+  /** The same, by message, once a message leaves the box: to wait in the
+   * queue, as a side question, as a slash line's text. */
+  const untypedOf = useRef(new Map<string, string[]>());
+  /** What of a queued line the person didn't give the window (a resume
+   * block that came while a reply ran, a told side answer), by line, for
+   * when Stop puts it back in the box. */
+  const backUntyped = useRef(new Map<string, string[]>());
   const deskChat = useRef(Symbol("chat"));
   const voice = useVoiceMode();
   const voiceSession = voice.session;
@@ -1061,7 +1263,7 @@ export function Chat({
   const [noteFor, setNoteFor] = useState<number | null>(null);
   const [noteSaved, setNoteSaved] = useNoteStatus();
   const row = useChipRow({
-    surface: "composer",
+    surface: embedded ? "code" : "composer",
     // The computer refuses a browser chips for a chat it has not sent in, so
     // the web app's new chat asks for the new-chat row.
     conversationId: remote && !items.some((it) => it.kind === "user") ? undefined : conversationId,
@@ -1197,12 +1399,28 @@ export function Chat({
     setQueue(next);
   }
 
+  /** Notes `untyped`, what the window put in message `text` for the app, a
+   * card or a model, as `text` leaves the box. A text with no `@` holds no
+   * reference, so only those with one go with the message. */
+  function noteUntyped(text: string, untyped: readonly string[]) {
+    const kept = untyped.filter((piece) => piece.includes("@"));
+    if (kept.length > 0) untypedOf.current.set(text, kept);
+  }
+
+  /** Queued `lines` go back in the box: what the window put in them stays
+   * untyped there. */
+  function untypedBack(lines: readonly string[]) {
+    const back = lines.flatMap((line) => untypedOf.current.get(line) ?? backUntyped.current.get(line) ?? []);
+    boxUntyped.current = [...boxUntyped.current, ...back];
+  }
+
   /** Messages lined up in the chat being left go back in the box, never
    * into the next chat by themselves. */
   function queueBackToBox() {
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
+      untypedBack(waiting);
       setDraft((now) => withQueued(now, waiting));
     }
   }
@@ -1210,6 +1428,7 @@ export function Chat({
   function startFresh(scratch = false) {
     const nextId = newConversationId(scratch);
     openAfter.current = null;
+    opening.current += 1;
     openNow.current = nextId;
     queueBackToBox();
     leaveSides();
@@ -1275,6 +1494,7 @@ export function Chat({
     // Picking the chat on screen keeps it, and drops a pick still waiting.
     if (id === conversationId) {
       openAfter.current = null;
+      opening.current += 1;
       return;
     }
     if (busyRef.current) {
@@ -1293,7 +1513,16 @@ export function Chat({
     openAfter.current = null;
     touched.current = true;
     closeChat(conversationId).catch(() => {});
-    loadChat(id).then(show, (err) => setError(String(err)));
+    // Only the latest pick lands: a slower load picked earlier is dropped.
+    const pick = ++opening.current;
+    loadChat(id).then(
+      (transcript) => {
+        if (opening.current === pick) show(transcript);
+      },
+      (err) => {
+        if (opening.current === pick) setError(String(err));
+      },
+    );
   }
   const openPicked = useEffectEvent((id: string) => openChat(id));
 
@@ -1367,8 +1596,10 @@ export function Chat({
     }
     if (next.send && next.text) {
       touched.current = true;
-      if (busyRef.current) changeQueue([...queueRef.current, next.text]);
-      else {
+      if (busyRef.current) {
+        backUntyped.current.set(next.text, [next.text]);
+        changeQueue([...queueRef.current, next.text]);
+      } else {
         // The Command page's line shows as typed, as `/sh` does.
         const shown = shownText(next.text);
         setNextUp((now) => ({
@@ -1380,7 +1611,10 @@ export function Chat({
       }
       return;
     }
-    // Opening the chat that is already open brings no text: keep what is typed.
+    // Opening the chat that is already open brings no text: keep what is
+    // typed. Text a page puts in the box (a Pulse card's offer, a card's
+    // work prompt) isn't the person's.
+    if (switched || next.text) boxUntyped.current = next.text ? [next.text] : [];
     setDraft((now) => (switched || next.text ? next.text : now));
   });
   useEffect(() => {
@@ -1588,7 +1822,10 @@ export function Chat({
     const said = [shown ?? text, ...files.map((f) => f.label)].filter(Boolean).join("\n");
     if (!again) setItems((now) => [...now, shown ? { kind: "user", text: said, sent: text } : { kind: "user", text: said }]);
     if (fromDraft) {
-      if (fromDraft === true) setDraft("");
+      if (fromDraft === true) {
+        setDraft("");
+        boxUntyped.current = [];
+      }
       attach.clear();
     }
     setError(null);
@@ -1604,7 +1841,12 @@ export function Chat({
     let stop = "";
     try {
       const paths = files.map((f) => f.path);
-      stop = await (paths.length ? sendChat(conversationId, text, runs, paths) : sendChat(conversationId, text, runs));
+      const untyped = untypedOf.current.get(text) ?? [];
+      stop = await (untyped.length
+        ? sendChat(conversationId, text, runs, paths, untyped)
+        : paths.length
+          ? sendChat(conversationId, text, runs, paths)
+          : sendChat(conversationId, text, runs));
     } catch (err) {
       setError(String(err));
     }
@@ -1632,6 +1874,7 @@ export function Chat({
       setNextUp((now) => ({ text: waiting[0], n: (now?.n ?? 0) + 1 }));
     } else {
       changeQueue([]);
+      untypedBack(waiting);
       setDraft((now) => withQueued(now, waiting));
     }
   }
@@ -1701,6 +1944,7 @@ export function Chat({
     const waiting = queueRef.current;
     if (waiting.length > 0) {
       changeQueue([]);
+      untypedBack(waiting);
       setDraft((now) => withQueued(now, waiting));
     }
     void cancelChat(conversationId);
@@ -1711,6 +1955,7 @@ export function Chat({
     const text = queueRef.current[index];
     if (text === undefined) return;
     changeQueue(queueRef.current.filter((_, i) => i !== index));
+    untypedBack([text]);
     setDraft((now) => (now.trim() ? now : text));
   }
 
@@ -1796,8 +2041,12 @@ export function Chat({
     const soFar = reply?.kind === "assistant" ? reply.text : "";
     setSides((now) => withSide(now, { id, question, answer: "", live: true, failed: false }));
     let failed = false;
+    const untyped = untypedOf.current.get(question) ?? [];
+    const asked = ask?.kind === "user" ? ask.text : "";
     try {
-      await sideChat(conversationId, id, question, ask?.kind === "user" ? ask.text : "", soFar);
+      await (untyped.length
+        ? sideChat(conversationId, id, question, asked, soFar, untyped)
+        : sideChat(conversationId, id, question, asked, soFar));
     } catch {
       failed = true;
     }
@@ -1818,8 +2067,13 @@ export function Chat({
     dismissSide(side);
     try {
       const told = await tellMain(conversationId, side.question, side.answer);
+      // The answer is a model's: back in the box, it stays untyped.
+      const untyped = [...(untypedOf.current.get(side.question) ?? []), side.answer];
       if (told.steered) setItems((now) => [...now, { kind: "user", text: told.text }]);
-      else if (busyRef.current) changeQueue([...queueRef.current, told.text]);
+      else if (busyRef.current) {
+        backUntyped.current.set(told.text, untyped);
+        changeQueue([...queueRef.current, told.text]);
+      }
       else void deliver(told.text, [], false, "chat");
     } catch (err) {
       setError(String(err));
@@ -1830,6 +2084,7 @@ export function Chat({
    * question, a correction for the work, stop, or a new job that waits. */
   async function routeRunning(typed: string, read: TurnRead) {
     const text = read.text.trim() || typed;
+    noteUntyped(text, untypedOf.current.get(typed) ?? []);
     setAck(read.ack || null);
     switch (read.route) {
       case "side":
@@ -1930,6 +2185,12 @@ export function Chat({
     // Only the line that was sent leaves the box: words typed while it ran stay.
     setDraft((now) => (now.trim() === box.trim() ? "" : now));
     const command = line.split(/\s+/)[0];
+    // A line's text keeps what the window put in the box for the app.
+    const untyped = untypedOf.current.get(line) ?? untypedOf.current.get(box.trim()) ?? [];
+    if ((effect.kind === "mode" || effect.kind === "queue") && effect.text) {
+      noteUntyped(effect.text, untyped);
+      noteUntyped(effect.text.trim(), untyped);
+    }
     switch (effect.kind) {
       case "newChat":
         startOver();
@@ -1960,16 +2221,56 @@ export function Chat({
           setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
         }
         break;
-      case "imagine":
-        if (onOpenView?.("imagine") === false) {
-          setItems((now) => withNotice(now, { kind: "slash", command, text: `${command} works on your computer.` }));
-        } else {
-          requestImagine(effect.media, effect.prompt);
+      case "imagine": {
+        const mediaPrompt = effect.prompt.trim();
+        if (!mediaPrompt) {
+          setDraft(effect.media === "video" ? "/imagine-video " : "/imagine ");
+          composerRef.current?.focus();
+          setItems((now) => withNotice(now, { kind: "slash", command, text: IMAGINE_PROMPT_HINT }));
+          break;
         }
+        const mediaId = `media-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        setItems((now) => [
+          ...now,
+          { kind: "media", id: mediaId, media: effect.media, prompt: mediaPrompt, status: "running" },
+        ]);
+        imagineGenerate(mediaPrompt, "1:1", 1, effect.media).then(
+          (made) => {
+            const count = Math.max(made.made, 1);
+            const tiles = made.page.tiles.slice(0, count);
+            const base = made.made === 1 ? "Made 1." : `Made ${made.made}.`;
+            const note = made.note ? `${base} ${made.note}` : base;
+            setItems((now) =>
+              now.map((it) =>
+                it.kind === "media" && it.id === mediaId
+                  ? { ...it, status: "done", tiles, note }
+                  : it,
+              ),
+            );
+          },
+          (err) => {
+            setItems((now) =>
+              now.map((it) =>
+                it.kind === "media" && it.id === mediaId
+                  ? { ...it, status: "error", error: String(err) }
+                  : it,
+              ),
+            );
+          },
+        );
         break;
+      }
       case "openSection":
         if (onOpenSection) onOpenSection(effect.section);
         else onOpenView?.("settings");
+        break;
+      case "downloadModel":
+        try {
+          await downloadModels([effect.id]);
+          setItems((now) => [...now, { kind: "slash", command, text: downloadingLine(effect.name) }]);
+        } catch (err) {
+          setItems((now) => [...now, { kind: "slash", command, text: String(err) }]);
+        }
         break;
       case "import": {
         // Review opens with the workspace's notes; with none to read, the chat says so.
@@ -2105,6 +2406,7 @@ export function Chat({
       return;
     }
     if (!run || !hit.runOnPick) {
+      boxUntyped.current = [];
       setDraft(hit.insert);
       return;
     }
@@ -2123,6 +2425,7 @@ export function Chat({
     event?.preventDefault();
     const text = draft.trim();
     const files = attach.files;
+    noteUntyped(text, boxUntyped.current);
     // While a reply runs, the app reads what the message is for (files wait
     // in the box). A typed /btw or /side asks on the side.
     if (busy) {
@@ -2136,6 +2439,7 @@ export function Chat({
         return;
       }
       setDraft("");
+      boxUntyped.current = [];
       // The web app lines messages up behind the reply, as before. In a chat
       // opened while another chat's reply ends, the message waits for it.
       if (remote || !busyHere) {
@@ -2185,6 +2489,7 @@ export function Chat({
     }
     const as = chip.mode === "plan" ? "plan" : undefined;
     if (draft.trim()) {
+      boxUntyped.current = [...boxUntyped.current, chip.value];
       setDraft(appendDraft(draft, chip.value));
       return;
     }
@@ -2224,6 +2529,8 @@ export function Chat({
       }
     } else if (event.key === "Tab" && !event.shiftKey && ghost) {
       event.preventDefault();
+      // A model wrote the suggestion: taken with Tab, it isn't typed.
+      boxUntyped.current = [...boxUntyped.current, ghost];
       setDraft(acceptSuggestion(draft, ghost));
       setGhostFor(null);
       ghostGen.current += 1;
@@ -2391,7 +2698,11 @@ export function Chat({
               editable={embedded && lead}
               onConfirm={settleConfirm}
               onStopAsking={!remote && settings?.approvals === "ask" ? stopAsking : undefined}
-              onFix={(text) => setDraft(text)}
+              onFix={(text) => {
+                // A model wrote the fix's prompt: in the box, it isn't typed.
+                boxUntyped.current = [text];
+                setDraft(text);
+              }}
               onPanelAction={panelAction}
               onPanelDismiss={() => dismissPanel(i)}
               onChipPick={(key) => {
@@ -2458,12 +2769,16 @@ export function Chat({
         busy={busy}
         onAttached={(outcome, prompt) => {
           attach.adopt([outcome]);
-          if (outcome.staged) setDraft((now) => (now.trim() ? now : prompt));
+          if (outcome.staged) {
+            boxUntyped.current = [...boxUntyped.current, prompt];
+            setDraft((now) => (now.trim() ? now : prompt));
+          }
         }}
       />
       <AttachChips files={attach.files} note={attach.note} onRemove={attach.remove} busy={busy} />
       {!remote && <VoiceCaption text={voice.caption} state={voice.state} />}
       {!remote && <VoiceLine text={voice.state === "off" ? micLine : voice.line} />}
+      {!remote && <HelperStrip conversationId={conversationId} />}
       <form className={glow && busyHere ? "composer slash-wrap glowing" : "composer slash-wrap"} onSubmit={send}>
         {slashOpen && (
           <SlashMenu
@@ -2494,6 +2809,7 @@ export function Chat({
             aria-controls={slashOpen ? "slash-menu" : undefined}
             aria-activedescendant={slashOpen ? `slash-row-${slashPick}` : undefined}
             onChange={(e) => {
+              if (!e.target.value.trim()) boxUntyped.current = [];
               setDraft(e.target.value);
               setSlashAt(0);
               ghostGen.current += 1;

@@ -6,7 +6,8 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -17,6 +18,7 @@ use grokhub_core::{
 
 use super::html_md;
 use super::ToolOutput;
+use crate::perm::{Action, Rule};
 
 const MAX_REDIRECTS: u32 = 10;
 const MAX_URL_LEN: usize = 2000;
@@ -165,22 +167,77 @@ pub(crate) fn schema() -> Value {
     })
 }
 
-pub(crate) fn run_with_ports(args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+/// The fetch with this workspace's permission rules, which each redirect hop
+/// goes through ([`hop_rules`]).
+pub(crate) fn run_with_ports(
+    args: &Value,
+    workspace: &Path,
+    stop: &dyn Fn() -> bool,
+) -> ToolOutput {
     match super::ports::current().fetch {
-        Some(fetch) => run(args, fetch.as_ref(), stop),
+        Some(fetch) => {
+            let rules = crate::perm::Policy::load(workspace).rules;
+            run(args, fetch.as_ref(), &rules, stop)
+        }
         None => ToolOutput::err(super::NO_WEB_PORT),
     }
 }
 
 /// `stop` is cancel or Halt: it denies a hard Send card that is waiting.
-pub(crate) fn run(args: &Value, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) -> ToolOutput {
+pub(crate) fn run(
+    args: &Value,
+    fetch: &dyn PageFetch,
+    rules: &[Rule],
+    stop: &dyn Fn() -> bool,
+) -> ToolOutput {
     let url = super::str_field(args, "url");
     if url.is_empty() {
         return ToolOutput::err("url is required");
     }
-    match fetch_markdown(&url, fetch, stop) {
+    match fetch_markdown(&url, fetch, rules, stop) {
         Ok(text) => ToolOutput::ok(super::fence::fence("web_fetch", &text)),
         Err(err) => ToolOutput::err(err),
+    }
+}
+
+/// User-initiated fetch for `/learn <url>`: public http(s) only, SSRF-checked,
+/// no permission-card loop (the person already typed the URL).
+pub fn fetch_public_markdown(url: &str) -> Result<String, String> {
+    let fetch = UreqFetch::new();
+    fetch_markdown_user(url, &fetch)
+}
+
+/// Like [`fetch_markdown`] but skips egress parking — the slash path already
+/// asked the person to name the URL.
+fn fetch_markdown_user(raw: &str, fetch: &dyn PageFetch) -> Result<String, String> {
+    let mut current = parse_public_url(raw)?;
+    let mut seen = HashSet::new();
+    let mut redirects = 0u32;
+    loop {
+        let url = current.display();
+        if !seen.insert(url.clone()) {
+            return Err("redirect loop".into());
+        }
+        check_ssrf(&current, fetch)?;
+        let resp = fetch.get(&url)?;
+        if is_redirect(resp.status) {
+            redirects = redirects.saturating_add(1);
+            if redirects > MAX_REDIRECTS {
+                return Err("too many redirects".into());
+            }
+            let loc = resp
+                .location
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "redirect missing location".to_string())?;
+            current = join_redirect(&current, loc)?;
+            continue;
+        }
+        if !(200..300).contains(&resp.status) {
+            return Err(format!("HTTP {}", resp.status));
+        }
+        return render_body(&resp.content_type, &resp.body);
     }
 }
 
@@ -195,9 +252,36 @@ fn guard_hop(url: &str, stop: &dyn Fn() -> bool) -> Result<(), String> {
     })
 }
 
+/// The gate judged the URL the model asked for (`start`); a redirect hop
+/// goes through the same `WebFetch` deny and ask rules here. No card can
+/// come up halfway through a fetch, so a hop an ask rule covers, and the
+/// start did not, is refused: the model can fetch that URL itself, and the
+/// gate asks.
+fn hop_rules(start: &str, hop: &UrlParts, rules: &[Rule]) -> Result<(), String> {
+    let url = hop.display();
+    let meets = |rule: &Rule, url: &str| crate::perm::webfetch_matches(rule, url);
+    if rules
+        .iter()
+        .any(|rule| rule.action == Action::Deny && meets(rule, &url))
+    {
+        let denied = crate::gate::unattended_deny("web_fetch");
+        return Err(format!("{denied} (the page redirects to {})", hop.host));
+    }
+    if rules
+        .iter()
+        .any(|rule| rule.action == Action::Ask && meets(rule, &url) && !meets(rule, start))
+    {
+        return Err(format!(
+            "the page redirects to {url}, which an ask rule covers; fetch that URL with web_fetch so it can be approved"
+        ));
+    }
+    Ok(())
+}
+
 fn fetch_markdown(
     raw: &str,
     fetch: &dyn PageFetch,
+    rules: &[Rule],
     stop: &dyn Fn() -> bool,
 ) -> Result<String, String> {
     let mut current = parse_public_url(raw)?;
@@ -223,6 +307,7 @@ fn fetch_markdown(
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "redirect missing location".to_string())?;
             current = join_redirect(&current, loc)?;
+            hop_rules(raw, &current, rules)?;
             continue;
         }
         if !(200..300).contains(&resp.status) {
@@ -317,11 +402,14 @@ fn sniff_empty(body: &[u8]) -> Result<BodyKind, String> {
     }
 }
 
+/// Where a fetch goes: the host web_fetch dials, the port, and the path it
+/// asks for. `WebFetch` rules read these same parts
+/// (`crate::perm::webfetch_matches`).
 #[derive(Debug, Clone)]
-struct UrlParts {
-    host: String,
+pub(crate) struct UrlParts {
+    pub(crate) host: String,
     port: Option<u16>,
-    path: String,
+    pub(crate) path: String,
 }
 
 impl UrlParts {
@@ -337,13 +425,22 @@ impl UrlParts {
         }
     }
 
-    fn dns_port(&self) -> u16 {
+    /// The port the fetch dials: 443 unless the URL names another.
+    pub(crate) fn dns_port(&self) -> u16 {
         self.port.unwrap_or(443)
     }
 }
 
-fn parse_public_url(raw: &str) -> Result<UrlParts, String> {
-    let raw = raw.trim();
+/// The fetch web_fetch makes for `raw`, read the way a browser reads a URL:
+/// tabs and newlines dropped, the host ending at the first `/`, `\`, `?` or
+/// `#`, `\` read as `/`, a port with leading zeros as its number, and the
+/// host as [`dial_host`] reads it. An error for a URL it won't fetch.
+pub(crate) fn parse_public_url(raw: &str) -> Result<UrlParts, String> {
+    let raw: String = raw
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
     if raw.len() > MAX_URL_LEN {
         return Err("url is too long".into());
     }
@@ -358,10 +455,6 @@ fn parse_public_url(raw: &str) -> Result<UrlParts, String> {
         return Err("urls with userinfo are not allowed".into());
     }
     let (host, port, path_src) = split_host(rest)?;
-    let host = normalize_host(&host);
-    if host.is_empty() {
-        return Err("url has no host".into());
-    }
     Ok(UrlParts {
         host,
         port,
@@ -369,55 +462,138 @@ fn parse_public_url(raw: &str) -> Result<UrlParts, String> {
     })
 }
 
+/// The host (as [`dial_host`] reads it), the port, and what follows.
 fn split_host(rest: &str) -> Result<(String, Option<u16>, &str), String> {
     if rest.is_empty() {
         return Err("url has no host".into());
     }
-    if let Some(body) = rest.strip_prefix('[') {
-        let end = body.find(']').ok_or_else(|| "bad ipv6 host".to_string())?;
-        let host = body[..end].to_string();
-        let after = &body[end + 1..];
-        if let Some(after_port) = after.strip_prefix(':') {
-            let pend = after_port.find(['/', '?', '#']).unwrap_or(after_port.len());
-            let port = parse_port(&after_port[..pend])?;
-            return Ok((host, Some(port), &after_port[pend..]));
-        }
-        return Ok((host, None, after));
+    let end = rest.find(['/', '\\', '?', '#']).unwrap_or(rest.len());
+    let (hostport, after) = rest.split_at(end);
+    if let Some(body) = hostport.strip_prefix('[') {
+        let (ip, port) = body.split_once(']').ok_or("bad ipv6 host")?;
+        let ip: Ipv6Addr = ip.parse().map_err(|_| "bad ipv6 host")?;
+        let port = match port {
+            "" | ":" => None,
+            port => Some(parse_port(port.strip_prefix(':').ok_or("bad ipv6 host")?)?),
+        };
+        return Ok((v6_host(ip), port, after));
     }
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let hostport = &rest[..end];
     if hostport.matches(':').count() > 1 {
         return Err("bracket ipv6 hosts".into());
     }
-    let (host, port) = split_host_port(hostport)?;
-    Ok((host, port, &rest[end..]))
+    let (host, port) = match hostport.split_once(':') {
+        Some((host, "")) => (host, None),
+        Some((host, port)) => (host, Some(parse_port(port)?)),
+        None => (hostport, None),
+    };
+    Ok((dial_host(host)?, port, after))
 }
 
-fn split_host_port(hostport: &str) -> Result<(String, Option<u16>), String> {
-    if let Some((host, port)) = hostport.rsplit_once(':') {
-        if !host.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
-            return Ok((host.to_string(), Some(parse_port(port)?)));
-        }
-    }
-    Ok((hostport.to_string(), None))
-}
-
+/// A port as its number: `08443` is 8443.
 fn parse_port(text: &str) -> Result<u16, String> {
+    let text = text.trim();
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
         return Err("bad port".into());
     }
-    text.parse::<u16>().map_err(|_| "bad port".into())
+    let digits = text.trim_start_matches('0');
+    if digits.is_empty() {
+        return Ok(0);
+    }
+    digits.parse::<u16>().map_err(|_| "bad port".into())
 }
 
-fn normalize_host(host: &str) -> String {
-    host.trim()
-        .trim_matches(|c| c == '[' || c == ']')
-        .trim_end_matches('.')
-        .to_ascii_lowercase()
+/// The host a fetch dials for a host name as written: blanks and a final
+/// dot trimmed, lowercase, an IPv4 address in any form a URL or a resolver
+/// reads (`2130706433`, `0x7f.1`, `0177.0.0.1`) as its four decimal parts,
+/// and an IPv6 address (bracketed or not) as [`v6_host`] reads it. An error
+/// for a host no fetch can dial (`evil.test]`, `evil%2etest`, `1.2.3.4.5`).
+pub(crate) fn dial_host(host: &str) -> Result<String, String> {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("url has no host".into());
+    }
+    let bare = host.strip_prefix('[').and_then(|h| h.strip_suffix(']'));
+    if let Ok(ip) = bare.unwrap_or(&host).parse::<Ipv6Addr>() {
+        return Ok(v6_host(ip));
+    }
+    let forbidden = |c: char| c.is_control() || c.is_whitespace() || "#%/:<>?@[\\]^|".contains(c);
+    if host.chars().any(forbidden) {
+        return Err(format!("bad host {host}"));
+    }
+    match ipv4_host(&host) {
+        Some(Some(ip)) => Ok(ip.to_string()),
+        Some(None) => Err(format!("bad ipv4 host {host}")),
+        None => Ok(host),
+    }
 }
 
+/// An IPv6 address in its short form, and an IPv4-mapped one
+/// (`::ffff:5db8:d822`, `::ffff:93.184.216.34`) as the IPv4 address the
+/// fetch lands on, so a rule naming either form names the other.
+fn v6_host(ip: Ipv6Addr) -> String {
+    ip.to_ipv4_mapped()
+        .map_or_else(|| ip.to_string(), |v4| v4.to_string())
+}
+
+/// An IPv4 address the way the URL standard reads a host whose last label
+/// is a number (as `inet_aton` reads it): one to four parts, each decimal,
+/// `0x` hex or `0` octal, the last filling the bytes left. `None` when the
+/// last label is no number; `Some(None)` when it is but the host is no
+/// address.
+fn ipv4_host(host: &str) -> Option<Option<Ipv4Addr>> {
+    let labels: Vec<&str> = host.split('.').collect();
+    let last = labels.last()?;
+    let hex = last
+        .strip_prefix("0x")
+        .is_some_and(|h| h.bytes().all(|b| b.is_ascii_hexdigit()));
+    if last.is_empty() || !(hex || last.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    if labels.len() > 4 {
+        return Some(None);
+    }
+    let Some(nums) = labels
+        .iter()
+        .map(|l| ipv4_number(l))
+        .collect::<Option<Vec<u64>>>()
+    else {
+        return Some(None);
+    };
+    let (last, head) = nums.split_last()?;
+    let room = 1u64 << (8 * (5 - nums.len()));
+    if head.iter().any(|&n| n > 255) || *last >= room {
+        return Some(None);
+    }
+    let value = head
+        .iter()
+        .enumerate()
+        .fold(*last, |v, (i, &n)| v + (n << (8 * (3 - i))));
+    Some(u32::try_from(value).ok().map(Ipv4Addr::from))
+}
+
+/// One part of an IPv4 address: decimal, `0x` hex, or octal after a `0`.
+fn ipv4_number(text: &str) -> Option<u64> {
+    let (digits, radix) = match text.strip_prefix("0x") {
+        Some(hex) => (hex, 16),
+        None if text.len() > 1 && text.starts_with('0') => (&text[1..], 8),
+        None => (text, 10),
+    };
+    if text.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    if digits.is_empty() {
+        return Some(0);
+    }
+    u64::from_str_radix(digits, radix).ok()
+}
+
+/// The path and query a fetch asks for: no fragment, and `\` in the path
+/// read as `/`.
 fn normalize_path(rest: &str) -> String {
     let rest = rest.split('#').next().unwrap_or("");
+    let (path, query) = rest.split_at(rest.find('?').unwrap_or(rest.len()));
+    let rest = format!("{}{query}", path.replace('\\', "/"));
+    let rest = rest.as_str();
     if rest.is_empty() {
         return "/".into();
     }
@@ -522,12 +698,225 @@ pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::Socket
 mod tests {
     use super::*;
 
+    /// The host a `WebFetch` rule reads is the host web_fetch dials.
+    #[test]
+    fn rules_read_the_host_web_fetch_dials() {
+        use crate::perm::{parse_rule, webfetch_matches, Action};
+        let deny = parse_rule("WebFetch(domain:evil.test)", Action::Deny).unwrap();
+        for u in [
+            "https://evil.test?.github.com/x",
+            "https://evil.test?a=1",
+            "https://evil.test#x",
+            "https://Evil.Test./a",
+            "https://evil.test:8443/x",
+        ] {
+            assert_eq!(parse_public_url(u).unwrap().host, "evil.test", "{u}");
+            assert!(webfetch_matches(&deny, u), "{u}");
+        }
+        // A URL glob too: web_fetch trims the host and dials https for http.
+        let glob = parse_rule("WebFetch(https://evil.test/*)", Action::Deny).unwrap();
+        for u in [
+            "http://evil.test/x",
+            "HTTP://evil.test/x",
+            "https:// evil.test/x",
+            "https://evil.test /x",
+            "https://\u{a0}evil.test/x",
+        ] {
+            let dialed = parse_public_url(u).unwrap();
+            assert_eq!(dialed.display(), "https://evil.test/x", "{u}");
+            assert!(webfetch_matches(&glob, u), "{u}");
+        }
+    }
+
+    /// web_fetch and the `WebFetch` rules read a URL's host and port one
+    /// way: a host no fetch can dial is refused (and a deny rule still
+    /// covers it), a port is its number, and an IPv4 address in any spelling
+    /// is the address dialed.
+    #[test]
+    fn web_fetch_and_its_rules_read_one_host_and_port() {
+        use crate::perm::{parse_rule, webfetch_matches, Action};
+        let deny = parse_rule("WebFetch(domain:evil.test)", Action::Deny).unwrap();
+        let allow = parse_rule("WebFetch(domain:evil.test)", Action::Allow).unwrap();
+        for (u, err, denied) in [
+            ("https://evil.test]/x", "bad host evil.test]", true),
+            ("https://]evil.test/x", "bad host ]evil.test", true),
+            ("https://evil.test[/x", "bad host evil.test[", true),
+            ("https://[evil.test]/x", "bad ipv6 host", true),
+            ("https://evil%2etest/x", "bad host evil%2etest", true),
+            ("https://evil.test:x/", "bad port", true),
+            ("https://1.2.3.4.5/x", "bad ipv4 host 1.2.3.4.5", false),
+            ("https://0x100000000/x", "bad ipv4 host 0x100000000", false),
+            ("https://256.1.1.1/x", "bad ipv4 host 256.1.1.1", false),
+            ("https://evil.123/x", "bad ipv4 host evil.123", false),
+        ] {
+            assert_eq!(parse_public_url(u).unwrap_err(), err, "{u}");
+            assert_eq!(webfetch_matches(&deny, u), denied, "{u}");
+            assert!(!webfetch_matches(&allow, u), "{u}");
+        }
+        for (u, host) in [
+            ("https://2130706433/x", "127.0.0.1"),
+            ("https://0x7f.1/x", "127.0.0.1"),
+            ("https://0X7F.0.0.1/x", "127.0.0.1"),
+            ("https://0177.0.0.1/x", "127.0.0.1"),
+            ("https://127.1/x", "127.0.0.1"),
+            ("https://0x5db8d822/x", "93.184.216.34"),
+            ("https://1572395042/x", "93.184.216.34"),
+            ("https://93.184.216.34./x", "93.184.216.34"),
+            ("https://[0:0::1]/x", "::1"),
+        ] {
+            assert_eq!(parse_public_url(u).unwrap().host, host, "{u}");
+        }
+        let ip = parse_rule("WebFetch(domain:93.184.216.34)", Action::Deny).unwrap();
+        for u in [
+            "https://0x5db8d822/x",
+            "https://1572395042/",
+            "https://93.184.216.34/",
+        ] {
+            assert!(webfetch_matches(&ip, u), "{u}");
+        }
+        assert!(!webfetch_matches(&ip, "https://93.184.216.35/"));
+        let loopback = parse_rule("WebFetch(domain:2130706433)", Action::Deny).unwrap();
+        assert!(webfetch_matches(&loopback, "https://127.0.0.1/"));
+        // A loopback address in another spelling is refused before any DNS.
+        let fetch = Scripted::new();
+        for u in [
+            "http://2130706433/",
+            "http://0x7f.1/",
+            "http://0177.0.0.1:80/",
+        ] {
+            let out = run(&args(u), &fetch);
+            assert_eq!(out.text, "refused non-public address 127.0.0.1", "{u}");
+        }
+        assert!(fetch.lookups.lock().unwrap().is_empty());
+        assert!(fetch.gets.lock().unwrap().is_empty());
+
+        for (u, port) in [
+            ("https://evil.test:08443/x", 8443),
+            ("https://evil.test:443/x", 443),
+            ("https://evil.test/x", 443),
+            ("http://evil.test/x", 443),
+            ("https://evil.test:/x", 443),
+            ("https://[::1]:0080/x", 80),
+        ] {
+            assert_eq!(parse_public_url(u).unwrap().dns_port(), port, "{u}");
+        }
+        let port = parse_rule("WebFetch(https://evil.test:8443/*)", Action::Deny).unwrap();
+        for u in [
+            "https://evil.test:8443/x",
+            "https://evil.test:08443/x",
+            "https://EVIL.test.:008443/x",
+        ] {
+            assert!(webfetch_matches(&port, u), "{u}");
+        }
+        assert!(!webfetch_matches(&port, "https://evil.test/x"));
+        let default = parse_rule("WebFetch(https://evil.test:443/*)", Action::Deny).unwrap();
+        for u in [
+            "https://evil.test/x",
+            "http://evil.test/x",
+            "https://evil.test:0443/x",
+        ] {
+            assert!(webfetch_matches(&default, u), "{u}");
+        }
+        let zeros = parse_rule("WebFetch(evil.test:08443)", Action::Deny).unwrap();
+        assert!(webfetch_matches(&zeros, "https://evil.test:8443/x"));
+        // An allow rule with no port allows port 443 only; a deny rule with
+        // no port covers every port.
+        let docs = parse_rule("WebFetch(https://docs.rs/*)", Action::Allow).unwrap();
+        assert!(webfetch_matches(&docs, "https://docs.rs:443/serde"));
+        assert!(!webfetch_matches(&docs, "https://docs.rs:8443/serde"));
+        let any = parse_rule("WebFetch(https://evil.test/*)", Action::Deny).unwrap();
+        assert!(webfetch_matches(&any, "https://evil.test:8443/x"));
+
+        // Tabs and newlines are dropped; `\` ends the host and reads as `/`
+        // in the path.
+        assert_eq!(
+            parse_public_url("https://ev\til.te\nst/x").unwrap().host,
+            "evil.test"
+        );
+        assert_eq!(
+            parse_public_url(r"https://evil.test\.github.com/x")
+                .unwrap()
+                .display(),
+            "https://evil.test/.github.com/x"
+        );
+        assert_eq!(
+            parse_public_url(r"https://example.com/a\b?q=c\d")
+                .unwrap()
+                .path,
+            r"/a/b?q=c\d"
+        );
+    }
+
+    /// An IPv4-mapped IPv6 address lands on its IPv4 address: web_fetch
+    /// dials it as that address, and a rule naming either form names the
+    /// other.
+    #[test]
+    fn a_mapped_address_reads_as_its_ipv4_host() {
+        use crate::perm::{parse_rule, webfetch_matches, Action};
+        for url in [
+            "https://[::ffff:93.184.216.34]/x",
+            "https://[::FFFF:5db8:d822]/x",
+            "http://[0:0:0:0:0:ffff:93.184.216.34]:443/x",
+        ] {
+            let parts = parse_public_url(url).unwrap();
+            assert_eq!(parts.display(), "https://93.184.216.34/x", "{url}");
+        }
+        assert_eq!(dial_host("[::ffff:7f00:1]"), Ok("127.0.0.1".to_string()));
+        assert_eq!(dial_host("0:0:0:0:0:0:0:1"), Ok("::1".to_string()));
+        // Other IPv6 addresses keep their own (short) form; NAT64 is a
+        // gateway's address, not the IPv4 host's.
+        let v6 = |url: &str| parse_public_url(url).unwrap().host;
+        assert_eq!(v6("https://[2001:DB8:0::1]/"), "2001:db8::1");
+        assert_eq!(v6("https://[64:ff9b::5db8:d822]/"), "64:ff9b::5db8:d822");
+
+        let urls = [
+            "https://[::ffff:5db8:d822]/x",
+            "https://93.184.216.34/x",
+            "http://[0:0:0:0:0:ffff:93.184.216.34]/x",
+        ];
+        for rule in [
+            "WebFetch(domain:93.184.216.34)",
+            "WebFetch(domain:[::ffff:5db8:d822])",
+            "WebFetch(domain:::ffff:93.184.216.34)",
+            "WebFetch(https://[::ffff:93.184.216.34]/*)",
+        ] {
+            let deny = parse_rule(rule, Action::Deny).unwrap();
+            for url in urls {
+                assert!(webfetch_matches(&deny, url), "{rule} {url}");
+            }
+            assert!(
+                !webfetch_matches(&deny, "https://[::ffff:5db8:d823]/x"),
+                "{rule}"
+            );
+        }
+        let _legacy = crate::tools::registry::LegacyPromptGuard::set();
+        let deny = policy(vec![parse_rule(
+            "WebFetch(domain:93.184.216.34)",
+            Action::Deny,
+        )
+        .unwrap()]);
+        let decided = decide_with(
+            &chat(true, PermMode::Always, false),
+            "web_fetch",
+            r#"{"url":"https://[::ffff:5db8:d822]/x"}"#,
+            false,
+            None,
+            Path::new("."),
+            Some(&deny),
+        );
+        assert!(
+            matches!(&decided, Decision::Refuse(text) if text == "Tool `web_fetch` was not executed: Denied by permission policy: deny rule on web_fetch"),
+            "{decided:?}"
+        );
+    }
+
     /// With no network installed, web fetch and web search name no sign-in:
     /// neither needs xAI.
     #[test]
     fn with_no_network_installed_the_web_tools_ask_for_no_sign_in() {
         let _none = super::super::ports::enter(super::super::ports::Ports::default());
-        let fetch = run_with_ports(&json!({"url": "https://example.com/"}), &|| false);
+        let ws = std::env::temp_dir();
+        let fetch = run_with_ports(&json!({"url": "https://example.com/"}), &ws, &|| false);
         let search = super::super::web_search::run_with_ports(&json!({"query": "rust"}), &|| false);
         for out in [fetch, search] {
             assert!(out.failed);
@@ -631,13 +1020,79 @@ mod tests {
 
     /// The tool with its egress lines in a scratch config folder.
     fn run(args: &Value, fetch: &dyn PageFetch) -> ToolOutput {
+        run_ruled(args, fetch, &[])
+    }
+
+    /// [`run`] with these permission rules.
+    fn run_ruled(args: &Value, fetch: &dyn PageFetch, rules: &[crate::perm::Rule]) -> ToolOutput {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = crate::harness::test_dir(&format!("web-fetch-{n}"));
         let _cfg = crate::perm::ConfigGuard::set(&dir);
-        let out = super::run(args, fetch, &|| false);
+        let out = super::run(args, fetch, rules, &|| false);
         let _ = std::fs::remove_dir_all(dir);
         out
+    }
+
+    /// The gate judged the URL the model asked for; each redirect hop meets
+    /// the deny and ask rules too, so a page can't send the fetch to a host
+    /// a rule blocks.
+    #[test]
+    fn a_redirect_hop_meets_the_deny_and_ask_rules() {
+        let rules = [
+            parse_rule("WebFetch(domain:evil.test)", Action::Deny).unwrap(),
+            parse_rule("WebFetch(domain:asked.test)", Action::Ask).unwrap(),
+        ];
+        let site = || {
+            Scripted::new()
+                .host("ok.test", vec![IpAddr::from([203, 0, 113, 5])])
+                .host("evil.test", vec![IpAddr::from([203, 0, 113, 6])])
+                .host("asked.test", vec![IpAddr::from([203, 0, 113, 7])])
+                .host("www.asked.test", vec![IpAddr::from([203, 0, 113, 7])])
+                .page("https://ok.test/deny", redirect("https://EVIL.test./x"))
+                .page("https://ok.test/ask", redirect("https://www.asked.test/y"))
+                .page("https://asked.test/a", redirect("https://www.asked.test/y"))
+                .page("https://evil.test/x", text_page(b"evil page"))
+                .page("https://www.asked.test/y", text_page(b"asked page"))
+        };
+        let fetched = |fetch: &Scripted| fetch.gets.lock().unwrap().clone();
+
+        let fetch = site();
+        let out = run_ruled(&args("https://ok.test/deny"), &fetch, &rules);
+        assert!(out.failed);
+        assert_eq!(
+            out.text,
+            "Tool `web_fetch` was not executed: Denied by permission policy: deny rule on web_fetch (the page redirects to evil.test)"
+        );
+        assert_eq!(fetched(&fetch), vec!["https://ok.test/deny"]);
+
+        let fetch = site();
+        let out = run_ruled(&args("https://ok.test/ask"), &fetch, &rules);
+        assert!(out.failed);
+        assert_eq!(
+            out.text,
+            "the page redirects to https://www.asked.test/y, which an ask rule covers; fetch that URL with web_fetch so it can be approved"
+        );
+        assert_eq!(fetched(&fetch), vec!["https://ok.test/ask"]);
+
+        // The start met that ask rule, so the gate asked for its domain.
+        let fetch = site();
+        let out = run_ruled(&args("https://asked.test/a"), &fetch, &rules);
+        assert!(!out.failed, "{}", out.text);
+        assert!(out.text.contains("asked page"), "{}", out.text);
+        assert_eq!(
+            fetched(&fetch),
+            vec!["https://asked.test/a", "https://www.asked.test/y"]
+        );
+
+        // With no rules the same redirect is followed.
+        let fetch = site();
+        let out = run_ruled(&args("https://ok.test/deny"), &fetch, &[]);
+        assert!(out.text.contains("evil page"), "{}", out.text);
+        assert_eq!(
+            fetched(&fetch),
+            vec!["https://ok.test/deny", "https://evil.test/x"]
+        );
     }
 
     #[test]
@@ -1131,7 +1586,7 @@ mod tests {
             .host("example.org", vec![IpAddr::from([203, 0, 113, 9])])
             .page(url, text_page(b"ferry times"));
         let deny = crate::harness::answer_next_park(dir.clone(), false);
-        let out = super::run(&args(url), &fetch, &|| false);
+        let out = super::run(&args(url), &fetch, &[], &|| false);
         let card = deny.join().unwrap().expect("hard card");
         assert_eq!(card.action, "web_fetch → example.org (chats, memory)");
         assert_eq!(card.class, "send");
@@ -1144,7 +1599,7 @@ mod tests {
         assert!(crate::harness::read_egress(&dir).is_empty());
 
         let approve = crate::harness::answer_next_park(dir.clone(), true);
-        let out = super::run(&args(url), &fetch, &|| false);
+        let out = super::run(&args(url), &fetch, &[], &|| false);
         assert!(approve.join().unwrap().is_some());
         assert!(!out.failed, "{}", out.text);
         assert_eq!(gets(&fetch), 1, "approve once fetches once");
@@ -1156,7 +1611,7 @@ mod tests {
         );
 
         // A halt (the turn's stop) denies a waiting card: still nothing fetched.
-        let out = super::run(&args(url), &fetch, &|| true);
+        let out = super::run(&args(url), &fetch, &[], &|| true);
         assert!(out.failed, "{}", out.text);
         assert_eq!(gets(&fetch), 1);
         assert!(
@@ -1184,6 +1639,7 @@ mod tests {
         let out = super::run(
             &args("https://example.com/go?token=sk-abcdefghijklmnopqrstuv"),
             &fetch,
+            &[],
             &|| false,
         );
         assert!(!out.failed, "{}", out.text);

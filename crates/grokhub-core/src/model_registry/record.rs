@@ -561,7 +561,7 @@ pub struct Breaker {
     pub opens: u32,
     #[serde(default)]
     pub open_until_ms: u64,
-    /// Its one half-open check (a probe or a low-risk background call) is out.
+    /// Its half-open check is out: a probe on a plan, its next real call on an API key.
     #[serde(default)]
     pub half_open: bool,
 }

@@ -1,6 +1,9 @@
 //! MCP client. Sync JSON-RPC over stdio, streamable HTTP, and legacy SSE.
 //! One worker thread per stdio child or HTTP read. No tokio.
 
+mod apps;
+mod tasks;
+pub use apps::{McpAppView, UiMeta, MIME as MCP_APP_MIME};
 mod browser;
 pub use browser::{loopback_endpoint, origin_of, Attach as BrowserAttach};
 mod config;
@@ -20,14 +23,19 @@ pub use config::{
 pub use elicit::{
     alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
 };
-pub(crate) use elicit::{ask_secret, wait_elicit, ElicitAnswer};
+pub(crate) use elicit::{
+    ask_secret, hook_session, offer_url, try_take_elicit, wait_elicit, ElicitAnswer,
+};
+
+#[cfg(test)]
+pub(crate) use oauth::tests::{approving_browser, AuthMcp};
 
 pub(crate) use elicit::with_elicit;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::SystemTime;
 
 use serde_json::{json, Value};
@@ -39,6 +47,8 @@ use crate::tools::{fence, ToolOutput};
 use config::TransportDef;
 use rpc::RawTool;
 pub use rpc::{ToolHints, ToolIcon};
+pub(crate) use tasks::take_orphans;
+pub use tasks::{binding_refusal, cancel_task, seed_open_task};
 
 /// Individual tool schemas at this count. Above it, `search_tool` and
 /// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
@@ -87,7 +97,18 @@ fn cabin_cua_def() -> Option<ServerDef> {
         headers: BTreeMap::new(),
         token_ref: None,
         token_env: None,
+        disabled_tools: Default::default(),
+        include_tools: None,
     })
+}
+
+/// One tool on a connector row, with its Connectors-page on/off switch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorTool {
+    /// The server's own tool name (not `server__tool`).
+    pub name: String,
+    /// False when the Connectors page turned it off for chat.
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +119,8 @@ pub struct DoctorRow {
     pub last_error: String,
     pub detail: String,
     pub sign_in: SignIn,
+    /// Tools from the last successful list, empty until Check / connect.
+    pub tools: Vec<DoctorTool>,
 }
 
 /// A server's browser sign-in, for its row.
@@ -143,6 +166,7 @@ struct ToolRec {
     output_schema: Option<Value>,
     hints: ToolHints,
     icons: Vec<ToolIcon>,
+    ui: Option<UiMeta>,
 }
 
 /// One connected MCP tool as its server's `tools/list` describes it, for a
@@ -185,6 +209,57 @@ pub fn tool_list() -> Vec<ToolInfo> {
         .collect()
 }
 
+/// A connected MCP tool another device may borrow: what a companion lends
+/// when its person offers `mcp` (`grokhub-hub node`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LentTool {
+    /// The `server__tool` name [`call_lent`] takes.
+    pub qualified: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub read_only: bool,
+}
+
+/// Every connected MCP tool a model may call, with its input schema, for a
+/// companion to lend (app-only tools stay with their own app).
+/// Another companion's relay (`/node/v1/mcp/`) is never lent on: that
+/// companion's person allowed this computer, not whoever it lends to.
+pub fn lent_tools() -> Vec<LentTool> {
+    let tools = model_tools();
+    let (slots, _) = load_slots();
+    let relays: Vec<&String> = slots
+        .iter()
+        .filter(|(_, slot)| {
+            matches!(&lock_slot(slot).def.transport,
+                config::TransportDef::Http { url, .. } if url.contains("/node/v1/mcp/"))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    tools
+        .into_iter()
+        .filter(|tool| !relays.contains(&&tool.server))
+        .map(|tool| LentTool {
+            qualified: tool.qualified,
+            description: tool.description,
+            input_schema: tool.schema,
+            read_only: tool.hints.read_only,
+        })
+        .collect()
+}
+
+/// Call a connected MCP tool by its `server__tool` name, the way a chat on
+/// this computer would. `None` when no connected tool has that name. The
+/// answer comes back without this computer's untrusted fence: the app that
+/// borrows the tool fences it as its own MCP output.
+pub fn call_lent(qualified: &str, args: &Value) -> Option<ToolOutput> {
+    if !qualified.contains("__") {
+        return None;
+    }
+    let mut out = try_dispatch(qualified, args, &|| false)?;
+    out.text = crate::tools::fence::display_text(&out.text).into_owned();
+    Some(out)
+}
+
 struct SlotInner {
     name: String,
     def: ServerDef,
@@ -196,7 +271,10 @@ struct SlotInner {
     connecting: bool,
     /// Bumped per connect, so one that a restart or sign-out overtook is dropped.
     attempt: u64,
-    conn: Option<Conn>,
+    /// The connection has its own lock, held for the length of a call, so a
+    /// slow or hung call never holds the slot that every chat's tool list,
+    /// permission check and Settings row reads.
+    conn: Option<SharedConn>,
     /// When `raw` was last listed, for the server's `ttlMs`.
     listed_at: Option<std::time::Instant>,
 }
@@ -217,14 +295,39 @@ impl SlotInner {
         }
     }
 
-    /// The server's `ttlMs` ran out since its tools were listed.
+    /// The server's `ttlMs` ran out since its tools were listed. Not while
+    /// a call is running on the connection: the re-list waits for a free one.
     fn list_expired(&self, now: std::time::Instant) -> bool {
         let (Some(conn), Some(at)) = (&self.conn, self.listed_at) else {
+            return false;
+        };
+        let Ok(conn) = conn.try_lock() else {
             return false;
         };
         conn.list_ttl()
             .is_some_and(|ttl| now.saturating_duration_since(at) >= ttl)
     }
+
+    /// Drop `conn` with `err` as the server's error, unless a restart has
+    /// replaced it since. `sign_in_again`: the next use reconnects.
+    fn forget_conn(&mut self, conn: &SharedConn, err: &str, sign_in_again: bool) {
+        if !self.conn.as_ref().is_some_and(|now| Arc::ptr_eq(now, conn)) {
+            return;
+        }
+        self.conn = None;
+        self.last_error = Some(clip_err(err));
+        if sign_in_again {
+            self.tried = false;
+        }
+    }
+}
+
+type SharedConn = Arc<Mutex<Conn>>;
+
+/// Lock order: a connection may be locked first and its slot after, never the
+/// other way round except with `try_lock`.
+fn lock_conn(conn: &Mutex<Conn>) -> MutexGuard<'_, Conn> {
+    conn.lock().unwrap_or_else(|err| err.into_inner())
 }
 
 enum Conn {
@@ -241,10 +344,29 @@ impl Conn {
         timeout: std::time::Duration,
         stop: &dyn Fn() -> bool,
         retry_safe: bool,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(String, bool, Value), String> {
         match self {
-            Conn::Stdio(conn) => conn.call(name, args, key, timeout),
+            Conn::Stdio(conn) => conn.call(name, args, key, timeout, stop),
             Conn::Http(conn) => conn.call(name, args, key, timeout, stop, retry_safe),
+        }
+    }
+
+    fn raw_rpc(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: std::time::Duration,
+    ) -> Result<Value, String> {
+        match self {
+            Conn::Stdio(conn) => conn.raw_rpc(method, params, timeout),
+            Conn::Http(conn) => conn.raw_rpc(method, params, timeout),
+        }
+    }
+
+    fn read_resource(&mut self, uri: &str, timeout: std::time::Duration) -> Result<Value, String> {
+        match self {
+            Conn::Stdio(conn) => conn.read_resource(uri, timeout),
+            Conn::Http(conn) => conn.read_resource(uri, timeout),
         }
     }
 
@@ -278,15 +400,31 @@ const RELIST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 fn relist_expired(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
     let now = std::time::Instant::now();
     for slot in slots.values() {
-        let mut inner = lock_slot(slot);
-        if !inner.list_expired(now) {
-            continue;
-        }
-        let wait = inner.def.startup_timeout.min(RELIST_WAIT);
-        let Some(conn) = inner.conn.as_mut() else {
+        let (conn, wait) = {
+            let inner = lock_slot(slot);
+            if !inner.list_expired(now) {
+                continue;
+            }
+            let Some(conn) = inner.conn.clone() else {
+                continue;
+            };
+            (conn, inner.def.startup_timeout.min(RELIST_WAIT))
+        };
+        // The slot stays free while the server answers.
+        let Ok(mut held) = conn.try_lock() else {
             continue;
         };
-        if let Ok(raw) = conn.relist(wait) {
+        let listed = held.relist(wait);
+        drop(held);
+        let mut inner = lock_slot(slot);
+        if !inner
+            .conn
+            .as_ref()
+            .is_some_and(|now| Arc::ptr_eq(now, &conn))
+        {
+            continue;
+        }
+        if let Ok(raw) = listed {
             inner.raw = raw;
         }
         inner.listed_at = Some(std::time::Instant::now());
@@ -349,6 +487,38 @@ pub fn connect_in_background(workspace: &Path) {
     });
 }
 
+pub(crate) fn cancel_open_tasks(session: &str) {
+    let plan = tasks::open_by_server(session);
+    if plan.is_empty() {
+        return;
+    }
+    let slots = {
+        let held = lock_state();
+        held.slots.clone()
+    };
+    for (server, ids) in plan {
+        let Some(slot) = slots.get(&server) else {
+            continue;
+        };
+        let shared = lock_slot(slot).conn.clone();
+        if let Some(shared) = shared {
+            let Ok(mut conn) = shared.try_lock() else {
+                continue;
+            };
+            for id in &ids {
+                let _ = conn.raw_rpc(
+                    "tasks/cancel",
+                    json!({ "taskId": id }),
+                    std::time::Duration::from_secs(2),
+                );
+            }
+        }
+        for id in ids {
+            tasks::finish_id(&id);
+        }
+    }
+}
+
 pub fn shutdown_all() {
     let mut held = lock_state();
     for slot in held.slots.values() {
@@ -356,6 +526,25 @@ pub fn shutdown_all() {
     }
     held.slots.clear();
     held.loaded = false;
+    tasks::clear_memory();
+}
+
+fn tool_offered(def: &ServerDef, raw: &str) -> bool {
+    !def.disabled_tools.contains(raw)
+        && match &def.include_tools {
+            None => true,
+            Some(include) => include.contains(raw),
+        }
+}
+
+fn doctor_tools(def: &ServerDef, listed: &[ToolRec]) -> Vec<DoctorTool> {
+    listed
+        .iter()
+        .map(|tool| DoctorTool {
+            name: tool.raw.clone(),
+            enabled: tool_offered(def, &tool.raw),
+        })
+        .collect()
 }
 
 pub fn configured() -> Vec<DoctorRow> {
@@ -377,6 +566,7 @@ pub fn configured() -> Vec<DoctorRow> {
             tool_count: 0,
             last_error: String::new(),
             detail: config::target_label(&def),
+            tools: Vec::new(),
         })
         .collect()
 }
@@ -402,14 +592,22 @@ pub fn doctor() -> Vec<DoctorRow> {
                 tool_count: 0,
                 last_error: String::new(),
                 detail: config::target_label(&inner.def),
+                tools: Vec::new(),
             });
             continue;
         }
         let ping_for = std::time::Duration::from_secs(5).min(inner.def.tool_timeout);
-        if let Some(conn) = inner.conn.as_mut() {
-            if let Err(err) = conn.ping(ping_for) {
-                inner.last_error = Some(clip_err(&err));
-                inner.conn.take();
+        // A connection busy with a call is up; one that is free is pinged
+        // with the slot unlocked.
+        if let Some(conn) = inner.conn.clone() {
+            if let Ok(mut held) = conn.try_lock() {
+                drop(inner);
+                let pinged = held.ping(ping_for);
+                drop(held);
+                inner = lock_slot(&slot);
+                if let Err(err) = pinged {
+                    inner.forget_conn(&conn, &err, false);
+                }
             }
         }
         let status = if inner.conn.is_some() && inner.last_error.is_none() {
@@ -427,13 +625,16 @@ pub fn doctor() -> Vec<DoctorRow> {
         } else {
             "stopped"
         };
+        let tools = doctor_tools(&inner.def, &inner.tools);
+        let offered = tools.iter().filter(|tool| tool.enabled).count();
         rows.push(DoctorRow {
             sign_in: sign_in_state(&name, &inner.def),
             name,
             status: status.into(),
-            tool_count: inner.tools.len(),
+            tool_count: offered,
             last_error: inner.last_error.clone().unwrap_or_default(),
             detail: config::target_label(&inner.def),
+            tools,
         });
     }
     rows
@@ -493,6 +694,15 @@ pub fn browser_attach_changed() -> Vec<String> {
 /// Sign in to an HTTP server in the browser `open` launches, then reconnect
 /// it with the new token. Returns the line naming the account.
 pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<String, String> {
+    sign_in_until(name, open, &|| false)
+}
+
+/// [`sign_in`] that stops when `stop` says so (chat Decline on the URL card).
+pub fn sign_in_until(
+    name: &str,
+    open: &dyn Fn(&str) -> Result<(), String>,
+    stop: &dyn Fn() -> bool,
+) -> Result<String, String> {
     let (slots, _) = load_slots();
     let slot = slots
         .get(name)
@@ -506,11 +716,12 @@ pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<
             ))
         }
     };
-    let line = oauth::sign_in(
+    let line = oauth::sign_in_until(
         name,
         &url,
         open,
         std::time::Duration::from_secs(oauth::LOOPBACK_SECS),
+        stop,
     )?;
     match restart(name) {
         Ok(()) => Ok(line),
@@ -559,7 +770,7 @@ pub fn disconnect(name: &str) -> Result<String, String> {
     Ok(format!("Disconnected {name}"))
 }
 
-/// Settings → Connectors switch: turn a server off (`enabled: false` in its
+/// Connectors page switch: turn a server off (`enabled: false` in its
 /// `mcp.json` entry) or back on (the flag is dropped), through the
 /// ChangeLedger (origin user, so `/connections` can undo it). A server that
 /// is off is listed but never started. Desktop servers keep their lock.
@@ -593,15 +804,122 @@ pub fn set_enabled(name: &str, on: bool) -> Result<String, String> {
     }
     let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
     let why = if on {
-        "turned on in Settings"
+        "turned on on the Connectors page"
     } else {
-        "turned off in Settings"
+        "turned off on the Connectors page"
     };
     crate::harness::record_change(&config, &target, crate::harness::Origin::User, why, || {
         crate::harness::ChangeTarget::put(&target, Some(&bytes))
     })?;
     invalidate();
     shutdown_all();
+    Ok(line)
+}
+
+/// Connectors page per-tool switch. With an install-time `includeTools`
+/// allowlist, toggling rewrites that list; otherwise it updates
+/// `disabledTools`. A tool left out is never offered to the model and never
+/// runs through chat. The server stays connected.
+pub fn set_tool_enabled(server: &str, tool: &str, on: bool) -> Result<String, String> {
+    let tool = tool.trim();
+    if tool.is_empty() {
+        return Err("Pick a tool to turn on or off.".into());
+    }
+    if is_desktop_server(server) {
+        return Err(format!(
+            "{server} belongs to the desktop; its tools stay on."
+        ));
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile {
+        path: &path,
+        name: server,
+    };
+    let cur = crate::harness::ChangeTarget::read(&target)?
+        .ok_or_else(|| format!("{server} isn't one of this app's connections"))?;
+    let mut entry: serde_json::Map<String, Value> =
+        serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    let read_set = |keys: &[&str]| -> std::collections::BTreeSet<String> {
+        keys.iter()
+            .find_map(|k| entry.get(*k))
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .collect()
+    };
+    let has_include = entry.contains_key("includeTools") || entry.contains_key("include_tools");
+    let mut include = read_set(&["includeTools", "include_tools"]);
+    let mut disabled = read_set(&["disabledTools", "disabled_tools"]);
+    let was_on = if has_include {
+        include.contains(tool) && !disabled.contains(tool)
+    } else {
+        !disabled.contains(tool)
+    };
+    let line = if on {
+        format!("Turned on {server}'s {tool}")
+    } else {
+        format!("Turned off {server}'s {tool}")
+    };
+    if was_on == on {
+        return Ok(line);
+    }
+    if has_include {
+        if on {
+            include.insert(tool.to_string());
+            disabled.remove(tool);
+        } else {
+            include.remove(tool);
+        }
+        entry.remove("include_tools");
+        entry.insert(
+            "includeTools".into(),
+            json!(include.iter().cloned().collect::<Vec<_>>()),
+        );
+    } else if on {
+        disabled.remove(tool);
+    } else {
+        disabled.insert(tool.to_string());
+    }
+    if disabled.is_empty() {
+        entry.remove("disabledTools");
+        entry.remove("disabled_tools");
+    } else {
+        entry.remove("disabled_tools");
+        entry.insert(
+            "disabledTools".into(),
+            json!(disabled.iter().cloned().collect::<Vec<_>>()),
+        );
+    }
+    let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
+    let why = if on {
+        "tool turned on on the Connectors page"
+    } else {
+        "tool turned off on the Connectors page"
+    };
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, why, || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    // Keep the connection; only the offered tool list changes. Sync the
+    // slot's filter sets and the file fingerprint so the next load does
+    // not tear the server down over this write.
+    {
+        let mut held = lock_state();
+        if let Some(slot) = held.slots.get(server) {
+            let mut inner = lock_slot(slot);
+            inner.def.include_tools = if has_include { Some(include) } else { None };
+            inner.def.disabled_tools = disabled;
+        }
+        let (r#gen, mtime) = fingerprint(&path);
+        held.r#gen = r#gen;
+        held.mtime = mtime;
+    }
     Ok(line)
 }
 
@@ -642,7 +960,9 @@ pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
     let obj = entry
         .as_object()
         .ok_or("a connector entry must be a JSON object")?;
-    if ["headers", "env", "bearerToken", "bearer_token", "tokenRef"]
+    // Catalog installs may carry non-secret `env` (a local URL) and an
+    // `includeTools` picker list. Headers and sealed token fields stay out.
+    if ["headers", "bearerToken", "bearer_token", "tokenRef"]
         .iter()
         .any(|k| obj.contains_key(*k))
     {
@@ -709,7 +1029,7 @@ pub fn save_key(name: &str, key: &str) -> Result<String, String> {
 /// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
 /// behind `search_tool` and `use_tool`.
 pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
-    let tools = current_tools();
+    let tools = model_tools();
     if tools.len() + native > DEFER_AFTER {
         return vec![search_schema(), use_schema()];
     }
@@ -834,7 +1154,7 @@ pub(crate) fn try_dispatch(
     if name != "use_tool" && !name.contains("__") {
         return None;
     }
-    let tools = current_tools();
+    let tools = model_tools();
     if name == "use_tool" {
         return Some(use_output(&tools, args, stop));
     }
@@ -853,7 +1173,7 @@ pub(crate) fn search_output(args: &Value) -> ToolOutput {
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
-    let tools = current_tools();
+    let tools = model_tools();
     let mut lines = Vec::new();
     for tool in &tools {
         let about = model_description(tool, usize::MAX);
@@ -982,7 +1302,7 @@ fn resolve(name: &str, arguments: &str) -> Option<Resolved> {
     if name != "use_tool" && !name.contains("__") {
         return None;
     }
-    let tools = current_tools();
+    let tools = model_tools();
     if name == "use_tool" {
         let target = arg_name(arguments);
         if target.is_empty() {
@@ -1060,14 +1380,22 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     let Some(slot) = slots.get(&rec.server).cloned() else {
         return ToolOutput::err(format!("MCP server `{}` stopped", rec.server));
     };
-    let mut inner = lock_slot(&slot);
-    let timeout = inner.def.tool_timeout;
-    let Some(conn) = inner.conn.as_mut() else {
-        return match inner.last_error.as_deref() {
-            Some(err) => fenced_error(err),
-            None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
+    let (shared, timeout, playwright) = {
+        let inner = lock_slot(&slot);
+        let Some(shared) = inner.conn.clone() else {
+            return match inner.last_error.as_deref() {
+                Some(err) => fenced_error(err),
+                None => ToolOutput::err(format!("MCP server `{}` stopped", rec.server)),
+            };
         };
+        let playwright = matches!(
+            &inner.def.transport,
+            TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
+        );
+        (shared, inner.def.tool_timeout, playwright)
     };
+    // Only this connection waits on the call; the slot stays free.
+    let mut conn = lock_conn(&shared);
     // Item 24: a call that can change things carries an idempotency key,
     // the same one when it is resent after an answer that never came.
     let keyed = idem::needs_key(&rec.hints).then(|| idem::fingerprint(&rec.server, &rec.raw, args));
@@ -1087,23 +1415,18 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     // A browser that died at launch gets one isolated relaunch, then the
     // model is pointed at web_fetch instead of a dead tool (LO-51).
     let died = match &result {
-        Ok((text, true)) => browser::launch_died(text).then(|| text.clone()),
+        Ok((text, true, _)) => browser::launch_died(text).then(|| text.clone()),
         Err(err) => browser::launch_died(err).then(|| err.clone()),
         Ok(_) => None,
     };
-    let playwright = matches!(
-        &inner.def.transport,
-        TransportDef::Stdio { command, args, .. } if browser::is_playwright(command, args)
-    );
     if let Some(text) = died.filter(|_| playwright) {
         eprintln!("grokhub mcp `{}` browser launch died: {text}", rec.server);
         // The dead launch's text passes the same page check as any answer,
         // here and when the next call shows it as the server's error.
         let text = browser::page_refusal(&rec.server, &rec.raw, args, &text, true)
             .map_or_else(|why| why, rpc::clip);
-        inner.conn.take();
-        inner.last_error = Some(clip_err(&text));
-        drop(inner);
+        drop(conn);
+        lock_slot(&slot).forget_conn(&shared, &text, false);
         if browser::isolate(&rec.server) && restart(&rec.server).is_ok() {
             return call_qualified(rec, args, stop);
         }
@@ -1114,25 +1437,43 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     // Nothing from a tab on a site the user didn't allow reaches the model.
     // The page check reads the whole answer; only then is it cut to size.
     let result = match result {
-        Ok((text, failed)) => {
+        Ok((text, failed, raw)) => {
             match browser::page_refusal(&rec.server, &rec.raw, args, &text, failed) {
-                Ok(text) => Ok((rpc::clip(text), failed)),
+                Ok(text) => Ok((rpc::clip(text), failed, raw)),
                 Err(why) => return ToolOutput::err(why),
             }
         }
         Err(err) => Err(err),
     };
     match result {
-        Ok((text, true)) => fenced_error(&text),
-        Ok((text, false)) => ToolOutput::ok(fence::fence("mcp", &text)),
+        Ok((text, true, _)) => fenced_error(&text),
+        Ok((text, false, raw)) => {
+            let mut out = ToolOutput::ok(fence::fence("mcp", &text));
+            if let Some(ui) = &rec.ui {
+                let wait = timeout.min(std::time::Duration::from_secs(15));
+                if let Ok(resource) = conn.read_resource(&ui.resource_uri, wait) {
+                    if let Ok((html, prefers_border)) =
+                        apps::decode_resource(&ui.resource_uri, &resource)
+                    {
+                        out.mcp_app = Some(Box::new(McpAppView {
+                            server: rec.server.clone(),
+                            tool: rec.raw.clone(),
+                            resource_uri: ui.resource_uri.clone(),
+                            html: apps::with_csp(&html, &apps::default_csp()),
+                            prefers_border,
+                            tool_input: args.clone(),
+                            tool_result: raw,
+                        }));
+                    }
+                }
+            }
+            out
+        }
         Err(err) => {
-            inner.conn.take();
-            inner.last_error = Some(clip_err(&err));
+            drop(conn);
             // An expired sign-in: the next use reconnects, refreshing the token.
             // Checked on the raw text, before it is fenced.
-            if http::is_unauthorized(&err) {
-                inner.tried = false;
-            }
+            lock_slot(&slot).forget_conn(&shared, &err, http::is_unauthorized(&err));
             let mut out = fenced_error(&err);
             if keyed.is_some() && idem::maybe_ran(&err) {
                 out.text.push_str(idem::MAYBE_RAN);
@@ -1140,6 +1481,47 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
             out
         }
     }
+}
+
+/// Call an app-visible MCP tool from an in-chat MCP App iframe. Rejects tools
+/// that are not app-visible. Returns the JSON-RPC `tools/call` result value.
+pub fn app_call_tool(server: &str, name: &str, args: &Value) -> Result<Value, String> {
+    let slots = slots_now();
+    let Some(slot) = slots.get(server).cloned() else {
+        return Err(format!("MCP server `{server}` is not connected"));
+    };
+    let (shared, timeout) = {
+        let inner = lock_slot(&slot);
+        let ui = inner
+            .raw
+            .iter()
+            .find(|tool| tool.name == name)
+            .and_then(|tool| tool.ui.as_ref());
+        if !apps::app_visible(ui) {
+            return Err(format!("Tool {name} is not available to apps"));
+        }
+        let Some(shared) = inner.conn.clone() else {
+            return Err(format!("MCP server `{server}` stopped"));
+        };
+        (shared, inner.def.tool_timeout)
+    };
+    let (_, failed, raw) = lock_conn(&shared).call(name, args, None, timeout, &|| false, true)?;
+    if failed {
+        return Err(raw
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or("tool reported an error")
+            .to_string());
+    }
+    Ok(raw)
+}
+
+/// Host result for a view's `ui/initialize` (JSON-RPC result payload).
+pub fn app_host_initialize() -> Value {
+    apps::host_initialize_result()
 }
 
 /// A failed MCP call for the model. The text can be the server's own words
@@ -1243,11 +1625,17 @@ fn current_tools() -> Vec<ToolRec> {
     // not waited on.
     // Tests pin config and Offline only per thread, so they connect in line.
     let side_by_side = !cfg!(test) && pending.len() > 1;
+    // Each connect thread keeps the turn's config folder, so an agent's
+    // servers start with the agent's home.
+    let pin = crate::perm::pinned_config();
     match pending.as_slice() {
         many if side_by_side => std::thread::scope(|scope| {
             for slot in many {
-                let workspace = &workspace;
-                scope.spawn(move || connect_if_needed(slot, workspace));
+                let (workspace, pin) = (&workspace, &pin);
+                scope.spawn(move || {
+                    let _config = pin.clone().map(crate::perm::ConfigGuard::set);
+                    connect_if_needed(slot, workspace)
+                });
             }
         }),
         each => {
@@ -1259,6 +1647,24 @@ fn current_tools() -> Vec<ToolRec> {
     relist_expired(&slots);
     requalify(&slots);
     flatten(&slots)
+}
+
+/// The tools a model may find and call: [`current_tools`] without the ones
+/// a server marks app-only (`_meta.ui.visibility: ["app"]`), which only its
+/// own MCP App iframe calls, through [`app_call_tool`], and without tools
+/// the Connectors page turned off (`disabledTools` in `mcp.json`).
+fn model_tools() -> Vec<ToolRec> {
+    let slots = slots_now();
+    current_tools()
+        .into_iter()
+        .filter(|tool| apps::model_visible(tool.ui.as_ref()))
+        .filter(|tool| {
+            slots
+                .get(&tool.server)
+                .map(|slot| tool_offered(&lock_slot(slot).def, &tool.raw))
+                .unwrap_or(true)
+        })
+        .collect()
 }
 
 fn slots_now() -> BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>> {
@@ -1347,7 +1753,7 @@ fn connect_if_needed(slot: &Mutex<SlotInner>, workspace: &Path) {
     match opened {
         Ok((conn, raw)) => {
             inner.raw = raw;
-            inner.conn = Some(conn);
+            inner.conn = Some(Arc::new(Mutex::new(conn)));
             inner.listed_at = Some(std::time::Instant::now());
             inner.last_error = None;
         }
@@ -1491,6 +1897,7 @@ fn requalify(slots: &BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>) {
                     output_schema: tool.output_schema.clone(),
                     hints: tool.hints.clone(),
                     icons: tool.icons.clone(),
+                    ui: tool.ui.clone(),
                 })
             })
             .collect();
@@ -1567,6 +1974,7 @@ pub(crate) fn install_test_tools(rows: &[(&str, &str, &str, bool)]) -> TestGuard
                 ..ToolHints::default()
             },
             icons: Vec::new(),
+            ui: None,
         });
     }
     install_test_recs(tools)
@@ -1594,6 +2002,7 @@ pub(crate) fn install_test_listing(server: &str, listing: &Value) -> TestGuard {
                 output_schema: tool.output_schema,
                 hints: tool.hints,
                 icons: tool.icons,
+                ui: tool.ui,
             })
         })
         .collect();
@@ -1609,8 +2018,9 @@ fn install_test_recs(tools: Vec<ToolRec>) -> TestGuard {
 #[cfg(test)]
 mod tests {
     use super::{
-        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents, install_test_tools,
-        read_mcp_text, schema_tools, search_output, try_dispatch,
+        bare_schema_named_in, begin_turn, chat_schema_tools, import_documents,
+        install_test_listing, install_test_tools, read_mcp_text, schema_tools, search_output,
+        try_dispatch,
     };
     use crate::gate::{decide, decide_with, mcp_policy_deny, Decision, Gate, PermMode};
     use crate::perm::ConfigGuard;
@@ -1677,6 +2087,93 @@ mod tests {
             super::set_enabled("nope", false),
             Err("nope isn't one of this app's connections".into())
         );
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn include_tools_from_the_install_picker_limits_chat() {
+        let (dir, _guard) = temp_cfg("include-tools");
+        std::fs::write(
+            dir.join("mcp.json"),
+            r#"{"mcpServers":{"wiki":{"command":"definitely-not-a-real-binary-xyz","includeTools":["ask"]}}}"#,
+        )
+        .unwrap();
+        super::invalidate();
+        let _snap = install_test_tools(&[
+            ("wiki", "ask", "ask a question", true),
+            ("wiki", "read", "read a page", true),
+        ]);
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["wiki__ask"]);
+        assert!(try_dispatch("wiki__read", &json!({}), &|| false).is_none());
+        assert_eq!(
+            super::set_tool_enabled("wiki", "read", true),
+            Ok("Turned on wiki's read".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(text.contains("\"includeTools\""), "{text}");
+        assert!(text.contains("read"), "{text}");
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"wiki__ask"), "{names:?}");
+        assert!(names.contains(&"wiki__read"), "{names:?}");
+        super::shutdown_all();
+        super::invalidate();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_tool_enabled_hides_the_tool_from_chat() {
+        let (dir, _guard) = temp_cfg("tool-enabled");
+        std::fs::write(
+            dir.join("mcp.json"),
+            r#"{"mcpServers":{"box":{"command":"definitely-not-a-real-binary-xyz"}}}"#,
+        )
+        .unwrap();
+        super::invalidate();
+        assert_eq!(
+            super::set_tool_enabled("box", "create", false),
+            Ok("Turned off box's create".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(
+            text.contains("\"disabledTools\"") && text.contains("create"),
+            "{text}"
+        );
+        let _snap = install_test_tools(&[
+            ("box", "search", "find things", true),
+            ("box", "create", "make things", false),
+        ]);
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["box__search"]);
+        assert!(try_dispatch("box__create", &json!({}), &|| false).is_none());
+        assert_eq!(
+            super::set_tool_enabled("box", "create", true),
+            Ok("Turned on box's create".into())
+        );
+        let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+        assert!(!text.contains("disabledTools"), "{text}");
+        let offered = schema_tools(0);
+        let names: Vec<&str> = offered
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"box__search"), "{names:?}");
+        assert!(names.contains(&"box__create"), "{names:?}");
+        assert_eq!(names.len(), 2, "{names:?}");
         super::shutdown_all();
         super::invalidate();
         let _ = std::fs::remove_dir_all(&dir);
@@ -2334,6 +2831,97 @@ mod tests {
     }
 
     #[test]
+    fn app_only_mcp_tools_stay_off_the_model_schema() {
+        let _guard = install_test_listing(
+            "box",
+            &json!({
+                "tools": [
+                    {
+                        "name": "show",
+                        "description": "Show",
+                        "inputSchema": {"type": "object"},
+                        "_meta": {
+                            "ui": {
+                                "resourceUri": "ui://demo/app",
+                                "visibility": ["model", "app"]
+                            }
+                        }
+                    },
+                    {
+                        "name": "restock",
+                        "description": "Restock",
+                        "inputSchema": {"type": "object"},
+                        "_meta": {
+                            "ui": {
+                                "resourceUri": "ui://demo/app",
+                                "visibility": ["app"]
+                            }
+                        }
+                    },
+                    {
+                        "name": "echo",
+                        "description": "Echo",
+                        "inputSchema": {"type": "object"}
+                    }
+                ]
+            }),
+        );
+        let names: Vec<String> = schema_tools(0)
+            .into_iter()
+            .filter_map(|tool| tool.get("name")?.as_str().map(str::to_string))
+            .collect();
+        assert!(names.iter().any(|n| n == "box__show"), "{names:?}");
+        assert!(names.iter().any(|n| n == "box__echo"), "{names:?}");
+        assert!(
+            names.iter().all(|n| n != "box__restock"),
+            "app-only tool must stay off the model: {names:?}"
+        );
+    }
+
+    #[test]
+    fn app_only_mcp_tools_are_not_found_or_run_by_the_model() {
+        let _guard = install_test_listing(
+            "box",
+            &json!({
+                "tools": [
+                    {
+                        "name": "restock",
+                        "description": "Restock",
+                        "inputSchema": {"type": "object"},
+                        "_meta": {"ui": {"resourceUri": "ui://demo/app", "visibility": ["app"]}}
+                    },
+                    {"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}
+                ]
+            }),
+        );
+        let found = search_output(&json!({"query": ""})).text;
+        assert_eq!(found, "box__echo — Echo");
+        let stop = || false;
+        let via_use = try_dispatch(
+            "use_tool",
+            &json!({"name": "box__restock", "arguments": {}}),
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(
+            (via_use.text.as_str(), via_use.failed),
+            ("unknown tool `box__restock`", true)
+        );
+        assert!(try_dispatch("box__restock", &json!({}), &stop).is_none());
+        let gate = gate(PermMode::Always, false, true);
+        assert_eq!(
+            super::permission(&gate, "use_tool", r#"{"name":"box__restock"}"#, false, None),
+            Some(Decision::Refuse("unknown tool `box__restock`".into()))
+        );
+        assert_eq!(
+            try_dispatch("use_tool", &json!({"name": "box__echo"}), &stop)
+                .unwrap()
+                .text,
+            "test-call box__echo"
+        );
+    }
+
+    #[test]
     fn a_chats_mcp_tools_hold_for_the_turn_and_new_ones_join_at_the_end() {
         let names = |tools: &[serde_json::Value]| -> Vec<String> {
             tools
@@ -2762,6 +3350,172 @@ mod tests {
         assert!(restart("linear")
             .unwrap_err()
             .ends_with("Sign in on its row under Native MCP"));
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Two HTTP MCP servers on one port, `/slow` with a `hang` tool that
+    /// answers after [`HANG`] and `/fast` with `echo`. Each request gets its
+    /// own thread, so one hung call never stalls the other server.
+    struct HangMcp {
+        port: u16,
+        hanging: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    const HANG: std::time::Duration = std::time::Duration::from_secs(5);
+
+    impl HangMcp {
+        fn start() -> Self {
+            use std::sync::atomic::Ordering;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let hanging = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (hanging2, stop2) = (hanging.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop2.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((sock, _)) => {
+                            let hanging = hanging2.clone();
+                            std::thread::spawn(move || Self::serve(sock, &hanging));
+                        }
+                        Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    }
+                }
+            });
+            Self {
+                port,
+                hanging,
+                stop,
+            }
+        }
+
+        fn url(&self, server: &str) -> String {
+            format!("http://mcp.example.test:{}/{server}", self.port)
+        }
+
+        fn serve(mut sock: std::net::TcpStream, hanging: &std::sync::atomic::AtomicBool) {
+            use std::io::{BufRead, Read, Write};
+            let _ = sock.set_nonblocking(false);
+            let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+            let mut reader = std::io::BufReader::new(sock.try_clone().unwrap());
+            let mut first = String::new();
+            if reader.read_line(&mut first).unwrap_or(0) == 0 {
+                return;
+            }
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return;
+                }
+                let line = line.trim_end().to_ascii_lowercase();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; len];
+            let _ = reader.read_exact(&mut body);
+            let msg: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
+            let tool = if path == "/slow" { "hang" } else { "echo" };
+            let result = match msg["method"].as_str().unwrap_or("") {
+                "initialize" => {
+                    json!({"protocolVersion": super::rpc::LATEST, "capabilities": {}, "serverInfo": {"name": "hang", "version": "0"}})
+                }
+                "tools/list" => {
+                    json!({"tools": [{"name": tool, "description": tool, "inputSchema": {"type": "object"}}]})
+                }
+                "tools/call" => {
+                    if tool == "hang" {
+                        hanging.store(true, std::sync::atomic::Ordering::SeqCst);
+                        std::thread::sleep(HANG);
+                    }
+                    json!({"content": [{"type": "text", "text": format!("{tool} done")}]})
+                }
+                _ => json!({}),
+            };
+            let id = msg.get("id").cloned().unwrap_or_default();
+            let (status, out) = if id.is_null() {
+                ("202 Accepted", String::new())
+            } else {
+                (
+                    "200 OK",
+                    json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string(),
+                )
+            };
+            let _ = write!(
+                sock,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
+                out.len()
+            );
+        }
+    }
+
+    impl Drop for HangMcp {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_hung_call_on_one_server_leaves_other_chats_tools_free() {
+        use super::{invalidate, shutdown_all};
+        use std::time::{Duration, Instant};
+        let dir = crate::harness::test_dir("mcp-hung-call");
+        let _guard = ConfigGuard::set(&dir);
+        let server = HangMcp::start();
+        let doc = json!({"mcpServers": {
+            "slow": {"url": server.url("slow"), "type": "http"},
+            "fast": {"url": server.url("fast"), "type": "http"}
+        }});
+        std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+        invalidate();
+        let names = || -> Vec<String> {
+            schema_tools(0)
+                .into_iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                .collect()
+        };
+        assert_eq!(names(), ["fast__echo", "slow__hang"]);
+
+        let pin = dir.clone();
+        let started = Instant::now();
+        let caller = std::thread::spawn(move || {
+            let _guard = ConfigGuard::set(&pin);
+            try_dispatch("slow__hang", &json!({}), &|| false).unwrap()
+        });
+        while !server.hanging.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "hang never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Another chat, while `slow__hang` waits on its server.
+        let other = Instant::now();
+        assert_eq!(names(), ["fast__echo", "slow__hang"]);
+        let gate = gate(PermMode::Always, false, true);
+        assert_eq!(
+            super::permission(&gate, "fast__echo", "{}", false, None),
+            Some(Decision::Run)
+        );
+        let fast = try_dispatch("fast__echo", &json!({}), &|| false).unwrap();
+        assert!(fast.text.contains("echo done"), "{}", fast.text);
+        let waited = other.elapsed();
+        assert!(
+            waited < Duration::from_secs(2),
+            "the other chat waited {waited:?} on the hung call"
+        );
+
+        let slow = caller.join().unwrap();
+        assert!(slow.text.contains("hang done"), "{}", slow.text);
+        assert!(started.elapsed() >= HANG);
         shutdown_all();
         let _ = std::fs::remove_dir_all(dir);
     }

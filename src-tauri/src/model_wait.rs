@@ -53,9 +53,10 @@ struct Waiter {
     wait: Option<NoRouteWait>,
     /// The waiting card's id in the Pulse store.
     card: Option<String>,
-    paused: Option<Paused>,
-    /// A model came back: the paused chat sends its ask once, when it is open and idle.
-    resume: Option<Resume>,
+    /// Every chat paused on the wait, one ask each (its newest).
+    paused: Vec<Paused>,
+    /// A model came back: each paused chat sends its ask once, when it is open and idle.
+    resume: Vec<Resume>,
     /// (model, attempts, when the wait ended).
     carry: Option<(String, u32, u64)>,
     /// A check is out now.
@@ -65,8 +66,8 @@ struct Waiter {
 static WAITER: Mutex<Waiter> = Mutex::new(Waiter {
     wait: None,
     card: None,
-    paused: None,
-    resume: None,
+    paused: Vec::new(),
+    resume: Vec::new(),
     carry: None,
     checking: false,
 });
@@ -91,11 +92,14 @@ pub fn turn_failed(config_dir: &Path, chat: &str, ask: &str, err: &str, now: u64
     if !is_waiting_turn(err) || ask.trim().is_empty() {
         return false;
     }
-    waiter().paused = Some(Paused {
+    let mut w = waiter();
+    w.paused.retain(|p| p.chat != chat);
+    w.paused.push(Paused {
         chat: chat.to_string(),
         ask: ask.to_string(),
         offline: err.contains(OFFLINE_NO_LOCAL_MSG),
     });
+    drop(w);
     observe(config_dir, now, &since_label(now));
     true
 }
@@ -114,7 +118,7 @@ pub fn start(config_dir: &Path, class: &str, model: &str, now: u64, since: &str)
     if w.wait.is_some() {
         return;
     }
-    let ask = match &w.paused {
+    let ask = match w.paused.last() {
         Some(p) if class.starts_with("chat:") => p.ask.clone(),
         _ => String::new(),
     };
@@ -177,28 +181,38 @@ pub fn checked(config_dir: &Path, back: Option<&str>, now: u64) -> Option<Resume
             before - cards.len()
         });
     }
-    let paused = w.paused.take()?;
-    let note = if paused.offline {
-        reconnect_note(&done.step)
-    } else {
-        wait::back_note(back, &done.step, true)
-    };
-    let resume = Resume {
-        conversation_id: paused.chat,
-        ask: paused.ask,
-        note,
-    };
-    w.resume = Some(resume.clone());
-    Some(resume)
+    let paused = std::mem::take(&mut w.paused);
+    let resumes: Vec<Resume> = paused
+        .into_iter()
+        .map(|p| {
+            // Each chat's note names its own step.
+            let step = wait::step_name(&done.class, &p.ask);
+            let note = if p.offline {
+                reconnect_note(&step)
+            } else {
+                wait::back_note(back, &step, true)
+            };
+            Resume {
+                conversation_id: p.chat,
+                ask: p.ask,
+                note,
+            }
+        })
+        .collect();
+    w.resume.retain(|r| {
+        !resumes
+            .iter()
+            .any(|n| n.conversation_id == r.conversation_id)
+    });
+    w.resume.extend(resumes.iter().cloned());
+    resumes.into_iter().next()
 }
 
 /// The paused chat, once it is open and idle: its ask goes out once, with the note.
 pub fn take_resume(chat: &str) -> Option<Resume> {
     let mut w = waiter();
-    if w.resume.as_ref()?.conversation_id != chat {
-        return None;
-    }
-    w.resume.take()
+    let at = w.resume.iter().position(|r| r.conversation_id == chat)?;
+    Some(w.resume.remove(at))
 }
 
 /// One look: start a wait the router reported, and run a check when due.

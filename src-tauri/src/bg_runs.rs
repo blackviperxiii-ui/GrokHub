@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use grokhub_agent::web_origin::RunOrigin;
 use grokhub_agent::{CancelToken, ModelClient, UnattendedDone};
 use grokhub_core::{bg_task_prompt, bg_task_title, BgEnd, BG_TASK_MAX};
 
@@ -31,7 +32,9 @@ fn runs() -> std::sync::MutexGuard<'static, Vec<Run>> {
     RUNS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// One unattended prompt, read-only, in Ask mode, with its job's tool set.
+/// One unattended prompt, read-only, in Ask mode, with its job's tool set,
+/// run on `origin`'s words: a browser's run reads only the chats a browser
+/// started ([`grokhub_agent::web_origin`]).
 pub fn ask_once(
     client: Arc<dyn ModelClient + Send + Sync>,
     model: &str,
@@ -39,6 +42,7 @@ pub fn ask_once(
     session_id: String,
     prompt: String,
     cancel: CancelToken,
+    origin: RunOrigin,
 ) -> UnattendedDone {
     crate::unattended::run(crate::unattended::Job {
         client,
@@ -47,7 +51,7 @@ pub fn ask_once(
         session_id,
         prompt,
         tools_from: None,
-        gate: crate::unattended::RunGate::BACKGROUND,
+        gate: crate::unattended::RunGate::BACKGROUND.with_origin(origin),
         cancel,
         resume: false,
     })
@@ -61,7 +65,8 @@ pub fn live_count() -> usize {
         .count()
 }
 
-/// Starts `task` on its own thread and returns its title at once.
+/// Starts `task` on its own thread, as `origin`'s run, and returns its
+/// title at once.
 pub fn start(
     config_dir: PathBuf,
     client: Arc<dyn ModelClient + Send + Sync>,
@@ -69,6 +74,7 @@ pub fn start(
     workspace: PathBuf,
     task: &str,
     scratch: bool,
+    origin: RunOrigin,
 ) -> Result<String, String> {
     let task = task.trim();
     if task.is_empty() {
@@ -105,7 +111,7 @@ pub fn start(
             scratch,
             &format!("bg-{id}-{}", grokhub_core::now_ms()),
         );
-        let done = ask_once(client, &model, workspace, session, prompt, cancel);
+        let done = ask_once(client, &model, workspace, session, prompt, cancel, origin);
         let end = if done.stop_reason == "halted" {
             BgEnd::Stopped
         } else if !done.error.is_empty() {
@@ -298,6 +304,7 @@ mod tests {
             ws.0.clone(),
             "write out.txt with x",
             false,
+            RunOrigin::Window,
         )
         .expect("started");
         assert_eq!(title, "write out.txt with x");
@@ -365,6 +372,7 @@ mod tests {
                 id,
                 "when does the harbor ferry leave".into(),
                 CancelToken::new(),
+                RunOrigin::Window,
             );
             assert_eq!(done.text, "Seven.");
             let requests = client.requests.lock().expect("requests");
@@ -391,7 +399,16 @@ mod tests {
         });
         let (cfg, ws) = (temp_dir("blank"), temp_dir("w"));
         assert_eq!(
-            start(cfg.0.clone(), client, "m".into(), ws.0.clone(), "  ", false).err(),
+            start(
+                cfg.0.clone(),
+                client,
+                "m".into(),
+                ws.0.clone(),
+                "  ",
+                false,
+                RunOrigin::Window
+            )
+            .err(),
             Some("Nothing to run".to_string())
         );
     }
@@ -421,7 +438,8 @@ mod tests {
                 "m".into(),
                 ws.0.clone(),
                 "one more",
-                false
+                false,
+                RunOrigin::Window
             )
             .err(),
             Some("3 background tasks are already running. Stop one first.".to_string())

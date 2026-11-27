@@ -3,7 +3,16 @@
 //! never reaches the model: it runs here and comes back as an effect the
 //! chat applies (a new chat, a mode, a view, or a short notice).
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+
+/// Config + workspace the composer's `/` list needs to show loaded skills.
+pub struct HitsCtx<'a> {
+    pub config_dir: &'a Path,
+    pub workspace: &'a Path,
+    pub home: Option<&'a Path>,
+}
 
 /// Greyed rows from the full command list carry this reason: the app has
 /// no handler for them.
@@ -211,6 +220,11 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         )
     },
     row("/skill", "Run a skill…", "/skill "),
+    row(
+        "/backend-dev",
+        "Load tdd, land-it, and follow-through together",
+        "/backend-dev ",
+    ),
     row("/skills", "Open Skills", "/skills"),
     row(
         "/skills changes",
@@ -301,15 +315,19 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
         desktop_only: true,
         ..row("/update", "Open Updates", "/update")
     },
-    row("/imagine", "Open Imagine", "/imagine "),
-    row("/imagine-video", "Open Imagine video", "/imagine-video "),
+    row("/imagine", "Make an image in chat", "/imagine "),
+    row("/imagine-video", "Make a video in chat", "/imagine-video "),
     ShellCmd {
         desktop_only: true,
         ..row("/journal", "Open the decision journal", "/journal")
     },
     ShellCmd {
         desktop_only: true,
-        ..row("/learn", "Reflect this chat into memory", "/learn")
+        ..row(
+            "/learn",
+            "Reflect chat, or build a skill from a URL, folder, PDF, or chat",
+            "/learn",
+        )
     },
     ShellCmd {
         desktop_only: true,
@@ -319,10 +337,22 @@ pub const SHELL_SLASH: &[ShellCmd] = &[
             "/learn reflect",
         )
     },
+    ShellCmd {
+        desktop_only: true,
+        ..row("/learn chat", "Build a skill from this chat", "/learn chat")
+    },
     row("/mcps", "Open Connectors", "/mcps"),
     ShellCmd {
         desktop_only: true,
         ..row("/plugins", "Open Plugins", "/plugins")
+    },
+    ShellCmd {
+        desktop_only: true,
+        ..row(
+            "/download",
+            "Download a model for this computer…",
+            "/download ",
+        )
     },
     row("/resume", "Open History", "/resume"),
     row("/palette", "Command palette", "/palette"),
@@ -424,8 +454,12 @@ pub enum Effect {
     OpenNote { view: &'static str, text: String },
     /// `/imagine` and `/imagine-video`. An empty prompt opens the page.
     Imagine { media: &'static str, prompt: String },
-    /// `/plugins`: Settings → Labs, where the plugin list lives.
+    /// `/plugins`: Settings → Labs, where the plugin list lives. `/download`
+    /// alone: Settings → Local AI, where Download models lives.
     OpenSection { section: &'static str },
+    /// `/download <model>`: queue that catalog model's download on this
+    /// computer (the Yes of the card that offers a better model for a task).
+    DownloadModel { id: String, name: String },
     /// `/sh <line>` or `$ <line>`: the Command page's checks on the line. A
     /// queued line goes to the agent; a confirm asks with its own Yes.
     Shell { check: crate::command_box::Verdict },
@@ -493,7 +527,14 @@ pub enum Op {
     Learned(String),
     /// `/learn`: reflect this chat into memory.
     Learn,
+    /// `/learn <url|path|chat|--save N>`: draft or save a skill from a source.
+    LearnSkill(String),
     Skill(String),
+    /// A skill bundle slash such as `/backend-dev …` (loads several skills).
+    SkillBundle {
+        slug: String,
+        args: String,
+    },
     SkillChanges,
     SkillUndo(String),
     SkillRestore(String),
@@ -562,9 +603,17 @@ fn shell_hit(c: &ShellCmd, remote: bool) -> Hit {
     }
 }
 
-/// The list for a draft: the shell's commands that match, then the cabin's
-/// matching commands greyed. Empty when the draft isn't a command.
+/// The list for a draft: the shell's commands that match, then enabled
+/// skills/bundles, then the cabin's matching commands greyed. Empty when
+/// the draft isn't a command. Pass `skills` so synced/bundled skills appear;
+/// without it the list stays the built-in shell + cabin rows (tests).
 pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
+    hits_with(draft, remote, None)
+}
+
+/// Like [`hits`], and when `skills` is set includes every enabled loaded
+/// skill and skill bundle as a selectable row (deduped against `SHELL_SLASH`).
+pub fn hits_with(draft: &str, remote: bool, skills: Option<HitsCtx<'_>>) -> Vec<Hit> {
     let t = draft.trim_start();
     if !t.starts_with('/') || t.split_whitespace().count() > 1 || t.ends_with(' ') {
         return Vec::new();
@@ -575,6 +624,10 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
         .filter(|c| c.cmd.starts_with(&needle))
         .map(|c| shell_hit(c, remote))
         .collect();
+    let with_skills = skills.is_some();
+    if let Some(cx) = skills {
+        push_skill_hits(&mut out, &needle, cx);
+    }
     for cabin in grokhub_core::filter_slash_hits(t, &[]) {
         let word = cabin.cmd.split_whitespace().next().unwrap_or("");
         if find(word).is_some() || out.iter().any(|h| h.cmd == cabin.cmd) {
@@ -588,8 +641,65 @@ pub fn hits(draft: &str, remote: bool) -> Vec<Hit> {
             disabled: Some(NOT_IN_APP.to_string()),
         });
     }
-    out.truncate(12);
+    // Without a skills ctx (shell-only tests) keep the short list. With
+    // skills loaded, keep every match so filtering never drops `/qa-walkthrough`
+    // — SlashMenu already scrolls (`max-height: 40vh`).
+    if !with_skills {
+        out.truncate(12);
+    }
     out
+}
+
+fn push_skill_hits(out: &mut Vec<Hit>, needle: &str, cx: HitsCtx<'_>) {
+    let page = crate::skills::load(cx.config_dir, cx.workspace, cx.home);
+    for row in &page.rows {
+        if !row.on {
+            continue;
+        }
+        let cmd = format!("/{}", row.name);
+        let lower = cmd.to_ascii_lowercase();
+        if !lower.starts_with(needle) {
+            continue;
+        }
+        if find(&cmd).is_some() || out.iter().any(|h| h.cmd.eq_ignore_ascii_case(&cmd)) {
+            continue;
+        }
+        let hint = row.description.trim();
+        out.push(Hit {
+            cmd: cmd.clone(),
+            hint: if hint.is_empty() {
+                format!("Skill {}", row.name)
+            } else {
+                hint.to_string()
+            },
+            // Enter/click runs the skill; Tab still fills `insert` for args.
+            insert: cmd.clone(),
+            run_on_pick: true,
+            disabled: None,
+        });
+    }
+    for bundle in grokhub_core::list_bundles(cx.config_dir) {
+        let cmd = format!("/{}", bundle.slug());
+        let lower = cmd.to_ascii_lowercase();
+        if !lower.starts_with(needle) {
+            continue;
+        }
+        if find(&cmd).is_some() || out.iter().any(|h| h.cmd.eq_ignore_ascii_case(&cmd)) {
+            continue;
+        }
+        let hint = bundle.description.trim();
+        out.push(Hit {
+            cmd: cmd.clone(),
+            hint: if hint.is_empty() {
+                format!("Skill bundle {}", bundle.slug())
+            } else {
+                hint.to_string()
+            },
+            insert: cmd.clone(),
+            run_on_pick: true,
+            disabled: None,
+        });
+    }
 }
 
 /// The `/help` text: the shell's commands, one per line.
@@ -634,6 +744,20 @@ pub fn parse(line: &str, remote: bool) -> Result<Action, String> {
         };
     }
     let Some(cmd) = find(&word) else {
+        // Unknown `/<slug>`: skill bundles and loaded skills (hyphenated or
+        // single-word). `slash_ops` resolves bundle → skill → Unknown command.
+        let slug = word.trim_start_matches('/');
+        let skillish = !slug.is_empty()
+            && slug
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && grokhub_core::parse_slash(line).is_none();
+        if skillish {
+            return Ok(Action::Op(Op::SkillBundle {
+                slug: slug.to_string(),
+                args: rest.to_string(),
+            }));
+        }
         if grokhub_core::parse_slash(line).is_some()
             || !grokhub_core::filter_slash_hits(&word, &[]).is_empty()
         {
@@ -761,6 +885,10 @@ fn more(line: &str, word: &str, rest: &str, remote: bool) -> Option<Result<Actio
         "/learned" => mine(Op::Learned(rest.to_string())),
         "/skill" if rest.is_empty() => Some(Err("Type the skill's name after /skill.".into())),
         "/skill" => mine(Op::Skill(rest.to_string())),
+        "/backend-dev" => mine(Op::SkillBundle {
+            slug: "backend-dev".into(),
+            args: rest.to_string(),
+        }),
         "/skills" if rest.is_empty() => None,
         "/skills" => match grokhub_core::parse_slash(line) {
             Some(Slash::SkillChanges) => mine(Op::SkillChanges),
@@ -855,10 +983,33 @@ fn extras(word: &str, rest: &str) -> Option<Result<Action, String>> {
             prompt: rest.to_string(),
         }),
         "/journal" => open("journal"),
-        "/learn" => mine(Op::Learn),
+        "/learn"
+            if rest.is_empty()
+                || rest.eq_ignore_ascii_case("reflect")
+                || rest.eq_ignore_ascii_case("now") =>
+        {
+            mine(Op::Learn)
+        }
+        "/learn" => mine(Op::LearnSkill(rest.to_string())),
         "/plugins" => fx(Effect::OpenSection { section: "labs" }),
+        "/download" if rest.is_empty() => fx(Effect::OpenSection { section: "localAi" }),
+        "/download" => Some(download_model(rest).map(Action::Effect)),
         _ => None,
     }
+}
+
+/// The catalog model `/download` names, by id or by name, any case.
+fn download_model(named: &str) -> Result<Effect, String> {
+    grokhub_core::local_setup::local_models()
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(named) || m.name.eq_ignore_ascii_case(named))
+        .map(|m| Effect::DownloadModel {
+            id: m.id.into(),
+            name: m.name.into(),
+        })
+        .ok_or_else(|| {
+            format!("{named} isn't in the model list. /download alone opens Download models.")
+        })
 }
 
 const PROJECT_USAGE: &str =
@@ -953,9 +1104,27 @@ mod tests {
 
     #[test]
     fn unknown_commands_error_and_paths_are_not_commands() {
+        // A skillish slug defers to slash_ops (bundle → skill → Unknown).
         assert_eq!(
             parse("/nope", false),
-            Err("Unknown command /nope. Type /help for the list.".into())
+            Ok(Action::Op(Op::SkillBundle {
+                slug: "nope".into(),
+                args: String::new(),
+            }))
+        );
+        assert_eq!(
+            parse("/hepl", false),
+            Ok(Action::Op(Op::SkillBundle {
+                slug: "hepl".into(),
+                args: String::new(),
+            }))
+        );
+        assert_eq!(
+            parse("/not-a-real-skill", false),
+            Ok(Action::Op(Op::SkillBundle {
+                slug: "not-a-real-skill".into(),
+                args: String::new(),
+            }))
         );
         assert!(!is_command("/usr/bin is slow"));
         assert!(!is_command("/ hi"));
@@ -963,6 +1132,31 @@ mod tests {
         assert!(is_command("  /Plan write tests"));
         assert!(hits("/plan now", false).is_empty());
         assert!(hits("hello", false).is_empty());
+    }
+
+    #[test]
+    fn skill_slugs_parse_to_skill_bundle_with_args() {
+        assert_eq!(
+            parse("/qa-walkthrough", false),
+            Ok(Action::Op(Op::SkillBundle {
+                slug: "qa-walkthrough".into(),
+                args: String::new(),
+            }))
+        );
+        assert_eq!(
+            parse("/qa-walkthrough check the Code tab", false),
+            Ok(Action::Op(Op::SkillBundle {
+                slug: "qa-walkthrough".into(),
+                args: "check the Code tab".into(),
+            }))
+        );
+        assert_eq!(
+            parse("/arena", false),
+            Ok(Action::Op(Op::SkillBundle {
+                slug: "arena".into(),
+                args: String::new(),
+            }))
+        );
     }
 
     #[test]
@@ -1011,18 +1205,22 @@ mod tests {
 
     #[test]
     fn routing_commands_are_unknown_here() {
-        for line in [
-            "/model grok-x",
-            "/model",
-            "/mode fast",
-            "/models",
-            "/effort high",
-            "/why",
+        // Cabin routing verbs are not SHELL_SLASH rows. They parse as
+        // SkillBundle so slash_ops can try a skill, then Unknown command.
+        for (line, slug, args) in [
+            ("/model grok-x", "model", "grok-x"),
+            ("/model", "model", ""),
+            ("/mode fast", "mode", "fast"),
+            ("/models", "models", ""),
+            ("/effort high", "effort", "high"),
+            ("/why", "why", ""),
         ] {
-            let word = line.split_whitespace().next().expect("word");
             assert_eq!(
                 parse(line, false),
-                Err(format!("Unknown command {word}. Type /help for the list.")),
+                Ok(Action::Op(Op::SkillBundle {
+                    slug: slug.into(),
+                    args: args.into(),
+                })),
                 "{line}"
             );
             assert_eq!(parse(line, true), parse(line, false), "{line}");
@@ -1436,6 +1634,13 @@ mod tests {
         assert_eq!(op_of("/dream"), Op::Dream);
         assert_eq!(op_of("/learned forget n1"), Op::Learned("forget n1".into()));
         assert_eq!(op_of("/skill tidy"), Op::Skill("tidy".into()));
+        assert_eq!(
+            op_of("/backend-dev refactor the auth middleware"),
+            Op::SkillBundle {
+                slug: "backend-dev".into(),
+                args: "refactor the auth middleware".into(),
+            }
+        );
         assert_eq!(effect_of("/skills"), Effect::Open { view: "skills" });
         assert_eq!(op_of("/skills changes"), Op::SkillChanges);
         assert_eq!(op_of("/skills undo tidy"), Op::SkillUndo("tidy".into()));
@@ -1872,6 +2077,32 @@ mod tests {
             parse("/plugins", true),
             Err("/plugins works on your computer.".into())
         );
+        let mid =
+            grokhub_core::local_setup::model_by_id("gemma-4-12b-it-abliterated-q4_k").unwrap();
+        let get = Ok(Action::Effect(Effect::DownloadModel {
+            id: mid.id.into(),
+            name: mid.name.into(),
+        }));
+        assert_eq!(
+            parse("/download gemma-4-12b-it-abliterated-q4_k", false),
+            get
+        );
+        assert_eq!(
+            parse(&format!("/download {}", mid.name.to_uppercase()), false),
+            get
+        );
+        assert_eq!(
+            parse("/download", false),
+            Ok(Action::Effect(Effect::OpenSection { section: "localAi" }))
+        );
+        assert_eq!(
+            parse("/download nope-7b", false),
+            Err("nope-7b isn't in the model list. /download alone opens Download models.".into())
+        );
+        assert_eq!(
+            parse("/download gemma-4-12b-it-abliterated-q4_k", true),
+            Err("/download works on your computer.".into())
+        );
         assert_eq!(parse("/resume", false), Ok(Action::Op(Op::Sessions)));
         for word in [
             "/imagine",
@@ -1894,12 +2125,116 @@ mod tests {
             .expect("/learn reflect is listed");
         assert_eq!(reflect.disabled, None);
         let help = help();
-        assert!(help.contains("/imagine — Open Imagine"));
+        assert!(help.contains("/imagine — Make an image in chat"));
         assert!(help.contains("/journal — Open the decision journal"));
-        assert!(help.contains("/learn — Reflect this chat into memory"));
+        assert!(help
+            .contains("/learn — Reflect chat, or build a skill from a URL, folder, PDF, or chat"));
         assert!(help.contains("/mcps — Open Connectors"));
         assert!(help.contains("/plugins — Open Plugins"));
         assert!(help.contains("/resume — Open History"));
         assert!(!help.contains("/learn reflect"));
+        assert_eq!(
+            parse("/learn chat", false),
+            Ok(Action::Op(Op::LearnSkill("chat".into())))
+        );
+        assert_eq!(
+            parse("/learn https://example.com/docs", false),
+            Ok(Action::Op(Op::LearnSkill(
+                "https://example.com/docs".into()
+            )))
+        );
+        assert_eq!(
+            parse("/learn --save 2", false),
+            Ok(Action::Op(Op::LearnSkill("--save 2".into())))
+        );
+    }
+
+    fn hits_home(
+        name: &str,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        grokhub_agent::perm::ConfigGuard,
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-shell-slash-hits-{name}-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let (config, ws) = (root.join("cfg"), root.join("ws"));
+        std::fs::create_dir_all(&config).expect("cfg");
+        std::fs::create_dir_all(&ws).expect("ws");
+        let guard = grokhub_agent::perm::ConfigGuard::set(&config);
+        (config, ws, guard)
+    }
+
+    #[test]
+    fn hits_list_synced_skills_and_exclude_disabled() {
+        let (config, ws, _guard) = hits_home("skills");
+        let ctx = HitsCtx {
+            config_dir: &config,
+            workspace: &ws,
+            home: None,
+        };
+        let qa = hits_with(
+            "/qa",
+            false,
+            Some(HitsCtx {
+                config_dir: &config,
+                workspace: &ws,
+                home: None,
+            }),
+        );
+        assert!(
+            cmds(&qa).contains(&"/qa-walkthrough"),
+            "expected /qa-walkthrough in {qa:?}"
+        );
+
+        let ar = hits_with(
+            "/ar",
+            false,
+            Some(HitsCtx {
+                config_dir: &config,
+                workspace: &ws,
+                home: None,
+            }),
+        );
+        assert!(cmds(&ar).contains(&"/arena"), "expected /arena in {ar:?}");
+        assert!(
+            cmds(&ar).contains(&"/architect"),
+            "expected /architect in {ar:?}"
+        );
+
+        // Built-in /backend-dev stays a single SHELL_SLASH row (no bundle dup).
+        let be = hits_with("/backend", false, Some(ctx));
+        assert_eq!(
+            be.iter().filter(|h| h.cmd == "/backend-dev").count(),
+            1,
+            "{be:?}"
+        );
+
+        let off_dir = config.join("skills").join("off-skill");
+        std::fs::create_dir_all(&off_dir).expect("dir");
+        std::fs::write(
+            off_dir.join("SKILL.md"),
+            "---\nname: off-skill\ndescription: Switched off skill\n---\n\n# off-skill\n\n## Steps\nnone\n",
+        )
+        .expect("skill");
+        grokhub_agent::set_skill_off_in(&config.join("skills"), "off-skill", true).expect("off");
+        let off = hits_with(
+            "/off",
+            false,
+            Some(HitsCtx {
+                config_dir: &config,
+                workspace: &ws,
+                home: None,
+            }),
+        );
+        assert!(
+            !cmds(&off).contains(&"/off-skill"),
+            "disabled skill must not appear: {off:?}"
+        );
+        let _ = std::fs::remove_dir_all(config.parent().expect("root"));
     }
 }

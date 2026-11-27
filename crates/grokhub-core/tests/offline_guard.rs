@@ -77,6 +77,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-core/src/connectivity.rs", 1, "default_http_client (facade agent) for the re-probe: run_probe_if_due sends nothing while on; the net log speed test calls offline::refuse first"),
     ("crates/grokhub-core/src/net_log.rs", 1, "net log resolver connect probe (shared by the app and the shell): offline::refuse first; its speed test goes through connectivity's facade agent above"),
     // Web tools, Pulse, GitHub, plugins.
+    ("crates/grokhub-core/src/at_context.rs", 1, "@url: fetch: offline::check_url + public_http_url, then http::agent public_only"),
+    ("crates/grokhub-core/src/home_assistant.rs", 1, "Home Assistant REST: saved_host dialer (offline::check_host on the configured server; LAN/loopback stay while Offline only is on)"),
     ("crates/grokhub-agent/src/tools/web_fetch.rs", 1, "every hop: egress guard + public_only_resolve (refuses all while on)"),
     ("crates/grokhub-agent/src/tools/web_search.rs", 2, "Brave: egress guard; a SearXNG server on your network: egress guard + the saved-server resolver (offline::check_host, local addresses only while on); DDG / public SearXNG go through web_fetch"),
     ("crates/grokhub-agent/src/tools/media.rs", 1, "Imagine media: egress guard"),
@@ -89,7 +91,10 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("src-tauri/src/voice_live.rs", 1, "voice mode text to speech: guard_quiet (chat data) before the POST; the test override is plain-http loopback only"),
     ("src-tauri/src/stt_stream.rs", 2, "voice mode speech stream (TCP connect, then the WebSocket upgrade): guard_quiet (chat data) before the socket, and Offline only is checked again before each audio block; the test override is plain-ws loopback only"),
     ("crates/grokhub-agent/src/xai_keychain.rs", 1, "Sign in with Grok (desktop app and grokhub-hub --oauth) to xAI's auth host: guard_quiet (codes and tokens only); the test override is loopback only"),
-    ("crates/grokhub-agent/src/channels_net.rs", 4, "messaging channels: Telegram's agent and Discord's REST agent (guard_quiet before every poll and send; the guard target leaves the token out), and Discord's Gateway (TCP connect, then the TLS WebSocket upgrade; guard_quiet before each connect, only Discord's own hosts)"),
+    ("crates/grokhub-agent/src/channels_email.rs", 1, "the email channel: one TCP connect for IMAP (993) and SMTP (465), both TLS from the first byte; guard_quiet on imaps:// or smtps:// and the host before each connect, public addresses only, and an answer goes only to an allowed sender"),
+    ("crates/grokhub-agent/src/channels_net.rs", 8, "messaging channels: Telegram's agent, Discord's REST agent and Slack's Web API agent (guard_quiet before every poll and send; the guard target leaves the token out), the Discord Gateway and Slack Socket Mode sockets (TCP connect, then the TLS WebSocket upgrade; guard_quiet before each connect, only Discord's and Slack's own hosts), and SignalLink's three agents for the signal-cli daemon (guard_quiet before every call; loopback-only resolver, so nothing leaves this computer)"),
+    ("crates/grokhub-agent/src/outbound_hooks.rs", 1, "outbound signed lifecycle webhooks: offline::refuse + guard_quiet + public_only before each POST"),
+    ("crates/grokhub-agent/src/telephony_net.rs", 1, "telephony calls: offline::refuse + guard_quiet before http::agent"),
     ("src-tauri/src/pulse_feed.rs", 2, "Pulse feed: guard_quiet + public_only_resolve; LoopbackNet is loopback only"),
     ("crates/grokhub-agent/src/mods_net.rs", 1, "mod sources (both shells): offline::refuse + guard_quiet on every hop"),
     ("crates/grokhub-agent/src/plugins.rs", 2, "marketplace index: egress guard; plugin git clone: offline::check_url"),
@@ -99,6 +104,7 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // MCP (HTTP transport + OAuth) and the MCP registry.
     ("crates/grokhub-agent/src/mcp/http.rs", 1, "connect / ping / call and OAuth sign-in (mcp/oauth.rs): egress guard; loopback servers still go"),
     ("crates/grokhub-core/src/mcp_catalog.rs", 1, "registry refresh: guard_mcp_registry_url refuses while on"),
+    ("crates/grokhub-core/src/skills_hub.rs", 1, "Skills Hub registry GETs: offline::refuse + public_http_url, then public_only facade agent"),
     // Sign-in, updates, downloads.
     ("src-tauri/src/catalog_refresh.rs", 1, "daily signed model catalog: runtime_download_url_ok + guard_quiet on every hop, public_only"),
     ("src-tauri/src/shell_update.rs", 1, "shell self-update release list: guard_quiet + public_only; the plugin's check and download refuse first (offline::refuse)"),
@@ -115,7 +121,8 @@ const GUARDED: &[(&str, usize, &str)] = &[
     ("crates/grokhub-agent/src/route/local_spec.rs", 2, "speed test and refusal check against the loopback sidecar"),
     // The app's own desktop, CDP, hub and LAN features.
     ("crates/grokhub-hub/src/doctor.rs", 1, "--doctor reads its own hub's /v1/health on 127.0.0.1 only"),
-    ("src-tauri/src/remote.rs", 2, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), and an empty TCP connect to its own web access server to wake its worker pool"),
+    ("crates/grokhub-hub/src/node_client.rs", 1, "`node` companion dials only the app's companion host at a private number address (host_address refuses public ones), so Offline only never blocks it and it never leaves the LAN"),
+    ("src-tauri/src/remote.rs", 3, "UDP connect to TEST-NET-1 to read the LAN address (sends nothing), an empty TCP connect to its own web access server to wake its worker pool, and a loopback TCP connect that forwards browser companion requests to the local Companions host"),
     ("src-tauri/src/remote_tls.rs", 1, "Web access TLS front proxies to its own loopback server"),
     ("src-tauri/src/hub_join.rs", 1, "Join another computer: pairs with and sends the machine card to a hub on this network or this computer only (number address checked before every call), no redirects"),
     // Game companions: loopback game clients only (game-data paths are not changed).
@@ -125,8 +132,12 @@ const GUARDED: &[(&str, usize, &str)] = &[
     // Words in lists, not spawns.
     ("crates/grokhub-agent/src/perm/risk.rs", 1, "downloader word list for shell risk"),
     ("crates/grokhub-agent/src/auto_review/routine_git.rs", 2, "routine git verbs list"),
+    ("crates/grokhub-agent/src/harness/git_words.rs", 11, "push guard's git verb and transport-option lists"),
+    ("crates/grokhub-code/src/chat_push.rs", 2, "chat push guard's match on the fetch and pull verbs"),
     ("crates/grokhub-core/src/companion/wardrobe.rs", 1, "tool-title mood word list"),
     ("crates/grokhub-agent/src/routine_draft.rs", 1, "saved-step tool label list (web_fetch is \"fetch\")"),
+    ("crates/grokhub-agent/src/file_checkpoint.rs", 1, "/rewind snapshot's list of git verbs that change the working tree"),
+    ("src-tauri/src/sessions_board.rs", 1, "Sessions board PR link parser: the /pull/ segment of a github.com URL in transcript text"),
 ];
 
 /// Scanners name every exit pattern themselves.

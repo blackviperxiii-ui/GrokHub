@@ -188,13 +188,16 @@ fn context_files_in(dir: &Path) -> Vec<PathBuf> {
 ///
 /// Chat keeps the full skills reminder and plugin extras. Background and
 /// Unattended drop those unless the job declares a [`PromptNeed`]. Review is
-/// the lean nightly body from [`grokhub_core::review_system_prompt`].
+/// the lean nightly body from [`grokhub_core::review_system_prompt`]. Peer is
+/// an agent answering a paired computer: no AGENTS.md or CLAUDE.md layer, no
+/// environment facts, skills or plugin extras, since those are the person's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptProfile {
     Chat,
     Background,
     Unattended,
     Review,
+    Peer,
 }
 
 /// Extras a job opts into beyond the profile default.
@@ -280,11 +283,19 @@ pub fn tool_set_from_job(job: &str) -> crate::tools::ToolSet {
 
 impl PromptProfile {
     fn want_skills(self, need: PromptNeed) -> bool {
-        matches!(self, PromptProfile::Chat) || need.skills
+        match self {
+            PromptProfile::Chat => true,
+            PromptProfile::Peer => false,
+            _ => need.skills,
+        }
     }
 
     fn want_plugins(self, need: PromptNeed) -> bool {
-        matches!(self, PromptProfile::Chat) || need.plugins
+        match self {
+            PromptProfile::Chat => true,
+            PromptProfile::Peer => false,
+            _ => need.plugins,
+        }
     }
 }
 
@@ -402,6 +413,42 @@ fn facts_block(workspace: &Path) -> String {
     grokhub_core::env_facts::prompt_block(&facts)
 }
 
+/// Real OS home and workspace paths so the model never guesses a username or
+/// user folder path. Stripped of Windows verbatim `\\?\` prefixes.
+pub fn paths_block(workspace: &Path, home: Option<&Path>) -> String {
+    let format_path = |p: &Path| {
+        let raw = p.to_string_lossy();
+        let windows = cfg!(windows)
+            || raw.starts_with(r"\\?\")
+            || (raw.len() >= 2 && raw.as_bytes()[1] == b':');
+        grokhub_core::canonical_session_cwd(&raw, windows)
+    };
+    let mut lines = Vec::new();
+    if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
+        let cleaned = format_path(h);
+        if !cleaned.is_empty() {
+            lines.push(format!("- Home: `{cleaned}`"));
+        }
+    }
+    if workspace.as_os_str().is_empty() {
+        lines.push(
+            "- Workspace: (none selected — ask the user to pick a folder before running file or shell tools)".to_string(),
+        );
+    } else {
+        let cleaned = format_path(workspace);
+        if !cleaned.is_empty() {
+            lines.push(format!("- Workspace: `{cleaned}`"));
+        }
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<paths>\nReal OS paths on this computer (use these exact paths; never guess a username or home directory):\n{}\n</paths>",
+        lines.join("\n")
+    )
+}
+
 fn compose(
     stable_rules: &str,
     volatile_tail: &str,
@@ -424,12 +471,17 @@ fn compose(
         out.push_str("\n\n");
         out.push_str(grokhub_core::conversation::CORE);
     }
-    if let Some(agents) = layered_agents(workspace, home) {
+    let peer = profile == PromptProfile::Peer;
+    if let Some(agents) = (!peer).then(|| layered_agents(workspace, home)).flatten() {
         out.push_str("\n\n<agents>\n");
         out.push_str(&agents);
         out.push_str("\n</agents>");
     }
-    let facts = facts_block(workspace);
+    let facts = if peer {
+        String::new()
+    } else {
+        facts_block(workspace)
+    };
     if !facts.is_empty() {
         out.push_str("\n\n");
         out.push_str(&facts);
@@ -804,6 +856,19 @@ mod tests {
         );
         assert!(full.find("Cabin rule line.").unwrap() < full.find("GLOBAL_MARK").unwrap());
         assert!(full.contains("<agents>"));
+        // An agent answering a paired computer gets none of these layers.
+        let peer = compose(
+            "Cabin rule line.",
+            "",
+            &cwd,
+            Some(&home),
+            PromptProfile::Peer,
+            PromptNeed::FULL,
+        );
+        assert!(peer.contains("Cabin rule line."), "{peer}");
+        for mark in ["GLOBAL_MARK", "ROOT_MARK", "CWD_MARK", "<agents>", ".grok"] {
+            assert!(!peer.contains(mark), "{mark}: {peer}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1137,5 +1202,34 @@ mod tests {
         );
         assert!(note.contains("windows case fold"), "{note}");
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn system_prompt_carries_real_os_home_and_workspace_paths() {
+        let win_home = Path::new(r"C:\Users\alice");
+        let win_ws = Path::new(r"\\?\C:\Users\alice\GrokHub-Work");
+        let block = paths_block(win_ws, Some(win_home));
+        assert!(block.contains("<paths>"));
+        assert!(block.contains(r"- Home: `C:\Users\alice`"), "{block}");
+        assert!(
+            block.contains(r"- Workspace: `C:\Users\alice\GrokHub-Work`"),
+            "{block}"
+        );
+        assert!(!block.contains(r"\\?\"), "{block}");
+
+        // Empty workspace explicitly tells the model to ask the user to pick a folder.
+        let empty_ws = paths_block(Path::new(""), Some(win_home));
+        assert!(empty_ws.contains("pick a folder"), "{empty_ws}");
+
+        // Peer and offline eval compose stay free of local OS paths unless injected.
+        let peer = compose(
+            "",
+            "",
+            win_ws,
+            Some(win_home),
+            PromptProfile::Peer,
+            PromptNeed::NONE,
+        );
+        assert!(!peer.contains("<paths>"));
     }
 }

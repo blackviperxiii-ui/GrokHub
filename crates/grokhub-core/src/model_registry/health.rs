@@ -5,8 +5,9 @@
 //! R2a adds the breaker ([`breaker_observe`]): 3 hard failures in a row (5xx
 //! or a timeout) or a ghost strike quarantine a model. It stays out of routing
 //! for its open backoff ([`BREAKER_BACKOFF_MS`], full jitter), then goes
-//! half-open: one probe or one low-risk background call decides whether it
-//! closes or opens again on the next step.
+//! half-open: with a plan sign-in one probe decides whether it closes or opens
+//! again on the next step; with an API key ([`start_trial`]) it routes again and
+//! its next real call decides, so the key never pays for a check.
 
 use serde::{Deserialize, Serialize};
 
@@ -309,8 +310,12 @@ pub fn breaker_observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -
     match obs.status {
         CallStatus::Ok => {
             rec.breaker.fails = 0;
-            if rec.state == ModelState::Quarantined {
+            let on_trial = rec.breaker.half_open
+                && matches!(rec.state, ModelState::Live | ModelState::Degraded);
+            if rec.state == ModelState::Quarantined || on_trial {
                 close_breaker(rec);
+            } else {
+                rec.breaker.half_open = false;
             }
         }
         CallStatus::NotFound if listed && obs.endpoint_ok => {
@@ -328,7 +333,9 @@ pub fn breaker_observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -
         }
         _ if hard_failure(obs) => {
             rec.breaker.fails = rec.breaker.fails.saturating_add(1);
-            if rec.state == ModelState::Quarantined && rec.breaker.half_open {
+            if rec.breaker.half_open
+                && (rec.state == ModelState::Quarantined || rec.state.routable())
+            {
                 open_breaker(
                     rec,
                     now,
@@ -341,6 +348,19 @@ pub fn breaker_observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -
         _ => {}
     }
     rec.state != before
+}
+
+/// With an API key there is no paid check: once the open backoff runs out the
+/// model routes again, half-open, and its next real call closes the breaker
+/// or opens it on the next step. Returns true when it started.
+pub fn start_trial(rec: &mut ModelRecord, now_ms: u64) -> bool {
+    if !half_open_due(rec, now_ms) {
+        return false;
+    }
+    rec.breaker.half_open = true;
+    rec.state = ModelState::Degraded;
+    rec.reason = "Its rest is over, so its next call decides whether it stays.".into();
+    true
 }
 
 /// Quarantined and its open backoff has run out, with no check out yet.

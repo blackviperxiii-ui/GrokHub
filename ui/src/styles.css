@@ -1024,6 +1024,131 @@ button.pill:focus-visible {
   white-space: nowrap;
 }
 
+/* Sidebar v2: Simple/Advanced switch on the desktop rail. */
+.rail-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 8px;
+}
+
+.rail-mode-btn {
+  width: 40px;
+  height: 20px;
+  padding: 0;
+  font-size: var(--font-caption);
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.rail-mode-btn[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--hover);
+  border-color: var(--red);
+}
+
+/* Advanced: a labeled, scrollable rail with collapsible groups. */
+.rail-advanced {
+  width: 168px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  gap: 2px;
+}
+
+.rail-advanced .rail-mode {
+  flex-direction: row;
+  gap: 4px;
+}
+
+.rail-advanced .rail-mode-btn {
+  flex: 1;
+  width: auto;
+  height: 28px;
+}
+
+.rail-advanced button:not(.rail-mode-btn):not(.rail-section-toggle) {
+  width: 100%;
+  height: 36px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.rail-advanced .rail-label {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  white-space: nowrap;
+  font-size: var(--font-caption);
+}
+
+.rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.rail-section-toggle {
+  width: 100%;
+  height: 28px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 8px;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  font-size: var(--font-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rail-section-toggle:hover:not(:disabled),
+.rail-section-toggle:focus-visible {
+  color: var(--text);
+  background: var(--hover);
+  border-color: transparent;
+}
+
+.rail-more-count {
+  margin-left: auto;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+@media (max-width: 600px) {
+  .rail-mode,
+  .rail-advanced .rail-section,
+  .rail-advanced .rail-more-count {
+    display: none;
+  }
+
+  .rail-advanced {
+    width: auto;
+    overflow: visible;
+  }
+
+  .rail-advanced button:not(.rail-mode-btn):not(.rail-section-toggle) {
+    width: 40px;
+    height: 40px;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+
+  .rail-advanced .rail-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
 /* The web app's avatar is a picture, not a button: the same box. */
 span.rail-avatar {
   display: inline-flex;
@@ -1160,6 +1285,7 @@ span.profile-avatar {
   /* These scroll the window on wider screens; here they scroll inside the
      page so their end clears the bar. */
   .journal,
+  .meetings,
   .workboard,
   .settings-page {
     flex: 1;
@@ -1564,6 +1690,7 @@ span.profile-avatar {
 
 .chat-frame > .chat {
   min-width: 0;
+  container: chat-column / inline-size;
 }
 
 .chat-side {
@@ -2504,6 +2631,22 @@ button.md-copy {
   min-height: 40px;
 }
 
+/* The window opens 900px wide, where the companion's column leaves the chat
+   under 700px and the buttons squeezed the box to two words a line. There the
+   box takes its own row and the buttons sit under it, as on a phone.
+   After the composer's own rules, which it overrides. */
+@container chat-column (max-width: 699px) {
+  .composer {
+    flex-wrap: wrap;
+  }
+
+  .composer-ghost-wrap {
+    order: -1;
+    flex: 1 0 100%;
+    width: auto;
+  }
+}
+
 /* Phones: the categories scroll sideways in one row, and the category's pages
    sit in a row above the page instead of down the side. */
 @media (max-width: 600px) {
@@ -2723,14 +2866,42 @@ button.md-copy {
   margin: 0;
 }
 
-/* A picture a tool made, on its own row above the detail. */
-.card-picture {
+/* A picture or video a tool made, on its own row above the detail. */
+.card-picture,
+.card-video {
   flex-basis: 100%;
   display: block;
   max-width: min(100%, 512px);
   max-height: 512px;
   object-fit: contain;
   border-radius: var(--radius-md);
+}
+
+.card-media-actions {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-media-result {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.library-creations {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.library-creations-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .card.permission {
@@ -2841,6 +3012,48 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .severity-medium {
   color: var(--warn-text);
   border-color: var(--warn-text);
+}
+
+/* MCP Apps host: sandboxed iframe for text/html;profile=mcp-app views. */
+.mcp-app {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  min-width: 0;
+}
+
+.mcp-app.bordered {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.mcp-app-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--font-caption);
+  color: var(--muted);
+}
+
+.mcp-app-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.mcp-app-frame {
+  width: 100%;
+  min-height: 220px;
+  border: 0;
+  background: var(--bg);
+}
+
+.mcp-app-status {
+  margin: 0;
+  font-size: var(--font-caption);
+  color: var(--danger-text);
 }
 
 /* A show_panel panel: plain text, tables and buttons inside a turn card. */
@@ -3074,10 +3287,17 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .memory,
 .connectors,
 .journal,
+.meetings,
 .code,
 .workboard,
 .history,
-.pulse {
+.pulse,
+.devices,
+.agents,
+.team,
+.skills,
+.imagine,
+.updates-page {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -3090,10 +3310,41 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 .memory,
 .connectors,
 .journal,
-.history {
+.meetings,
+.history,
+.devices,
+.agents,
+.team,
+.skills,
+.imagine,
+.command-box,
+.updates-page {
   width: 100%;
   max-width: 880px;
   margin-inline: auto;
+}
+
+/* A page opens with its title and, when it has one, a one-line lede. */
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+
+.page-lede {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+}
+
+/* An empty or loading line sits under what it describes, not adrift
+   mid-page, so what follows it (Hooks, Routines) stays in reach. */
+:is(.automations, .memory, .connectors, .journal, .meetings, .history, .devices, .agents, .team, .skills,
+  .imagine, .command-box, .updates-page, .workboard, .mods) > .empty {
+  margin: 0;
 }
 
 .automations .add,
@@ -3138,6 +3389,143 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Personal → Map (MemoryMap.tsx): dots clustered by type, links by kind. */
+.memory-view-tabs {
+  margin: 8px 0;
+}
+
+.memory-map-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 8px 0;
+}
+
+.memory-map-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-map-canvas {
+  max-width: 100%;
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.memory-map-canvas svg {
+  display: block;
+}
+
+.memory-map-heading {
+  fill: var(--muted);
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+
+.memory-map-node {
+  cursor: pointer;
+}
+
+.memory-map-node circle {
+  fill: var(--muted);
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.memory-map-node text {
+  fill: var(--text);
+  font-size: var(--font-caption);
+}
+
+.memory-map-node.proposed circle {
+  fill: var(--bg);
+  stroke: var(--warn-text);
+  stroke-dasharray: 3 2;
+}
+
+.memory-map-node.paused,
+.memory-map-node.superseded {
+  opacity: 0.55;
+}
+
+.memory-map-node.sealed text {
+  fill: var(--muted);
+  font-style: italic;
+}
+
+.memory-map-node.picked circle,
+.memory-map-node:focus-visible circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.memory-map-node:focus-visible {
+  outline: none;
+}
+
+.memory-map-edge {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.memory-map-edge.edge-supersedes {
+  stroke: var(--muted);
+  stroke-dasharray: 4 3;
+}
+
+.memory-map-edge.edge-about_project,
+.memory-map-edge.edge-learned_from_span {
+  stroke: var(--muted);
+}
+
+.memory-map-edge.edge-contradicts {
+  stroke: var(--warn-text);
+  stroke-width: 2;
+}
+
+.memory-map-edge.lit {
+  stroke-width: 3;
+}
+
+.memory-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.memory-map-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memory-map-picked,
+.memory-map-disagree {
+  margin: 12px 0;
+}
+
+.memory-map-versions ol {
+  margin: 4px 0 0;
+}
+
+.memory-map-list summary {
+  cursor: pointer;
+  margin: 8px 0;
+}
+
+.memory-map-link {
+  color: var(--muted);
 }
 
 .automations .rows,
@@ -3236,10 +3624,6 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
   overflow-wrap: anywhere;
 }
 
-/* Hooks and GitHub follow the list, so an empty list stays at the top. */
-.connectors > .empty {
-  margin: 0;
-}
 
 .hooks,
 .github {
@@ -3250,7 +3634,8 @@ button.danger:hover:not(:disabled):not([role="menuitem"]) {
 }
 
 .hooks h2,
-.github h2 {
+.github h2,
+.memory-files h2 {
   font-size: var(--font-prose);
   margin: 8px 0 0;
 }
@@ -5061,7 +5446,7 @@ a.feed-title:focus-visible {
 
   :root:not([data-reduce-motion="true"]) .rail button[aria-current="page"],
   :root:not([data-reduce-motion="true"]) :is(.settings-tabs button, .pulse-head .switch button)[aria-pressed="true"],
-  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"])[aria-selected="true"] {
+  :root:not([data-reduce-motion="true"]) :is(.chat-tab, .code-side-tabs [role="tab"], .workboard-kinds [role="tab"])[aria-selected="true"] {
     animation: tab-open var(--t-base) var(--ease-out) backwards;
   }
 
@@ -5122,13 +5507,6 @@ a.feed-title:focus-visible {
 }
 
 /* Imagine: the prompt bar on top, the gallery (the cabin's wall) below. */
-.imagine {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-}
 
 .imagine-bar {
   display: flex;
@@ -5189,6 +5567,18 @@ a.feed-title:focus-visible {
   white-space: nowrap;
 }
 
+.artifact-tile .card-status {
+  font-size: var(--font-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-tile .card-media-actions {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .lightbox video {
   max-width: 100%;
   max-height: calc(100% - 64px);
@@ -5196,16 +5586,6 @@ a.feed-title:focus-visible {
 }
 
 /* Devices: this computer, Web access and the paired browsers, one column. */
-.devices {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .devices textarea {
   flex-shrink: 0;
@@ -5242,11 +5622,6 @@ a.feed-title:focus-visible {
 }
 .fleet .glow-bar.fleet-bar {
   margin-top: 4px;
-}
-.fleet .fleet-refresh {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: #000;
 }
 .fleet label {
   display: flex;
@@ -5317,6 +5692,7 @@ a.feed-title:focus-visible {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"],
 .code-run,
 button.cta,
 button.primary:not(.quick-chip) {
@@ -5331,6 +5707,7 @@ button.primary:not(.quick-chip) {
 .settings-nav button,
 .pulse-head .switch button,
 .code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"],
 .code-run,
 button.cta,
 button.primary:not(.quick-chip) {
@@ -5651,6 +6028,24 @@ button.primary:not(.quick-chip) {
   float: right;
 }
 
+.connector-tools {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.connector-tools label.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+}
+
 /* Settings → Account: Sign in with Grok. */
 .grok-sign-in {
   margin-bottom: 1.5rem;
@@ -5661,6 +6056,25 @@ button.primary:not(.quick-chip) {
   letter-spacing: 0.15em;
   margin: 0.5rem 0;
   user-select: all;
+}
+/* Devices → Companions: what one companion may lend, as a row of boxes. */
+.companion-offers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  border: 0;
+  margin: 0.5rem 0;
+  padding: 0;
+}
+.companion-offers legend {
+  padding: 0;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+}
+.companion-offers label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 /* Composer slash commands: the list sits just above the composer. */
 .slash-wrap {
@@ -5969,6 +6383,89 @@ button.primary:not(.quick-chip) {
   width: 100%;
 }
 
+.workboard-kinds {
+  display: flex;
+  gap: 4px;
+}
+
+.sessions-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sessions-toolbar,
+.sessions-agent,
+.sessions-filters,
+.sessions-query,
+.sessions-pin-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sessions-filters button.active {
+  border-color: var(--red);
+}
+
+.sessions-agent {
+  width: 100%;
+}
+
+.sessions-agent input,
+.sessions-query input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.sessions-rule {
+  margin-left: 8px;
+  font-weight: 400;
+  opacity: 0.6;
+  font-size: var(--font-caption);
+}
+
+.sessions-tile .sessions-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sessions-run {
+  font-size: var(--font-caption);
+  opacity: 0.85;
+}
+
+.sessions-prs {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sessions-prs a {
+  font-size: var(--font-caption);
+}
+
+.sessions-empty,
+.sessions-col-empty,
+.sessions-help,
+.sessions-count,
+.sessions-note {
+  margin: 0;
+  opacity: 0.85;
+}
+
 .workboard-add,
 .board-edit {
   display: flex;
@@ -6120,17 +6617,72 @@ button.primary:not(.quick-chip) {
   margin: 8px 0;
 }
 
-/* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
-.agents {
-  flex: 1;
+/* Team: the person's agents, teams and task log. */
+
+.team h2 {
+  font-size: var(--font-prose);
+  margin: 0;
+}
+
+.team .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
+  gap: var(--space-8);
 }
+
+.team .card {
+  align-self: stretch;
+  max-width: none;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.team-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+
+.team-about,
+.team-reply {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.team-reply {
+  white-space: pre-wrap;
+}
+
+.team-form {
+  gap: var(--space-8);
+}
+
+.team-form > label,
+.team-form fieldset {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.team-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.team-form .team-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+/* Agents: the open chat's tasks and to-dos (the cabin's Queue). */
 
 .agents h2 {
   font-size: var(--font-prose);
@@ -6244,16 +6796,6 @@ button.primary:not(.quick-chip) {
 }
 
 /* The Skills page (Skills.tsx): one centered column like Connectors. */
-.skills {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  width: 100%;
-  max-width: 880px;
-  margin-inline: auto;
-}
 
 .skills input[type="search"] {
   flex: 1;
@@ -6296,6 +6838,66 @@ button.primary:not(.quick-chip) {
 .skill-field-hint {
   color: var(--muted);
   font-size: var(--font-caption);
+}
+
+.skill-pack-card {
+  margin-bottom: 12px;
+}
+
+.skill-pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.skill-library-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.skill-library-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-category-tag {
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.skill-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.skill-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
 }
 
 /* A card's one-line read of its own numbers: a dot in its tone, then the line. */
@@ -6593,7 +7195,8 @@ button.primary:not(.quick-chip) {
 }
 
 .home-head h2,
-.objectives-head h2 {
+.objectives-head h2,
+.page-head h2 {
   margin: 0;
   font-size: var(--font-headline);
   letter-spacing: var(--tracking-headline);
@@ -7193,6 +7796,11 @@ button.primary:not(.quick-chip) {
   align-self: flex-start;
 }
 
+/* First run v2 (FirstRunV2.tsx): layout, apps, skills, task, tour. */
+.first-run.first-run-v2 {
+  max-width: 640px;
+}
+
 .onboard-field {
   display: flex;
   flex-direction: column;
@@ -7291,6 +7899,16 @@ button.primary:not(.quick-chip) {
   padding: var(--space-8) var(--space-12);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+
+.local-library-job {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
 }
 
 /* The model a Pulse card's Open in Settings landed on. */
@@ -8063,7 +8681,9 @@ fieldset.channel label {
 
 .code-agent {
   flex: 1 1 var(--code-agent-pct, 62%);
-  min-width: 420px;
+  /* Give way before the side column does: it keeps its 300px, plus the
+     handle, so a window just wide enough to split never scrolls sideways. */
+  min-width: min(420px, 100% - 310px);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -8077,6 +8697,165 @@ fieldset.channel label {
 
 .code-agent > .code-head h3 {
   margin: 0;
+}
+
+.code-route-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+}
+
+.code-route-chip.local {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.code-panel-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 16px;
+}
+
+.code-settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.code-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.code-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.code-toggle-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.code-switch {
+  flex: none;
+  min-width: 54px;
+  min-height: 30px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, transparent);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.code-switch.on {
+  border-color: var(--amber);
+  background: var(--tab-open-bg);
+  color: var(--tab-open-text);
+}
+
+.code-guard-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.code-guard-limits label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  color: var(--muted);
+}
+
+.code-guard-limits input[type="number"] {
+  width: 64px;
+  padding: 4px 8px;
+}
+
+.code-safety-rule {
+  margin: 0;
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  color: var(--muted);
+  border-left: 2px solid var(--amber);
+  padding-left: 8px;
+}
+
+.code-backups-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.code-backups-head h4 {
+  margin: 0;
+}
+
+.code-retention-warn {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--amber);
+  font-size: var(--font-caption);
+  line-height: var(--lh-caption);
+  color: var(--amber);
+}
+
+.code-backup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.code-backup-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.code-backup-label {
+  font-size: var(--font-body);
+  line-height: var(--lh-body);
+  font-weight: 500;
+  word-break: break-word;
 }
 
 .code-split-handle {
@@ -8113,12 +8892,14 @@ fieldset.channel label {
   gap: 4px;
 }
 
-.code-side-tabs [role="tab"] {
+.code-side-tabs [role="tab"],
+.workboard-kinds [role="tab"] {
   min-height: 32px;
   padding: 4px 12px;
 }
 
-.code-side-tabs [role="tab"][aria-selected="true"] {
+.code-side-tabs [role="tab"][aria-selected="true"],
+.workboard-kinds [role="tab"][aria-selected="true"] {
   border-color: var(--red);
   background: var(--tab-open-bg);
   color: var(--tab-open-text);
@@ -8649,4 +9430,160 @@ fieldset.channel label {
   .usage-ring--hot .usage-ring-fill {
     animation: none;
   }
+}
+
+/* vstack skill library: sync status on the Skills page and Code tab, and a scrolling filter list. */
+.vstack-sync {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.vstack-sync .note {
+  margin: 0;
+}
+
+.code-skills .rows {
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.code-skills input[type="search"] {
+  flex: 1;
+  min-width: 12rem;
+}
+
+/* Order 0.08 — permanent grouped sidebar.
+   This is the only styles.css edit for that change. It sits last so it wins
+   over the Simple-mode switch and the phone tab bar above, and so another
+   styles.css edit can merge around it. */
+@media (max-width: 600px) {
+  .app {
+    --tabbar: 0px;
+    padding-bottom: 12px;
+  }
+
+  .app.bar-away {
+    padding-bottom: 12px;
+  }
+
+  .rail.rail-advanced {
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    z-index: auto;
+    width: 168px;
+    height: auto;
+    max-height: 100%;
+    min-height: 0;
+    flex: 0 0 168px;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    align-items: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 8px 8px 8px 0;
+    background: transparent;
+    border-top: none;
+    border-right: 1px solid var(--red-dim);
+    transform: none;
+  }
+
+  .rail.rail-advanced .rail-section {
+    display: flex;
+  }
+
+  .rail.rail-advanced .rail-end {
+    flex-direction: column;
+    margin-top: auto;
+  }
+
+  .rail.rail-advanced .rail-avatar {
+    display: inline-flex;
+  }
+
+  .rail.rail-advanced button:not(.rail-mode-btn):not(.rail-section-toggle) {
+    width: 100%;
+    height: 36px;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .rail.rail-advanced .rail-label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: nowrap;
+  }
+
+  .bar-away .rail.rail-advanced {
+    transform: none;
+  }
+}
+
+/* Running helpers above the composer: one quiet row each, Steer and Stop. */
+.helper-strip ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.helper-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.helper-strip-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.helper-strip-model,
+.helper-strip-progress,
+.helper-strip-note {
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+.helper-strip-steer {
+  flex-basis: 100%;
+}
+
+.helper-strip-steer input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.agent-steer {
+  margin: 8px 0 0;
+}
+
+.agent-steer input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Connectors → Phone and chat apps: the Telegram pairing QR. The SVG carries
+   its own white ground so phones read it in either theme. */
+.channel-qr {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 8px 0 0;
 }

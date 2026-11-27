@@ -22,6 +22,7 @@ pub mod coaching;
 pub mod connectivity;
 pub mod difficulty;
 pub mod feedback;
+pub mod frontier_usage;
 pub mod goal;
 pub mod guard;
 pub mod handoff;
@@ -51,6 +52,7 @@ pub mod local_perf;
 pub mod local_pin;
 pub mod local_preset;
 pub mod local_prewarm;
+pub mod local_repeat;
 pub mod local_resident;
 pub mod local_sampler;
 pub mod local_scale;
@@ -72,6 +74,7 @@ pub mod score;
 pub mod session_metrics;
 pub mod signals;
 pub mod sizing;
+pub mod skill_metrics;
 pub mod sources;
 pub mod spend;
 pub mod table;
@@ -145,6 +148,10 @@ pub struct ModelCall {
 
 /// The route rule on a call stepped up after a re-plan.
 pub const STEP_UP_RULE: &str = "replan:step_up";
+/// The router picked within the tier an agent's profile names.
+pub const AGENT_TIER_RULE: &str = "agent:tier";
+/// An agent's profile named a tier with no model Auto could send: picked as usual.
+pub const AGENT_TIER_MISSING_RULE: &str = "agent:tier:missing";
 
 impl ModelCall {
     pub fn xai(
@@ -259,7 +266,7 @@ pub fn call_model(
             call.provider
         )));
     }
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     // Playbooks 8: a banned ask never leaves the computer.
     let mut sent = call.clone();
     adult::scrub(&mut sent.input);
@@ -292,9 +299,14 @@ pub fn call_model(
         ..RouteCall::default()
     };
     rc.providers = true;
-    // Failover PR 6: the router hears the turn is explicit up front,
-    // from the same scrubbed input the guard below reads.
-    rc.adult = adult::explicit(&sent.input);
+    let ask_adult = adult::ask_explicit(&sent.input);
+    let must_stay = adult::voice_on(&sent.input);
+    let background = call.class.trim().starts_with("background:");
+    rc.adult = if background {
+        adult::explicit(&sent.input)
+    } else {
+        ask_adult || must_stay
+    };
     let now = grokhub_core::now_ms();
     // "It tries again on your next message": a person's turn is the retry.
     local::retry_for_turn(&call.class);
@@ -313,27 +325,35 @@ pub fn call_model(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
-    // 18+ chat runs on this computer's model only, never online.
+    // 18+ asks and 18+ voices run on this computer's model only, never online.
     let bench = user_bench::load(&dir);
+    let mut forced_adult_local = false;
     if adult::to_local(&sent.input, dest) {
-        if let Some(notice) = adult::no_local_notice() {
-            let out = adult::notice_answer(&call.class, &notice)?;
-            let tokens = CallTokens::of(&sent, &out.usage);
-            return Ok(Routed { out, tokens });
+        let stripped =
+            !background && !must_stay && !ask_adult && adult::leave_adult_out(&mut sent.input);
+        if !stripped {
+            if let Some(notice) = adult::no_local_notice() {
+                let out = adult::notice_answer(&call.class, &notice)?;
+                let tokens = CallTokens::of(&sent, &out.usage);
+                return Ok(Routed { out, tokens });
+            }
+            if bench.blocks_local() {
+                return Err(ClientError::Protocol(
+                    "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
+                        .into(),
+                ));
+            }
+            on_device = true;
+            forced_adult_local = true;
+            sent.model = local::live_tier().to_string();
         }
-        if bench.blocks_local() {
-            return Err(ClientError::Protocol(
-                "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
-                    .into(),
-            ));
-        }
-        on_device = true;
-        sent.model = local::live_tier().to_string();
     }
     let mut on_provider = decision.on_provider() && !on_device;
     let started = std::time::Instant::now();
     crate::harness::replay::clear_last();
-    let allow_failover = voice_route::active_reply_pref(&dir).is_none();
+    let allow_failover = voice_route::active_reply_pref(&dir).is_none()
+        && !crate::code_panel::session_local_only(&call.conversation_id)
+        && !crate::code_panel::session_local_only(&call.session);
     let session_key = if call.session.is_empty() {
         call.conversation_id.as_str()
     } else {
@@ -341,13 +361,29 @@ pub fn call_model(
     };
     let mut active_provider = decision.route.provider.clone();
     let mut active_decision = decision;
+    if forced_adult_local {
+        let rule = if ask_adult {
+            "adult:local_only"
+        } else {
+            "adult:voice_local"
+        };
+        if !active_decision.route.rule_ids.iter().any(|r| r == rule) {
+            active_decision.route.rule_ids.push(rule.into());
+        }
+    }
     let mut tried: Vec<String> = Vec::new();
     let mut short_retried = false;
     let mut out = Err(ClientError::Protocol("no route".into()));
     for attempt in 0..4 {
         tried.push(sent.model.clone());
         let step = if on_device {
-            let r = local_live::routing_reason(&active_decision.route.rule_ids, None);
+            let r = local_live::local_reason(
+                &active_decision.route.rule_ids,
+                None,
+                forced_adult_local,
+                ask_adult,
+                must_stay,
+            );
             local_live::note_route_reason(&call.conversation_id, r);
             local::serve(&call.class, &text, cancel)
         } else if on_provider {
@@ -541,6 +577,9 @@ pub struct RouteInput<'a> {
     /// The effort the chat's words asked for this kind of task, held inside
     /// the class's floor and ceiling.
     pub named_effort: Option<&'a str>,
+    /// Inside an agent's turn, the `model_profiles.toml` tier its profile
+    /// names: Auto picks among that tier's models, else as usual.
+    pub model_tier: Option<&'a str>,
     /// Failover PR 5: the turn's size estimate ([`sizing`]), when the call
     /// site sized it. A long task keeps free provider models out of the pick
     /// while a carrier route exists and ranks the paid routes first (xAI,
@@ -552,6 +591,11 @@ pub struct RouteInput<'a> {
     /// estimate, the warm model takes the turn by default
     /// ([`sizing::warm_local_default`]).
     pub local_warm: bool,
+    /// The typed ask is light chat the device answers as well: a greeting,
+    /// a quick fact, everyday talk, a story or an explanation, with nothing
+    /// at stake. Not research (it needs the web), code or reasoning. Only
+    /// such a turn may take the warm-local default online.
+    pub light_chat: bool,
     /// Failover PR 3's quota ledger, as last detected: the scorer's hard
     /// filters read it, so a closed, spent or benched route is never
     /// picked in the first place (failover PR 6).
@@ -567,6 +611,10 @@ pub struct RouteInput<'a> {
     pub probation_canary: Option<&'a str>,
     /// Active voice session reply source preference (`None` = Auto).
     pub voice_reply: Option<voice_route::ReplyPref>,
+    /// Code tab "Local models only and nonstop coding" is enabled for this project.
+    pub code_local_only: bool,
+    /// Warm coding turns try local first and escalate to frontier if verification fails.
+    pub local_coding_first: bool,
     /// User-benched models/providers to exclude from routing.
     pub user_bench: user_bench::UserBench,
 }
@@ -1227,7 +1275,10 @@ impl Router {
         // A picture moves the turn online only when the device would have
         // taken it and an online model that reads pictures is left: a turn
         // that went online anyway never says the picture moved it.
-        if !local::is_local(&route.model) || !local_vision::reads_online(input) {
+        if input.code_local_only
+            || !local::is_local(&route.model)
+            || !local_vision::reads_online(input)
+        {
             return route;
         }
         let online = Self::choose_among(input, reg, profiles, table, now_ms, true);
@@ -1288,6 +1339,36 @@ impl Router {
                 fit
             }
         };
+        let throttled = matches!(
+            input.local.capacity.level,
+            grokhub_core::local_governor::Level::Throttle
+        );
+        // Online the device takes only background work, except a light
+        // typed chat while its model is already loaded (the warm-local
+        // default below): the gate then admits it as it would offline.
+        // The turn's ladder hasn't climbed (no trouble, no "try again", no
+        // "think hard"): a fresh pick at its start is the ordinary case.
+        let calm = input.steer != ladder::Steer::Harder
+            && input
+                .pick
+                .as_ref()
+                .is_none_or(|p| p.moved != ladder::Move::Up);
+        let warm_chat = input.local_warm
+            && input.light_chat
+            && (!input.needs_image || input.local.sees_pictures)
+            && input.episode_model.is_none()
+            && calm
+            && local::fits_by_trimming(input.class)
+            && sizing::warm_local_default(input.size.map(|s| s.size), throttled);
+        let coding_first = input.local_coding_first
+            && !input.local.local_verify_failed
+            && input.episode_model.is_none()
+            && calm
+            && (!input.needs_image || input.local.sees_pictures);
+        let warm_gate = local::LocalGate {
+            offline: true,
+            ..input.local.clone()
+        };
         let ids: Vec<&str> = reg
             .models
             .keys()
@@ -1296,6 +1377,9 @@ impl Router {
             .filter(|id| {
                 !local::is_local(id)
                     || local::admits(&input.local, id, input.class, input.ctx_tokens)
+                    || ((warm_chat || input.adult)
+                        && local::admits(&warm_gate, id, input.class, input.ctx_tokens))
+                    || (coding_first && local::admits_coding(&warm_gate, id, input.ctx_tokens))
             })
             .filter(|id| policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms))
             .collect();
@@ -1344,6 +1428,31 @@ impl Router {
             }
         } else {
             ids
+        };
+        // Inside an agent's turn, its profile's tier: Auto picks among that
+        // tier's models it could send. The device has no tier and stays in
+        // reach; a tier with no such model changes nothing.
+        let ids: Vec<&str> = match input.model_tier {
+            Some(tier) => {
+                let kept: Vec<&str> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        local::is_local(id)
+                            || (reg.get(id).and_then(|r| r.meta.card.tier.as_deref()) == Some(tier)
+                                && in_auto_pool(reg, id, input.spend.settings.ceiling_usd_per_m)
+                                && auto_ok(reg, profiles, input.lane(), id))
+                    })
+                    .collect();
+                if kept.iter().all(|id| local::is_local(id)) {
+                    rules.push(AGENT_TIER_MISSING_RULE.into());
+                    ids
+                } else {
+                    rules.push(AGENT_TIER_RULE.into());
+                    kept
+                }
+            }
+            None => ids,
         };
         // The chat's words named a model for this kind of task: Auto picks
         // among the models that carry the name and that Auto could send.
@@ -1470,23 +1579,41 @@ impl Router {
                 && local::admits(&as_offline, id, input.class, input.ctx_tokens)
                 && policy::fits(reg, profiles, id, fit_for(id), &input.spend, now_ms)
         });
+        let code_local_gate = local::LocalGate {
+            offline: true,
+            hard_tool: false,
+            ..input.local.clone()
+        };
+        let code_local_id = reg.models.keys().map(String::as_str).find(|id| {
+            !input.user_bench.matches_model(id)
+                && local::admits(&code_local_gate, id, input.class, input.ctx_tokens)
+                && policy::fits(
+                    reg,
+                    profiles,
+                    id,
+                    policy::Fit {
+                        ctx_tokens: 0,
+                        needs_image: false,
+                        ..fit
+                    },
+                    &input.spend,
+                    now_ms,
+                )
+        });
         // Failover PR 5, the warm-local rule (corrected 2026-11-07): a model
         // already loaded on the device takes a less challenging turn by
         // default — no cloud spend, no cold start — unless the turn is
-        // pinned to an episode model or carries an explicit pick. The gate
+        // pinned to an episode model or its ladder climbed (`calm`). Typed
+        // chat takes it only when light (`warm_chat`). The gate
         // admitted the tier into `ids` already, so class eligibility and
         // the governor's say are spent (at Unload nothing is admitted);
         // sizing adds only the size line and, under throttle, tiny only.
         // A cloud candidate must exist for the default to be a choice at
         // all: with no cloud route the device is a fallback, and the
         // fallback paths below own the pick (and its cabin note).
-        let throttled = matches!(
-            input.local.capacity.level,
-            grokhub_core::local_governor::Level::Throttle
-        );
         let warm_local = if input.local_warm
             && input.episode_model.is_none()
-            && input.pick.is_none()
+            && calm
             && ids.iter().any(|id| !local::is_local(id))
             && sizing::warm_local_default(input.size.map(|s| s.size), throttled)
         {
@@ -1494,6 +1621,12 @@ impl Router {
         } else {
             None
         };
+        let coding_local = if coding_first && ids.iter().any(|id| !local::is_local(id)) {
+            ids.iter().find(|id| local::is_local(id)).copied()
+        } else {
+            None
+        };
+        let mut verify_reason: Option<String> = None;
         // Failover PR 6: an explicit (18+) call's only candidate is the
         // device — the hard filter at the pick itself, ahead of the
         // warm-local default and every cloud branch.
@@ -1506,11 +1639,35 @@ impl Router {
             && ((input.local.sensitive && !input.local.cloud_grant)
                 || (input.local.offline
                     && local::eligible_if_running(&input.local, input.class, input.ctx_tokens))
+                || (input.code_local_only
+                    && local::eligible_if_running(&code_local_gate, input.class, input.ctx_tokens))
                 || (matches!(input.voice_reply, Some(voice_route::ReplyPref::LocalOnly))
                     && local::eligible_if_running(&as_offline, input.class, input.ctx_tokens)))
         {
-            // Sensitive data, offline mode, or voice Local only: keep on the paused device.
+            // Sensitive data, offline mode, Code local-only, or voice Local only:
+            // keep on the paused device.
             local_paused(&mut rules)
+        } else if input.code_local_only {
+            // Code tab "Local models only and nonstop coding": route strictly to
+            // local models and never escalate to a frontier model.
+            match code_local_id {
+                Some(id) => {
+                    rules.push("code:local_only".into());
+                    ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: None,
+                    }
+                }
+                None => {
+                    rules.push("code:no_local".into());
+                    ModelPick {
+                        model: input.current_model.trim().to_string(),
+                        no_route: true,
+                        replaced: None,
+                    }
+                }
+            }
         } else if local::privacy_only(&input.local) {
             // Sensitive data and no cloud grant: the device or nothing.
             match ids.iter().find(|id| local::is_local(id)) {
@@ -1571,6 +1728,7 @@ impl Router {
         } else if local::escalate_after_verify(&input.local) {
             // PR E: on-device answer failed verify — pick cloud and name both models.
             let local_tier = input.local.tier.clone();
+            verify_reason = local::local_verify_reason();
             let mut pick = Self::pick_model(
                 input, reg, profiles, &cloud_ids, table, e2, stronger, now_ms, &mut rules,
             );
@@ -1639,6 +1797,13 @@ impl Router {
                         }
                     }
                 },
+            }
+        } else if let Some(id) = coding_local {
+            rules.push("local:coding_first".into());
+            ModelPick {
+                model: id.to_string(),
+                no_route: false,
+                replaced: None,
             }
         } else if let Some(id) = warm_local {
             // The warm-local default (above): the loaded device model takes
@@ -1880,8 +2045,12 @@ impl Router {
                 )
             }
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_verify") => {
-                local::escalate_note(from, &model)
+                local::escalate_note_with_reason(from, &model, verify_reason.as_deref())
             }
+            _ if rules.iter().any(|r| r == "local:coding_first") => format!(
+                "{tier_word} · {}: trying local coding model first.",
+                effort_word(effort.as_deref())
+            ),
             (Some(from), _) if rules.iter().any(|r| r == "local:escalate_hard") => {
                 format!(
                     "{tier_word} · {}: {from} (local) is too small for this step.",
@@ -1967,6 +2136,8 @@ mod r2a_tests;
 #[cfg(test)]
 mod r2b_tests;
 
+#[cfg(test)]
+mod matrix_tests;
 #[cfg(test)]
 mod r3b_tests;
 
@@ -2780,6 +2951,35 @@ mod tests {
         reg.entitlement.credential = Credential::Plan;
         reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, rows)], &[], 1);
         reg
+    }
+
+    /// An agent's tier narrows Auto to that tier's models; a tier no model
+    /// carries picks as usual and says so.
+    #[test]
+    fn an_agents_tier_narrows_the_pick_and_a_tier_nothing_carries_does_not() {
+        let reg = xai_listed(&["grok-4.7", "grok-4.3"]);
+        let none = BTreeMap::new();
+        let mut base = input("debug", "grok-4.7", 0.5);
+        base.lane = Some("debug");
+        let auto = Router::choose(&base, &reg, &none, &no_table(), 10);
+        assert_eq!(auto.model, "grok-4.7", "{auto:?}");
+        let workhorse = RouteInput {
+            model_tier: Some("workhorse"),
+            ..base.clone()
+        };
+        let r = Router::choose(&workhorse, &reg, &none, &no_table(), 10);
+        assert_eq!(r.model, "grok-4.3", "{r:?}");
+        assert!(r.rule_ids.iter().any(|id| id == AGENT_TIER_RULE), "{r:?}");
+        let free = RouteInput {
+            model_tier: Some("free"),
+            ..base.clone()
+        };
+        let r = Router::choose(&free, &reg, &none, &no_table(), 10);
+        assert_eq!(r.model, "grok-4.7", "{r:?}");
+        assert!(
+            r.rule_ids.iter().any(|id| id == AGENT_TIER_MISSING_RULE),
+            "{r:?}"
+        );
     }
 
     /// The chat's words narrow Auto to the named model and hold the named

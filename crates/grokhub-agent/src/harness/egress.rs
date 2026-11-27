@@ -114,7 +114,10 @@ pub fn egress_dest(target: &str) -> String {
         .strip_prefix("https://")
         .or_else(|| t.strip_prefix("http://"))
         .or_else(|| t.strip_prefix("wss://"))
-        .or_else(|| t.strip_prefix("ws://"));
+        .or_else(|| t.strip_prefix("ws://"))
+        // The email channel's IMAP and SMTP sockets.
+        .or_else(|| t.strip_prefix("imaps://"))
+        .or_else(|| t.strip_prefix("smtps://"));
     let Some(rest) = rest else {
         let key: String = t.to_ascii_lowercase().chars().take(80).collect();
         return grokhub_core::redact_secrets(&key);
@@ -360,6 +363,7 @@ pub fn model_text_classes(text: &str) -> &'static [DataClass] {
 /// [`decide`]: crate::harness::decide
 pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:egress_guard");
+    let config_dir = &shared_dir(config_dir);
     if let Err(reason) = offline_refusal(req.target) {
         return GateOutcome::Refuse { reason };
     }
@@ -387,6 +391,15 @@ pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     outcome
 }
 
+/// The folder egress consent, its log and its cards live in: the app's, also
+/// for an agent's home, so an agent's sends follow the person's grants and
+/// show in the app's log and inbox.
+pub(crate) fn shared_dir(config_dir: &Path) -> PathBuf {
+    grokhub_core::agent_team::agent_turn(config_dir)
+        .map(|(root, _)| root)
+        .unwrap_or_else(|| config_dir.to_path_buf())
+}
+
 /// Offline only (LU-13): a refused host sends nothing, with no card and no
 /// log line. Loopback and the LAN hub (`/sync`) still go.
 fn offline_refusal(target: &str) -> Result<(), String> {
@@ -398,6 +411,7 @@ fn offline_refusal(target: &str) -> Result<(), String> {
 
 /// Log a send the user approved once on a hard card (no standing grant).
 pub fn record_approved_once(config_dir: &Path, req: &EgressReq<'_>) -> Result<(), String> {
+    let config_dir = &shared_dir(config_dir);
     let dest = egress_dest(req.target);
     append_egress(
         config_dir,
@@ -454,6 +468,7 @@ pub(crate) fn guard_or_park_within(
 /// Otherwise hard class `send`, even under Always.
 pub fn guard_provider(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:provider_guard");
+    let config_dir = &shared_dir(config_dir);
     if let Err(reason) = offline_refusal(req.target) {
         return GateOutcome::Refuse { reason };
     }
@@ -509,6 +524,8 @@ fn park_unless_allowed(
     halted: &mut dyn FnMut() -> bool,
     outcome: GateOutcome,
 ) -> Result<(), String> {
+    // The card goes to the app's inbox, where the person sees it.
+    let config_dir = &shared_dir(config_dir);
     let (reason, class) = match outcome {
         GateOutcome::Allow => return Ok(()),
         GateOutcome::Refuse { reason } => return Err(reason),
@@ -689,6 +706,8 @@ mod tests {
         );
         assert_eq!(egress_dest("http://[::1]:9/x"), "[::1]");
         assert_eq!(egress_dest("hub"), "hub");
+        assert_eq!(egress_dest("imaps://IMAP.gmail.com"), "imap.gmail.com");
+        assert_eq!(egress_dest("smtps://smtp.gmail.com"), "smtp.gmail.com");
         assert_eq!(egress_dest("http://evil.com\\@127.0.0.1/feed"), "evil.com");
         assert!(is_model_host("api.x.ai") && is_model_host("grok.com") && is_model_host("x.ai"));
         assert!(!is_model_host("evilx.ai") && !is_model_host("x.ai.example.org"));
@@ -814,6 +833,42 @@ mod tests {
         assert_eq!(revoke_grant(&d, &g.id), Ok(true));
         assert_eq!(guard_egress(&d, &req), send_park("example.org", "personal"));
         assert_eq!(read_egress(&d).len(), 1);
+    }
+
+    #[test]
+    fn an_agents_sends_follow_the_apps_grants_and_log_in_the_app() {
+        use grokhub_core::agent_team::{Kind, Profile, TeamFile, VERSION};
+        let (d, _g) = dir("agent-home");
+        let home = d.join("agents").join("kid");
+        let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
+        // A folder shaped like a home that no team file lists is its own.
+        assert_eq!(shared_dir(&home), home);
+        TeamFile {
+            version: VERSION,
+            agents: vec![Profile::new(Kind::Family, "kid", "Kid")],
+            teams: vec![],
+        }
+        .save(&d)
+        .unwrap();
+        assert_eq!(shared_dir(&home), d);
+        assert_eq!(
+            guard_egress(&home, &req),
+            send_park("example.org", "personal")
+        );
+        let g = grant_destination(
+            &d,
+            "example.org",
+            &[DataClass::Personal],
+            UserClick::from_click(),
+        )
+        .unwrap();
+        // The person's grant covers the agent's send, logged in the app.
+        assert_eq!(guard_egress(&home, &req), GateOutcome::Allow);
+        let log = read_egress(&d);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].grant_id, g.id);
+        assert!(!egress_path(&home).exists());
+        assert!(!crate::harness::consent::consent_path(&home).exists());
     }
 
     #[test]

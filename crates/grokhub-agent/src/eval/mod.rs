@@ -31,6 +31,7 @@ mod scan;
 pub mod ab;
 pub mod care_first;
 pub mod close_check;
+pub mod coding;
 pub mod efficiency;
 pub mod live;
 pub mod live_guard;
@@ -41,6 +42,7 @@ pub mod metrics;
 pub mod naturalness;
 pub mod paired;
 pub mod recall_set;
+pub mod skills;
 pub mod sycophancy;
 pub mod turn_endings;
 
@@ -1012,18 +1014,21 @@ fn background_halt_native() -> (&'static str, u32) {
         );
         let _ = tx.send(done);
     });
+    // Windows CI can take well over 5s to spawn the background command and
+    // reach the second model turn. Wait for that turn (blocked) before halt.
     let start = Instant::now();
-    while !blocked.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(5) {
+    while !blocked.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(30) {
         thread::sleep(Duration::from_millis(10));
     }
     let blob_now = client.blob();
     let alive_before = command_is_live(&dir, "eval-bg-halt", &blob_now);
     let pids = workspace_pids(&dir);
-    cancel_main.cancel();
-    crate::tasks::halt_session("eval-bg-halt");
-    // The run forgets the session when it returns, so the process check happens
-    // before that join. Halt already signalled the process group.
+    // Halt the background task only. `halt_session` also cancels the run's
+    // CancelToken, which wakes Scripted::halt and lets the worker forget the
+    // session before Windows can read `status: killed` from task_text.
+    crate::tasks::hub_for("eval-bg-halt").halt_all();
     let stopped = command_is_stopped("eval-bg-halt", &blob_now, &pids);
+    cancel_main.cancel();
     let done = rx.recv_timeout(Duration::from_secs(5)).ok();
     let _ = worker.join();
     #[cfg(unix)]
@@ -1347,7 +1352,8 @@ impl ModelClient for Scripted {
                     if cancel.is_cancelled() {
                         return Err(ClientError::Cancelled);
                     }
-                    if start.elapsed() > Duration::from_secs(8) {
+                    // Ceiling covers hub.halt_all + the 5s stop poll before cancel.
+                    if start.elapsed() > Duration::from_secs(12) {
                         return Err(ClientError::Protocol("halt did not arrive".into()));
                     }
                     thread::sleep(Duration::from_millis(10));
@@ -1600,7 +1606,7 @@ fn command_is_stopped(session: &str, blob: &str, pids: &[u32]) -> bool {
             return false;
         }
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(2) {
+        while start.elapsed() < Duration::from_secs(5) {
             if pids.iter().copied().all(|pid| !process_alive(pid)) {
                 return true;
             }
@@ -1612,7 +1618,8 @@ fn command_is_stopped(session: &str, blob: &str, pids: &[u32]) -> bool {
     {
         let _ = pids;
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(2) {
+        // Generous for slow Windows CI; returns as soon as status: killed appears.
+        while start.elapsed() < Duration::from_secs(5) {
             if task_text(session, blob).is_some_and(|text| text.contains("status: killed")) {
                 return true;
             }

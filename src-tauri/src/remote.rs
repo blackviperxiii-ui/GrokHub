@@ -28,6 +28,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 pub const PORT: u16 = 4620;
 pub const PREFIX: &str = "/remote/v1";
+pub const NODE_PREFIX: &str = "/node/v1";
 pub const KIND: &str = "grokhub-remote";
 pub const VERSION: u32 = 1;
 const MAX_BODY: usize = 1024 * 1024;
@@ -150,6 +151,9 @@ pub const WEB_COMMANDS: &[&str] = &[
     "imagine_cancel",
     "imagine_image",
     "chat_picture",
+    "chat_media",
+    "save_chat_media_to_library",
+    "list_chat_artifacts",
     "get_skills",
     "nyx_look",
     "get_queue",
@@ -166,6 +170,10 @@ pub const WEB_COMMANDS: &[&str] = &[
     "workboard_delete_archived",
     "workboard_sweep_undo",
     "workboard_sweep_dismiss",
+    "get_sessions_board",
+    "sessions_board_stamp",
+    "sessions_board_pin",
+    "sessions_board_reshape",
     "get_behavior",
     "get_privacy",
     "get_background",
@@ -192,13 +200,26 @@ pub enum Route {
     Hello,
     Events,
     Call(String),
+    /// Companion endpoint proxied over loopback to `NodeHost` (`/node/v1/*`, never `/mcp/*`).
+    Node(String),
     /// A file of the UI, by its path.
     Page(String),
+    /// The page an MCP App runs in.
+    AppFrame,
     Wrong(u16),
 }
 
 pub fn route(method: &Method, url: &str) -> Route {
     let path = url.split(['?', '#']).next().unwrap_or("/");
+    if let Some(rest) = path.strip_prefix(NODE_PREFIX) {
+        return match (method, rest) {
+            (Method::Options, "/pair" | "/hello" | "/next" | "/reply" | "/event")
+            | (Method::Post, "/pair" | "/hello" | "/reply" | "/event")
+            | (Method::Get, "/next") => Route::Node(rest.to_string()),
+            (_, "/pair" | "/hello" | "/next" | "/reply" | "/event") => Route::Wrong(405),
+            _ => Route::Wrong(404),
+        };
+    }
     if let Some(rest) = path.strip_prefix(PREFIX) {
         return match (method, rest) {
             (Method::Get, "/hello") => Route::Hello,
@@ -213,6 +234,7 @@ pub fn route(method: &Method, url: &str) -> Route {
         };
     }
     match method {
+        Method::Get | Method::Head if path == crate::mcp_app_frame::PATH => Route::AppFrame,
         Method::Get | Method::Head => Route::Page(path.to_string()),
         _ => Route::Wrong(405),
     }
@@ -404,9 +426,34 @@ pub struct WebAccess {
     /// The conversations a browser started. Only their events go out, so a
     /// chat in the window stays in the window.
     chats: Chats,
+    /// Running companion host port on loopback, for browser companion proxy calls.
+    companion_port: Arc<Mutex<Option<u16>>>,
 }
 
 impl WebAccess {
+    pub fn set_companion_port(&self, port: Option<u16>) {
+        *self
+            .companion_port
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = port;
+    }
+
+    /// Preferred origin for the running Web access listener, suitable for
+    /// `NodeHost::set_allowed_origin`.
+    pub fn primary_origin(&self) -> Option<String> {
+        let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let run = running.as_ref()?;
+        match &run.front {
+            Some((front, _)) => {
+                let host = lan_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+                Some(format!("https://{}", SocketAddr::new(host, front.port)))
+            }
+            None => Some(format!(
+                "http://{}",
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), run.port)
+            )),
+        }
+    }
     pub fn view(&self) -> WebAccessView {
         let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
         match running.as_ref() {
@@ -482,6 +529,21 @@ impl WebAccess {
                     None => None,
                 };
                 let port = inner.port();
+                let mut allowed_origins = vec![
+                    format!(
+                        "http://{}",
+                        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+                    ),
+                    format!("http://localhost:{port}"),
+                ];
+                if let Some((front, _)) = &front {
+                    if let Some(ip) = lan_ip() {
+                        allowed_origins
+                            .push(format!("https://{}", SocketAddr::new(ip, front.port)));
+                    }
+                    allowed_origins.push(format!("https://127.0.0.1:{}", front.port));
+                    allowed_origins.push(format!("https://localhost:{}", front.port));
+                }
                 let server = Arc::new(server);
                 let pairing = Arc::new(Mutex::new(Pairing::new(Instant::now())));
                 let job = Job {
@@ -490,6 +552,8 @@ impl WebAccess {
                     chats: Arc::clone(&self.chats),
                     dispatch,
                     assets,
+                    companion_port: Arc::clone(&self.companion_port),
+                    allowed_origins: Arc::new(allowed_origins),
                 };
                 let accept = Arc::clone(&server);
                 std::thread::spawn(move || accept_loop(&accept, &job));
@@ -628,6 +692,8 @@ struct Job {
     chats: Chats,
     dispatch: Dispatch,
     assets: Assets,
+    companion_port: Arc<Mutex<Option<u16>>>,
+    allowed_origins: Arc<Vec<String>>,
 }
 
 impl Job {
@@ -664,6 +730,8 @@ fn accept_loop(server: &Server, job: &Job) {
             chats: Arc::clone(&job.chats),
             dispatch: Arc::clone(&job.dispatch),
             assets: Arc::clone(&job.assets),
+            companion_port: Arc::clone(&job.companion_port),
+            allowed_origins: Arc::clone(&job.allowed_origins),
         };
         std::thread::spawn(move || handle(req, &job, slot));
     }
@@ -785,9 +853,172 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
             send_json(req, 200, &reply);
         }
         Route::Page(path) => page(req, &path, &job.assets),
+        Route::AppFrame => send(
+            req,
+            200,
+            crate::mcp_app_frame::HTML.as_bytes().to_vec(),
+            "text/html; charset=utf-8",
+            &[("Content-Security-Policy", crate::mcp_app_frame::CSP)],
+        ),
+        Route::Node(subpath) => proxy_node(req, job, slot, &subpath),
         Route::Wrong(status) => {
             send_json(req, status, &json!({ "ok": false, "error": "Not found." }))
         }
+    }
+}
+
+const NODE_PROXY_TIMEOUT: Duration = Duration::from_secs(35);
+
+fn forward_node_request(
+    port: u16,
+    method: &str,
+    subpath: &str,
+    origin: Option<&str>,
+    auth: Option<&str>,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Result<(u16, Vec<u8>, String, Option<String>), String> {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|_| "Companions host is unreachable.".to_string())?;
+    let _ = stream.set_read_timeout(Some(NODE_PROXY_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(NODE_PROXY_TIMEOUT));
+    let mut wire = format!(
+        "{method} {NODE_PREFIX}{subpath} HTTP/1.0\r\n\
+         Host: 127.0.0.1:{port}\r\nConnection: close\r\n"
+    );
+    if let Some(origin) = origin {
+        wire.push_str(&format!("Origin: {origin}\r\n"));
+    }
+    if let Some(auth) = auth {
+        wire.push_str(&format!("Authorization: {auth}\r\n"));
+    }
+    if let Some(ctype) = content_type {
+        wire.push_str(&format!("Content-Type: {ctype}\r\n"));
+    }
+    wire.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    stream
+        .write_all(wire.as_bytes())
+        .and_then(|()| stream.write_all(body))
+        .map_err(|_| "Couldn't reach companions host.".to_string())?;
+    let mut raw = Vec::new();
+    stream
+        .take(MAX_BODY as u64 + 8192)
+        .read_to_end(&mut raw)
+        .map_err(|_| "Companions host didn't answer.".to_string())?;
+    let split = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "Malformed reply from companions host.".to_string())?;
+    let head = String::from_utf8_lossy(&raw[..split]);
+    let resp_body = raw[split + 4..].to_vec();
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(502);
+    let mut ctype = "application/json".to_string();
+    let mut allow_origin = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = name.trim().to_ascii_lowercase();
+        let val = value.trim();
+        if key == "content-type" && !val.is_empty() {
+            ctype = val.to_string();
+        } else if key == "access-control-allow-origin" && !val.is_empty() {
+            allow_origin = Some(val.to_string());
+        }
+    }
+    Ok((status, resp_body, ctype, allow_origin))
+}
+
+fn proxy_node(mut req: Request, job: &Job, slot: Slot, subpath: &str) {
+    let origin = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Origin"))
+        .map(|h| h.value.as_str().trim().to_string());
+    if let Some(ref origin) = origin {
+        if !job.allowed_origins.iter().any(|allowed| allowed == origin) {
+            return send_json(
+                req,
+                403,
+                &json!({ "ok": false, "error": "Origin not allowed." }),
+            );
+        }
+    }
+    let port = *job.companion_port.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(port) = port else {
+        return send_json(
+            req,
+            503,
+            &json!({ "ok": false, "error": "Companions are off on this computer." }),
+        );
+    };
+    let method = match req.method() {
+        Method::Get => "GET",
+        Method::Post => "POST",
+        Method::Options => "OPTIONS",
+        _ => {
+            return send_json(
+                req,
+                405,
+                &json!({ "ok": false, "error": "Method not allowed." }),
+            );
+        }
+    };
+    let auth = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Authorization"))
+        .map(|h| h.value.as_str().to_string());
+    let content_type = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Content-Type"))
+        .map(|h| h.value.as_str().to_string());
+    let mut body = Vec::new();
+    let read = req
+        .as_reader()
+        .take(MAX_BODY as u64 + 1)
+        .read_to_end(&mut body);
+    if read.is_err() || body.len() > MAX_BODY {
+        return send_json(
+            req,
+            413,
+            &json!({ "ok": false, "error": "That request is too big." }),
+        );
+    }
+    if subpath == "/next" {
+        drop(slot);
+    }
+    match forward_node_request(
+        port,
+        method,
+        subpath,
+        origin.as_deref(),
+        auth.as_deref(),
+        content_type.as_deref(),
+        &body,
+    ) {
+        Ok((status, resp_body, resp_ctype, allow_origin)) => {
+            let mut extra: Vec<(&str, &str)> = Vec::new();
+            if let Some(ref orig) = allow_origin {
+                extra.push(("Access-Control-Allow-Origin", orig.as_str()));
+                extra.push(("Vary", "Origin"));
+                if status == 204 {
+                    extra.push(("Access-Control-Allow-Methods", "GET, POST, OPTIONS"));
+                    extra.push((
+                        "Access-Control-Allow-Headers",
+                        "Authorization, Content-Type",
+                    ));
+                }
+            }
+            send(req, status, resp_body, &resp_ctype, &extra);
+        }
+        Err(err) => send_json(req, 502, &json!({ "ok": false, "error": err })),
     }
 }
 
@@ -963,7 +1194,15 @@ mod tests {
 
     #[test]
     fn a_browser_never_halts_the_computer() {
-        for name in ["halt_desktop", "get_halt_keys"] {
+        for name in [
+            "halt_desktop",
+            "get_halt_keys",
+            "steer_task",
+            "memory_graph",
+            "telegram_qr",
+            "signal_link_start",
+            "signal_link_finish",
+        ] {
             assert!(!web_command(name), "{name} must stay on the desktop");
         }
     }
@@ -1098,6 +1337,10 @@ mod tests {
             "workboard_add",
             "workboard_act",
             "workboard_work",
+            "get_sessions_board",
+            "sessions_board_stamp",
+            "sessions_board_pin",
+            "sessions_board_reshape",
             "stage_attachment",
             "remove_attachment",
         ] {
@@ -1148,6 +1391,12 @@ mod tests {
             "journal_add",
             "journal_act",
             "journal_to_mission",
+            "get_meetings",
+            "meetings_act",
+            // Wake word mic opt-in and on-device feed stay on this computer.
+            "get_wake_word",
+            "wake_word_act",
+            "wake_word_feed_local",
             "get_permissions",
             // The GitHub token is sent with these.
             "get_github",
@@ -1194,6 +1443,11 @@ mod tests {
             "create_skill",
             "get_skill_detail",
             "edit_skill",
+            "search_skills_hub",
+            "install_skills_hub",
+            "get_skill_library",
+            "install_library_skill",
+            "install_library_pack",
             "get_local_ai",
             "save_local_ai",
             "start_local_engine_download",
@@ -1217,6 +1471,7 @@ mod tests {
             "disconnect_channel",
             "approve_channel_code",
             "unpair_channel_sender",
+            "allow_email_sender",
             "set_channel_asks",
             "add_channel_webhook",
             "remove_channel_webhook",
@@ -1370,7 +1625,7 @@ mod tests {
     /// its own handler list, so a new one is refused the day it is added.
     #[test]
     fn only_the_reviewed_commands_are_on_the_web_list() {
-        const REVIEWED: [&str; 100] = [
+        const REVIEWED: [&str; 107] = [
             "add_automation",
             "add_memory",
             "add_personal_fact",
@@ -1381,6 +1636,7 @@ mod tests {
             "apply_memory_raw_tidy",
             "approve_memory_row",
             "cancel_chat",
+            "chat_media",
             "chat_picture",
             "check_connectors",
             "chip_outcome",
@@ -1406,6 +1662,7 @@ mod tests {
             "get_profile",
             "get_pulse",
             "get_queue",
+            "get_sessions_board",
             "get_settings",
             "get_skills",
             "get_workboard",
@@ -1416,6 +1673,7 @@ mod tests {
             "imagine_image",
             "list_automation_blueprints",
             "list_automations",
+            "list_chat_artifacts",
             "list_connectors",
             "list_suggested_automations",
             "nyx_look",
@@ -1446,11 +1704,15 @@ mod tests {
             "restore_memory_file",
             "run_automation",
             "run_slash",
+            "save_chat_media_to_library",
             "save_feed_prompt",
             "save_memory",
             "save_memory_file",
             "search_memory",
             "send_chat",
+            "sessions_board_pin",
+            "sessions_board_reshape",
+            "sessions_board_stamp",
             "set_automation_enabled",
             "set_chat_archive",
             "set_home_layout",
@@ -1533,6 +1795,10 @@ mod tests {
             "workboard_delete_archived",
             "workboard_sweep_undo",
             "workboard_sweep_dismiss",
+            "get_sessions_board",
+            "sessions_board_stamp",
+            "sessions_board_pin",
+            "sessions_board_reshape",
         ] {
             assert!(web_command(name), "{name}");
         }
@@ -1814,6 +2080,29 @@ mod tests {
         }
     }
 
+    /// An MCP App's inline script runs only under a CSP that allows it, so
+    /// its frame is a page of its own: that CSP, a forced sandbox (an opaque
+    /// origin even when opened on its own), and no network.
+    #[test]
+    fn serves_the_mcp_app_frame_with_its_own_csp() {
+        let access = WebAccess::default();
+        let (port, _) = serve(&access);
+        let (status, head, body) = http(port, "GET", "/mcp-app-frame", None, "");
+        assert_eq!(status, 200, "{head}");
+        let csp = "Content-Security-Policy: sandbox allow-scripts; default-src 'none'; \
+                   script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; \
+                   img-src data: blob:; media-src data: blob:; font-src data:; \
+                   connect-src 'none'; frame-src 'none'; object-src 'none'; \
+                   base-uri 'none'; form-action 'none'";
+        assert!(head.contains(csp), "{head}");
+        assert!(!head.contains("X-Frame-Options"), "{head}");
+        assert!(
+            body.contains("ui/notifications/sandbox-proxy-ready"),
+            "{body}"
+        );
+        access.stop();
+    }
+
     #[test]
     fn serves_the_page_and_runs_only_paired_web_commands() {
         let access = WebAccess::default();
@@ -1843,6 +2132,12 @@ mod tests {
         let shell = conf["app"]["security"]["csp"].as_str().unwrap_or("");
         assert!(shell.contains(expected_media), "{shell}");
         assert!(shell.contains("img-src 'self' data:;"), "{shell}");
+        // MCP App frames come from the shell's own mcp-app: scheme
+        // (http://mcp-app.localhost on Windows), and only frames do.
+        assert!(
+            shell.ends_with("; frame-src mcp-app: http://mcp-app.localhost"),
+            "{shell}"
+        );
         assert!(head.contains("X-Frame-Options: DENY"), "{head}");
         let (_, _, body) = http(port, "GET", "/memory", None, "");
         assert_eq!(body, "<html>app</html>");
@@ -2195,5 +2490,129 @@ mod tests {
     fn the_devices_page_stays_on_the_desktop() {
         assert!(!web_command("get_devices"));
         assert!(!web_command("forget_all_devices"));
+    }
+
+    #[test]
+    fn companion_proxy_routes_client_paths_only_and_blocks_mcp() {
+        assert_eq!(
+            route(&Method::Post, "/node/v1/pair"),
+            Route::Node("/pair".into())
+        );
+        assert_eq!(
+            route(&Method::Post, "/node/v1/hello"),
+            Route::Node("/hello".into())
+        );
+        assert_eq!(
+            route(&Method::Get, "/node/v1/next"),
+            Route::Node("/next".into())
+        );
+        assert_eq!(
+            route(&Method::Post, "/node/v1/reply"),
+            Route::Node("/reply".into())
+        );
+        assert_eq!(
+            route(&Method::Post, "/node/v1/event"),
+            Route::Node("/event".into())
+        );
+        assert_eq!(
+            route(&Method::Options, "/node/v1/pair"),
+            Route::Node("/pair".into())
+        );
+        assert_eq!(route(&Method::Get, "/node/v1/pair"), Route::Wrong(405));
+        assert_eq!(route(&Method::Post, "/node/v1/next"), Route::Wrong(405));
+        assert_eq!(
+            route(&Method::Post, "/node/v1/mcp/phone"),
+            Route::Wrong(404)
+        );
+        assert_eq!(route(&Method::Get, "/node/v1/health"), Route::Wrong(404));
+    }
+
+    #[test]
+    fn browser_companion_pairs_and_polls_through_web_access_proxy() {
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-web-companion-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let node = grokhub_hub::node_host::NodeHost::start(
+            &dir.join("companions.json"),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            0,
+            "local-key-0123456789".to_string(),
+            "Desk",
+        )
+        .expect("node host");
+
+        let access = WebAccess::default();
+        let view = access
+            .start(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                0,
+                None,
+                Arc::new(|_, _| Ok(Value::Null)),
+                Arc::new(|_| None),
+            )
+            .expect("web access");
+        let web_port: u16 = view
+            .links
+            .last()
+            .and_then(|l| l.strip_prefix("http://127.0.0.1:"))
+            .and_then(|l| l.split('/').next())
+            .and_then(|p| p.parse().ok())
+            .expect("port");
+        let origin = format!("http://127.0.0.1:{web_port}");
+        assert!(node.set_allowed_origin(Some(&origin)));
+        access.set_companion_port(Some(node.port()));
+
+        let pair_code = node.open_pairing().code;
+        let body = format!(
+            r#"{{"code":"{pair_code}","id":"phone-web","name":"Phone","platform":"browser"}}"#
+        );
+        let (status, paired, _, _) = forward_node_request(
+            web_port,
+            "POST",
+            "/pair",
+            Some(&origin),
+            None,
+            Some("application/json"),
+            body.as_bytes(),
+        )
+        .expect("proxy pair");
+        assert_eq!(status, 200);
+        let parsed: Value = serde_json::from_slice(&paired).expect("json");
+        let token = parsed["token"].as_str().expect("token");
+
+        // Unapproved companion stays pending through the proxy.
+        let (status, next_raw, _, _) = forward_node_request(
+            web_port,
+            "GET",
+            "/next",
+            Some(&origin),
+            Some(&format!("Bearer {token}")),
+            None,
+            &[],
+        )
+        .expect("proxy next");
+        assert_eq!(status, 200);
+        let next_json: Value = serde_json::from_slice(&next_raw).expect("json");
+        assert_eq!(next_json["pending"], json!(true));
+
+        // Direct request to /node/v1/mcp/<id> on Web access port returns 404.
+        let mut s = TcpStream::connect(("127.0.0.1", web_port)).expect("connect");
+        let req = concat!(
+            "POST /node/v1/mcp/phone-web HTTP/1.0\r\n",
+            "Host: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}"
+        );
+        s.write_all(req.as_bytes()).expect("write");
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).expect("read");
+        assert!(
+            resp.starts_with("HTTP/1.0 404") || resp.starts_with("HTTP/1.1 404"),
+            "{resp}"
+        );
+
+        access.stop();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

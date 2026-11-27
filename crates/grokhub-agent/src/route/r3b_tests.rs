@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -390,10 +391,9 @@ fn base_urls_are_https_hosts_and_xai_is_built_in() {
     );
     for key in providers::NamedKey::ALL {
         let url = format!("https://{}.example.com/v1", key.account());
-        assert_ne!(
-            parse_base_url(&url).map(|(_, _, id)| id).as_deref(),
-            Ok(key.account()),
-            "{url}"
+        assert!(
+            (parse_base_url(&url).map(|(_, _, id)| id).as_deref()) != (Ok(key.account())),
+            "a named key's account was accepted as a provider id"
         );
     }
     let a = providers::Provider {
@@ -2103,6 +2103,99 @@ impl ModelClient for XaiSignedOut {
 }
 
 /// A local model that answers chat.
+/// Starts cold, then stays loaded. A switch clears that so the next turn
+/// loads again.
+struct StaysWarm {
+    loads: AtomicUsize,
+    warm: AtomicBool,
+}
+
+impl StaysWarm {
+    fn loads(&self) -> usize {
+        self.loads.load(Ordering::SeqCst)
+    }
+
+    fn switch_model(&self) {
+        self.warm.store(false, Ordering::SeqCst);
+    }
+}
+
+impl super::local::LocalRuntime for StaysWarm {
+    fn warmed(&self) -> bool {
+        self.warm.load(Ordering::SeqCst)
+    }
+    fn classify(&self, _: &str, labels: &[&str]) -> Result<serde_json::Value, String> {
+        Ok(json!({ "label": labels[0], "score": 0.9 }))
+    }
+    fn summarize(&self, _: &str, _: u32) -> Result<serde_json::Value, String> {
+        Ok(json!({ "summary": "" }))
+    }
+    fn difficulty(&self, _: &str) -> Result<serde_json::Value, String> {
+        Ok(json!({ "d": 0.3 }))
+    }
+    fn chat_stream(
+        &self,
+        _: &[super::local::ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        if !self.warm.swap(true, Ordering::SeqCst) {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+        }
+        on_delta("kept warm");
+        Ok("kept warm".into())
+    }
+}
+
+#[test]
+fn two_back_to_back_turns_load_the_local_model_once_and_note_it_once() {
+    let (dir, wire) = setup("keep-warm");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    save_registry(&dir, &reg).unwrap();
+    let stays = Arc::new(StaysWarm {
+        loads: AtomicUsize::new(0),
+        warm: AtomicBool::new(false),
+    });
+    let _on = super::local::ForceOn::with(Some(stays.clone()));
+    let send = || {
+        let mut thought = String::new();
+        let out = live::stream_routed(
+            &XaiSignedOut,
+            &chat("keep-warm-1", &["hey"]),
+            &CancelToken::new(),
+            &mut |ev| {
+                if let StreamEvent::ReasoningDelta(t) = ev {
+                    thought.push_str(&t);
+                }
+            },
+            "chat:default",
+        );
+        let notes = thought.matches(super::local::LOCAL_LOADING_NOTE).count();
+        (out, notes, thought)
+    };
+
+    let (first, notes, thought) = send();
+    assert_eq!(first.expect("the first turn answers").text, "kept warm");
+    assert_eq!(notes, 1, "a cold load says so once: {thought}");
+    assert_eq!(stays.loads(), 1);
+    assert_eq!(wire.n(), 0, "nothing left the computer");
+
+    let (second, notes, thought) = send();
+    assert_eq!(second.expect("the second turn answers").text, "kept warm");
+    assert_eq!(notes, 0, "a warm model says nothing: {thought}");
+    assert_eq!(stays.loads(), 1, "the server stayed up between turns");
+    assert_eq!(wire.n(), 0, "nothing left the computer");
+
+    stays.switch_model();
+    let (third, notes, thought) = send();
+    assert_eq!(third.expect("the switched turn answers").text, "kept warm");
+    assert_eq!(notes, 1, "a model switch says so: {thought}");
+    assert_eq!(stays.loads(), 2, "a model switch loads again");
+    assert_eq!(wire.n(), 0, "nothing left the computer");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 struct LocalChat;
 
 impl super::local::LocalRuntime for LocalChat {
@@ -3309,15 +3402,15 @@ fn an_openrouter_call_sends_its_backup_session_and_deny_and_keeps_the_answering_
 
 #[test]
 fn a_chats_session_id_is_a_hash_of_its_id_never_its_text() {
-    assert_eq!(
-        providers::openrouter_session_id("conv-1").as_deref(),
-        Some("36524fd8f6747fc2712506d01fee0e18")
+    assert!(
+        (providers::openrouter_session_id("conv-1").as_deref())
+            == (Some("36524fd8f6747fc2712506d01fee0e18"))
     );
-    assert_eq!(
-        providers::openrouter_session_id(" or-chat-7 ").as_deref(),
-        Some("bed5f8094605e99e4ec7d0fd7a4e7dc4")
+    assert!(
+        (providers::openrouter_session_id(" or-chat-7 ").as_deref())
+            == (Some("bed5f8094605e99e4ec7d0fd7a4e7dc4"))
     );
-    assert_eq!(providers::openrouter_session_id("  "), None);
+    assert!(providers::openrouter_session_id("  ").is_none());
     // With no backup and no conversation, only the provider field is added.
     let mut b = json!({"model": "vendor/a"});
     providers::apply_openrouter_picks(&mut b, None, "");
@@ -4325,4 +4418,343 @@ fn a_chat_picture_that_lands_on_the_device_says_it_wasnt_read() {
         super::local_live::take_line("vision-back-1").as_deref(),
         Some(super::local_live::BLIND_LINE)
     );
+}
+
+#[test]
+fn multi_turn_sequence_classifies_every_turn_fresh_without_sticky_explicit() {
+    let _routing = ROUTING_SET.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, wire) = setup("route-per-turn-online");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::Local,
+            super::local::TIERS
+                .iter()
+                .map(|t| super::local::tier_meta(t))
+                .collect(),
+        )],
+        &[],
+        2,
+    );
+    save_registry(&dir, &reg).unwrap();
+    add_provider(&dir, OR_URL, KEY, NOW).unwrap();
+    grant_destination(&dir, OR_DEST, CALL_DATA, UserClick::from_click()).unwrap();
+    let mut table = table_with("chat:default", OR_MODEL);
+    let row = table.classes["chat:default"].clone();
+    for lane in ["chat:quick", "debug", "code:edit-small", "code:multi-file"] {
+        table.classes.insert(lane.into(), row.clone());
+    }
+    let path = super::table::table_path(&dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_string(&table).unwrap()).unwrap();
+
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let xai = XaiRec::default();
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
+    };
+    let conv = "route-seq-online-1";
+    let mut history: Vec<InputItem> = Vec::new();
+    let mut send = |prompt: &str| {
+        history.push(say("user", prompt));
+        let mut req = chat(conv, &[]);
+        req.model = OR_MODEL.into();
+        req.input = history.clone();
+        let out = live::stream_routed(&xai, &req, &CancelToken::new(), &mut |_| {}, "chat:default")
+            .unwrap();
+        history.push(say("assistant", &out.text));
+        let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES).pop().unwrap();
+        (out.text, rec)
+    };
+
+    // Turn 1 (explicit): runs locally for explicit content, never hits the wire.
+    let (t1_text, t1) = send("talk dirty to me, I'm horny");
+    assert_eq!(t1_text, "local here");
+    assert_eq!(t1.used.model, super::local::live_tier());
+    assert!(
+        t1.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t1.rule_ids
+    );
+    assert_eq!(
+        super::local_live::local_reason(&t1.rule_ids, None, false, true, false),
+        "keeping explicit content on this computer"
+    );
+    assert_eq!(wire.n(), 0);
+
+    // Turn 2 (code): explicit flag does not stick; routes to the coding pick online
+    // with explicit history stripped.
+    let (t2_text, t2) = send("Fix the borrow error in src/main.rs");
+    assert_eq!(t2_text, "hello from the provider");
+    assert_eq!(t2.used.model, OR_MODEL);
+    assert!(
+        t2.rule_ids.iter().any(|r| r == "ask:debug"),
+        "{:?}",
+        t2.rule_ids
+    );
+    assert!(
+        !t2.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t2.rule_ids
+    );
+    assert_eq!(wire.n(), 1);
+    let b2 = wire.bodies().pop().unwrap();
+    assert!(b2.contains("Fix the borrow error in src/main.rs"), "{b2}");
+    assert!(
+        !b2.contains("horny"),
+        "explicit turn must not leak online: {b2}"
+    );
+
+    // Turn 3 (file task): routes to the coding pick even mid-Hangout, never explicit.
+    let (t3_text, t3) = send("List the files in my folder and read notes.txt");
+    assert_eq!(t3_text, "hello from the provider");
+    assert_eq!(t3.used.model, OR_MODEL);
+    assert!(
+        t3.rule_ids.iter().any(|r| r == "ask:code_small"),
+        "{:?}",
+        t3.rule_ids
+    );
+    assert!(
+        !t3.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t3.rule_ids
+    );
+    assert_eq!(wire.n(), 2);
+    let b3 = wire.bodies().pop().unwrap();
+    assert!(b3.contains("notes.txt"), "{b3}");
+    assert!(
+        !b3.contains("horny"),
+        "explicit turn must not leak online: {b3}"
+    );
+
+    // Turn 4 (casual): classified fresh as chat, served by warm local with the real reason.
+    let (t4_text, t4) = send("Grabbing some coffee, what a long day");
+    assert_eq!(t4_text, "local here");
+    assert_eq!(t4.used.model, super::local::live_tier());
+    assert!(
+        t4.rule_ids.iter().any(|r| r == "ask:chat"),
+        "{:?}",
+        t4.rule_ids
+    );
+    assert!(
+        t4.rule_ids.iter().any(|r| r == "size:warm_local"),
+        "{:?}",
+        t4.rule_ids
+    );
+    assert!(
+        !t4.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t4.rule_ids
+    );
+    assert_eq!(
+        super::local_live::local_reason(&t4.rule_ids, None, false, false, false),
+        "already warm on this computer"
+    );
+
+    assert_eq!(xai.0.lock().unwrap().len(), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn multi_turn_local_sequence_uses_exact_reason_and_task_kind_per_turn() {
+    use grokhub_core::adult_guard::ADULT_VOICE;
+    use grokhub_core::local_skills::TaskKind;
+
+    let (dir, _wire) = setup("route-per-turn-local");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    let mut reg = fleet();
+    reg.entitlement.credential = Credential::None;
+    reg.apply_refresh(
+        &[Listing::new(
+            SourceKind::Local,
+            super::local::TIERS
+                .iter()
+                .map(|t| super::local::tier_meta(t))
+                .collect(),
+        )],
+        &[],
+        2,
+    );
+    save_registry(&dir, &reg).unwrap();
+    let _on = super::local::ForceOn::with(Some(Arc::new(LocalChat)));
+    let say = |role: &str, text: &str| InputItem::Message {
+        role: role.into(),
+        content: vec![ContentPart::InputText(text.into())],
+    };
+
+    let conv = "route-seq-local-1";
+    let mut history: Vec<InputItem> = Vec::new();
+    let mut send = |prompt: &str| {
+        history.push(say("user", prompt));
+        let mut req = chat(conv, &[]);
+        req.input = history.clone();
+        let out = live::stream_routed(
+            &XaiSignedOut,
+            &req,
+            &CancelToken::new(),
+            &mut |_| {},
+            "chat:default",
+        )
+        .unwrap();
+        history.push(say("assistant", &out.text));
+        let (_, rec) = route_records(&dir, ROUTE_TAIL_LINES).pop().unwrap();
+        let kind = super::local::turn_kind("chat:default", 20, prompt, false);
+        (rec, kind)
+    };
+
+    let (t1, k1) = send("talk dirty to me, I'm horny");
+    assert_eq!(t1.used.model, super::local::live_tier());
+    assert_eq!(k1, Some(TaskKind::Adult));
+    assert_eq!(
+        super::local_live::local_reason(&t1.rule_ids, None, false, true, false),
+        "keeping explicit content on this computer"
+    );
+
+    let (t2, k2) = send("Fix the borrow error in src/main.rs");
+    assert_eq!(t2.used.model, super::local::live_tier());
+    assert_eq!(k2, Some(TaskKind::Code));
+    assert!(
+        !t2.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t2.rule_ids
+    );
+    assert_eq!(
+        super::local_live::local_reason(&t2.rule_ids, None, false, false, false),
+        "no online sign-in or API key is configured"
+    );
+
+    let (t3, k3) = send("List the files in my folder and read notes.txt");
+    assert_eq!(t3.used.model, super::local::live_tier());
+    assert_eq!(k3, Some(TaskKind::Code));
+    assert!(
+        !t3.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t3.rule_ids
+    );
+    assert_eq!(
+        super::local_live::local_reason(&t3.rule_ids, None, false, false, false),
+        "no online sign-in or API key is configured"
+    );
+
+    let (t4, k4) = send("Grabbing some coffee, what a long day");
+    assert_eq!(t4.used.model, super::local::live_tier());
+    assert_eq!(k4, Some(TaskKind::Chat));
+    assert!(
+        !t4.rule_ids.iter().any(|r| r == "adult:local_only"),
+        "{:?}",
+        t4.rule_ids
+    );
+    assert_eq!(
+        super::local_live::local_reason(&t4.rule_ids, None, false, false, false),
+        "no online sign-in or API key is configured"
+    );
+
+    // With an 18+ voice active, a clean coding turn stays local for the 18+ voice
+    // (not explicit content) and still classifies as TaskKind::Code.
+    let mut voice_req = chat("route-seq-voice-1", &[]);
+    voice_req.input = vec![
+        say("system", &format!("Personality: Viper. {ADULT_VOICE}")),
+        say("user", "Fix the borrow error in src/main.rs"),
+    ];
+    live::stream_routed(
+        &XaiSignedOut,
+        &voice_req,
+        &CancelToken::new(),
+        &mut |_| {},
+        "chat:default",
+    )
+    .unwrap();
+    let (_, tv) = route_records(&dir, ROUTE_TAIL_LINES).pop().unwrap();
+    assert_eq!(tv.used.model, super::local::live_tier());
+    assert_eq!(
+        super::local::turn_kind(
+            "chat:default",
+            20,
+            "Fix the borrow error in src/main.rs",
+            false
+        ),
+        Some(TaskKind::Code)
+    );
+    assert_eq!(
+        super::local_live::local_reason(&tv.rule_ids, None, false, false, true),
+        "18+ voice stays on this computer"
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// fleet() with a priced Claude model: $3/M in, $0.30/M cache read,
+/// $3.75/M cache write and $15/M out, in ticks per token.
+fn priced_claude_fleet() -> Registry {
+    let mut reg = fleet();
+    let an = ModelMeta {
+        id: AN_MODEL.into(),
+        context_length: Some(200_000),
+        prices: Prices {
+            prompt: Some(30_000),
+            cached: Some(3_000),
+            cache_write: Some(37_500),
+            completion: Some(150_000),
+            ..Prices::default()
+        },
+        ..ModelMeta::default()
+    };
+    reg.apply_refresh(&[Listing::new(SourceKind::Anthropic, vec![an])], &[], 2);
+    reg
+}
+
+/// 100 fresh, 40 cache-read and 25 cache-write input tokens and 7 out:
+/// 100×30_000 + 40×3_000 + 25×37_500 + 7×150_000 ticks.
+const CLAUDE_CACHED_TICKS: i64 = 5_107_500;
+
+/// A Claude reply that used the prompt cache is priced at its whole
+/// input (fresh, cache reads and cache writes), so the cost meter and
+/// the weekly cap count what the call cost, streamed or whole.
+#[test]
+fn an_anthropic_reply_is_priced_at_its_whole_input() {
+    let whole = r#"{"content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn","usage":{"input_tokens":100,"cache_creation_input_tokens":25,"cache_read_input_tokens":40,"output_tokens":7}}"#;
+    let (dir, _wire) = sse_setup("anthropic-priced-whole", whole);
+    save_registry(&dir, &priced_claude_fleet()).unwrap();
+    let out = providers::call_model(
+        &dir,
+        "chat:default",
+        AN_MODEL,
+        Some("high"),
+        &hello(),
+        CALL_DATA,
+        "conv-1:12",
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(out.text, "Hi");
+    assert_eq!(out.usage.cost_in_usd_ticks, CLAUDE_CACHED_TICKS);
+    let _ = std::fs::remove_dir_all(dir);
+
+    let sse = concat!(
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":25,\"cache_read_input_tokens\":40,\"output_tokens\":1}}}\n\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+    let (dir, _wire) = sse_setup("anthropic-priced-stream", sse);
+    save_registry(&dir, &priced_claude_fleet()).unwrap();
+    let mut shown = Vec::new();
+    let out = stream_call(&dir, &mut shown).unwrap();
+    assert_eq!(out.text, "Hi");
+    assert_eq!(out.usage.cost_in_usd_ticks, CLAUDE_CACHED_TICKS);
+    // The spend ledger prices the same call the same way.
+    let ledger = grokhub_core::model_registry::store::load_quota(&dir);
+    assert_eq!(
+        (
+            ledger.anthropic.spend.day_input_tokens,
+            ledger.anthropic.spend.day_output_tokens,
+            ledger.anthropic.spend.day_ticks
+        ),
+        (165, 7, CLAUDE_CACHED_TICKS)
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

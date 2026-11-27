@@ -574,6 +574,21 @@ pub fn stop(conversation_id: &str, task_id: Option<&str>) -> Result<(), String> 
     }
 }
 
+/// Tasks → Steer: queues the person's text for a running helper's next step.
+/// A finished helper, an unknown id or empty text is refused, so the box can
+/// say the text never reached it.
+pub fn steer(conversation_id: &str, task_id: &str, text: &str) -> Result<(), String> {
+    let id = task_id.trim();
+    if text.trim().is_empty() {
+        return Err("type what the helper should do".into());
+    }
+    if grokhub_agent::steer_task(conversation_id, id, text) {
+        Ok(())
+    } else {
+        Err(format!("helper {id} is not running"))
+    }
+}
+
 /// Tasks → Merge: puts a helper's sealed work into the project folder, as
 /// uncommitted changes. A merge that ends in a conflict or held is not an
 /// error: the row says how it ended. An error is a refusal that changed

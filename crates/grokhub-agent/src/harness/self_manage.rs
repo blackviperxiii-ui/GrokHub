@@ -357,11 +357,13 @@ mod tests {
             heartbeat_every_min: every,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(1_000),
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         }
     }
 

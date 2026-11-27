@@ -3,7 +3,7 @@
 //! Native MCP server file. Only `mcpServers` / `mcp_servers` definitions are kept.
 //! A credential-looking file name is refused before it is opened.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,6 +13,10 @@ use serde_json::{json, Map, Value};
 use crate::perm::config_dir;
 
 const FILE_NAME: &str = "mcp.json";
+/// How long a server may take to start, and one tool call to answer, when
+/// its entry does not say.
+const STARTUP_TIMEOUT_SECS: u64 = 15;
+const TOOL_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerDef {
@@ -27,6 +31,12 @@ pub struct ServerDef {
     /// A stdio server's env var that gets the sealed `tokenRef` token at
     /// start (`tokenEnv`, e.g. `BRAVE_API_KEY`). The entry never holds it.
     pub token_env: Option<String>,
+    /// Raw tool names the Connectors page turned off. Chat never sees them.
+    pub disabled_tools: BTreeSet<String>,
+    /// When `Some`, only these raw tool names are offered to chat (minus
+    /// `disabled_tools`). `None` means no allowlist. An empty set means no
+    /// tools. Written by the catalog install picker.
+    pub include_tools: Option<BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +243,31 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
     if !def.enabled {
         spec.insert("enabled".into(), json!(false));
     }
+    if !def.disabled_tools.is_empty() {
+        spec.insert(
+            "disabledTools".into(),
+            json!(def.disabled_tools.iter().cloned().collect::<Vec<_>>()),
+        );
+    }
+    if let Some(include) = &def.include_tools {
+        spec.insert(
+            "includeTools".into(),
+            json!(include.iter().cloned().collect::<Vec<_>>()),
+        );
+    }
+    // A timeout the entry set is kept; the default is left out.
+    for (key, value, default) in [
+        (
+            "startup_timeout_sec",
+            def.startup_timeout,
+            STARTUP_TIMEOUT_SECS,
+        ),
+        ("tool_timeout_sec", def.tool_timeout, TOOL_TIMEOUT_SECS),
+    ] {
+        if value.as_secs() != default {
+            spec.insert(key.into(), json!(value.as_secs()));
+        }
+    }
     Some(Value::Object(spec))
 }
 
@@ -243,8 +278,18 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         .get("enabled")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let startup_timeout = secs_field(&kept, "startup_timeout_sec", "startupTimeoutSec", 15);
-    let tool_timeout = secs_field(&kept, "tool_timeout_sec", "toolTimeoutSec", 60);
+    let startup_timeout = secs_field(
+        &kept,
+        "startup_timeout_sec",
+        "startupTimeoutSec",
+        STARTUP_TIMEOUT_SECS,
+    );
+    let tool_timeout = secs_field(
+        &kept,
+        "tool_timeout_sec",
+        "toolTimeoutSec",
+        TOOL_TIMEOUT_SECS,
+    );
     let mut headers = string_map(kept.get("headers"));
     if let Some(token) = kept
         .get("bearerToken")
@@ -305,6 +350,14 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
     };
     let token_ref = text_field("tokenRef");
     let token_env = text_field("tokenEnv");
+    let disabled_tools = string_set(
+        kept.get("disabledTools")
+            .or_else(|| kept.get("disabled_tools")),
+    );
+    let include_tools = kept
+        .get("includeTools")
+        .or_else(|| kept.get("include_tools"))
+        .map(|v| string_set(Some(v)));
     Some(ServerDef {
         transport,
         enabled,
@@ -313,7 +366,23 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         headers,
         token_ref,
         token_env,
+        disabled_tools,
+        include_tools,
     })
+}
+
+fn string_set(value: Option<&Value>) -> BTreeSet<String> {
+    value
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
@@ -335,6 +404,10 @@ fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
         "bearer_token",
         "tokenRef",
         "tokenEnv",
+        "disabledTools",
+        "disabled_tools",
+        "includeTools",
+        "include_tools",
     ];
     let mut out = Map::new();
     for key in KEYS {
@@ -494,5 +567,77 @@ mod tests {
         assert!(is_desktop_server("grokhub-desktop"));
         assert!(is_desktop_server(" GROKHUB_DESKTOP "));
         assert!(!is_desktop_server("grokhub-desktop-extra"));
+    }
+
+    #[test]
+    fn disabled_tools_round_trip_in_mcp_json() {
+        let dir = crate::harness::test_dir("mcp-disabled-tools");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers":{
+            "box":{"command":"box-mcp","disabledTools":["create","delete"]}
+        }}"#;
+        import_documents(&[doc.to_string()]).unwrap();
+        let saved = load_servers();
+        let def = saved.get("box").expect("box");
+        assert_eq!(
+            def.disabled_tools.iter().cloned().collect::<Vec<_>>(),
+            vec!["create".to_string(), "delete".to_string()]
+        );
+        let text = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            file["mcpServers"]["box"]["disabledTools"],
+            json!(["create", "delete"])
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn include_tools_round_trip_in_mcp_json() {
+        let dir = crate::harness::test_dir("mcp-include-tools");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers":{
+            "wiki":{"url":"https://mcp.example.com/mcp","type":"http","includeTools":["ask","read"]}
+        }}"#;
+        import_documents(&[doc.to_string()]).unwrap();
+        let saved = load_servers();
+        let def = saved.get("wiki").expect("wiki");
+        assert_eq!(
+            def.include_tools
+                .as_ref()
+                .map(|s| s.iter().cloned().collect::<Vec<_>>()),
+            Some(vec!["ask".to_string(), "read".to_string()])
+        );
+        let text = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            file["mcpServers"]["wiki"]["includeTools"],
+            json!(["ask", "read"])
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_imported_entry_keeps_its_timeouts() {
+        let dir = crate::harness::test_dir("mcp-import-timeouts");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let doc = r#"{"mcpServers":{
+            "slow":{"command":"slow-mcp","tool_timeout_sec":3,"startupTimeoutSec":20},
+            "web":{"url":"http://127.0.0.1:9/mcp","toolTimeoutSec":90},
+            "plain":{"command":"plain-mcp"}
+        }}"#;
+        import_documents(&[doc.to_string()]).unwrap();
+        let saved = load_servers();
+        let timeouts = |name: &str| {
+            let def = &saved[name];
+            (def.startup_timeout.as_secs(), def.tool_timeout.as_secs())
+        };
+        assert_eq!(timeouts("slow"), (20, 3));
+        assert_eq!(timeouts("web"), (15, 90));
+        assert_eq!(timeouts("plain"), (15, 60));
+        let text = fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(file["mcpServers"]["plain"], json!({"command": "plain-mcp"}));
+        let _ = fs::remove_dir_all(dir);
     }
 }

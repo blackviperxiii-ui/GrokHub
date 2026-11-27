@@ -451,7 +451,9 @@ pub fn custom_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
     dir.join(format!("{id}.toml"))
 }
 
-/// Check and write a custom preset to `dir/<id>.toml`. Built-in ids are refused.
+/// Check and write a custom preset over its copy in the file it was loaded
+/// from, whatever that file is called, or to `dir/<id>.toml` when it has none
+/// yet. Built-in ids are refused.
 pub fn save_custom(dir: &std::path::Path, p: &Personality) -> Result<std::path::PathBuf, String> {
     p.check()?;
     if p.id == LEGACY_DEFAULT_ID || builtins_cached().iter().any(|b| b.id == p.id) {
@@ -460,22 +462,60 @@ pub fn save_custom(dir: &std::path::Path, p: &Personality) -> Result<std::path::
             p.name
         ));
     }
-    let text = toml::to_string(&PresetFile {
-        preset: vec![p.clone()],
-    })
-    .map_err(|e| format!("Personalities: {e}"))?;
+    let (path, presets) = match file_holding(dir, &p.id) {
+        Some((path, mut presets)) => {
+            for q in presets.iter_mut().filter(|q| q.id == p.id) {
+                *q = p.clone();
+            }
+            (path, presets)
+        }
+        None => (custom_path(dir, &p.id), vec![p.clone()]),
+    };
+    let text = toml::to_string(&PresetFile { preset: presets })
+        .map_err(|e| format!("Personalities: {e}"))?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = custom_path(dir, &p.id);
     std::fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
-/// Remove a custom preset's file. Built-ins have none, so this never touches them.
+/// The first file in `dir` holding a preset with `id`, with all its presets.
+/// Files go in the order `load_all` reads them, so this is the copy it shows.
+fn file_holding(dir: &std::path::Path, id: &str) -> Option<(std::path::PathBuf, Vec<Personality>)> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.into_iter().find_map(|path| {
+        let presets = parse(&std::fs::read_to_string(&path).ok()?).ok()?;
+        presets
+            .iter()
+            .any(|p| p.id == id)
+            .then_some((path, presets))
+    })
+}
+
+/// Remove a custom preset from the file it was loaded from, whatever that file
+/// is called: the file goes when the preset was its only one, else the file
+/// keeps its other presets. Built-ins have no file, so this never touches them.
 pub fn delete_custom(dir: &std::path::Path, id: &str) -> Result<(), String> {
     if builtins_cached().iter().any(|b| b.id == id) {
         return Err("Built-in personalities can't be deleted.".into());
     }
-    std::fs::remove_file(custom_path(dir, id)).map_err(|e| e.to_string())
+    let Some((path, mut presets)) = file_holding(dir, id) else {
+        return Err(format!("No custom personality called {id}."));
+    };
+    presets.retain(|p| p.id != id);
+    if presets.is_empty() {
+        return std::fs::remove_file(&path).map_err(|e| e.to_string());
+    }
+    let text = toml::to_string(&PresetFile { preset: presets })
+        .map_err(|e| format!("Personalities: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())
 }
 
 fn builtins_cached() -> &'static [Personality] {
@@ -937,6 +977,89 @@ mod tests {
             DEFAULT_ID,
             "a deleted preset falls back to the default"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_loaded_custom_preset_can_be_deleted() {
+        let dir = scratch("loaded-delete");
+        std::fs::create_dir_all(&dir).unwrap();
+        let preset = |id: &str| {
+            format!("[[preset]]\nid = \"{id}\"\nname = \"N {id}\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n")
+        };
+        // A file named for something else, and one file holding two presets.
+        std::fs::write(dir.join("mine.toml"), preset("deckhand")).unwrap();
+        std::fs::write(
+            dir.join("pair.toml"),
+            format!("{}\n{}", preset("left"), preset("right")),
+        )
+        .unwrap();
+        let (all, problems) = load_all(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(all.len(), 27);
+
+        delete_custom(&dir, "deckhand").expect("deletes the preset in mine.toml");
+        assert!(!dir.join("mine.toml").exists());
+        delete_custom(&dir, "left").expect("deletes one of two presets in a file");
+        let (all, problems) = load_all(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        let ids: Vec<&str> = all
+            .iter()
+            .filter(|p| p.custom)
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["right"]);
+        assert_eq!(
+            delete_custom(&dir, "nobody"),
+            Err("No custom personality called nobody.".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_a_loaded_custom_preset_edits_the_file_it_came_from() {
+        let dir = scratch("loaded-save");
+        std::fs::create_dir_all(&dir).unwrap();
+        let preset = |id: &str| {
+            format!("[[preset]]\nid = \"{id}\"\nname = \"N {id}\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n")
+        };
+        // A file named for something else, and one file holding two presets.
+        std::fs::write(dir.join("mine.toml"), preset("deckhand")).unwrap();
+        std::fs::write(
+            dir.join("pair.toml"),
+            format!("{}\n{}", preset("left"), preset("right")),
+        )
+        .unwrap();
+        let (all, _) = load_all(&dir);
+        for (id, name, file) in [
+            ("deckhand", "Deck", "mine.toml"),
+            ("left", "Lefty", "pair.toml"),
+        ] {
+            let mut p = find(&all, id);
+            p.name = name.into();
+            assert_eq!(save_custom(&dir, &p), Ok(dir.join(file)));
+        }
+        assert!(!dir.join("deckhand.toml").exists());
+        assert!(!dir.join("left.toml").exists());
+        let (all, problems) = load_all(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        let custom: Vec<(&str, &str)> = all
+            .iter()
+            .filter(|p| p.custom)
+            .map(|p| (p.id.as_str(), p.name.as_str()))
+            .collect();
+        assert_eq!(
+            custom,
+            [
+                ("deckhand", "Deck"),
+                ("left", "Lefty"),
+                ("right", "N right")
+            ]
+        );
+        // A preset with no file yet still lands in `<id>.toml`.
+        let mut fresh = find(&all, "right");
+        fresh.id = "fresh".into();
+        assert_eq!(save_custom(&dir, &fresh), Ok(dir.join("fresh.toml")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

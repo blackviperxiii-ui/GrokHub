@@ -13,9 +13,10 @@ pub fn rewrite_desktop_entry(template: &str, prefix: &str) -> String {
     let bin = desktop_bin_path(prefix);
     let mut out = String::with_capacity(template.len() + bin.len());
     for line in template.lines() {
-        if line == "Exec=grokhub-shell" {
+        if line == "Exec=grokhub-shell" || line == "Exec=grokhub-shell %u" {
             out.push_str("Exec=");
             out.push_str(&bin);
+            out.push_str(" %u");
         } else if line == "TryExec=grokhub-shell" {
             out.push_str("TryExec=");
             out.push_str(&bin);
@@ -30,9 +31,10 @@ pub fn rewrite_desktop_entry(template: &str, prefix: &str) -> String {
 /// True when Exec/TryExec name the prefix binary, not a PATH-relative `grokhub-shell`.
 pub fn desktop_entry_uses_prefix_bin(entry: &str, prefix: &str) -> bool {
     let bin = desktop_bin_path(prefix);
-    let exec = format!("Exec={bin}");
+    let exec = format!("Exec={bin} %u");
+    let exec_plain = format!("Exec={bin}");
     let try_exec = format!("TryExec={bin}");
-    entry.lines().any(|l| l == exec) && entry.lines().any(|l| l == try_exec)
+    entry.lines().any(|l| l == exec || l == exec_plain) && entry.lines().any(|l| l == try_exec)
 }
 
 #[cfg(test)]
@@ -44,8 +46,12 @@ mod tests {
     #[test]
     fn user_prefix_exec_does_not_need_local_bin_on_path() {
         assert!(
-            TEMPLATE.lines().any(|l| l == "Exec=grokhub-shell"),
-            "in-tree template stays PATH-relative; install rewrites it: {TEMPLATE}"
+            TEMPLATE.lines().any(|l| l == "Exec=grokhub-shell %u"),
+            "in-tree template stays PATH-relative with %u for loadout:// links: {TEMPLATE}"
+        );
+        assert!(
+            TEMPLATE.contains("MimeType=x-scheme-handler/loadout;"),
+            "desktop entry registers the loadout:// scheme: {TEMPLATE}"
         );
         let prefix = "/home/user/.local";
         let entry = rewrite_desktop_entry(TEMPLATE, prefix);
@@ -56,9 +62,9 @@ mod tests {
             "menu Exec must be the prefix binary: {entry}"
         );
         assert!(
-            !entry
-                .lines()
-                .any(|l| l == "Exec=grokhub-shell" || l == "TryExec=grokhub-shell"),
+            !entry.lines().any(|l| l == "Exec=grokhub-shell"
+                || l == "Exec=grokhub-shell %u"
+                || l == "TryExec=grokhub-shell"),
             "PATH-relative grokhub-shell must not remain after rewrite: {entry}"
         );
         // A session PATH that lacks ~/.local/bin still has an absolute Exec.
@@ -70,8 +76,8 @@ mod tests {
             "fixture PATH must omit the prefix bin dir"
         );
         assert!(
-            entry.contains(&format!("Exec={bin}")),
-            "Exec stays absolute when PATH is {path_without_prefix}: {entry}"
+            entry.contains(&format!("Exec={bin} %u")),
+            "Exec stays absolute with %u when PATH is {path_without_prefix}: {entry}"
         );
     }
 

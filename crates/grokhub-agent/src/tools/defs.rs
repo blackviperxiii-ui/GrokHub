@@ -5,9 +5,9 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, local_ai, media, models_check, mods, ptc,
-    read_file, run_routine, save_routine, search_replace, session_search, shell, show_panel,
-    web_fetch, web_search, write,
+    connections, control, desktop, glob, grep, home_assistant, list_dir, local_ai, media,
+    models_check, mods, ptc, read_file, repo_map, run_routine, save_routine, search_replace,
+    session_search, shell, show_panel, web_fetch, web_search, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -50,6 +50,14 @@ fn mods_action_on(gate: &Gate) -> bool {
     not_readonly(gate) && mods::available()
 }
 
+fn home_assistant_on(_gate: &Gate) -> bool {
+    home_assistant::available()
+}
+
+fn home_assistant_action_on(gate: &Gate) -> bool {
+    not_readonly(gate) && home_assistant::available()
+}
+
 /// Only once the person has a routine the chat may start, so other lists stay
 /// as they were.
 fn routines_on(gate: &Gate) -> bool {
@@ -75,7 +83,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 15] = [
+    static DEFS: [ToolDef; 19] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -109,6 +117,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             blurb: "Read background command or subagent output",
             defer: false,
             schema: control::output_schema,
+            visible: always,
+        },
+        ToolDef {
+            name: repo_map::NAME,
+            blurb: "Ranked tree-sitter symbol map of the workspace",
+            defer: true,
+            schema: repo_map::schema,
             visible: always,
         },
         ToolDef {
@@ -175,6 +190,27 @@ pub fn read_defs() -> &'static [ToolDef] {
             visible: mods_on,
         },
         ToolDef {
+            name: home_assistant::LIST_ENTITIES,
+            blurb: "List Home Assistant entities on this network",
+            defer: true,
+            schema: home_assistant::list_entities_schema,
+            visible: home_assistant_on,
+        },
+        ToolDef {
+            name: home_assistant::GET_STATE,
+            blurb: "Read one Home Assistant entity's state",
+            defer: true,
+            schema: home_assistant::get_state_schema,
+            visible: home_assistant_on,
+        },
+        ToolDef {
+            name: home_assistant::LIST_SERVICES,
+            blurb: "List Home Assistant services for local devices",
+            defer: true,
+            schema: home_assistant::list_services_schema,
+            visible: home_assistant_on,
+        },
+        ToolDef {
             name: ptc::NAME,
             blurb: "Run a sandboxed read-only multi-tool Python script",
             defer: true,
@@ -188,7 +224,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 26] = [
+    static DEFS: [ToolDef; 27] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -337,6 +373,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             defer: true,
             schema: mods::prepare_schema,
             visible: mods_action_on,
+        },
+        ToolDef {
+            name: home_assistant::CALL_SERVICE,
+            blurb: "Call a Home Assistant service to control a device",
+            defer: true,
+            schema: home_assistant::call_service_schema,
+            visible: home_assistant_action_on,
         },
         ToolDef {
             name: show_panel::SHOW_PANEL,

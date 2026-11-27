@@ -130,27 +130,79 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     echo "ci-guards: PR labels=[${pr_labels_csv}]"
 
     # --- 3. Cargo.lock needs dependencies label --------------------------------
-    lock_changed=0
-    toml_paths=()
+    # Each lockfile (Cargo.lock, src-tauri/Cargo.lock) is checked on its own.
+    # Its Cargo.toml files are the ones in its folder that no deeper lockfile
+    # owns, and only a change that still shows once the TOML is parsed
+    # (comments and package versions aside) counts as a dependency edit.
+    lock_dirs=()
+    if ! lock_list=$(git ls-files -- 'Cargo.lock' '*/Cargo.lock'); then
+      echo "ci-guards: git ls-files for the lockfiles failed; failing PR file rules" >&2
+      fail=1
+      lock_list=""
+    fi
+    while IFS= read -r l; do
+      [[ -n "$l" ]] && lock_dirs+=("$(dirname "$l")")
+    done <<<"$lock_list"
+    lock_owner() {
+      local path="$1" d best=""
+      for d in "${lock_dirs[@]+"${lock_dirs[@]}"}"; do
+        if [[ "$d" == . || "$path" == "$d/"* ]] && ((${#d} > ${#best})); then
+          best="$d"
+        fi
+      done
+      printf '%s\n' "${best:-.}"
+    }
+    locks_changed=()
     for f in "${pr_changed[@]+"${pr_changed[@]}"}"; do
       case "$f" in
-        Cargo.lock) lock_changed=1 ;;
-        Cargo.toml|*/Cargo.toml) toml_paths+=("$f") ;;
+        Cargo.lock|*/Cargo.lock) locks_changed+=("$f") ;;
       esac
     done
-    if (( lock_changed == 1 )); then
+    if ((${#locks_changed[@]} == 0)); then
+      echo "ci-guards: Cargo.lock unchanged"
+    fi
+    for lock in "${locks_changed[@]+"${locks_changed[@]}"}"; do
+      lock_dir=$(dirname "$lock")
+      toml_paths=()
+      for f in "${pr_changed[@]+"${pr_changed[@]}"}"; do
+        case "$f" in
+          Cargo.toml|*/Cargo.toml)
+            [[ "$(lock_owner "$f")" == "$lock_dir" ]] && toml_paths+=("$f")
+            ;;
+        esac
+      done
       toml_dep=0
-      if ((${#toml_paths[@]} > 0)); then
-        if git diff -U0 "$pr_merge_base"...HEAD -- "${toml_paths[@]}" \
-          | grep -E '^\+[^+]|^-[^-]' \
-          | grep -vE '^\+\+\+|^\-\-\-' \
-          | grep -vE '^[+-][[:space:]]*version[[:space:]]*=' \
-          | grep -q .; then
+      for t in "${toml_paths[@]+"${toml_paths[@]}"}"; do
+        old_toml=$(mktemp)
+        git show "$pr_merge_base:$t" >"$old_toml" 2>/dev/null || true
+        if python3 - "$old_toml" "$t" <<'PY'
+import sys, tomllib
+
+def load(path):
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return {}
+    for table in (data.get("package"), data.get("workspace", {}).get("package")):
+        if isinstance(table, dict):
+            table.pop("version", None)
+    return data
+
+# Exit 0 only for a real change; an unreadable file is not a dependency edit.
+try:
+    sys.exit(0 if load(sys.argv[1]) != load(sys.argv[2]) else 1)
+except Exception:
+    sys.exit(1)
+PY
+        then
           toml_dep=1
         fi
-      fi
-      # `release` only unlocks Cargo.lock when grokhub-* package versions changed
-      # (xtask bump). Other lock churn still needs `dependencies` or a toml dep edit.
+        rm -f "$old_toml"
+      done
+      # `release` only unlocks a lockfile when grokhub-* package versions
+      # changed (xtask bump). Other lock churn still needs `dependencies` or a
+      # toml dep edit.
       has_lock_hatch=0
       case ",${pr_labels_csv}," in
         *,dependencies,*|*,deps,*) has_lock_hatch=1 ;;
@@ -158,9 +210,9 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       case ",${pr_labels_csv}," in
         *,release,*)
           old_lock=$(mktemp)
-          git show "$pr_merge_base:Cargo.lock" >"$old_lock" 2>/dev/null || true
+          git show "$pr_merge_base:$lock" >"$old_lock" 2>/dev/null || true
           old_gv=$(grokhub_lock_versions "$old_lock")
-          new_gv=$(grokhub_lock_versions "Cargo.lock")
+          new_gv=$(grokhub_lock_versions "$lock")
           rm -f "$old_lock"
           if [[ -n "$old_gv" && -n "$new_gv" && "$old_gv" != "$new_gv" ]]; then
             has_lock_hatch=1
@@ -168,15 +220,13 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
           ;;
       esac
       if (( toml_dep == 0 && has_lock_hatch == 0 )); then
-        echo "ci-guards: Cargo.lock changed without a Cargo.toml dependency edit or the 'dependencies'/'release' (grokhub-* versions) label." >&2
+        echo "ci-guards: $lock changed without a Cargo.toml dependency edit beside it or the 'dependencies'/'release' (grokhub-* versions) label." >&2
         echo "ci-guards: add label 'dependencies' for a lock-only dep bump, 'release' for xtask bump of grokhub-* versions, or include the Cargo.toml dep change." >&2
         fail=1
       else
-        echo "ci-guards: Cargo.lock change allowed (toml_dep=$toml_dep hatch=$has_lock_hatch)"
+        echo "ci-guards: $lock change allowed (toml_dep=$toml_dep hatch=$has_lock_hatch)"
       fi
-    else
-      echo "ci-guards: Cargo.lock unchanged"
-    fi
+    done
 
     # --- 5. Non-release PRs may not touch version lockstep files ---------------
     # Escape hatch: label `release` (promotion / hotfix that runs xtask bump).

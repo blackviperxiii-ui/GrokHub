@@ -1,10 +1,23 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillDetail, SkillPage, SkillRow, SkillSource } from "./api";
+import type {
+  SkillDetail,
+  SkillLibraryPage,
+  SkillPage,
+  SkillRow,
+  SkillSource,
+  SkillsHubHit,
+  SkillsHubInstall,
+  SkillLibraryInstall,
+  VstackStatus,
+} from "./api";
 
 const api = vi.hoisted(() => ({
   getSkills: vi.fn<() => Promise<SkillPage>>(),
+  getSkillLibrary: vi.fn<() => Promise<SkillLibraryPage>>(),
+  installLibrarySkill: vi.fn<(id: string) => Promise<SkillLibraryInstall>>(),
+  installLibraryPack: vi.fn<(packId: string) => Promise<SkillLibraryInstall>>(),
   openSkillFolder:
     vi.fn<(source: SkillSource, name: string) => Promise<void>>(),
   setSkillOn: vi.fn<(name: string, on: boolean) => Promise<SkillPage>>(),
@@ -18,16 +31,23 @@ const api = vi.hoisted(() => ({
       instructions: string,
     ) => Promise<SkillPage>
   >(),
+  searchSkillsHub: vi.fn<(query: string) => Promise<SkillsHubHit[]>>(),
+  installSkillsHub: vi.fn<(hit: SkillsHubHit) => Promise<SkillsHubInstall>>(),
+  vstackSyncStatus: vi.fn(),
+  vstackSyncNow: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
 
 import {
+  filterLibrarySkills,
   filterSkills,
   SKILL_GROUPS,
   SKILL_OFF_NOTE,
   Skills,
   SKILLS_EMPTY,
+  SKILLS_HUB_NOTE,
+  SKILLS_LIBRARY_NOTE,
   SKILLS_NONE_MATCHED,
 } from "./Skills";
 
@@ -89,9 +109,23 @@ describe("filterSkills", () => {
   });
 });
 
+const VSTACK: VstackStatus = {
+  repo: "https://github.com/blackviperxiii-ui/vstack",
+  source: "bundled",
+  version: "1.4.0",
+  tag: "v1.4.0",
+  commit: "11cca98b4a55da3118f51e749ac62faefbc21b3b",
+  lastSyncMs: null,
+  lastCheckMs: null,
+  lastError: null,
+  skillCount: 58,
+};
+
 describe("Skills", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    api.vstackSyncStatus.mockResolvedValue(VSTACK);
+    api.vstackSyncNow.mockResolvedValue(VSTACK);
   });
 
   it("groups skills by source and search filters by name, description and trigger", async () => {
@@ -110,7 +144,7 @@ describe("Skills", () => {
     expect(
       screen.getByRole("list", { name: "Plugin skills" }),
     ).toBeInTheDocument();
-    expect(SKILL_GROUPS.map((g) => g.source)).not.toContain("builtin");
+    expect(SKILL_GROUPS.map((g) => g.label)).toContain("Built-in (vstack)");
     expect(screen.queryByRole("list", { name: "User skills" })).toBeNull();
 
     const search = screen.getByLabelText("Search skills");
@@ -125,6 +159,66 @@ describe("Skills", () => {
     await userEvent.type(search, "zzz");
     expect(names()).toEqual([]);
     expect(screen.getByText(SKILLS_NONE_MATCHED)).toBeInTheDocument();
+  });
+
+  it("lists the vstack library, keeps it read-only, and refreshes after Sync now", async () => {
+    const builtins: SkillRow[] = [
+      ...Array.from({ length: 68 }, (_, i) =>
+        row({
+          name: `skill-${String(i).padStart(2, "0")}`,
+          description: "A vstack skill",
+          trigger: "Use the skill.",
+          source: "builtin",
+          folder: "",
+        }),
+      ),
+      row({
+        name: "viper-mode",
+        description: "Viper mode.",
+        trigger: "Use the viper-mode skill.",
+        source: "builtin",
+        folder: "",
+      }),
+      row({
+        name: "qa-walkthrough",
+        description: "Ship check.",
+        trigger: "Use the qa-walkthrough skill.",
+        source: "builtin",
+        folder: "",
+      }),
+      row({
+        name: "arena",
+        description: "Bake off designs.",
+        trigger: "Use the arena skill.",
+        source: "builtin",
+        folder: "",
+      }),
+    ];
+    const refreshed = builtins.map((item) =>
+      item.name === "arena" ? { ...item, description: "Bake off designs. refreshed" } : item,
+    );
+    api.getSkills.mockResolvedValueOnce({ rows: builtins }).mockResolvedValue({ rows: refreshed });
+    api.vstackSyncNow.mockResolvedValue({
+      ...VSTACK,
+      source: "synced",
+      version: "9.9.9",
+      tag: "v9.9.9",
+      commit: "abcdef1234567890abcd",
+      skillCount: 71,
+    });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    expect(await screen.findByText("bundled v1.4.0 · 11cca98b4a55 · 58 skills")).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Built-in (vstack)" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(71);
+    expect(within(list).getByRole("listitem", { name: "viper-mode" })).toHaveTextContent("Read-only.");
+    expect(within(list).queryByRole("switch")).toBeNull();
+    await userEvent.type(screen.getByLabelText("Search skills"), "arena");
+    expect(names()).toEqual(["arena"]);
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(api.vstackSyncNow).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Bake off designs. refreshed")).toBeInTheDocument();
+    expect(screen.getByText("synced v9.9.9 · abcdef123456 · 71 skills")).toBeInTheDocument();
   });
 
   it("Use hands the skill's trigger to the chat box", async () => {
@@ -312,13 +406,65 @@ describe("Skills", () => {
     expect(screen.queryByRole("form", { name: "Edit deploy-site" })).toBeNull();
   });
 
-  it("the web app gets no New skill and no Edit", async () => {
+  it("the web app gets no New skill, no Edit, and no Skills Hub", async () => {
     api.getSkills.mockResolvedValue({ rows: ROWS });
     render(<Skills onUse={() => {}} onOpenConnectors={() => {}} remote />);
 
     await screen.findByRole("listitem", { name: "deploy-site" });
     expect(screen.queryByRole("button", { name: "New skill" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByLabelText("Skills Hub")).toBeNull();
+  });
+
+  it("Skills Hub search lists hits and Install refreshes the page", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.searchSkillsHub.mockResolvedValue([
+      {
+        source: "clawhub",
+        id: "find-skills",
+        name: "find-skills",
+        description: "Discover skills",
+      },
+    ]);
+    const installed = row({
+      name: "find-skills",
+      description: "Discover skills",
+      trigger: "Use the find-skills skill.",
+    });
+    api.installSkillsHub.mockResolvedValue({
+      page: { rows: [...ROWS, installed] },
+      note: "Installed find-skills. Chat can use it.",
+    });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    expect(await screen.findByText(SKILLS_HUB_NOTE)).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByLabelText("Search Skills Hub"),
+      "find skills",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Search Hub" }));
+    const hub = await screen.findByRole("list", { name: "Skills Hub results" });
+    expect(within(hub).getByRole("listitem", { name: "find-skills" })).toHaveTextContent(
+      "clawhub",
+    );
+    await userEvent.click(
+      within(hub).getByRole("button", { name: "Install" }),
+    );
+    expect(api.installSkillsHub).toHaveBeenCalledWith({
+      source: "clawhub",
+      id: "find-skills",
+      name: "find-skills",
+      description: "Discover skills",
+    });
+    expect(
+      await within(
+        await screen.findByRole("list", { name: "App skills" }),
+      ).findByRole("listitem", { name: "find-skills" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Skills Hub results" })).toBeNull();
+    expect(
+      screen.getByText("Installed find-skills. Chat can use it."),
+    ).toBeInTheDocument();
   });
 
   it("says so when there are none, refreshes, and links to Connectors", async () => {
@@ -336,5 +482,142 @@ describe("Skills", () => {
     expect(api.getSkills).toHaveBeenCalledTimes(2);
     await userEvent.click(screen.getByRole("button", { name: "Connectors" }));
     expect(onOpenConnectors).toHaveBeenCalledTimes(1);
+  });
+
+  it("Skills Library browses by category, previews steps, and installs single skills and the Everyday Life Pack", async () => {
+    const libraryPage: SkillLibraryPage = {
+      packs: [
+        {
+          id: "everyday-life",
+          name: "Everyday Life Pack",
+          description: "Twelve practical workflows.",
+          category: "Everyday Life",
+          total: 2,
+          installed: 0,
+        },
+      ],
+      categories: ["Finance & Shopping", "Home & Meals"],
+      items: [
+        {
+          id: "weekly-meal-plan",
+          name: "Weekly Meal Plan",
+          description: "Build a 7-day meal plan and grouped grocery list.",
+          category: "Home & Meals",
+          tags: ["meals", "groceries"],
+          pack: "everyday-life",
+          trigger: "plan meals for the week",
+          instructions: "1. Gather dietary needs.\n2. Group grocery list.",
+          pitfalls: "Stick to everyday staples.",
+          installed: false,
+        },
+        {
+          id: "monthly-budget-check",
+          name: "Monthly Budget Check",
+          description: "Group expenses into fixed needs and savings targets.",
+          category: "Finance & Shopping",
+          tags: ["budget", "money"],
+          pack: "everyday-life",
+          trigger: "review my monthly budget and spending",
+          instructions: "1. Summarize numbers.\n2. Highlight top cuts.",
+          pitfalls: "No investment advice.",
+          installed: false,
+        },
+      ],
+    };
+
+    expect(filterLibrarySkills(libraryPage.items, "Home & Meals", "").map((i) => i.id)).toEqual([
+      "weekly-meal-plan",
+    ]);
+    expect(filterLibrarySkills(libraryPage.items, "", "budget").map((i) => i.id)).toEqual([
+      "monthly-budget-check",
+    ]);
+
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    api.getSkillLibrary.mockResolvedValue(libraryPage);
+
+    const installedMealRow = row({
+      name: "Weekly Meal Plan",
+      description: "Build a 7-day meal plan and grouped grocery list.",
+      trigger: "plan meals for the week",
+      category: "Home & Meals",
+      pack: "everyday-life",
+    });
+    const afterOneLib: SkillLibraryPage = {
+      ...libraryPage,
+      packs: [{ ...libraryPage.packs[0], installed: 1 }],
+      items: [
+        { ...libraryPage.items[0], installed: true },
+        libraryPage.items[1],
+      ],
+    };
+    api.installLibrarySkill.mockResolvedValue({
+      page: { rows: [...ROWS, installedMealRow] },
+      library: afterOneLib,
+      note: "Installed Weekly Meal Plan. Chat can use it.",
+    });
+
+    const installedBudgetRow = row({
+      name: "Monthly Budget Check",
+      description: "Group expenses into fixed needs and savings targets.",
+      trigger: "review my monthly budget and spending",
+      category: "Finance & Shopping",
+      pack: "everyday-life",
+    });
+    const afterPackLib: SkillLibraryPage = {
+      ...libraryPage,
+      packs: [{ ...libraryPage.packs[0], installed: 2 }],
+      items: libraryPage.items.map((item) => ({ ...item, installed: true })),
+    };
+    api.installLibraryPack.mockResolvedValue({
+      page: { rows: [...ROWS, installedMealRow, installedBudgetRow] },
+      library: afterPackLib,
+      note: "Installed 1 skills from Everyday Life Pack.",
+    });
+
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} />);
+
+    const lib = await screen.findByRole("region", { name: "Skills Library" });
+    expect(within(lib).getByText(SKILLS_LIBRARY_NOTE)).toBeInTheDocument();
+    expect(within(lib).getByText(/0 of 2 installed/)).toBeInTheDocument();
+
+    // Filter by category pill
+    await userEvent.click(within(lib).getByRole("button", { name: "Home & Meals" }));
+    expect(within(lib).getByRole("article", { name: "Weekly Meal Plan" })).toBeInTheDocument();
+    expect(within(lib).queryByRole("article", { name: "Monthly Budget Check" })).toBeNull();
+
+    // Reset to All and search
+    await userEvent.click(within(lib).getByRole("button", { name: "All" }));
+    await userEvent.type(within(lib).getByLabelText("Search Skills Library"), "grocery");
+    expect(within(lib).getByRole("article", { name: "Weekly Meal Plan" })).toBeInTheDocument();
+    expect(within(lib).queryByRole("article", { name: "Monthly Budget Check" })).toBeNull();
+    await userEvent.clear(within(lib).getByLabelText("Search Skills Library"));
+
+    // Preview steps and pitfalls
+    const mealCard = within(lib).getByRole("article", { name: "Weekly Meal Plan" });
+    await userEvent.click(within(mealCard).getByRole("button", { name: "Preview" }));
+    expect(within(mealCard).getByText(/Stick to everyday staples/)).toBeInTheDocument();
+
+    // Install single skill
+    await userEvent.click(within(mealCard).getByRole("button", { name: "Install" }));
+    expect(api.installLibrarySkill).toHaveBeenCalledWith("weekly-meal-plan");
+    expect(
+      await screen.findByText("Installed Weekly Meal Plan. Chat can use it."),
+    ).toBeInTheDocument();
+    expect(within(lib).getByText(/1 of 2 installed/)).toBeInTheDocument();
+
+    // Install rest of pack
+    await userEvent.click(within(lib).getByRole("button", { name: "Install pack" }));
+    expect(api.installLibraryPack).toHaveBeenCalledWith("everyday-life");
+    expect(
+      await within(lib).findByRole("button", { name: "Pack installed" }),
+    ).toBeDisabled();
+  });
+
+  it("hides Skills Library in remote web mode", async () => {
+    api.getSkills.mockResolvedValue({ rows: ROWS });
+    render(<Skills onUse={() => {}} onOpenConnectors={() => {}} remote />);
+    await screen.findByRole("listitem", { name: "deploy-site" });
+    expect(screen.queryByRole("region", { name: "Skills Library" })).toBeNull();
+    expect(api.getSkillLibrary).not.toHaveBeenCalled();
   });
 });

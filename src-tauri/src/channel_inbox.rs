@@ -41,18 +41,12 @@ pub struct ReplyTo {
 /// webhook). `None` for a record this app can't read.
 pub fn prompt_for(record: &Value) -> Option<(String, Option<ReplyTo>)> {
     let field = |k: &str| record.get(k).and_then(Value::as_str).unwrap_or_default();
+    // Only a kind with an adapter in this build can carry an answer back.
+    let live = ChannelKind::from_key(field("channel")).filter(|k| k.spec().live);
     match field("channel") {
-        kind @ ("telegram" | "discord") => {
-            let channel = if kind == "telegram" {
-                ChannelKind::Telegram
-            } else {
-                ChannelKind::Discord
-            };
-            let app = if kind == "telegram" {
-                "Telegram"
-            } else {
-                "Discord"
-            };
+        _ if live.is_some() => {
+            let channel = live?;
+            let app = channel.name();
             let text = field("text").trim();
             let to = field("replyTo");
             if text.is_empty() || to.is_empty() {
@@ -349,6 +343,33 @@ mod tests {
         );
         assert_eq!(std::fs::read_dir(working_dir(&dir)).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_message_from_a_kind_with_no_adapter_is_not_read() {
+        let record = |channel: &str| {
+            json!({
+                "channel": channel,
+                "sender": "1001",
+                "label": "Sam",
+                "replyTo": "1001",
+                "text": "hello",
+                "receivedMs": 1,
+            })
+        };
+        // Every live kind in KINDS reads into a prompt; unknown keys do not.
+        for (key, on, kind) in [
+            ("discord", "on Discord", ChannelKind::Discord),
+            ("slack", "on Slack", ChannelKind::Slack),
+            ("signal", "on Signal", ChannelKind::Signal),
+            ("email", "on Email", ChannelKind::Email),
+            ("telegram", "on Telegram", ChannelKind::Telegram),
+        ] {
+            let (prompt, to) = prompt_for(&record(key)).expect(key);
+            assert!(prompt.contains(on), "{key}: {prompt}");
+            assert_eq!(to.expect(key).channel, kind, "{key}");
+        }
+        assert_eq!(prompt_for(&record("carrier-pigeon")), None);
     }
 
     #[test]

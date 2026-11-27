@@ -13,19 +13,25 @@ on:
     branches: [beta]
   pull_request_review:
     types: [submitted, dismissed]
+  # CI's last job calls this once the PR's gate finished, so a PR that was
+  # already green when auto-merge was asked for still merges.
+  workflow_call:
 permissions: {}
-concurrency:
-  group: auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   auto-merge:
     # Bot reviews (Copilot) only comment; their runs need approval and fail.
+    # Concurrency is on the job, not the workflow: a skipped bot-review run
+    # still joins a workflow-level group and cancels a ready_for_review run
+    # before auto-merge can enable (#2189). A skipped job holds no group.
     if: >-
       github.event.pull_request.base.ref == 'beta' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event_name != 'pull_request_review' || github.event.review.user.type != 'Bot')
+    concurrency:
+      group: auto-merge-${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: write
@@ -61,7 +67,36 @@ jobs:
               // PR, not in beta's history.
               .filter(l => !/^\s*(_Requested by\b|<!--.*-->\s*$)/.test(l) && !/claude\.ai\/code\//.test(l))
               .join('\n').replace(/\n{3,}/g, '\n\n').trim();
-            await github.graphql(`mutation($id:ID!,$head:GitObjectID!,$title:String!,$body:String!){
-              enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH,expectedHeadOid:$head,commitHeadline:$title,commitBody:$body}){clientMutationId}}`,
-              { id: pr.node_id, head: pr.head.sha, title: `${pr.title} (#${number})`, body });
-            core.info('squash auto-merge enabled');
+            const title = `${pr.title} (#${number})`;
+            try {
+              await github.graphql(`mutation($id:ID!,$head:GitObjectID!,$title:String!,$body:String!){
+                enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH,expectedHeadOid:$head,commitHeadline:$title,commitBody:$body}){clientMutationId}}`,
+                { id: pr.node_id, head: pr.head.sha, title, body });
+              return core.info('squash auto-merge enabled');
+            } catch (e) {
+              // GitHub refuses auto-merge on a PR that can already merge
+              // (clean) or whose only open items are non-required checks
+              // (unstable). Merge it here only when every other check on the
+              // head commit finished green.
+              if (!/(clean|unstable) status/i.test(e.message || '')) throw e;
+              core.info('auto-merge refused: ' + e.message);
+            }
+            // Checks outside CI (an approval bot, say) can still be running
+            // here, and nothing else re-runs this job once they finish, so
+            // wait for them a bounded while (20 x 30s) instead of giving up.
+            for (let tries = 0; ; tries++) {
+              const runs = await github.paginate(github.rest.checks.listForRef, { owner, repo, ref: pr.head.sha, per_page: 100 });
+              const others = runs.filter(r => !/auto-merge/i.test(r.name));
+              const waiting = others.filter(r => r.status !== 'completed').map(r => r.name);
+              const red = others.filter(r => r.status === 'completed' && !['success', 'skipped', 'neutral'].includes(r.conclusion)).map(r => r.name);
+              const { data: st } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: pr.head.sha });
+              if (red.length || st.state === 'failure' || st.state === 'error') return core.info('not merging, red: ' + red.join(', ') + ' status=' + st.state);
+              if (!waiting.length && !(st.total_count && st.state === 'pending')) break;
+              if (tries >= 19) return core.info('not merging yet, still waiting on: ' + waiting.join(', '));
+              core.info('waiting on: ' + waiting.join(', '));
+              await new Promise(r => setTimeout(r, 30000));
+            }
+            const { data: now } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            if (now.state !== 'open' || now.draft || now.head.sha !== pr.head.sha) return core.info('PR changed while waiting; not merging');
+            await github.rest.pulls.merge({ owner, repo, pull_number: number, merge_method: 'squash', sha: pr.head.sha, commit_title: title, commit_message: body });
+            core.info('squash merged (already green)');

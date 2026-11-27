@@ -58,41 +58,82 @@ fn the_manifest_comes_only_from_this_repos_releases() {
 
 #[test]
 fn the_appimage_the_deb_the_mac_app_and_the_windows_installer_update_themselves() {
+    let dir = std::env::temp_dir().join(format!("shell-update-updatable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let clone = dir.join("my-clone");
+    std::fs::create_dir_all(&clone).expect("clone");
+
     let bin = Path::new("/home/user/.local/bin/grokhub-shell");
     let usr = Path::new("/usr/bin/grokhub-shell");
-    assert!(!updatable("linux", None, false, bin));
-    assert!(!updatable("linux", Some(""), false, bin));
+    // Prebuilt user install (no clone receipt): AppImage path, including Arch.
+    assert!(updatable("linux", None, false, bin, &dir));
+    assert!(updatable("linux", Some(""), false, bin, &dir));
     assert!(updatable(
         "linux",
         Some("/home/user/Apps/loadout.AppImage"),
         false,
-        bin
+        bin,
+        &dir
     ));
     // The .deb build, where the package put it.
-    assert!(updatable("linux", None, true, usr));
-    // A .deb-stamped binary copied somewhere else isn't the package's.
-    assert!(!updatable("linux", None, true, bin));
+    assert!(updatable("linux", None, true, usr, &dir));
+    // A .deb-stamped binary copied somewhere else isn't the package's unless
+    // it's a prebuilt user install (no clone receipt).
+    assert!(updatable("linux", None, true, bin, &dir));
     // An AUR or clone build under /usr isn't stamped .deb.
-    assert!(!updatable("linux", None, false, usr));
+    assert!(!updatable("linux", None, false, usr, &dir));
+    // A from-source user install keeps the clone receipt and does not
+    // replace itself with the AppImage.
+    std::fs::write(dir.join("source"), format!("{}\n", clone.display())).expect("receipt");
+    assert!(!updatable("linux", None, false, bin, &dir));
+    assert!(!updatable("linux", Some(""), false, bin, &dir));
+    // $APPIMAGE still wins even with a receipt (the running file is the AppImage).
+    assert!(updatable(
+        "linux",
+        Some("/home/user/.local/bin/grokhub-shell"),
+        false,
+        bin,
+        &dir
+    ));
+    assert_eq!(
+        linux_manifest_target(None, bin, &dir),
+        None,
+        "clone install must not force the AppImage target"
+    );
+    let _ = std::fs::remove_file(dir.join("source"));
+    assert_eq!(
+        linux_manifest_target(None, bin, &dir),
+        Some("linux-x86_64-appimage")
+    );
+    assert_eq!(
+        linux_manifest_target(Some("/home/user/Apps/loadout.AppImage"), bin, &dir),
+        Some("linux-x86_64-appimage")
+    );
+    assert_eq!(linux_manifest_target(None, usr, &dir), None);
     assert!(updatable(
         "windows",
         None,
         false,
-        Path::new(r"C:\Users\user\AppData\Local\GrokHub Shell\grokhub-shell.exe")
+        Path::new(r"C:\Users\user\AppData\Local\GrokHub Shell\grokhub-shell.exe"),
+        &dir
     ));
     assert!(updatable(
         "macos",
         None,
         false,
-        Path::new("/Applications/GrokHub Shell.app/Contents/MacOS/grokhub-shell")
+        Path::new("/Applications/GrokHub Shell.app/Contents/MacOS/grokhub-shell"),
+        &dir
     ));
     assert!(!updatable(
         "macos",
         None,
         false,
-        Path::new("/Users/user/src/target/release/grokhub-shell")
+        Path::new("/Users/user/src/target/release/grokhub-shell"),
+        &dir
     ));
-    assert!(!updatable("android", None, false, bin));
+    assert!(!updatable("android", None, false, bin, &dir));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

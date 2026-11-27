@@ -1687,3 +1687,76 @@ fn keep_loaded_a_forced_file_a_low_battery_and_a_game_keep_their_model_for_a_pic
         "Running a model that can see the picture your pick can't. Your pick comes back once the chat is quiet."
     );
 }
+
+#[test]
+fn explicit_adult_specialist_never_sticks_for_code_file_or_casual_turns() {
+    const QWEN_CODER: &str = "qwen3.6-35b-a3b-heretic-q4_k_m";
+    const HERMES_ADULT: &str = "nous-hermes4-14b-abliterated-q4_k_m";
+    let qwen = file(QWEN_CODER);
+    let hermes = file(HERMES_ADULT);
+    let on_disk = vec![
+        (m(QWEN_CODER), qwen.clone()),
+        (m(HERMES_ADULT), hermes.clone()),
+    ];
+
+    // Turn 1 (explicit): swaps immediately from Qwen3.6 35B to Hermes 4 14B.
+    let turn1 = Now {
+        loaded: Some((&qwen, None)),
+        secs_since_swap: 10,
+        task: Some(TaskKind::Adult),
+        ..now(&qwen, &on_disk)
+    };
+    assert_eq!(
+        plan(turn1),
+        Plan::Load {
+            model: hermes.clone(),
+            stand_in: Some(StandIn::BestFor(TaskKind::Adult)),
+        }
+    );
+
+    // Turn 2 (code): leaves Hermes 4 14B immediately for Qwen3.6 35B, even inside cooldown.
+    let turn2 = Now {
+        loaded: Some((&hermes, Some(StandIn::BestFor(TaskKind::Adult)))),
+        secs_since_swap: 10,
+        task: Some(TaskKind::Code),
+        ..now(&qwen, &on_disk)
+    };
+    assert_eq!(
+        plan(turn2),
+        Plan::Load {
+            model: qwen.clone(),
+            stand_in: None,
+        }
+    );
+
+    // Turn 3 (file task -> TaskKind::Code): stays on Qwen3.6 35B.
+    let turn3 = Now {
+        loaded: Some((&qwen, None)),
+        secs_since_swap: 10,
+        task: Some(TaskKind::Code),
+        ..now(&qwen, &on_disk)
+    };
+    assert_eq!(plan(turn3), Plan::Keep);
+
+    // Turn 4 (casual): also leaves Hermes immediately if Hermes was running, and stays on home otherwise.
+    let casual_after_hermes = Now {
+        loaded: Some((&hermes, Some(StandIn::BestFor(TaskKind::Adult)))),
+        secs_since_swap: 10,
+        task: Some(TaskKind::Chat),
+        ..now(&qwen, &on_disk)
+    };
+    assert_eq!(
+        plan(casual_after_hermes),
+        Plan::Load {
+            model: qwen.clone(),
+            stand_in: None,
+        }
+    );
+    let turn4 = Now {
+        loaded: Some((&qwen, None)),
+        secs_since_swap: 10,
+        task: Some(TaskKind::Chat),
+        ..now(&qwen, &on_disk)
+    };
+    assert_eq!(plan(turn4), Plan::Keep);
+}

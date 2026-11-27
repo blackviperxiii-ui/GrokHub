@@ -112,7 +112,7 @@ pub fn probe_ollama_num_ctx(prefer: Option<&str>, ceiling: Option<u64>) -> Optio
     // (a model name only, no user data); loopback goes with no log line.
     let guard = |url: &str| {
         crate::harness::guard_quiet(
-            &crate::perm::config_dir(),
+            &crate::perm::app_config_dir(),
             &crate::harness::EgressReq::new(url, &[]),
         )
     };
@@ -466,7 +466,7 @@ fn production_assets_present() -> bool {
 /// The cabin's config folder: `GROKHUB_CONFIG`, else the platform default.
 /// Reading only the env var left the route off in every normal launch.
 fn config_dir() -> Option<PathBuf> {
-    Some(crate::perm::config_dir())
+    Some(crate::perm::app_config_dir())
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -548,9 +548,33 @@ pub fn caps() -> TierCaps {
 /// Remember that the last on-device answer failed VerifyGate (escalate next online turn).
 static LOCAL_VERIFY_FAILED: AtomicBool = AtomicBool::new(false);
 
+fn verify_reason_slot() -> &'static Mutex<Option<String>> {
+    static S: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
 /// Cabin / live path: set after a local turn's verify outcome.
 pub fn note_local_verify_failed(failed: bool) {
     LOCAL_VERIFY_FAILED.store(failed, Ordering::SeqCst);
+    if !failed {
+        if let Ok(mut slot) = verify_reason_slot().lock() {
+            *slot = None;
+        }
+    }
+}
+
+/// Record a failed local verification together with the reason shown on escalation.
+pub fn note_local_verify_failed_with_reason(reason: impl Into<String>) {
+    let trimmed = reason.into().trim().to_string();
+    if let Ok(mut slot) = verify_reason_slot().lock() {
+        *slot = (!trimmed.is_empty()).then_some(trimmed);
+    }
+    LOCAL_VERIFY_FAILED.store(true, Ordering::SeqCst);
+}
+
+/// Stored verification failure reason, if any.
+pub fn local_verify_reason() -> Option<String> {
+    verify_reason_slot().lock().ok()?.clone()
 }
 
 pub fn local_verify_failed() -> bool {
@@ -706,9 +730,30 @@ pub fn too_hard_for_local(class: &str, ctx_tokens: u64, d: f64) -> bool {
         || (!fits_by_trimming(class) && ctx_tokens > ctx_cap().saturating_mul(3) / 4)
 }
 
+/// `id` may serve a local-first coding turn within the live tier's context cap.
+pub fn admits_coding(gate: &LocalGate, id: &str, ctx_tokens: u64) -> bool {
+    is_local(id)
+        && id.trim() == gate.tier
+        && gate.enabled
+        && !gate.hard_tool
+        && ctx_tokens <= ctx_cap()
+}
+
 /// Quiet note when escalating from local to cloud (names both models).
 pub fn escalate_note(local_model: &str, cloud_model: &str) -> String {
     format!("Switched from {local_model} (local) to {cloud_model}: the on-device answer failed a check.")
+}
+
+/// Escalation note including the specific check or test failure reason when available.
+pub fn escalate_note_with_reason(
+    local_model: &str,
+    cloud_model: &str,
+    reason: Option<&str>,
+) -> String {
+    match reason.map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => format!("Switched from {local_model} (local) to {cloud_model}: {r}."),
+        None => escalate_note(local_model, cloud_model),
+    }
 }
 
 /// The registry source for local tiers. Lists nothing (a no-op) while the flag is off.
@@ -814,6 +859,14 @@ pub trait LocalRuntime: Send + Sync {
         false
     }
 
+    /// The model this runtime will answer with is already in memory.
+    /// A real server reports true; the sidecar decides a cold start or a
+    /// model switch. A test runtime reports false until its first chat, and
+    /// again after it switches models, so the loading note shows once.
+    fn warmed(&self) -> bool {
+        true
+    }
+
     /// Chat with function tools (cabin web_search / web_fetch). Default falls
     /// back to plain [`chat_stream`] and returns no tool calls.
     fn chat_tools(
@@ -854,18 +907,36 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     super::local_http::from_global_sidecar(busy)
 }
 
-/// [`runtime`], but only while the model is already loaded (a test fake, or a
-/// running sidecar). It never starts or restarts the sidecar, so it returns at
-/// once; a cold start could not answer a short call in time anyway.
+/// [`runtime`], but only while the model is already loaded (a warmed test
+/// fake, or a sidecar that will answer this turn without a start). It never
+/// starts or restarts the sidecar, so it returns at once; a cold start could
+/// not answer a short call in time anyway.
 pub fn warm_runtime() -> Option<Arc<dyn LocalRuntime>> {
     if !available() {
         return None;
     }
     if let Some(rt) = test_runtime() {
-        return Some(rt);
+        return rt.warmed().then_some(rt);
+    }
+    if !super::local_sidecar::answers_now() {
+        return None;
     }
     super::local_sidecar::global_endpoint()?;
     super::local_http::from_global_sidecar(super::local_sidecar::busy())
+}
+
+/// The chat should say [`LOCAL_LOADING_NOTE`]: this turn will cold-start the
+/// on-device server, or switch the model file it is serving. A server already
+/// serving that file stays up between turns and the note stays quiet. Idle
+/// unload still uses the timeout from Settings.
+pub(crate) fn needs_loading_note() -> bool {
+    if let Some(rt) = test_runtime() {
+        return !rt.warmed();
+    }
+    let Some(dir) = config_dir() else {
+        return true;
+    };
+    super::local_sidecar::will_start_or_switch(&dir)
 }
 
 /// Start the sidecar if needed; the guard marks this caller's request in
@@ -970,6 +1041,24 @@ pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput
     serve_within(class, text, HEAVY_WAIT, cancel)
 }
 
+/// The task kind a device turn picks its model for. A typed chat turn
+/// reads its own kind, as the router's pick did: a debugging question
+/// typed in chat is coding work for the model on disk too, not everyday
+/// chat.
+pub(crate) fn turn_kind(class: &str, tokens: u64, text: &str, picture: bool) -> Option<TaskKind> {
+    let lane = if class == super::ask::CHAT_CLASS && !text.trim().is_empty() {
+        let cx = super::ask::AskContext {
+            ctx_tokens: tokens,
+            needs_image: picture,
+            ..super::ask::AskContext::default()
+        };
+        super::ask::read(text, &cx).lane()
+    } else {
+        class
+    };
+    super::local_task::kind(lane, tokens, text)
+}
+
 /// Chat path that keeps function tools (cabin `web_search` / `web_fetch`) so the
 /// agent loop can run them and round-trip results. Background classes stay
 /// text-only via [`serve`].
@@ -977,6 +1066,17 @@ pub fn serve_request(
     class: &str,
     req: &crate::client::ResponsesRequest,
     cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
+    serve_request_noting(class, req, cancel, &mut || {})
+}
+
+/// [`serve_request`] that tells the chat, before the wait, when this turn
+/// will cold-start the server or switch its model file.
+pub(super) fn serve_request_noting(
+    class: &str,
+    req: &crate::client::ResponsesRequest,
+    cancel: &CancelToken,
+    on_load: &mut dyn FnMut(),
 ) -> Result<TurnOutput, ClientError> {
     let (text, picture) = super::live::last_user_text(&req.input);
     let class_norm = class_row(class).map(|r| r.class).unwrap_or(class);
@@ -988,11 +1088,11 @@ pub fn serve_request(
     let tokens = (text.len() as u64).div_ceil(4);
     let _need =
         super::local_scale::NeedGuard::set(super::local_scale::need(class_norm, tokens, &text));
-    let kind = super::local_task::kind(class_norm, tokens, &text);
+    let kind = turn_kind(class_norm, tokens, &text, picture);
     let _kind = super::local_task::KindGuard::set(kind);
     // The chat's tier: the person's words this turn, else the chat's setting.
     // The router decides the model from it; the model never picks it.
-    let config_dir = crate::perm::config_dir();
+    let config_dir = crate::perm::app_config_dir();
     let helper = super::local_scale::helper_turn(class, &req.conversation_id);
     let care_first = crate::brain::care_first_enabled(&config_dir);
     let mut standing = super::local_pin::get(&config_dir, &req.conversation_id);
@@ -1030,6 +1130,11 @@ pub fn serve_request(
             Some(_) => {}
         }
     }
+    // After the turn's model choice is set, so a switch is the same one the
+    // load is about to make. The note is sent before that load waits.
+    if needs_loading_note() {
+        on_load();
+    }
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(no_runtime_msg()));
     };
@@ -1039,7 +1144,7 @@ pub fn serve_request(
     super::identity::stamp(
         &mut req.input,
         live_tier(),
-        super::local_sidecar::model_name(&crate::perm::config_dir()).as_deref(),
+        super::local_sidecar::model_name(&crate::perm::app_config_dir()).as_deref(),
         req.effort.as_deref(),
     );
     // A server without its vision projector (`--mmproj`) refuses any
@@ -1055,6 +1160,12 @@ pub fn serve_request(
     let n_ctx = rt
         .context_tokens()
         .unwrap_or_else(|| super::local_perf::current_defaults().ctx);
+    // Order 27: a local coding turn keeps only code tools and a lean prompt
+    // before the window fit (frontier / Hangout chat-only never reach here).
+    if crate::tools::coding::wants_on_device(&req.conversation_id) {
+        crate::tools::coding::filter_tools(&mut req.tools);
+        crate::tools::coding::apply_lean_prompt(&mut req.input);
+    }
     // A picture ask, or a computer that can draw, keeps the picture tool
     // even on a small window, and the device is told it can draw.
     let can_draw = super::local_image::can_draw_here();
@@ -1110,7 +1221,7 @@ fn note_task_reply(kind: Option<TaskKind>, out: &Result<TurnOutput, String>, can
         Ok(o) => super::local_task::answered(&o.text, !o.calls.is_empty()),
         Err(_) => false,
     };
-    super::local_task::note_reply(&crate::perm::config_dir(), &model, kind, ok);
+    super::local_task::note_reply(&crate::perm::app_config_dir(), &model, kind, ok);
 }
 
 pub(crate) fn serve_within(

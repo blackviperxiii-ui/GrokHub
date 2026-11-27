@@ -80,7 +80,20 @@ register_slash! {
         names: ["/learn"],
         effect: Local,
         sample: "/learn",
-        parse: |_rest| Some(Slash::LearnReflect),
+        parse: |rest| match crate::learn_skill::parse_learn_rest(rest) {
+            Ok(crate::learn_skill::LearnSource::Reflect) => Some(Slash::LearnReflect),
+            Ok(crate::learn_skill::LearnSource::Save(n)) => {
+                Some(Slash::LearnSkill(format!("--save {n}")))
+            }
+            Ok(crate::learn_skill::LearnSource::Chat) => {
+                Some(Slash::LearnSkill("chat".into()))
+            }
+            Ok(crate::learn_skill::LearnSource::Url(u)) => Some(Slash::LearnSkill(u)),
+            Ok(crate::learn_skill::LearnSource::Path(p)) => {
+                Some(Slash::LearnSkill(p.to_string_lossy().into_owned()))
+            }
+            Err(_) => Some(Slash::LearnSkill(rest.to_string())),
+        },
     }
 }
 

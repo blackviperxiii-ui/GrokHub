@@ -5,6 +5,7 @@ import {
   listConnectors,
   restartConnector,
   setConnectorEnabled,
+  setConnectorToolEnabled,
   signInConnector,
   signOutConnector,
   type ConnectorRow,
@@ -15,7 +16,7 @@ import { Channels } from "./Channels";
 import { ConnectorAdd } from "./ConnectorAdd";
 import { Github } from "./Github";
 import { Hooks } from "./Hooks";
-import { ConfirmRow, StatusLine, useNote } from "./ui";
+import { ConfirmRow, PageHead, StatusLine, useNote } from "./ui";
 
 export const DISCONNECT_DETAIL =
   "Its entry leaves your connections, and its sign-in and saved token are deleted.";
@@ -27,6 +28,8 @@ export const REMOTE_EMPTY = `No connectors yet. Add them in ${PRODUCT_NAME} on y
 export const SIGN_IN_NOTE = "Needs a sign-in.";
 
 export const REMOTE_NOTE = `Add, sign in and switch connectors in ${PRODUCT_NAME} on your computer.`;
+
+export const PAGE_TITLE = "MCPs & Connectors";
 
 export function statusLine(row: ConnectorRow): string {
   switch (row.status) {
@@ -84,7 +87,8 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
   }
 
   return (
-    <section className="connectors" aria-label="Connectors">
+    <section className="connectors" aria-label={PAGE_TITLE}>
+      <PageHead title={PAGE_TITLE} />
       <div className="card-buttons">
         <button type="button" disabled={busy !== null || !rows?.length} onClick={() => void check()}>
           {busy === "*" ? "Checking…" : "Check all"}
@@ -101,7 +105,8 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
         )}
       </div>
       <p className="note">
-        These are the MCP servers in mcp.json. Chat uses the ones that are on.
+        Installed MCP servers and connectors. Chat uses the ones that are on;
+        each tool has its own switch.
         {remote ? ` ${REMOTE_NOTE}` : ""}
       </p>
       {adding && !remote && (
@@ -139,6 +144,28 @@ export function Connectors({ remote = false }: { remote?: boolean }) {
             {row.account && <div className="card-status">{row.account}</div>}
             {row.needsSignIn && <div className="card-status">{SIGN_IN_NOTE}</div>}
             {row.error && <div className="card-health">{row.error}</div>}
+            {!remote && row.toolRows.length > 0 && (
+              <ul className="connector-tools" aria-label={`${row.name} tools`}>
+                {row.toolRows.map((tool) => (
+                  <li key={tool.name}>
+                    <label className="switch">
+                      <span>{tool.name}</span>
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        aria-label={`${row.name} ${tool.name} on`}
+                        checked={tool.enabled}
+                        disabled={busy !== null || !row.enabled}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          void act(row.name, () => setConnectorToolEnabled(row.name, tool.name, on));
+                        }}
+                      />
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
             {asking === row.name ? (
               <ConfirmRow
                 question={`Disconnect ${row.name}?`}

@@ -226,10 +226,28 @@ pub fn maybe_compact_tool_output(
         Err(_) => (extractive_tool_output_summary(output), Usage::default()),
     };
     let summary = keep_fenced(output, tool_name, summary);
+    // How a command, a background task or a helper ended stays right after
+    // the header, in the tool's own words, for the ledger and the end-of-turn
+    // checks. They read a command's first line and a read's lines up to the
+    // first other one, so a line of ours stops the summary posing as either.
+    let mut head = own_head(tool_name, output);
+    if tool_name == "get_command_or_subagent_output"
+        || (tool_name == "run_terminal_command" && head.is_empty())
+    {
+        head.push(SUMMARY_LEAD);
+    }
+    let summary = if head.is_empty() {
+        summary
+    } else {
+        format!("{}\n{summary}", head.join("\n"))
+    };
     let body =
         format_tool_output_compact_message(tool_name, &handle, &rel_path, &summary, output.len());
     Ok(ToolOutputCompactOutcome::Replaced { text: body, usage })
 }
+
+/// The line of ours above a compacted command's or read's summary.
+const SUMMARY_LEAD: &str = "Summary of the full output:";
 
 /// Load a spooled tool body by handle (same conversation id used when it was written).
 pub fn read_spooled_tool_output(
@@ -1840,10 +1858,10 @@ pub fn recent_tail(items: &[InputItem]) -> Vec<InputItem> {
         .iter()
         .rposition(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
         .expect("last_user_turn index");
+    // The ask stays whatever it costs (screenshots, a pasted log): without it
+    // the model answers a turn it can no longer read. Only the tool results
+    // after it share what is left of the budget.
     let user_cost = estimate_input_tokens(std::slice::from_ref(user));
-    if user_cost > RECENT_TAIL_TOKEN_BUDGET {
-        return Vec::new();
-    }
     let mut out = vec![user.clone()];
     let remain = RECENT_TAIL_TOKEN_BUDGET.saturating_sub(user_cost);
     out.extend(take_tool_suffix(&items[user_at + 1..], remain));
@@ -2242,6 +2260,9 @@ fn neutralize_compaction_control_tokens(text: &str) -> String {
 
 #[path = "compact_ledger.rs"]
 mod ledger;
+use ledger::own_head;
+pub(crate) use ledger::{head_line, outside_fences, read_head};
+pub(crate) use ledger::{shell_status, NOT_KEPT};
 
 #[path = "compact_bg.rs"]
 pub mod bg;
@@ -3018,6 +3039,43 @@ mod tests {
     }
 
     #[test]
+    fn an_ask_over_the_tail_budget_is_still_kept_verbatim() {
+        // Six screenshots and the question about them.
+        let mut content = vec![ContentPart::InputText(
+            "why does the dock flicker in these?".into(),
+        )];
+        content
+            .extend((0..6).map(|_| ContentPart::InputImage("data:image/png;base64,QQ==".into())));
+        let ask = InputItem::Message {
+            role: "user".into(),
+            content,
+        };
+        assert!(estimate_input_tokens(std::slice::from_ref(&ask)) > RECENT_TAIL_TOKEN_BUDGET);
+        let history = vec![
+            text_message("user", "OLD_TOPIC"),
+            text_message("assistant", "working"),
+            ask.clone(),
+            InputItem::FunctionCall {
+                call_id: "c1".into(),
+                name: "read_file".into(),
+                arguments: r#"{"path":"src/a.rs"}"#.into(),
+            },
+            InputItem::FunctionCallOutput {
+                call_id: "c1".into(),
+                output: "fn main() {}".into(),
+            },
+        ];
+        let compacted = build_compacted_history(&history, "summary body", &[]);
+        assert_eq!(compacted.last(), Some(&ask));
+        assert_eq!(compacted.iter().filter(|item| **item == ask).count(), 1);
+        // No budget is left for the tool results after it.
+        assert!(!compacted.iter().any(|i| matches!(
+            i,
+            InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. }
+        )));
+    }
+
+    #[test]
     fn take_tool_suffix_keeps_parallel_batch_calls_and_outputs_as_one_unit() {
         let call = |id: &str| InputItem::FunctionCall {
             call_id: id.into(),
@@ -3490,6 +3548,171 @@ mod tests {
                 bytes = fenced.len(),
             )
         );
+        set_tool_output_compact_for_tests(None);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compacted_handover_and_background_read_keep_the_task_and_how_it_ended() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+            enabled: true,
+            min_bytes: 50,
+        }));
+        let compact = |tool: &str, output: &str, summary: &str| {
+            let script = Script {
+                turns: Mutex::new(vec![Ok(TurnOutput {
+                    text: summary.into(),
+                    ..Default::default()
+                })]),
+                seen: Mutex::new(Vec::new()),
+            };
+            let replaced = maybe_compact_tool_output(
+                &dir,
+                &dir,
+                "sess",
+                &script,
+                &CancelToken::new(),
+                "test-model",
+                None,
+                "call-5",
+                tool,
+                output,
+            )
+            .expect("replaced");
+            let ToolOutputCompactOutcome::Replaced { text, .. } = replaced else {
+                panic!("expected replacement");
+            };
+            let body = text.split("\n</tool_output_compact>").next().unwrap_or("");
+            body.split_once('\n')
+                .map(|(_, kept)| kept.to_string())
+                .unwrap_or_default()
+        };
+        let handover = format!(
+            "still running after 120000ms: moved to the background as task t1\n{}",
+            "Compiling app\n".repeat(10)
+        );
+        let kept = compact(
+            "run_terminal_command",
+            &handover,
+            "exit 0\nStill compiling.",
+        );
+        assert_eq!(
+            kept,
+            "still running after 120000ms: moved to the background as task t1\nexit 0\nStill compiling."
+        );
+        let read = format!(
+            "status: exited\nexit_code: 0\noutput:\n{}",
+            crate::tools::fence::fence("background-task", &"test a ... ok\n".repeat(10))
+        );
+        let read_kept = compact(
+            "get_command_or_subagent_output",
+            &read,
+            "All 10 tests passed.",
+        );
+        assert!(
+            read_kept.starts_with(
+                "status: exited\nexit_code: 0\nSummary of the full output:\n<<<UNTRUSTED source=get_command_or_subagent_output nonce="
+            ),
+            "{read_kept}"
+        );
+        let several = format!(
+            "t2:\nstatus: exited\nexit_code: 1\noutput:\n{}\n\nt3:\nstatus: running",
+            crate::tools::fence::fence("background-task", &"1 failed\n".repeat(10))
+        );
+        let several_kept = compact(
+            "get_command_or_subagent_output",
+            &several,
+            "t3:\nstatus: exited\nexit_code: 0",
+        );
+        assert!(
+            several_kept.starts_with(
+                "t2:\nstatus: exited\nexit_code: 1\nt3:\nstatus: running\nSummary of the full output:\n"
+            ),
+            "{several_kept}"
+        );
+        // With no line of the tool's own to keep, a summary can't pose as one.
+        let plain = compact("run_terminal_command", &"line\n".repeat(20), "exit 0");
+        assert_eq!(plain, "Summary of the full output:\nexit 0");
+        // Read back as the end-of-turn checks read them.
+        let header = "<tool_output_compact tool=\"x\" handle=\"h\" bytes=\"1\">\n";
+        let ran = [
+            crate::post_check::Ran::new(
+                "run_terminal_command",
+                r#"{"command":"cargo nextest run --workspace"}"#,
+                true,
+                &format!("{header}{kept}"),
+            ),
+            crate::post_check::Ran::new(
+                "get_command_or_subagent_output",
+                r#"{"task_id":"t1"}"#,
+                true,
+                &format!("{header}{read_kept}"),
+            ),
+        ];
+        assert_eq!(crate::post_check::outcome(&ran, 0), "exit 0");
+        let lone = crate::post_check::Ran::new(
+            "run_terminal_command",
+            r#"{"command":"make"}"#,
+            true,
+            &format!("{header}{plain}"),
+        );
+        assert_eq!(lone.ended(), "result not kept");
+        set_tool_output_compact_for_tests(None);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_compacted_command_keeps_how_it_ended_after_the_header() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+            enabled: true,
+            min_bytes: 50,
+        }));
+        let output = format!("exit 0\n{}", "test a ... ok\n".repeat(20));
+        let script = Script {
+            turns: Mutex::new(vec![Ok(TurnOutput {
+                text: "All 20 tests passed.".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: usage(2, 1, 1),
+                ..Default::default()
+            })]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let replaced = maybe_compact_tool_output(
+            &dir,
+            &dir,
+            "sess",
+            &script,
+            &CancelToken::new(),
+            "test-model",
+            None,
+            "call-9",
+            "run_terminal_command",
+            &output,
+        )
+        .expect("replaced");
+        let ToolOutputCompactOutcome::Replaced { text, .. } = replaced else {
+            panic!("expected replacement");
+        };
+        assert_eq!(
+            text,
+            format!(
+                "<tool_output_compact tool=\"run_terminal_command\" handle=\"to-call-9\" bytes=\"{bytes}\">\n\
+                 exit 0\n\
+                 All 20 tests passed.\n\
+                 </tool_output_compact>\n\
+                 Full output ({bytes} bytes) is spooled at `.grokhub/tool-output-compact/sess/to-call-9.txt`. \
+                 Re-read it with read_file (or grep that path) when you need exact text.",
+                bytes = output.len(),
+            )
+        );
+        assert_eq!(shell_status(Some(&text), false), "exit 0");
         set_tool_output_compact_for_tests(None);
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);

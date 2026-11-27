@@ -937,6 +937,61 @@ pub const SEED_CHIPS: &[(&str, &str)] = &[
 
 const SEED_SCORE: f32 = 30.0;
 
+/// The Code agent's starter chips: key, label, and what a tap sends. They
+/// take the Hangout starters' place on its row (see [`swap_in_code_starters`]).
+pub const CODE_SEED_CHIPS: &[(&str, &str, &str)] = &[
+    (
+        "tests",
+        "Run the tests",
+        "Run the tests and tell me what fails.",
+    ),
+    (
+        "explain",
+        "Explain this repo",
+        "Explain what this repo does and how it is laid out.",
+    ),
+    (
+        "bug",
+        "Find a bug to fix",
+        "Find a likely bug in this repo and propose a fix.",
+    ),
+];
+
+/// Where an empty Code chat's starters rank: above every app chip, below
+/// only "Set up AI" (130), so a fresh agent window offers code first.
+const CODE_STARTER_SCORE: f32 = 125.0;
+
+/// A Code agent's row: the game and life starters and the app tour out, the
+/// coding starters in. They lead an empty chat ([`CODE_STARTER_SCORE`]) and
+/// sink to the seed rank once it has messages, so the conversation's own
+/// chips lead. "Set up AI" stays: nothing codes without it. `empty`: no
+/// messages yet.
+pub fn swap_in_code_starters(pool: &mut Vec<QuickChip>, empty: bool) {
+    pool.retain(|c| {
+        !c.id.starts_with(SEED_PREFIX) && (!c.id.starts_with("guide-") || c.id == "guide-connect")
+    });
+    let base = if empty {
+        CODE_STARTER_SCORE
+    } else {
+        SEED_SCORE - 15.0
+    };
+    pool.extend(
+        CODE_SEED_CHIPS
+            .iter()
+            .enumerate()
+            .map(|(i, (key, label, value))| {
+                chip(
+                    &format!("{SEED_PREFIX}code-{key}"),
+                    label,
+                    value,
+                    ChipKind::Chat,
+                    base - i as f32 * 0.1,
+                    "",
+                )
+            }),
+    );
+}
+
 fn seed_chips(stage: ChipStage) -> Vec<QuickChip> {
     // Mid-chat they sink further so the conversation's own chips lead.
     let base = if stage == ChipStage::Empty {

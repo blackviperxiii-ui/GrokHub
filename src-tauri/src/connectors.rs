@@ -15,12 +15,22 @@ use grokhub_agent::mcp::{self, DoctorRow, SignIn};
 use grokhub_core::mcp_catalog::{self, Catalog, CatalogAuth, CatalogEntry};
 use serde::Serialize;
 
+/// One tool on a connector, for the per-tool on/off switch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRow {
+    pub name: String,
+    /// False when the Connectors page turned it off for chat.
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Row {
     pub name: String,
     /// "connected", "error", "stopped", "not checked" or "disabled".
     pub status: String,
+    /// How many tools chat can use (off tools are not counted).
     pub tools: usize,
     pub error: String,
     /// The command or URL the entry runs.
@@ -33,6 +43,8 @@ pub struct Row {
     pub can_disconnect: bool,
     /// False once the switch turned it off; it is listed but never started.
     pub enabled: bool,
+    /// Tools from the last Check / connect; empty until then.
+    pub tool_rows: Vec<ToolRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -56,6 +68,14 @@ fn row(r: DoctorRow) -> Row {
         tools: r.tool_count,
         error: r.last_error,
         detail: r.detail,
+        tool_rows: r
+            .tools
+            .into_iter()
+            .map(|tool| ToolRow {
+                name: tool.name,
+                enabled: tool.enabled,
+            })
+            .collect(),
     }
 }
 
@@ -127,6 +147,12 @@ pub struct CatalogRow {
     /// What Add runs or reaches.
     pub target: String,
     pub installed: bool,
+    /// Manifest / docs URL for the detail view.
+    pub source: String,
+    /// What it can reach, in one line.
+    pub permissions: String,
+    /// Known tool names for the install picker (may be empty).
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -182,6 +208,9 @@ fn catalog_rows(catalog: &Catalog, installed: &[String]) -> Vec<CatalogRow> {
             key_hint: e.key_hint.clone(),
             target: e.target(),
             installed: installed.contains(&e.id),
+            source: e.source.clone(),
+            permissions: e.permissions.clone(),
+            tools: e.tools.clone(),
         })
         .collect()
 }
@@ -219,11 +248,17 @@ fn catalog_entry(id: &str) -> Result<CatalogEntry, String> {
 }
 
 /// Add from the catalog. It is written enabled and starts on Check or first
-/// use; a key or a sign-in comes after.
-pub fn add_catalog(workspace: &Path, id: &str) -> Result<Changed, String> {
+/// use; a key or a sign-in comes after. `include_tools` is the install
+/// picker's selection; a full selection (or none) leaves no allowlist.
+pub fn add_catalog(
+    workspace: &Path,
+    id: &str,
+    include_tools: Option<Vec<String>>,
+) -> Result<Changed, String> {
     let entry = catalog_entry(id)?;
     mcp::set_workspace(workspace);
-    let status = match mcp::install(&entry.id, &entry.config_entry())? {
+    let picked = include_tools.as_deref();
+    let status = match mcp::install(&entry.id, &entry.config_entry_with_include(picked))? {
         mcp::Installed::Added => match entry.auth {
             CatalogAuth::Key => format!("Added {}. Paste its key to finish", entry.name),
             CatalogAuth::Oauth => format!("Added {}. Sign in to finish", entry.name),
@@ -260,6 +295,21 @@ pub fn set_enabled(workspace: &Path, name: &str, on: bool) -> Result<Changed, St
     Ok(Changed {
         status,
         rows: rows(mcp::configured()),
+    })
+}
+
+/// Turn one tool of a server off or back on for chat.
+pub fn set_tool_enabled(
+    workspace: &Path,
+    name: &str,
+    tool: &str,
+    on: bool,
+) -> Result<Changed, String> {
+    mcp::set_workspace(workspace);
+    let status = mcp::set_tool_enabled(name, tool, on)?;
+    Ok(Changed {
+        status,
+        rows: rows(mcp::doctor()),
     })
 }
 
@@ -434,13 +484,23 @@ mod tests {
         let checked = check(&d.workspace);
         assert_eq!(checked[0].status, "connected", "{:?}", checked[0]);
         assert_eq!(checked[0].tools, 1);
+        assert_eq!(checked[0].tool_rows.len(), 1);
+        assert!(checked[0].tool_rows[0].enabled);
         assert_eq!(checked[0].error, "");
         assert!(!checked[0].needs_sign_in);
         assert!(checked[0].can_disconnect);
 
+        let tool = checked[0].tool_rows[0].name.clone();
+        let off = set_tool_enabled(&d.workspace, "box", &tool, false).expect("tool off");
+        assert_eq!(off.status, format!("Turned off box's {tool}"));
+        assert_eq!(off.rows[0].tools, 0);
+        assert!(!off.rows[0].tool_rows[0].enabled);
+
         let again = restart(&d.workspace, "box");
         assert_eq!(again.status, "Reconnected box");
         assert_eq!(again.rows[0].status, "connected");
+        assert_eq!(again.rows[0].tools, 0);
+        assert!(!again.rows[0].tool_rows[0].enabled);
     }
 
     #[test]
@@ -505,7 +565,7 @@ mod tests {
             .expect("brave");
         assert_eq!(brave.auth, "key");
         assert!(!brave.installed);
-        let added = add_catalog(&d.workspace, "brave-search").expect("add");
+        let added = add_catalog(&d.workspace, "brave-search", None).expect("add");
         assert_eq!(added.status, "Added Brave Search. Paste its key to finish");
         assert_eq!(added.rows[0].name, "brave-search");
         assert!(added.rows[0].enabled);
@@ -516,12 +576,39 @@ mod tests {
             .iter()
             .any(|r| r.id == "brave-search" && r.installed));
         assert_eq!(
-            add_catalog(&d.workspace, "brave-search").map(|c| c.status),
+            add_catalog(&d.workspace, "brave-search", None).map(|c| c.status),
             Ok("Brave Search was already added".to_string())
         );
         assert_eq!(
-            add_catalog(&d.workspace, "no-such-connector").map(|c| c.status),
+            add_catalog(&d.workspace, "no-such-connector", None).map(|c| c.status),
             Err("no-such-connector isn't in the catalog".to_string())
+        );
+    }
+
+    #[test]
+    fn add_from_the_catalog_writes_include_tools_from_the_picker() {
+        let d = dirs("include", serde_json::json!({}));
+        let deep = catalog(&d.workspace, false)
+            .rows
+            .into_iter()
+            .find(|r| r.id == "deepwiki")
+            .expect("deepwiki");
+        assert!(deep.tools.len() >= 2, "{:?}", deep.tools);
+        assert!(!deep.source.is_empty());
+        assert!(!deep.permissions.is_empty());
+        let picked = vec![deep.tools[0].clone()];
+        let added = add_catalog(&d.workspace, "deepwiki", Some(picked.clone())).expect("add");
+        assert_eq!(added.status, "Added DeepWiki");
+        let saved = std::fs::read_to_string(d.config.join("mcp.json")).expect("read");
+        assert!(saved.contains("includeTools"), "{saved}");
+        assert!(saved.contains(&picked[0]), "{saved}");
+        let all = deep.tools.clone();
+        let d2 = dirs("include-all", serde_json::json!({}));
+        add_catalog(&d2.workspace, "deepwiki", Some(all)).expect("add all");
+        let saved_all = std::fs::read_to_string(d2.config.join("mcp.json")).expect("read");
+        assert!(
+            !saved_all.contains("includeTools"),
+            "full pick leaves no allowlist: {saved_all}"
         );
     }
 
@@ -587,7 +674,7 @@ mod tests {
     #[test]
     fn a_key_waits_for_its_card_and_deny_saves_nothing() {
         let d = dirs("key", serde_json::json!({}));
-        add_catalog(&d.workspace, "brave-search").expect("add");
+        add_catalog(&d.workspace, "brave-search", None).expect("add");
         assert_eq!(
             start_key(&d.workspace, "brave-search", "  ".into()),
             Err("Type the brave-search key first.".to_string())

@@ -22,12 +22,14 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [learn](learn.md) | `crates/grokhub-core/src/learn/`: the learning engine's signal stream, beliefs, confidence ladder and files |
 | [ask-offers](ask-offers.md) | Repeated local asks → one Automate / Skill offer (intent × hour) |
 | [print-alerts](print-alerts.md) | Command Centre card 60: LAN 3D printer finish/fail Pulse alerts |
+| [home-assistant](home-assistant.md) | Order 973: first-class Home Assistant list/read/control with consent |
 | [hobby-paths](hobby-paths.md) | Know me hobby learning paths: opt-in tips, progress, Pulse cards |
 | [personalities](personalities.md) | voices, the 18+ heat dial, dynamic chat and the quip bank |
 | [voice](voice.md) | voice mode: open mic, streaming speech-to-text, spoken replies, barge-in |
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-desktop/src/` and `crates/grokhub-core/src/desktop_mcp.rs` |
 | [self-manage](self-manage.md) | `crates/grokhub-agent/src/self_manage/`: Grok's own skill, connection, and automation tools |
+| [skill-curator](skill-curator.md) | Track use, retire stale self-made skills (archive/restore, never delete), weekly Pulse |
 | [grokhub-hub](grokhub-hub.md) | `crates/grokhub-hub/`: LAN `/v1` hub and pairing |
 | [install-scripts](install-scripts.md) | `scripts/install.sh` and friends, plus the tests that pin their text |
 | [versions-and-channels](versions-and-channels.md) | version bumps, beta/stable channels, the build label |

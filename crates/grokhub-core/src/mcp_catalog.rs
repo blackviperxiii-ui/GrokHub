@@ -58,6 +58,15 @@ pub struct CatalogEntry {
     pub capabilities: Vec<String>,
     /// What it can reach, in one line, for the detail view.
     pub permissions: String,
+    /// Known tool names for the install picker. Empty when the list loads
+    /// after connect; the picker still runs and can write an include list
+    /// once tools are known.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Non-secret env the install recipe needs (for example a local URL).
+    /// Never holds credentials; keys stay in `key_env` / the keyring.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,8 +148,16 @@ impl CatalogEntry {
     }
 
     /// The `mcpServers` value Install writes. No credentials: a key is
-    /// saved separately and the entry only names it.
+    /// saved separately and the entry only names it. When `include_tools`
+    /// is a subset of the known tools (or any non-empty list when the
+    /// catalog has no tool names yet), it is written as `includeTools`.
+    /// Selecting every known tool leaves the filter out.
     pub fn config_entry(&self) -> Value {
+        self.config_entry_with_include(None)
+    }
+
+    /// Like [`Self::config_entry`], with an optional install-time include list.
+    pub fn config_entry_with_include(&self, include_tools: Option<&[String]>) -> Value {
         let mut out = Map::new();
         if self.transport == "http" {
             out.insert("url".into(), json!(self.url));
@@ -153,6 +170,30 @@ impl CatalogEntry {
             }
             if self.auth == CatalogAuth::Key {
                 out.insert("tokenEnv".into(), json!(self.key_env));
+            }
+            if !self.env.is_empty() {
+                let mut env = Map::new();
+                for (k, v) in &self.env {
+                    env.insert(k.clone(), json!(v));
+                }
+                out.insert("env".into(), Value::Object(env));
+            }
+        }
+        if let Some(picked) = include_tools {
+            let picked: Vec<String> = picked
+                .iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            let write = if self.tools.is_empty() {
+                !picked.is_empty()
+            } else {
+                !picked.is_empty()
+                    && (picked.len() != self.tools.len()
+                        || !self.tools.iter().all(|t| picked.iter().any(|p| p == t)))
+            };
+            if write {
+                out.insert("includeTools".into(), json!(picked));
             }
         }
         Value::Object(out)
@@ -445,7 +486,11 @@ mod tests {
     #[test]
     fn the_bundled_catalog_parses_with_every_field() {
         let c = bundled();
-        assert!(c.entries.len() >= 25, "{} entries", c.entries.len());
+        assert!(
+            c.entries.len() >= 55 && c.entries.len() <= 70,
+            "{} entries",
+            c.entries.len()
+        );
         let mut ids: Vec<&str> = c.entries.iter().map(|e| e.id.as_str()).collect();
         ids.sort();
         ids.dedup();
@@ -459,9 +504,61 @@ mod tests {
             "gmail",
             "google-drive",
             "google-calendar",
+            "clickup",
+            "todoist",
+            "monday",
+            "dropbox",
+            "canva",
+            "slack",
+            "discord",
+            "home-assistant",
+            "hugging-face",
+            "vercel",
+            "netlify",
+            "postman",
+            "semgrep",
+            "deepwiki",
         ] {
             assert!(c.get(id).is_some(), "{id} is in the catalog");
         }
+        for e in &c.entries {
+            assert!(
+                e.source.starts_with("https://") && !e.permissions.trim().is_empty(),
+                "{} needs source and permissions",
+                e.id
+            );
+        }
+    }
+
+    #[test]
+    fn install_picker_writes_include_tools_when_a_subset_is_picked() {
+        let c = bundled();
+        let deep = c.get("deepwiki").expect("deepwiki");
+        assert_eq!(
+            deep.tools,
+            vec![
+                "ask_wiki_question".to_string(),
+                "read_wiki_contents".to_string(),
+                "read_wiki_structure".to_string(),
+            ]
+        );
+        let all = deep.config_entry_with_include(Some(&deep.tools));
+        assert!(all.get("includeTools").is_none(), "{all}");
+        let subset = deep.config_entry_with_include(Some(&[
+            "ask_wiki_question".into(),
+            "read_wiki_structure".into(),
+        ]));
+        assert_eq!(
+            subset["includeTools"],
+            json!(["ask_wiki_question", "read_wiki_structure"])
+        );
+        let ha = c.get("home-assistant").expect("home-assistant");
+        let entry = ha.config_entry();
+        assert_eq!(
+            entry["env"]["HOMEASSISTANT_URL"],
+            json!("http://homeassistant.local:8123")
+        );
+        assert_eq!(entry["tokenEnv"], json!("HOMEASSISTANT_TOKEN"));
     }
 
     #[test]
@@ -481,8 +578,13 @@ mod tests {
         );
         for e in &c.entries {
             let v = e.config_entry();
-            for k in ["headers", "env", "bearerToken", "tokenRef"] {
+            for k in ["headers", "bearerToken", "tokenRef"] {
                 assert!(v.get(k).is_none(), "{} carries {k}", e.id);
+            }
+            if e.env.is_empty() {
+                assert!(v.get("env").is_none(), "{} carries empty env", e.id);
+            } else {
+                assert!(v.get("env").is_some(), "{} missing public env", e.id);
             }
             if e.auth == CatalogAuth::Key && e.transport == "stdio" {
                 assert_eq!(v["tokenEnv"], json!(e.key_env), "{}", e.id);
@@ -535,7 +637,12 @@ mod tests {
         );
         assert_eq!(after.config_entry(), before.config_entry());
         assert_eq!(merged.entries.len(), base.entries.len());
-        assert!(merged.get("slack").is_none());
+        // Slack is a curated catalog entry; registry merge never invents extras.
+        assert!(base.get("slack").is_some());
+        assert_eq!(
+            merged.get("slack").map(|e| &e.url),
+            base.get("slack").map(|e| &e.url)
+        );
     }
 
     #[test]
@@ -569,6 +676,8 @@ mod tests {
                 source: "https://example.com".into(),
                 capabilities: vec!["a".into()],
                 permissions: "p".into(),
+                tools: Vec::new(),
+                env: HashMap::new(),
             }],
         })
         .unwrap_err();

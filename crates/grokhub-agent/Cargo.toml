@@ -23,6 +23,12 @@ regex = { version = "1.13", default-features = false, features = ["std", "perf",
 base64 = "0.23"
 ignore = "0.4"
 globset = { version = "0.4", default-features = false }
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
 image = { workspace = true }
 # FTS5 memory index. Bundled sqlite so Windows GNU does not need a system libsqlite.
 # `hooks` (no extra crates): the browser-history indexer's authorizer denies
@@ -52,7 +58,7 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "rin
 [target.'cfg(windows)'.dependencies]
 # Microsoft Execution Containers: the shell sandbox's process container on
 # Windows 11 (network only through the egress proxy). Pinned: the API is new.
-mxc-sdk = { version = "=1.0.1", default-features = false }
+mxc-sdk = { version = "=1.1.0", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionMode, Settings, SlashEffect, SlashHit } from "./api";
+import type { ImagineKind, ImagineMade, SessionMode, Settings, SlashEffect, SlashHit } from "./api";
 
 const api = vi.hoisted(() => ({
   sendChat: vi.fn<(id: string, text: string, mode?: SessionMode) => Promise<string>>(),
@@ -10,6 +10,10 @@ const api = vi.hoisted(() => ({
   runSlash: vi.fn<(line: string) => Promise<SlashEffect>>(),
   closeChat: vi.fn<(id: string) => Promise<void>>(),
   addAutomation: vi.fn<(text: string) => Promise<unknown[]>>(),
+  downloadModels: vi.fn<(ids: string[]) => Promise<unknown>>(),
+  imagineGenerate: vi.fn<(prompt: string, aspect: string, count: number, kind: ImagineKind) => Promise<ImagineMade>>(),
+  imagineImage: vi.fn<(name: string) => Promise<string>>(),
+  imagineCancel: vi.fn<() => Promise<boolean>>(),
 }));
 
 vi.mock("./api", async () => {
@@ -24,6 +28,12 @@ vi.mock("./api", async () => {
   runSlash: api.runSlash,
   closeChat: api.closeChat,
   addAutomation: api.addAutomation,
+  downloadModels: api.downloadModels,
+  imagineGenerate: api.imagineGenerate,
+  imagineImage: api.imagineImage,
+  imagineCancel: api.imagineCancel,
+  chatMedia: vi.fn(),
+  saveChatMediaToLibrary: vi.fn(),
   answerElicit: vi.fn(),
   saveSettings: vi.fn(),
   answerPermission: vi.fn(),
@@ -44,7 +54,6 @@ vi.mock("./api", async () => {
 });
 
 import { Chat, NO_PLAN, PLAN_NEXT, UNDO_NA } from "./Chat";
-import { subscribeImagine } from "./imagineAsk";
 import { isShellLine, isSlashCommand } from "./SlashMenu";
 
 const SETTINGS: Settings = {
@@ -163,6 +172,47 @@ describe("composer slash commands", () => {
     await userEvent.type(screen.getByLabelText("Message"), "/nope{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent("Unknown command /nope");
     expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("typing /qa lists /qa-walkthrough and selecting it runs the skill", async () => {
+    api.slashHits.mockImplementation((draft) =>
+      Promise.resolve(
+        draft.trim().toLowerCase().startsWith("/qa")
+          ? [
+              {
+                cmd: "/qa-walkthrough",
+                hint: "Ship-gate walkthrough",
+                insert: "/qa-walkthrough",
+                runOnPick: true,
+                disabled: null,
+              },
+            ]
+          : [],
+      ),
+    );
+    api.runSlash.mockResolvedValue({
+      kind: "mode",
+      mode: "chat",
+      text: "/qa-walkthrough",
+    });
+    render(<Chat onOpenSettings={() => {}} />);
+    const box = screen.getByLabelText("Message");
+    await userEvent.type(box, "/qa");
+    const menu = await screen.findByRole("listbox", { name: "Commands" });
+    expect(menu).toHaveAttribute("id", "slash-menu");
+    expect(await screen.findByRole("option", { name: /qa-walkthrough/ })).toBeInTheDocument();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(api.runSlash).toHaveBeenCalledWith("/qa-walkthrough", expect.stringMatching(/^shell-/)),
+    );
+    // Mode effect with the skill prompt delivers it as the next chat turn.
+    await waitFor(() =>
+      expect(api.sendChat).toHaveBeenCalledWith(
+        expect.stringMatching(/^shell-/),
+        "/qa-walkthrough",
+        "chat",
+      ),
+    );
   });
 
   it("/connectors opens its page", async () => {
@@ -413,16 +463,51 @@ describe("composer slash commands", () => {
     await waitFor(() => expect(onOpenSection).toHaveBeenCalledWith("labs"));
   });
 
-  it("/imagine-video opens Imagine and starts that prompt", async () => {
+  it("/download with a model starts its download, and alone opens Local AI", async () => {
+    const onOpenSection = vi.fn();
+    api.downloadModels.mockResolvedValueOnce({});
+    render(<Chat onOpenSettings={() => {}} onOpenSection={onOpenSection} />);
+    api.runSlash.mockResolvedValueOnce({ kind: "downloadModel", id: "qwen3.6-35b-a3b-heretic-q4_k_m", name: "Qwen3.6 35B-A3B" });
+    await userEvent.type(screen.getByLabelText("Message"), "/download qwen3.6-35b-a3b-heretic-q4_k_m{Enter}");
+    await waitFor(() => expect(api.downloadModels).toHaveBeenCalledWith(["qwen3.6-35b-a3b-heretic-q4_k_m"]));
+    expect(await screen.findByRole("status", { name: "/download result" })).toHaveTextContent(
+      "Downloading Qwen3.6 35B-A3B. Settings → Local AI shows how it's going.",
+    );
+    api.runSlash.mockResolvedValueOnce({ kind: "openSection", section: "localAi" });
+    await userEvent.type(screen.getByLabelText("Message"), "/download{Enter}");
+    await waitFor(() => expect(onOpenSection).toHaveBeenCalledWith("localAi"));
+  });
+
+  it("/imagine-video generates a video inline in chat without opening Imagine", async () => {
     const onOpenView = vi.fn();
-    const seen: { kind: string; prompt: string }[] = [];
-    const stop = subscribeImagine((job) => seen.push({ kind: job.kind, prompt: job.prompt }));
+    api.imagineGenerate.mockResolvedValueOnce({
+      page: {
+        tiles: [
+          {
+            id: "gen-v1",
+            name: "gen-v1_a.mp4",
+            title: "waves",
+            prompt: "waves",
+            createdMs: 1,
+            video: true,
+            tall: false,
+          },
+        ],
+        ready: true,
+        account: null,
+        canSignIn: false,
+      },
+      made: 1,
+      note: "",
+    });
+    api.imagineImage.mockResolvedValueOnce("data:video/mp4;base64,AAAA");
     render(<Chat onOpenSettings={() => {}} onOpenView={onOpenView} />);
     api.runSlash.mockResolvedValueOnce({ kind: "imagine", media: "video", prompt: "waves" });
     await userEvent.type(screen.getByLabelText("Message"), "/imagine-video waves{Enter}");
-    await waitFor(() => expect(onOpenView).toHaveBeenCalledWith("imagine"));
-    expect(seen).toEqual([{ kind: "video", prompt: "waves" }]);
-    stop();
+    await waitFor(() => expect(api.imagineGenerate).toHaveBeenCalledWith("waves", "1:1", 1, "video"));
+    expect(onOpenView).not.toHaveBeenCalled();
+    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
+    expect(await screen.findByLabelText("waves")).toHaveAttribute("src", "data:video/mp4;base64,AAAA");
   });
 
   it("/learn posts the reflect line", async () => {

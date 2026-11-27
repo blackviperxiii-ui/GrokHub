@@ -128,6 +128,7 @@ impl DesktopOps for Fixture {
                 text: "windows: Settings".into(),
                 image_data_url: Some(format!("data:image/png;base64,FRAME{n}")),
                 failed: false,
+                mcp_app: None,
             };
         }
         ToolOutput::ok(format!("{name} ok"))

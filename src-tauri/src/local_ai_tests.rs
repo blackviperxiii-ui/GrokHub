@@ -562,7 +562,7 @@ fn optional_makers_follow_the_defaults_and_are_never_preselected() {
         apple(16_384),
     ] {
         let (_, selected, picker) = page(&m);
-        assert_eq!(picker.models.iter().filter(|r| r.optional).count(), 20);
+        assert_eq!(picker.models.iter().filter(|r| r.optional).count(), 21);
         assert!(!picker.models.iter().any(|r| r.optional && r.preselected));
         assert!(!ls::model_by_id(&selected).is_some_and(|x| x.optional));
         // Within a bucket, no optional row sits above a default one.
@@ -637,5 +637,51 @@ fn an_old_manual_pick_becomes_an_added_file_and_old_auto_drops_its_tuning() {
     );
     assert_eq!(c.manual.deny_apps, ["blender"]);
     assert_eq!(c.overrides(), local_autoconfig::Overrides::default());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn saving_the_local_ai_page_keeps_a_file_the_library_just_added_to_auto() {
+    let dir = std::env::temp_dir().join(format!("grokhub-local-ai-merge-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mine = "/models/mine.gguf".to_string();
+    let pulled = "/models/library/qwen3-8b-q4_k_m.gguf".to_string();
+    save(
+        &dir,
+        &LocalAiConfig {
+            own_files: vec![mine.clone()],
+            ..LocalAiConfig::default()
+        },
+    )
+    .unwrap();
+    // The page opens and reads one added file.
+    let page = view(&dir).config;
+    assert_eq!(page.own_files, std::slice::from_ref(&mine));
+    // While it is open, a library download adds its file to Auto.
+    let mut now = load(&dir);
+    now.own_files.push(pulled.clone());
+    save(&dir, &now).unwrap();
+    // The page saves an unrelated switch with the list it read.
+    let saved = save_view(
+        &dir,
+        LocalAiConfig {
+            pause_for_games: false,
+            ..page
+        },
+    )
+    .unwrap();
+    assert_eq!(load(&dir).own_files, [mine.clone(), pulled.clone()]);
+    assert_eq!(saved.config.own_files, [mine.clone(), pulled.clone()]);
+    assert!(!load(&dir).pause_for_games);
+    // A file the page showed and the user removed stays removed.
+    let after = save_view(
+        &dir,
+        LocalAiConfig {
+            own_files: vec![pulled.clone()],
+            ..saved.config
+        },
+    )
+    .unwrap();
+    assert_eq!(after.config.own_files, [pulled]);
     let _ = std::fs::remove_dir_all(dir);
 }

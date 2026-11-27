@@ -5,12 +5,13 @@
 //!
 //! `grokhub --mcp-cua` is a cabin MCP server that Grok Build registers as
 //! `grokhub-cua` (the cabin Grok home only). It starts the pinned MIT
-//! `cua-driver mcp` as its own child in `bounded` mode with a cabin-written
-//! manifest, and runs every `tools/call` through [`decide`] before it is
-//! forwarded: the floor refuses, hard class parks the same card as path A,
-//! and the desktop switch, the `cuaDriver` flag, and Halt refuse. Grok Build
-//! never sees Cua's socket. Spans carry `driver:"cua"` and store typed text
-//! as its length only.
+//! `cua-driver serve --socket` daemon (the runtime that owns the screen),
+//! then `cua-driver mcp --socket` as its stdio child, both in `bounded`
+//! mode with a cabin-written manifest, and runs every `tools/call` through
+//! [`decide`] before it is forwarded: the floor refuses, hard class parks
+//! the same card as path A, and the desktop switch, the `cuaDriver` flag,
+//! and Halt refuse. Grok Build never sees Cua's socket. Spans carry
+//! `driver:"cua"` and store typed text as its length only.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -182,6 +183,9 @@ pub static CUA_NO_PASSWORD_MSG: std::sync::LazyLock<&'static str> = std::sync::L
 
 /// How long the proxy waits for the child's answer to one request.
 const REPLY_WAIT: Duration = Duration::from_secs(60);
+/// How long `cua-driver serve` may take to create its socket.
+const SERVE_READY_WAIT: Duration = Duration::from_secs(5);
+
 /// How long `cua-driver --version` may take.
 const VERSION_WAIT: Duration = Duration::from_secs(5);
 
@@ -216,6 +220,16 @@ pub fn cua_manifest_for(os: &str) -> String {
         yaml_list("    ", CUA_TOOLS),
         yaml_list("    ", CUA_DENY_TOOLS),
     )
+}
+
+/// `cua-driver serve --socket <cabin-private socket>` (the daemon that owns
+/// the runtime; `mcp` attaches to this socket).
+pub fn cua_serve_args(socket: &Path) -> Vec<String> {
+    vec![
+        "serve".into(),
+        "--socket".into(),
+        socket.display().to_string(),
+    ]
 }
 
 /// `cua-driver mcp --socket <cabin-private socket>`
@@ -408,16 +422,91 @@ pub trait CuaChild {
     fn kill(&mut self);
 }
 
-/// The real child: line-delimited JSON-RPC on its stdin/stdout.
+/// The real child: line-delimited JSON-RPC on its stdin/stdout, plus the
+/// `serve` daemon that owns the runtime on the same socket.
 pub struct StdioChild {
     child: Child,
+    serve: Option<Child>,
     stdin: ChildStdin,
     rx: mpsc::Receiver<String>,
 }
 
-/// Write the manifest and start `cua-driver mcp` with the bounded env, on
-/// the screen `screen` names (the Bot Desktop's `DISPLAY` and the like; a
-/// `None` value is removed). Empty keeps the app's own screen.
+/// Bounded env, strip loose vars, and put the child on `screen` (Bot Desktop
+/// `DISPLAY` and the like; a `None` value is removed).
+fn apply_cua_launch_env(cmd: &mut Command, manifest: &Path, screen: &[(&str, Option<String>)]) {
+    cmd.envs(cua_spawn_env(manifest));
+    for k in CUA_ENV_REMOVE {
+        cmd.env_remove(k);
+    }
+    for (key, value) in screen {
+        match value {
+            Some(v) => {
+                cmd.env(key, v);
+            }
+            None => {
+                cmd.env_remove(key);
+            }
+        }
+    }
+}
+
+/// Start `cua-driver serve --socket` and wait until the socket exists.
+fn spawn_cua_serve(
+    bin: &Path,
+    socket: &Path,
+    manifest: &Path,
+    screen: &[(&str, Option<String>)],
+) -> Result<Child, String> {
+    let _ = std::fs::remove_file(socket);
+    let mut cmd = Command::new(bin);
+    cmd.args(cua_serve_args(socket))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    apply_cua_launch_env(&mut cmd, manifest, screen);
+    grokhub_core::proc_util::hide_windows_console(&mut cmd);
+    let mut serve = cmd.spawn().map_err(|e| {
+        format!(
+            "{product} could not start Cua Driver serve: {e}",
+            product = grokhub_core::brand::product_name()
+        )
+    })?;
+    let start = Instant::now();
+    loop {
+        if socket.exists() {
+            return Ok(serve);
+        }
+        match serve.try_wait() {
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Cua Driver serve stopped before its socket was ready ({status})."
+                ));
+            }
+            Ok(None) if start.elapsed() > SERVE_READY_WAIT => {
+                let _ = serve.kill();
+                let _ = serve.wait();
+                return Err(format!(
+                    "Cua Driver serve did not create its socket, so {product} did not start mcp.",
+                    product = grokhub_core::brand::product_name()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => {
+                let _ = serve.kill();
+                let _ = serve.wait();
+                return Err(format!(
+                    "{product} could not start Cua Driver serve: {e}",
+                    product = grokhub_core::brand::product_name()
+                ));
+            }
+        }
+    }
+}
+
+/// Write the manifest, start `cua-driver serve --socket`, then `cua-driver
+/// mcp` with the bounded env, on the screen `screen` names (the Bot
+/// Desktop's `DISPLAY` and the like; a `None` value is removed). Empty keeps
+/// the app's own screen.
 pub fn spawn_cua_child(
     bin: &Path,
     config_dir: &Path,
@@ -443,30 +532,46 @@ pub fn spawn_cua_child(
             product = grokhub_core::brand::product_name()
         )
     })?;
+    let socket = cua_socket_path(config_dir);
+    let mut serve = spawn_cua_serve(bin, &socket, &manifest, screen)?;
     let mut cmd = Command::new(bin);
-    cmd.args(cua_spawn_args(&cua_socket_path(config_dir)))
-        .envs(cua_spawn_env(&manifest))
+    cmd.args(cua_spawn_args(&socket))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    for k in CUA_ENV_REMOVE {
-        cmd.env_remove(k);
-    }
-    for (key, value) in screen {
-        match value {
-            Some(v) => cmd.env(key, v),
-            None => cmd.env_remove(key),
-        };
-    }
+    apply_cua_launch_env(&mut cmd, &manifest, screen);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| {
-        format!(
-            "{product} could not start Cua Driver: {e}",
-            product = grokhub_core::brand::product_name()
-        )
-    })?;
-    let stdin = child.stdin.take().ok_or("Cua Driver has no stdin")?;
-    let stdout = child.stdout.take().ok_or("Cua Driver has no stdout")?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = serve.kill();
+            let _ = serve.wait();
+            return Err(format!(
+                "{product} could not start Cua Driver: {e}",
+                product = grokhub_core::brand::product_name()
+            ));
+        }
+    };
+    let stdin = match child.stdin.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = serve.kill();
+            let _ = serve.wait();
+            return Err("Cua Driver has no stdin".into());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = serve.kill();
+            let _ = serve.wait();
+            return Err("Cua Driver has no stdout".into());
+        }
+    };
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -476,7 +581,12 @@ pub fn spawn_cua_child(
             }
         }
     });
-    Ok(StdioChild { child, stdin, rx })
+    Ok(StdioChild {
+        child,
+        serve: Some(serve),
+        stdin,
+        rx,
+    })
 }
 
 impl CuaChild for StdioChild {
@@ -506,6 +616,10 @@ impl CuaChild for StdioChild {
     fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(mut serve) = self.serve.take() {
+            let _ = serve.kill();
+            let _ = serve.wait();
+        }
     }
 }
 
@@ -1444,7 +1558,7 @@ mod tests {
             .unwrap();
         let req = waiter.join().unwrap().expect("slot parks as credentials");
         assert_eq!(req.class, "credentials");
-        assert_eq!(text_of(&out), *CUA_NO_PASSWORD_MSG);
+        assert!((text_of(&out)) == (*CUA_NO_PASSWORD_MSG));
         assert_eq!(sent_tools(&fake), vec!["press_key"]);
         // Floor and manifest refusals never reach the child either.
         let out = p
@@ -1709,6 +1823,14 @@ mod tests {
         );
         let sock = Path::new("cfg").join("cua").join("driver.sock");
         assert_eq!(cua_socket_path(Path::new("cfg")), sock);
+        assert_eq!(
+            cua_serve_args(&sock),
+            vec![
+                "serve".to_string(),
+                "--socket".into(),
+                sock.display().to_string()
+            ]
+        );
         assert_eq!(
             cua_spawn_args(&sock),
             vec![

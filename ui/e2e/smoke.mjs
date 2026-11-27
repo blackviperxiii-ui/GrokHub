@@ -90,6 +90,17 @@ function toolCall(callId, name, args) {
 // "result checked"), as with a real model: write the note, re-read it, tick
 // the checklist, then reply in two pieces.
 function mockReply(callNumber, body) {
+  // The Team page's agent answers the message the person's chat hands it;
+  // the chat asks it once, then passes the answer on.
+  if (body.includes(`You are ${TEAM_NAME}, one of the person's agents`)) return textReply(TEAM_ANSWER);
+  // The agent a paired computer messages through the hub.
+  if (body.includes(`You are ${PEER_AGENT}, one of the person's agents`)) return textReply(PEER_ANSWER);
+  if (body.includes(TEAM_ASK)) {
+    if (!body.includes("smoke-team-ask")) {
+      return toolCall("smoke-team-ask", "message_agent", { agent: TEAM_ID, message: TEAM_QUESTION });
+    }
+    return textReply(TEAM_REPLY);
+  }
   // The Pulse writer's two calls: the taste note, then one post.
   if (body.includes("You keep a short note on what one person likes")) {
     return textReply("They like smoke tests and shell news.");
@@ -375,7 +386,19 @@ const EP_PROMPT = "tidy the old folder as a watched session";
 const EP_TEXT = "rm -rf ~/old";
 const EP_REPLY = "Waiting for your OK on the delete";
 const WEB_PROMPT = "hello from the browser smoke test";
+const TEAM_NAME = "Smoke researcher";
+const TEAM_ID = "smoke-researcher";
+const TEAM_ASK = "ask the smoke researcher which router reaches the garden";
+const TEAM_QUESTION = "Which router reaches the garden?";
+const TEAM_ANSWER = "The mesh kit, with one unit by the back door.";
+const TEAM_REPLY = "The researcher says the mesh kit reaches it";
 const WEB_REPLY = "Hello, browser";
+const PEER_AGENT = "Smoke front desk";
+const PEER_AGENT_ID = "smoke-front-desk";
+const PEER_PC = "smoke-laptop";
+const PEER_PC_NAME = "Smoke laptop";
+const PEER_QUESTION = "When does the garden shop open?";
+const PEER_ANSWER = "Nine to five, every day but Monday.";
 
 async function find(s, css) {
   const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
@@ -691,7 +714,7 @@ async function connectors(s, config) {
     mcpFile,
     JSON.stringify({ mcpServers: { box: { command: process.execPath, args: [script] } } }),
   );
-  await tab(s, "Connectors");
+  await tab(s, "MCPs & Connectors");
   await waitFor("the connector row", async () => {
     const t = await textOf(s, ".card.connector .card-status");
     return t === "Not checked" ? t : null;
@@ -1043,6 +1066,169 @@ async function plan(s, workspace) {
   console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, no picker needed`);
 }
 
+// Agent door: start share on Devices, pair a computer over the hub, share a
+// new agent with it on the Team page, then that computer lists the agent and
+// messages it at /a2a/v1. The answer comes from the agent's own turn and the
+// task log names the computer. Stop share closes the door.
+async function peerDoor(s, config) {
+  const one = async (xpath) => (await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }))[0];
+  const press = async (what, xpath) => {
+    const el = await waitFor(what, () => one(xpath));
+    await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+  };
+  await tab(s, "Devices");
+  await press("Start share", "//div[@aria-label='Share']//button[normalize-space()='Start share']");
+  const code = await waitFor("the pairing code", async () =>
+    (await textOf(s, "div[aria-label='Share'] p[aria-label='Pairing code']")).trim(),
+  );
+  const status = await textOf(s, "div[aria-label='Share'] .card-status");
+  const port = Number(/port (\d+)/.exec(status)?.[1]);
+  if (!port) throw new Error(`the share card said ${JSON.stringify(status)}`);
+  const hub = `http://127.0.0.1:${port}`;
+  const paired = await fetch(`${hub}/v1/pair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, deviceId: PEER_PC, deviceName: PEER_PC_NAME }),
+  });
+  const { token } = await paired.json();
+  if (!paired.ok || !token) throw new Error(`pairing answered ${paired.status}`);
+  const auth = { Authorization: `Bearer ${token}` };
+  console.log(`paired ${PEER_PC} with the hub on port ${port}`);
+
+  await tab(s, "Team");
+  await press("New role", "//section[@aria-label='Team']//button[normalize-space()='New role']");
+  const form = "form[aria-label='New role']";
+  await typeInto(s, await waitFor("the agent form", () => find(s, `${form} input`)), PEER_AGENT);
+  await typeInto(s, await find(s, `${form} textarea`), "Answers when the garden shop is open.");
+  await press(
+    "the paired computer in the share list",
+    `//form[@aria-label='New role']//fieldset[legend[normalize-space()='Paired computers that can message it']]//label[starts-with(normalize-space(), '${PEER_PC_NAME} · ')]/input`,
+  );
+  await shot(s, "team-share-list");
+  await click(s, `${form} button[type='submit']`);
+  const made = await waitFor("the shared agent in agent-team.json", async () => {
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents?.find((a) => a.id === PEER_AGENT_ID) ?? null;
+  });
+  if (made.share !== true || JSON.stringify(made.share_with) !== JSON.stringify([PEER_PC])) {
+    throw new Error(`the agent was saved as ${JSON.stringify(made)}`);
+  }
+  const card = await waitFor("the agent's card", () => find(s, `section[aria-label='Team'] li[aria-label='${PEER_AGENT}']`));
+  const cardSays = await cardText(s, card, (t) => t.includes("shared with 1 computer"));
+  if (!cardSays.includes("Role · Ask first · shared with 1 computer")) throw new Error(`the card said ${JSON.stringify(cardSays)}`);
+
+  const list = await (await fetch(`${hub}/a2a/v1`, { headers: auth })).json();
+  const listed = list.agents?.find((a) => a.id === PEER_AGENT_ID);
+  if (listed?.url !== `${hub}/a2a/v1/${PEER_AGENT_ID}`) throw new Error(`the door listed ${JSON.stringify(list)}`);
+  const sent = await fetch(listed.url, {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "SendMessage",
+      params: { message: { messageId: "smoke-m-1", role: "ROLE_USER", parts: [{ text: PEER_QUESTION }] } },
+    }),
+  });
+  const reply = await sent.json();
+  const task = reply.result?.task;
+  if (task?.status?.state !== "TASK_STATE_COMPLETED" || task.artifacts?.[0]?.parts?.[0]?.text !== PEER_ANSWER) {
+    throw new Error(`the door answered ${JSON.stringify(reply)}`);
+  }
+  console.log(`the door answered ${JSON.stringify(task.artifacts[0].parts[0].text)} (${task.status.state})`);
+  const asked = mockSeen.find((c) => c.body.includes(`You are ${PEER_AGENT}, one of the person's agents`));
+  if (!asked?.body.includes(PEER_QUESTION)) throw new Error("the agent's turn never got the computer's message");
+  const logged = await waitFor("the computer's task in agent-tasks.jsonl", async () => {
+    const rows = readFileSync(join(config, "agent-tasks.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    return rows.find((r) => r.to === PEER_AGENT_ID) ?? null;
+  });
+  if (logged.from?.peer !== PEER_PC || logged.state !== "TASK_STATE_COMPLETED" || logged.reply !== PEER_ANSWER) {
+    throw new Error(`the task was logged as ${JSON.stringify(logged)}`);
+  }
+  console.log(`task log: ${JSON.stringify({ from: logged.from, to: logged.to, state: logged.state })}`);
+
+  await tab(s, "Devices");
+  await press("Stop share", "//div[@aria-label='Share']//button[normalize-space()='Stop share']");
+  const closed = await waitFor("the door to close", async () => {
+    const after = await fetch(`${hub}/a2a/v1`, { headers: auth });
+    return after.status === 200 ? null : after.status;
+  });
+  console.log(`after stop share the door answers ${closed}`);
+
+  await tab(s, "Team");
+  await press("Remove", `//li[@aria-label='${PEER_AGENT}']//button[normalize-space()='Remove']`);
+  await press("Remove to confirm", `//div[@aria-label='Remove ${PEER_AGENT}?']//button[normalize-space()='Remove']`);
+  await waitFor("the shared agent gone from agent-team.json", async () => {
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents.every((a) => a.id !== PEER_AGENT_ID) ? true : null;
+  });
+}
+
+// Team: make a role agent on the Team page, have the chat message it, see the
+// exchange in the task log (agent-tasks.jsonl), then remove the agent so the
+// steps after this one see the chat's usual tools.
+async function team(s, config) {
+  await tab(s, "Team");
+  const one = async (xpath) => (await wd("POST", `${s}/elements`, { using: "xpath", value: xpath }))[0];
+  const newRole = await waitFor("New role", () => one("//section[@aria-label='Team']//button[normalize-space()='New role']"));
+  await wd("POST", `${s}/element/${newRole[ELEMENT]}/click`, {});
+  const form = "form[aria-label='New role']";
+  await typeInto(s, await waitFor("the agent form", () => find(s, `${form} input`)), TEAM_NAME);
+  await typeInto(s, await find(s, `${form} textarea`), "Finds sources for questions about the house.");
+  await click(s, `${form} button[type='submit']`);
+  const made = await waitFor("the agent in agent-team.json", async () => {
+    if (!existsSync(join(config, "agent-team.json"))) return null;
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents?.find((a) => a.id === TEAM_ID) ?? null;
+  });
+  if (made.kind !== "role" || made.access !== "ask" || made.name !== TEAM_NAME) {
+    throw new Error(`the agent was saved as ${JSON.stringify(made)}`);
+  }
+  await waitFor("the agent's card", () => find(s, `section[aria-label='Team'] li[aria-label='${TEAM_NAME}']`));
+  console.log(`Team page made ${TEAM_ID} (${made.kind}, ${made.access})`);
+
+  await tab(s, "Chat");
+  const box = await waitFor("the message box", () => find(s, "section[aria-label='Chat'] textarea[aria-label='Message']"));
+  await typeInto(s, box, TEAM_ASK);
+  await click(s, "section[aria-label='Chat'] form.composer button[type='submit']");
+  await turnOver(s, TEAM_REPLY);
+  const asked = mockSeen.find((c) => c.body.includes(`You are ${TEAM_NAME}, one of the person's agents`));
+  if (!asked?.body.includes(TEAM_QUESTION)) throw new Error("the agent's turn never got the message");
+  if (asked.body.includes(TEAM_ASK)) throw new Error("the agent's turn saw the person's chat");
+  const logged = await waitFor("the task in agent-tasks.jsonl", async () => {
+    const path = join(config, "agent-tasks.jsonl");
+    if (!existsSync(path)) return null;
+    const rows = readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    return rows.find((r) => r.to === TEAM_ID) ?? null;
+  });
+  if (logged.from !== "person" || logged.state !== "TASK_STATE_COMPLETED" || logged.asked !== TEAM_QUESTION || logged.reply !== TEAM_ANSWER) {
+    throw new Error(`the task was logged as ${JSON.stringify(logged)}`);
+  }
+  console.log(`task log: ${JSON.stringify({ from: logged.from, to: logged.to, state: logged.state, reply: logged.reply })}`);
+
+  await tab(s, "Team");
+  const row = await waitFor("the task log row", () =>
+    find(s, `ul[aria-label='Task log'] li[aria-label='You asked ${TEAM_NAME}']`),
+  );
+  const rowText = await wd("GET", `${s}/element/${row}/text`);
+  if (!rowText.includes("Answered") || !rowText.includes(TEAM_QUESTION)) throw new Error(`the log row said ${JSON.stringify(rowText)}`);
+  await shot(s, "team-task-log");
+  console.log(`Team page log row: ${JSON.stringify(rowText.split("\n")[0])}`);
+
+  const remove = await one(`//li[@aria-label='${TEAM_NAME}']//button[normalize-space()='Remove']`);
+  await wd("POST", `${s}/element/${remove[ELEMENT]}/click`, {});
+  const confirm = await waitFor("Remove to confirm", () =>
+    one(`//div[@aria-label='Remove ${TEAM_NAME}?']//button[normalize-space()='Remove']`),
+  );
+  await wd("POST", `${s}/element/${confirm[ELEMENT]}/click`, {});
+  await waitFor("the agent gone from agent-team.json", async () => {
+    const file = JSON.parse(readFileSync(join(config, "agent-team.json"), "utf8"));
+    return file.agents.length === 0 ? true : null;
+  });
+  if (!existsSync(join(config, "agents", TEAM_ID))) throw new Error("removing the agent deleted its folder");
+  console.log("removed the agent; its folder stays");
+}
+
 // Settings → Local AI: on Windows smoke, capture Get engine → progress →
 // ready → Gemma 4 12B draft offer (PR proof). Then Manual takes a model file whose
 // name says its safety training was removed only after the notice is read,
@@ -1135,51 +1321,31 @@ async function localAi(s, config) {
       console.log("Get engine absent; download skipped, shot the state as found");
     }
 
-    // 4) Gemma 4 12B → Install and run draft model offer (its paired 12B drafter not on disk).
-    await click(s, ".local-ai button.mode-manual");
-    const showAll = await wd("POST", `${s}/elements`, {
+    // 4) The draft model offer for the model Auto picked, under Advanced.
+    // Auto picks by this PC's hardware, so a runner may get no offer.
+    await openAdvanced(s);
+    const offers = await wd("POST", `${s}/elements`, {
       using: "css selector",
-      value: ".local-ai button.link",
+      value: ".local-ai .local-draft-offer",
     });
-    for (const el of showAll) {
-      const label = await wd("GET", `${s}/element/${el[ELEMENT]}/text`);
-      if (/Show all/i.test(label)) {
-        await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
-        break;
-      }
+    if (offers.length > 0) {
+      const offer = await textOf(s, ".local-ai .local-draft-offer");
+      await scrollIntoView(s, ".local-ai .local-draft-offer");
+      await shot(s, "settings-local-ai-draft-offer");
+      console.log(`shot draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
+    } else {
+      console.log("no draft offer for the model Auto picked here");
     }
-    const gemma = await waitFor("Gemma 4 12B in the picker", async () => {
-      const el = await wd("POST", `${s}/element`, {
-        using: "xpath",
-        value: "//li[contains(@class,'local-model')][@aria-label='Gemma 4 12B']//input",
-      });
-      return el[ELEMENT];
-    });
-    await wd("POST", `${s}/element/${gemma}/click`, {});
-    const offer = await waitFor("the Gemma 4 12B draft offer", async () => {
-      const t = await textOf(s, ".local-ai .local-draft-offer");
-      const paired = /Gemma 4 12B draft model makes Gemma 4 12B/.test(t);
-      return /Install and run draft model/i.test(t) && paired ? t : null;
-    });
-    await scrollIntoView(s, ".local-ai .local-draft-offer");
-    await shot(s, "settings-local-ai-gemma-draft-offer");
-    console.log(`shot Gemma draft offer: ${JSON.stringify(offer.split("\n")[0])}`);
-
-    await click(s, ".local-ai button.reset-local");
-    await waitFor("the reset note after the draft offer", async () => {
-      const t = await textOf(s, ".local-ai .local-note");
-      return t === "Back to Auto." ? t : null;
-    });
   }
 
+  // Model files and the tuning sit under Advanced: Auto picks the model, and
+  // an added file loads when no downloaded model is on this PC. The Windows
+  // proof above can leave the page scrolled to the top, where the heading
+  // covers the card's buttons, so these clicks centre first.
   const modelFile = join(config, "Llama-3-8B-abliterated.Q4_K_M.gguf");
   writeFileSync(modelFile, "GGUF");
-  // The Windows proof above leaves the draft offer scrolled to the top, where
-  // the page heading covers the card's buttons, so these clicks centre first.
-  await clickCentered(s, ".local-ai button.mode-manual");
-  const input = await waitFor("the model file field", () =>
-    find(s, "input[aria-label='Model file path']"),
-  );
+  await openAdvanced(s);
+  const input = await find(s, "input[aria-label='Model file path']");
   await typeInto(s, input, modelFile);
   await clickCentered(s, ".local-ai button.use-file");
   const notice = await waitFor("the model notice", async () => {
@@ -1188,6 +1354,18 @@ async function localAi(s, config) {
   });
   console.log(`notice shown: ${JSON.stringify(notice.split("\n")[0])}`);
   await clickCentered(s, ".local-ai .notice button.accept");
+  await waitFor("the added model file", async () => {
+    const t = await textOf(s, ".local-ai ul[aria-label='Added model files']");
+    return t.includes("Llama-3-8B-abliterated.Q4_K_M.gguf") ? t : null;
+  });
+  const allow = await waitFor("the never-pause apps box", async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//label[contains(normalize-space(),'Never pause for these apps')]//textarea",
+    });
+    return el[ELEMENT];
+  });
+  await typeInto(s, allow, "smoke.exe");
   await clickCentered(s, ".local-ai button.save-local");
   await waitFor("the saved note", async () => {
     const t = await textOf(s, ".local-ai .local-note");
@@ -1195,9 +1373,9 @@ async function localAi(s, config) {
   });
   const saved = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
   if (
-    saved.mode !== "manual" ||
-    saved.localModel?.selected !== modelFile ||
-    !saved.noticeSeen?.includes(modelFile)
+    !saved.ownFiles?.includes(modelFile) ||
+    !saved.noticeSeen?.includes(modelFile) ||
+    saved.manual?.allowApps?.join() !== "smoke.exe"
   ) {
     throw new Error(`local_ai.json holds ${JSON.stringify(saved)}`);
   }
@@ -1206,22 +1384,48 @@ async function localAi(s, config) {
     throw new Error(`governor.json holds ${JSON.stringify(rules)}`);
   }
   await shot(s, "settings-local-ai");
-  console.log("model file picked after the notice");
+  console.log("model file added after the notice");
 
-  await click(s, ".local-ai button.reset-local");
+  // Reset Advanced puts the tuning and app lists back and keeps added files.
+  await clickCentered(s, ".local-ai button.reset-local");
   await waitFor("the reset note", async () => {
     const t = await textOf(s, ".local-ai .local-note");
-    return t === "Back to Auto." ? t : null;
+    return t === "Advanced settings are back to their defaults." ? t : null;
   });
   const reset = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
-  if (reset.mode !== "auto" || reset.localModel?.selected !== "") {
-    throw new Error(`Reset to Auto left ${JSON.stringify(reset)}`);
+  if (reset.manual?.allowApps?.length !== 0 || !reset.ownFiles?.includes(modelFile)) {
+    throw new Error(`Reset Advanced left ${JSON.stringify(reset)}`);
   }
-  console.log("reset to Auto");
+  console.log("Reset Advanced cleared the app list and kept the file");
+
+  // Remove the file again. On Windows the engine proof installed
+  // llama-server, and with an engine, a model file and no sign-in, Auto sends
+  // the next chats to this PC (local:no_keys) instead of the mock model.
+  await clickCentered(s, ".local-ai ul[aria-label='Added model files'] button.remove-file");
+  await clickCentered(s, ".local-ai button.save-local");
+  const removed = await waitFor("the file gone from local_ai.json", async () => {
+    const now = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
+    return now.ownFiles?.includes(modelFile) ? null : now;
+  });
+  if ((removed.ownFiles ?? []).length !== 0) {
+    throw new Error(`Remove left ${JSON.stringify(removed.ownFiles)}`);
+  }
+  console.log("model file removed and saved");
 }
 
-// Labs: a folder bundle installs off and untrusted into the config folder,
-// then Trust and Turn on land in the same plugin-state.json the cabin reads.
+/** Opens Settings → Local AI's Advanced part, once. */
+async function openAdvanced(s) {
+  const open = await wd("POST", `${s}/execute/sync`, {
+    script: "const d = document.querySelector('.local-ai details.local-advanced'); return d ? d.open : null;",
+    args: [],
+  });
+  if (open === false) await clickCentered(s, ".local-ai details.local-advanced > summary");
+  await waitFor("the Advanced settings", () => find(s, "input[aria-label='Model file path']"));
+}
+
+// Marketplace → Plugins: a folder bundle installs off and untrusted into the
+// config folder, then Trust and Turn on land in plugin-state.json. Plugins
+// moved off Settings → Labs (#2301).
 async function labs(s, config) {
   const bundle = join(config, "smoke-bundle");
   mkdirSync(bundle, { recursive: true });
@@ -1229,11 +1433,10 @@ async function labs(s, config) {
     join(bundle, "plugin.json"),
     JSON.stringify({ name: "smoke-kit", version: "0.1.0", description: "Smoke bundle" }),
   );
-  await tab(s, "Settings");
-  await section(s, "Labs");
-  const input = await waitFor("the install box", () => find(s, ".labs-row input"));
+  await tab(s, "Marketplace");
+  const input = await waitFor("the install box", () => find(s, ".marketplace-plugins .labs-row input"));
   await typeInto(s, input, bundle);
-  await click(s, ".labs-row button[type='submit']");
+  await click(s, ".marketplace-plugins .labs-row button[type='submit']");
   const step = async (label, state) => {
     const button = await waitFor(`the ${label} button`, async () => {
       const el = await wd("POST", `${s}/element`, {
@@ -1923,46 +2126,50 @@ async function noSidewaysScroll(s, when) {
   console.log(`no sideways scroll ${when}: ${wide}px in ${fits}px`);
 }
 
-/** A fresh profile opens on the first-run window (AutoSetup.tsx), which
- * covers the page until it's answered, and WebKit then refuses a click on
- * Send as "element click intercepted". Skip it the way a person would, then
- * wait out the corner note the launch pass may leave over the composer. */
+/** A fresh profile opens on first-run windows that cover the page until
+ * they're answered: setup (AutoSetup.tsx), get to know you
+ * (GetToKnowYou.tsx) and first run v2 (FirstRunV2.tsx). WebKit refuses a
+ * click on Send under them as "element click intercepted". Skip each the way
+ * a person would, topmost first, then wait out the corner note the launch
+ * pass may leave over the composer. */
+const FIRST_RUN_SKIP =
+  "//div[contains(@class,'first-run-backdrop')]//div[@role='dialog']" +
+  "//button[normalize-space()='Skip setup' or normalize-space()='Skip for now']";
+
 async function skipFirstRun(s) {
-  const skip = await waitFor(
-    "the first-run window",
-    () =>
-      wd("POST", `${s}/element`, {
-        using: "xpath",
-        value: "//div[@role='dialog' and contains(@class,'first-run')]//button[normalize-space()='Skip setup']",
-      }),
+  // The windows open one after another, so give the first one time to land.
+  await waitFor(
+    "a first-run window",
+    async () => (await wd("POST", `${s}/elements`, { using: "xpath", value: FIRST_RUN_SKIP })).length > 0,
     20000,
   ).catch(() => null);
-  if (skip) await wd("POST", `${s}/element/${skip[ELEMENT]}/click`, {});
-  // Get to know you (GetToKnowYou.tsx) is the next stage and uses the
-  // same backdrop; skip it too. With auto setup off it can open on its own.
-  const later = await waitFor(
-    "the get-to-know-you stage",
-    () =>
-      wd("POST", `${s}/element`, {
-        using: "xpath",
-        value: "//div[@role='dialog' and contains(@class,'onboard')]//button[normalize-space()='Skip for now']",
-      }),
-    10000,
-  ).catch(() => null);
-  if (later) await wd("POST", `${s}/element/${later[ELEMENT]}/click`, {});
-  if (!skip && !later) {
+  let skipped = 0;
+  for (let quiet = 0; quiet < 3 && skipped < 6; ) {
+    const skips = await wd("POST", `${s}/elements`, { using: "xpath", value: FIRST_RUN_SKIP });
+    if (skips.length === 0) {
+      // A later stage can open a moment after the last one closes.
+      quiet += 1;
+      await sleep(1500);
+      continue;
+    }
+    quiet = 0;
+    // A later window renders after an earlier one and sits on top of it.
+    await wd("POST", `${s}/element/${skips[skips.length - 1][ELEMENT]}/click`, {});
+    skipped += 1;
+    await sleep(500);
+  }
+  if (skipped === 0) {
     console.log("first run: no window (auto setup off)");
     return;
   }
-  await waitFor("the first-run window to close", async () => {
+  await waitFor("the first-run windows to close", async () => {
     const open = await wd("POST", `${s}/elements`, { using: "css selector", value: ".first-run-backdrop" });
     return open.length === 0;
   });
   await sleep(1000);
   const notes = await wd("POST", `${s}/elements`, { using: "css selector", value: ".auto-note.card .chip" });
   if (notes.length > 0) await wd("POST", `${s}/element/${notes[0][ELEMENT]}/click`, {});
-  const also = [later && "get to know you skipped", notes.length > 0 && "corner note closed"].filter(Boolean);
-  console.log(`first run: ${skip ? "skipped" : "no window (auto setup off)"}${also.map((a) => `, ${a}`).join("")}`);
+  console.log(`first run: ${skipped} window(s) skipped${notes.length > 0 ? ", corner note closed" : ""}`);
 }
 
 async function main() {
@@ -2115,7 +2322,9 @@ async function main() {
     await codeProjects(s, config, workspace);
     await codeAgent(s, config, workspace);
     await codeShip(s, config, workspace);
-    if (process.env.SMOKE_WEB === "1") await web(s);
+    await team(s, config);
+    await peerDoor(s, config);
+    if (process.env.SMOKE_WEB === "1") await web(s, config);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.
@@ -2139,11 +2348,12 @@ async function main() {
 }
 
 // A tool counts as offered when the model gets its schema or, with deferred
-// tools on, its line in load_tool_schema's index ("name — blurb").
+// tools on, its line in the deferred index in tool_search's description
+// ("name — blurb [toolset]").
 function offeredTools(body) {
   const tools = JSON.parse(body).tools ?? [];
-  const index = tools.find((t) => t.name === "load_tool_schema")?.description ?? "";
-  const deferred = (index.split("Deferred tools (index):\n")[1] ?? "")
+  const index = tools.find((t) => t.name === "tool_search")?.description ?? "";
+  const deferred = (index.split("Full deferred index:\n")[1] ?? "")
     .split("\n")
     .map((line) => line.split(" — ")[0].trim())
     .filter(Boolean);
@@ -2167,8 +2377,8 @@ async function desktop(s, config) {
       value: "//label[contains(., 'Let Loadout control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
+  // The switch saves on the flip.
   await wd("POST", `${s}/element/${desk}/click`, {});
-  await click(s, ".settings > form button[type='submit']");
   await waitFor("the saved desktop switch", () => {
     const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
     return saved.desktopControl === true;
@@ -2323,7 +2533,7 @@ async function webStallReport(origin, pending) {
   }
 }
 
-async function web(s) {
+async function web(s, config) {
   const { chromium } = createRequire(import.meta.url)("playwright");
   await tab(s, "Settings");
   await section(s, "Web access");
@@ -2391,9 +2601,12 @@ async function web(s) {
     console.log(`the web can't set the key: ${JSON.stringify(refused.paired.error)}`);
 
     // Port 4620 is HTTPS with the certificate whose fingerprint Settings shows.
+    // Trusting only the certificate the app saved, the handshake also proves
+    // it is valid for 127.0.0.1.
     const shown = await textOf(s, "[aria-label='Certificate fingerprint']");
+    const ca = readFileSync(join(config, "web-access", "cert.pem"));
     const served = await new Promise((done, fail) => {
-      const sock = tlsConnect({ host: "127.0.0.1", port: 4620, rejectUnauthorized: false }, () => {
+      const sock = tlsConnect({ host: "127.0.0.1", port: 4620, ca }, () => {
         done(sock.getPeerCertificate().fingerprint256);
         sock.end();
       });

@@ -11,7 +11,15 @@
 //!   it (`tokenRef`).
 //! - A server on a host the user has not granted is refused: an agent-made
 //!   connection that reaches a new host needs an egress grant first.
+//! - `catalog_id` (or a name that matches the bundled catalog) reuses the
+//!   Connectors install recipe. OAuth shows a URL elicit card and never
+//!   opens the browser; cancel removes the entry.
 
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use grokhub_core::mcp_catalog::{CatalogAuth, CatalogEntry};
 use serde_json::{json, Map, Value};
 
 use super::ToolOutput;
@@ -177,6 +185,155 @@ pub(crate) fn list() -> ToolOutput {
     ToolOutput::ok(grokhub_core::redact_secrets(&rows.join("\n")))
 }
 
+/// A bundled catalog entry from `catalog_id` or a matching `name`.
+pub(crate) fn resolve_catalog(args: &Value) -> Option<CatalogEntry> {
+    let catalog = grokhub_core::mcp_catalog::bundled();
+    let id = text(args, "catalog_id");
+    if !id.is_empty() {
+        return catalog.get(&id).cloned();
+    }
+    let name = text(args, "name");
+    if name.is_empty() {
+        return None;
+    }
+    catalog
+        .entries
+        .iter()
+        .find(|e| e.id.eq_ignore_ascii_case(&name) || e.name.eq_ignore_ascii_case(&name))
+        .cloned()
+}
+
+/// True when this add is a catalog key connector (credentials hard class).
+pub(crate) fn catalog_needs_key(args: &Value) -> bool {
+    resolve_catalog(args).is_some_and(|e| e.auth == CatalogAuth::Key)
+}
+
+fn drop_catalog_setup(name: &str, reason: &str) {
+    let config = crate::perm::config_dir();
+    let _ = record(name, reason, None);
+    hx::forget_connection_token(&config, name);
+    crate::mcp::invalidate();
+}
+
+pub(crate) fn add_catalog(
+    entry: &CatalogEntry,
+    reason: &str,
+    ask: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<String, String> {
+    let name = entry.id.clone();
+    if crate::mcp::is_desktop_server(&name) {
+        return Err(format!(
+            "{name} is {}'s own desktop server",
+            grokhub_core::brand::product_name()
+        ));
+    }
+    let config_entry = entry.config_entry();
+    let obj = config_entry
+        .as_object()
+        .cloned()
+        .ok_or_else(|| format!("{name}'s catalog entry is not an object"))?;
+    match record(&name, reason, Some(Value::Object(obj)))? {
+        Some(_) | None => {}
+    }
+    let next_turn = "Its tools join the next turn once this chat's tool list refreshes.";
+    match entry.auth {
+        CatalogAuth::None | CatalogAuth::Own => Ok(format!(
+            "added catalog connection {name} ({label}). {next_turn}",
+            label = entry.name
+        )),
+        CatalogAuth::Google => Ok(format!(
+            "added catalog connection {name} ({label}). Finish Google setup on the MCPs & Connectors page. {next_turn}",
+            label = entry.name
+        )),
+        CatalogAuth::Key => {
+            let message = format!(
+                "API key for {}. It is sealed with your keychain key and never shown to the model.",
+                entry.name
+            );
+            let token = match ask(&message) {
+                Some(t) => t,
+                None => {
+                    drop_catalog_setup(&name, "cancelled connector key");
+                    return Err(format!(
+                        "No key was given for {}, so nothing was kept.",
+                        entry.name
+                    ));
+                }
+            };
+            let config = crate::perm::config_dir();
+            if let Err(err) = hx::seal_connection_token(&config, &name, &token) {
+                drop_catalog_setup(&name, "failed to seal connector key");
+                return Err(err);
+            }
+            let mut with_ref = entry
+                .config_entry()
+                .as_object()
+                .cloned()
+                .ok_or_else(|| format!("{name}'s catalog entry is not an object"))?;
+            with_ref.insert("tokenRef".into(), json!(name));
+            if let Err(err) = record(&name, reason, Some(Value::Object(with_ref))) {
+                hx::forget_connection_token(&config, &name);
+                drop_catalog_setup(&name, "failed to save connector key");
+                return Err(err);
+            }
+            Ok(format!(
+                "added catalog connection {name} ({label}) with a sealed key. {next_turn}",
+                label = entry.name
+            ))
+        }
+        CatalogAuth::Oauth => add_catalog_oauth(entry),
+    }
+}
+
+fn add_catalog_oauth(entry: &CatalogEntry) -> Result<String, String> {
+    let name = entry.id.clone();
+    let label = entry.name.clone();
+    let session = crate::mcp::hook_session().unwrap_or_default();
+    let card_id: RefCell<Option<String>> = RefCell::new(None);
+    let offered = Arc::new(AtomicBool::new(false));
+    let offered_flag = offered.clone();
+    let open = |link: &str| -> Result<(), String> {
+        let message = format!(
+            "Sign in to {label} in your browser, then press I've finished. The app never opens the browser by itself."
+        );
+        match crate::mcp::offer_url(&label, &message, link) {
+            Some(id) => {
+                *card_id.borrow_mut() = Some(id);
+                offered_flag.store(true, Ordering::SeqCst);
+                Ok(())
+            }
+            None => Err(format!("No sign-in card for {label}, so nothing was kept.")),
+        }
+    };
+    let stop = || {
+        let id = card_id.borrow().clone();
+        matches!(
+            id.and_then(|id| crate::mcp::try_take_elicit(&session, &id)),
+            Some(crate::mcp::ElicitAnswer::Decline) | Some(crate::mcp::ElicitAnswer::Cancel)
+        )
+    };
+    match crate::mcp::sign_in_until(&name, &open, &stop) {
+        Ok(line) => Ok(format!(
+            "{line}. Its tools join the next turn once this chat's tool list refreshes."
+        )),
+        Err(err) => {
+            drop_catalog_setup(&name, "cancelled connector sign-in");
+            if !offered.load(Ordering::SeqCst) {
+                return Err(err);
+            }
+            if err.contains("stopped") {
+                Err(format!(
+                    "Sign-in for {label} was cancelled, so nothing was kept."
+                ))
+            } else {
+                Err(format!(
+                    "Sign-in for {label} did not finish ({err}), so nothing was kept."
+                ))
+            }
+        }
+    }
+}
+
 fn add_inner(
     args: &Value,
     keep_token: bool,
@@ -185,8 +342,18 @@ fn add_inner(
     if carries_secret(args) {
         return Err("Never pass a token or header. Set needs_token and the user types it in. Nothing was added.".into());
     }
-    let name = name_of(args)?;
     let reason = text(args, "reason");
+    if let Some(entry) = resolve_catalog(args) {
+        let url = text(args, "url");
+        let command = text(args, "command");
+        if !url.is_empty() || !command.is_empty() {
+            return Err(
+                "catalog_id already carries the install recipe; leave url and command out.".into(),
+            );
+        }
+        return add_catalog(&entry, &reason, ask);
+    }
+    let name = name_of(args)?;
     let url = text(args, "url");
     let command = text(args, "command");
     let mut entry = Map::new();
@@ -779,5 +946,214 @@ mod tests {
             crate::mcp::Installed::AlreadyThere,
             "installing again keeps the saved key"
         );
+    }
+
+    #[test]
+    fn catalog_id_or_name_resolves_a_bundled_connector() {
+        let by_id = resolve_catalog(&json!({"catalog_id": "notion", "name": "x", "reason": "r"}));
+        assert_eq!(by_id.as_ref().map(|e| e.id.as_str()), Some("notion"));
+        let by_name = resolve_catalog(&json!({"name": "Notion", "reason": "r"}));
+        assert_eq!(by_name.as_ref().map(|e| e.id.as_str()), Some("notion"));
+        assert!(catalog_needs_key(&json!({"catalog_id": "brave-search"})));
+        assert!(!catalog_needs_key(&json!({"catalog_id": "notion"})));
+        assert!(!catalog_needs_key(&json!({"name": "notes"})));
+    }
+
+    #[test]
+    fn a_catalog_none_connector_lands_and_cancel_is_n_a() {
+        let root = crate::harness::test_dir("conn-catalog-none");
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let out = ctx_run(
+            &root,
+            "connection_add",
+            r#"{"name":"context7","catalog_id":"context7","reason":"docs"}"#,
+        );
+        assert!(!out.failed, "{}", out.text);
+        assert!(
+            out.text.contains("added catalog connection context7")
+                && out.text.contains("next turn"),
+            "{}",
+            out.text
+        );
+        let text = std::fs::read_to_string(root.join("mcp.json")).unwrap();
+        assert!(text.contains("mcp.context7.com"), "{text}");
+        assert!(!text.contains("tokenRef"), "{text}");
+    }
+
+    #[test]
+    fn a_catalog_key_decline_leaves_no_config() {
+        let root = crate::harness::test_dir("conn-catalog-key-deny");
+        crate::harness::use_key_store_for(
+            &root,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let always = Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: true,
+        };
+        let args = r#"{"name":"brave-search","catalog_id":"brave-search","reason":"search"}"#;
+        assert_eq!(
+            decide_harness(
+                &always,
+                "connection_add",
+                args,
+                true,
+                None,
+                AccessMode::Full
+            ),
+            GateOutcome::Park {
+                reason: "hard-class credentials: Credentials / secrets — Always cannot skip".into(),
+                hard: Some(HardClass::Credentials),
+                needs_user: true,
+            }
+        );
+        let mut emit = |_view: crate::mcp::ElicitView| {};
+        let mut wait = |_id: &str| crate::mcp::ElicitAnswer::Decline;
+        let out = crate::mcp::with_elicit(true, "conn-catalog-key", &mut emit, &mut wait, || {
+            ctx_run(&root, "connection_add", args)
+        });
+        assert!(out.failed, "{}", out.text);
+        assert!(
+            out.text.contains("No key was given") && out.text.contains("nothing was kept"),
+            "{}",
+            out.text
+        );
+        assert!(
+            !root.join("mcp.json").exists()
+                || !std::fs::read_to_string(root.join("mcp.json"))
+                    .unwrap_or_default()
+                    .contains("brave-search"),
+            "cancel must leave no brave-search entry"
+        );
+    }
+
+    #[test]
+    fn a_catalog_oauth_card_never_opens_the_browser_and_decline_clears_config() {
+        let root = crate::harness::test_dir("conn-catalog-oauth-deny");
+        crate::harness::use_key_store_for(
+            &root,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let server = crate::mcp::AuthMcp::start();
+        let entry = CatalogEntry {
+            id: "auth-demo".into(),
+            name: "Auth Demo".into(),
+            publisher: "Test".into(),
+            category: "Test".into(),
+            description: "OAuth fixture".into(),
+            logo: "A".into(),
+            transport: "http".into(),
+            command: Vec::new(),
+            url: server.url(),
+            auth: CatalogAuth::Oauth,
+            key_env: String::new(),
+            key_hint: String::new(),
+            registry_id: String::new(),
+            source: "https://example.com/auth-demo".into(),
+            capabilities: vec!["echo".into()],
+            permissions: "Test only.".into(),
+            tools: Vec::new(),
+            env: Default::default(),
+        };
+        let (tx, inbox) = crate::mcp::ElicitInbox::pair();
+        crate::mcp::attach_elicit("oauth-deny", inbox);
+        let opened = Arc::new(std::sync::Mutex::new(String::new()));
+        let seen = opened.clone();
+        let mut emit = move |view: crate::mcp::ElicitView| {
+            assert_eq!(view.mode, "url");
+            assert!(!view.url.is_empty());
+            *seen.lock().unwrap() = view.url.clone();
+            let _ = tx.send(crate::mcp::ElicitNote {
+                id: view.id,
+                action: "decline".into(),
+                content: None,
+            });
+        };
+        let mut wait = |_id: &str| crate::mcp::ElicitAnswer::Decline;
+        let mut ask = |_m: &str| None;
+        let out = crate::mcp::with_elicit(true, "oauth-deny", &mut emit, &mut wait, || {
+            add_catalog(&entry, "connect from chat", &mut ask)
+        });
+        crate::mcp::detach_elicit("oauth-deny");
+        assert!(out.is_err(), "{out:?}");
+        let err = out.unwrap_err();
+        assert!(
+            err.contains("cancelled") && err.contains("nothing was kept"),
+            "{err}"
+        );
+        assert!(
+            !opened.lock().unwrap().is_empty(),
+            "the URL card must show the authorize link"
+        );
+        let text = std::fs::read_to_string(root.join("mcp.json")).unwrap_or_default();
+        assert!(
+            !text.contains("auth-demo"),
+            "decline must remove the staged entry: {text}"
+        );
+        assert!(crate::harness::open_mcp_signin(&root, "auth-demo").is_none());
+    }
+
+    #[test]
+    fn a_catalog_oauth_finish_seals_sign_in_for_the_next_turn() {
+        let root = crate::harness::test_dir("conn-catalog-oauth-ok");
+        crate::harness::use_key_store_for(
+            &root,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let server = crate::mcp::AuthMcp::start();
+        let entry = CatalogEntry {
+            id: "auth-ok".into(),
+            name: "Auth Ok".into(),
+            publisher: "Test".into(),
+            category: "Test".into(),
+            description: "OAuth fixture".into(),
+            logo: "A".into(),
+            transport: "http".into(),
+            command: Vec::new(),
+            url: server.url(),
+            auth: CatalogAuth::Oauth,
+            key_env: String::new(),
+            key_hint: String::new(),
+            registry_id: String::new(),
+            source: "https://example.com/auth-ok".into(),
+            capabilities: vec!["echo".into()],
+            permissions: "Test only.".into(),
+            tools: Vec::new(),
+            env: Default::default(),
+        };
+        let (tx, inbox) = crate::mcp::ElicitInbox::pair();
+        crate::mcp::attach_elicit("oauth-ok", inbox);
+        let approve = crate::mcp::approving_browser("good-code");
+        let mut emit = move |view: crate::mcp::ElicitView| {
+            assert_eq!(view.mode, "url");
+            approve(&view.url).unwrap();
+            let _ = tx.send(crate::mcp::ElicitNote {
+                id: view.id,
+                action: "accept".into(),
+                content: Some(json!({})),
+            });
+        };
+        let mut wait = |_id: &str| crate::mcp::ElicitAnswer::Accept(json!({}));
+        let mut ask = |_m: &str| None;
+        let out = crate::mcp::with_elicit(true, "oauth-ok", &mut emit, &mut wait, || {
+            add_catalog(&entry, "connect from chat", &mut ask)
+        });
+        crate::mcp::detach_elicit("oauth-ok");
+        let line = out.expect("oauth should finish");
+        assert!(
+            line.contains("Signed in to auth-ok") && line.contains("next turn"),
+            "{line}"
+        );
+        let text = std::fs::read_to_string(root.join("mcp.json")).unwrap();
+        assert!(
+            text.contains("auth-ok") && text.contains(&server.url()),
+            "{text}"
+        );
+        assert!(crate::harness::open_mcp_signin(&root, "auth-ok").is_some());
     }
 }

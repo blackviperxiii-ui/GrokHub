@@ -4,42 +4,116 @@ import { act } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  GrokSignInPoll,
-  GrokSignInStart,
+  BattlenetPage,
+  ChatArtifact,
+  ChatEvent,
   ImagineKind,
   ImagineMade,
   ImaginePage,
   ImagineTile,
+  LibraryPage,
+  MissionPage,
+  Settings,
+  SlashEffect,
+  SlashHit,
   WallNews,
 } from "./api";
 
 const api = vi.hoisted(() => ({
+  getSettings: vi.fn<() => Promise<Settings>>(),
+  sendChat: vi.fn<(id: string, text: string) => Promise<string>>(),
+  slashHits: vi.fn<(draft: string) => Promise<SlashHit[]>>(),
+  runSlash: vi.fn<(line: string) => Promise<SlashEffect>>(),
+  onChatEvent: vi.fn<(handler: (ev: { conversationId: string; event: ChatEvent; helper?: boolean }) => void) => Promise<() => void>>(),
+  chatPicture: vi.fn<(path: string) => Promise<string>>(),
+  chatMedia: vi.fn<(path: string) => Promise<string>>(),
+  saveChatMediaToLibrary: vi.fn<(path: string, prompt: string) => Promise<ImagineTile>>(),
+  listChatArtifacts: vi.fn<() => Promise<ChatArtifact[]>>(),
+  openChatArtifact: vi.fn<(path: string) => Promise<void>>(),
+  revealChatArtifact: vi.fn<(path: string) => Promise<void>>(),
   getImagine: vi.fn<() => Promise<ImaginePage>>(),
   imagineGenerate:
     vi.fn<(prompt: string, aspect: string, count: number, kind: ImagineKind) => Promise<ImagineMade>>(),
   imagineCancel: vi.fn<() => Promise<boolean>>(),
   imagineImage: vi.fn<(name: string) => Promise<string>>(),
-  pulseImage: vi.fn<(name: string) => Promise<string>>(),
-  imagineSignInStart: vi.fn<() => Promise<GrokSignInStart>>(),
-  imagineSignInPoll: vi.fn<() => Promise<GrokSignInPoll>>(),
-  imagineSignOut: vi.fn<() => Promise<ImaginePage>>(),
   onWallNews: vi.fn<(handler: (news: WallNews) => void) => Promise<() => void>>(),
+  getLibrary: vi.fn<() => Promise<LibraryPage>>(),
+  getBattlenet: vi.fn<() => Promise<BattlenetPage>>(),
+  getMission: vi.fn<() => Promise<MissionPage>>(),
+  libraryCover: vi.fn<() => Promise<string | null>>(),
 }));
 
-vi.mock("./api", () => api);
-vi.mock("./external", () => ({ openExternal: () => Promise.resolve() }));
+vi.mock("./api", async () => {
+  const { chatTabApiStubs } = await import("./chatTabApiStubs");
+  return {
+    ...chatTabApiStubs(),
+    quickChips: () => Promise.resolve([]),
+    chipOutcome: () => Promise.resolve(true),
+    getSettings: api.getSettings,
+    sendChat: api.sendChat,
+    slashHits: api.slashHits,
+    runSlash: api.runSlash,
+    onChatEvent: api.onChatEvent,
+    chatPicture: api.chatPicture,
+    chatMedia: api.chatMedia,
+    saveChatMediaToLibrary: api.saveChatMediaToLibrary,
+    listChatArtifacts: api.listChatArtifacts,
+    openChatArtifact: api.openChatArtifact,
+    revealChatArtifact: api.revealChatArtifact,
+    getImagine: api.getImagine,
+    imagineGenerate: api.imagineGenerate,
+    imagineCancel: api.imagineCancel,
+    imagineImage: api.imagineImage,
+    onWallNews: api.onWallNews,
+    getLibrary: api.getLibrary,
+    getBattlenet: api.getBattlenet,
+    getMission: api.getMission,
+    libraryCover: api.libraryCover,
+    libraryPlay: vi.fn(),
+    battlenetPlay: vi.fn(),
+    battlenetOpenFolder: vi.fn(),
+    closeChat: vi.fn(),
+    addAutomation: vi.fn(),
+    downloadModels: vi.fn(),
+    answerElicit: vi.fn(),
+    saveSettings: vi.fn(),
+    answerPermission: vi.fn(),
+    cancelChat: vi.fn(),
+    getStartChat: () => Promise.resolve(null),
+    loadChat: vi.fn(),
+    helperQuestions: () => Promise.resolve([]),
+    onEventGap: () => Promise.resolve(() => {}),
+    onFileDrop: () => Promise.resolve(() => {}),
+    stageAttachment: vi.fn(),
+    stageAttachmentPaths: vi.fn(),
+    pickAttachments: vi.fn(),
+    removeAttachment: vi.fn(),
+  };
+});
 
+import { Chat, IMAGINE_PROMPT_HINT, makingLine } from "./Chat";
 import {
-  GALLERY_EMPTY,
-  IMAGINE_BUSY,
-  Imagine,
-  makingLine,
-  NEED_SIGNIN,
+  ARTIFACTS_EMPTY,
+  CREATIONS_EMPTY,
+  filterArtifacts,
+  Library,
   paintingLine,
   WALL_RETRY,
   wallLine,
-} from "./Imagine";
-import { requestImagine } from "./imagineAsk";
+} from "./Library";
+
+function artifact(over: Partial<ChatArtifact> = {}): ChatArtifact {
+  return {
+    id: "shell-1:cabin.png",
+    kind: "image",
+    name: "cabin.png",
+    path: "/home/user/.config/app/sessions/shell-1/media/cabin.png",
+    chatId: "shell-1",
+    chatTitle: "make a cabin",
+    created: 2,
+    ...over,
+  };
+}
 
 function tile(over: Partial<ImagineTile> = {}): ImagineTile {
   return {
@@ -54,17 +128,64 @@ function tile(over: Partial<ImagineTile> = {}): ImagineTile {
   };
 }
 
-const EMPTY: ImaginePage = { tiles: [], ready: true, account: null, canSignIn: false };
+const SETTINGS: Settings = {
+  closeToTray: true,
+  hasApiKey: true,
+  workspace: "",
+  workspacePath: "/home/me/GrokHub-Work",
+  approvals: "ask",
+  desktopControl: false,
+  theme: "system",
+  version: "3.1.0",
+  summonHotkey: false,
+  notifications: true,
+  dockPanels: false,
+  dockLayout: { panes: [{ tabs: ["chat"], active: 0, share: 1000, id: "pane-1" }], focused: 0 },
+};
 
-describe("Imagine", () => {
+const EMPTY_PAGE: ImaginePage = { tiles: [], ready: true, account: null, canSignIn: false };
+const EMPTY_XP = {
+  level: 1,
+  title: "Rookie",
+  xp: 0,
+  nextLevelXp: 100,
+  frac: 0,
+  today: 0,
+  week: {
+    days: [false, false, false, false, false, false, false],
+    today: 0,
+    active: 0,
+    target: 3,
+    inARow: 0,
+    played: 0,
+    freezes: 0,
+  },
+};
+
+describe("Chat media generation and Library Creations", () => {
+  let pushEvent: (ev: { conversationId: string; event: ChatEvent; helper?: boolean }) => void;
+
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+    pushEvent = () => {};
+    api.getSettings.mockResolvedValue(SETTINGS);
+    api.slashHits.mockResolvedValue([]);
+    api.onChatEvent.mockImplementation((handler) => {
+      pushEvent = handler;
+      return Promise.resolve(() => {});
+    });
     api.imagineImage.mockImplementation((name) => Promise.resolve(`data:image/png;base64,${name}`));
     api.imagineCancel.mockResolvedValue(true);
     api.onWallNews.mockResolvedValue(() => {});
+    api.getLibrary.mockResolvedValue({ steamFound: false, games: [] });
+    api.getBattlenet.mockResolvedValue({ found: false, games: [] });
+    api.getMission.mockResolvedValue({ mission: null, xp: EMPTY_XP });
+    api.libraryCover.mockResolvedValue(null);
+    api.listChatArtifacts.mockResolvedValue([]);
+    api.openChatArtifact.mockResolvedValue();
+    api.revealChatArtifact.mockResolvedValue();
   });
 
-  /** Catches the wall's news handler; returns a way to send it news. */
   function wallNews(unlisten: () => void = () => {}) {
     let tell: (news: WallNews) => void = () => {};
     api.onWallNews.mockImplementation((handler) => {
@@ -74,280 +195,262 @@ describe("Imagine", () => {
     return (news: WallNews) => act(() => tell(news));
   }
 
-  it("shows a living wall cover painting with Stop, then the cover when it lands, and stops listening on close", async () => {
+  it("/imagine shows progress with Stop, then renders the generated image inline with Lightbox and Download", async () => {
+    let finish: (made: ImagineMade) => void = () => {};
+    api.runSlash.mockResolvedValueOnce({ kind: "imagine", media: "image", prompt: "a snowy cabin" });
+    api.imagineGenerate.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/imagine a snowy cabin{Enter}");
+
+    expect(api.imagineGenerate).toHaveBeenCalledWith("a snowy cabin", "1:1", 1, "image");
+    expect(await screen.findByText("Making 1 image…")).toBeInTheDocument();
+    expect(makingLine("image", 1)).toBe("Making 1 image…");
+    expect(makingLine("image", 2)).toBe("Making 2 images…");
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+
+    act(() =>
+      finish({
+        page: { tiles: [tile()], ready: true, account: null, canSignIn: false },
+        made: 1,
+        note: "",
+      }),
+    );
+
+    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
+    const img = await screen.findByRole("img", { name: "snowy cabin" });
+    expect(img).toHaveAttribute("src", "data:image/png;base64,gen-1_a.png");
+    expect(screen.getByText("Saved to Library")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    const box = await screen.findByRole("dialog", { name: "Image" });
+    expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute("download", "gen-1_a.png");
+    await userEvent.click(within(box).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("/imagine-video generates a video inline, and Stop cancels an in-flight run", async () => {
+    let fail: (err: string) => void = () => {};
+    api.runSlash.mockResolvedValueOnce({ kind: "imagine", media: "video", prompt: "waves" });
+    api.imagineGenerate.mockReturnValueOnce(new Promise((_, reject) => (fail = reject)));
+
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/imagine-video waves{Enter}");
+
+    expect(api.imagineGenerate).toHaveBeenCalledWith("waves", "1:1", 1, "video");
+    expect(await screen.findByText("Making a video… this can take a few minutes.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(api.imagineCancel).toHaveBeenCalledTimes(1);
+
+    act(() => fail("Stopped."));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Stopped.");
+  });
+
+  it("bare /imagine prompts the user and fills the composer", async () => {
+    api.runSlash.mockResolvedValueOnce({ kind: "imagine", media: "image", prompt: "" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "/imagine{Enter}");
+
+    expect(await screen.findByText(IMAGINE_PROMPT_HINT)).toBeInTheDocument();
+    expect(screen.getByLabelText("Message")).toHaveValue("/imagine ");
+    expect(api.imagineGenerate).not.toHaveBeenCalled();
+  });
+
+  it("tool-generated image and video render inline in Chat and save to Library", async () => {
+    let resolveTurn: () => void = () => {};
+    let chatId = "";
+    api.sendChat.mockImplementation((id) => {
+      chatId = id;
+      return new Promise((resolve) => {
+        resolveTurn = () => resolve(id);
+      });
+    });
+    const imgPath = "/home/me/.config/app/sessions/c1/media/image-1.png";
+    const vidPath = "/home/me/.config/app/sessions/c1/media/video-2.mp4";
+    api.chatPicture.mockResolvedValue("data:image/png;base64,IMGDATA");
+    api.chatMedia.mockResolvedValue("data:video/mp4;base64,VIDDATA");
+    api.saveChatMediaToLibrary
+      .mockResolvedValueOnce(tile({ id: "lib-img", name: "lib-img_a.png", title: "image_generate" }))
+      .mockResolvedValueOnce(tile({ id: "lib-vid", name: "lib-vid_a.mp4", title: "video_generate", video: true }));
+
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "make a picture and a short video{Enter}");
+    await waitFor(() => expect(chatId).not.toBe(""));
+
+    act(() => {
+      pushEvent({
+        conversationId: chatId,
+        event: {
+          kind: "tool",
+          id: "t-img",
+          title: "image_generate",
+          status: "completed",
+          detail: `IMAGINE: ${imgPath}`,
+          picture: imgPath,
+        },
+      });
+      pushEvent({
+        conversationId: chatId,
+        event: {
+          kind: "tool",
+          id: "t-vid",
+          title: "video_generate",
+          status: "completed",
+          detail: `IMAGINE: ${vidPath}`,
+          video: vidPath,
+        },
+      });
+    });
+
+    const img = await screen.findByRole("img", { name: "The picture this made" });
+    expect(img).toHaveAttribute("src", "data:image/png;base64,IMGDATA");
+    const vid = await screen.findByLabelText("The video this made");
+    expect(vid.tagName).toBe("VIDEO");
+    expect(vid).toHaveAttribute("src", "data:video/mp4;base64,VIDDATA");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save to Library" });
+    expect(saveButtons).toHaveLength(2);
+    await userEvent.click(saveButtons[0]);
+    expect(api.saveChatMediaToLibrary).toHaveBeenCalledWith(imgPath, "image_generate");
+    await userEvent.click(saveButtons[1]);
+    expect(api.saveChatMediaToLibrary).toHaveBeenCalledWith(vidPath, "video_generate");
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Saved to Library" })).toHaveLength(2));
+
+    act(() => {
+      pushEvent({ conversationId: chatId, event: { kind: "done", stop: "end_turn" } });
+      resolveTurn();
+    });
+  });
+
+  it("Library Creations shows saved Imagine images and videos with Lightbox, Download, and living wall status", async () => {
     const unlisten = vi.fn();
     const tell = wallNews(unlisten);
     api.getImagine
-      .mockResolvedValueOnce(EMPTY)
-      .mockResolvedValue({ ...EMPTY, tiles: [tile({ id: "abc", name: "abc_a.png", title: "Snow porch" })] });
-    const { unmount } = render(<Imagine />);
-    expect(await screen.findByText(GALLERY_EMPTY)).toBeVisible();
+      .mockResolvedValueOnce(EMPTY_PAGE)
+      .mockResolvedValue({
+        ...EMPTY_PAGE,
+        tiles: [
+          tile({ id: "abc", name: "abc_a.png", title: "Snow porch" }),
+          tile({ id: "vid-1", name: "vid-1_a.mp4", title: "Ocean waves", video: true }),
+        ],
+      });
+    api.imagineImage.mockImplementation((name) =>
+      Promise.resolve(name.endsWith(".mp4") ? "data:video/mp4;base64,AAAA" : `data:image/png;base64,${name}`),
+    );
+
+    const { unmount } = render(<Library />);
+    await userEvent.click(screen.getByRole("button", { name: "Creations" }));
+    expect(await screen.findByText(CREATIONS_EMPTY)).toBeVisible();
 
     tell({ state: "painting", title: "Snow porch" });
     expect(screen.getByRole("status")).toHaveTextContent("Painting a wall cover: Snow porch");
-    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
-    expect(screen.queryByRole("button", { name: "Make" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Image" })).toBeDisabled();
+    expect(paintingLine("Snow porch")).toBe("Painting a wall cover: Snow porch");
     await userEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(api.imagineCancel).toHaveBeenCalledTimes(1);
 
     tell({ state: "painted", title: "Snow porch" });
     expect(await screen.findByText("Snow porch")).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("New cover on the wall: Snow porch");
-    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "false");
-    expect(screen.getByRole("button", { name: "Make" })).toBeVisible();
     expect(wallLine("Snow porch")).toBe("New cover on the wall: Snow porch");
-    expect(paintingLine("Snow porch")).toBe("Painting a wall cover: Snow porch");
-    expect(api.getImagine).toHaveBeenCalledTimes(2);
+
+    // Open saved video in Lightbox player.
+    await userEvent.click(screen.getByRole("button", { name: "Open Ocean waves" }));
+    const box = await screen.findByRole("dialog", { name: "Image" });
+    expect(box.querySelector("video")).toHaveAttribute("src", "data:video/mp4;base64,AAAA");
+    expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute("download", "vid-1_a.mp4");
+    await userEvent.click(within(box).getByRole("button", { name: "Close" }));
+
+    tell({ state: "failed" });
+    expect(screen.getByRole("status")).toHaveTextContent(WALL_RETRY);
+    expect(WALL_RETRY).toBe("The wall cover didn't come. It tries again in 15 minutes.");
+
     unmount();
     await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
   });
 
-  it("says when a wall cover fails, gives Make back, and clears a Make it refused", async () => {
-    const tell = wallNews();
-    api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockRejectedValue(IMAGINE_BUSY);
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    // The Make went out before the page heard the cover start.
-    await userEvent.type(screen.getByLabelText("What to make"), "a fox");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(IMAGINE_BUSY);
-
-    tell({ state: "painting", title: "Snow porch" });
-    expect(screen.getByRole("status")).toHaveTextContent("Painting a wall cover: Snow porch");
-    tell({ state: "failed" });
-    expect(screen.getByRole("status")).toHaveTextContent(WALL_RETRY);
-    expect(WALL_RETRY).toBe("The wall cover didn't come. It tries again in 15 minutes.");
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("button", { name: "Make" })).toBeEnabled();
-    expect(api.getImagine).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a running Make's own line when a wall cover lands", async () => {
-    const tell = wallNews();
-    let finish: (made: ImagineMade) => void = () => {};
-    api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    await userEvent.type(screen.getByLabelText("What to make"), "a fox");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(screen.getByRole("status")).toHaveTextContent(makingLine("image", 1));
-
-    tell({ state: "painted", title: "Snow porch" });
-    await waitFor(() => expect(api.getImagine).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole("status")).toHaveTextContent(makingLine("image", 1));
-    expect(screen.getByRole("button", { name: "Stop" })).toBeVisible();
-    act(() => finish({ page: EMPTY, made: 1, note: "" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Make" })).toBeVisible());
-  });
-
-  it("starts square, one image, video off", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    render(<Imagine />);
-    expect(await screen.findByText(GALLERY_EMPTY)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Square" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "1" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Image" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Video" })).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Make" })).toBeDisabled();
-  });
-
-  it("generate shows progress, then the new tiles", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    let finish: (made: ImagineMade) => void = () => {};
-    api.imagineGenerate.mockReturnValue(new Promise((resolve) => (finish = resolve)));
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    await userEvent.type(screen.getByLabelText("What to make"), "a snowy cabin");
-    await userEvent.click(screen.getByRole("button", { name: "Wide" }));
-    await userEvent.click(screen.getByRole("button", { name: "2" }));
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-
-    expect(api.imagineGenerate).toHaveBeenCalledWith("a snowy cabin", "3:2", 2, "image");
-    expect(screen.getByRole("status")).toHaveTextContent("Making 2 images…");
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
-
-    finish({
-      page: { tiles: [tile({ id: "gen-2", name: "gen-2_a.png" }), tile()], ready: true, account: null, canSignIn: false },
-      made: 2,
-      note: "",
+  it("Library Artifacts lists chat media with Open chat, search, Open, Download and Copy", async () => {
+    const openChat = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
     });
-    const gallery = await screen.findByRole("list", { name: "Gallery" });
-    expect(within(gallery).getAllByRole("listitem")).toHaveLength(2);
-    expect(screen.getByRole("status")).toHaveTextContent("Made 2.");
-    expect(screen.getByRole("button", { name: "Make" })).toBeEnabled();
-    await waitFor(() => expect(api.imagineImage).toHaveBeenCalledWith("gen-2_a.png"));
-  });
+    const imgPath = "/home/user/.config/app/sessions/shell-1/media/cabin.png";
+    const vidPath = "/home/user/.config/app/sessions/shell-1/media/waves.mp4";
+    api.listChatArtifacts.mockResolvedValue([
+      artifact({ id: "shell-1:cabin.png", name: "cabin.png", path: imgPath }),
+      artifact({
+        id: "shell-1:waves.mp4",
+        kind: "video",
+        name: "waves.mp4",
+        path: vidPath,
+        chatTitle: "ocean clip",
+      }),
+      artifact({
+        id: "shell-1:link:0",
+        kind: "link",
+        name: "example.com/docs",
+        path: "https://example.com/docs",
+        chatTitle: "docs",
+      }),
+    ]);
+    api.chatPicture.mockResolvedValue("data:image/png;base64,CABIN");
+    api.chatMedia.mockResolvedValue("data:video/mp4;base64,AAAA");
 
-  it("a video is one, with no count chips", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockReturnValue(new Promise(() => {}));
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    await userEvent.click(screen.getByRole("button", { name: "Video" }));
-    expect(screen.queryByRole("group", { name: "How many" })).toBeNull();
-    await userEvent.type(screen.getByLabelText("What to make"), "waves");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(api.imagineGenerate).toHaveBeenCalledWith("waves", "1:1", 1, "video");
-    expect(screen.getByRole("status")).toHaveTextContent(makingLine("video", 1));
-  });
+    const listed = [
+      artifact({ id: "shell-1:cabin.png", name: "cabin.png", path: imgPath }),
+      artifact({
+        id: "shell-1:waves.mp4",
+        kind: "video",
+        name: "waves.mp4",
+        path: vidPath,
+        chatTitle: "ocean clip",
+      }),
+      artifact({
+        id: "shell-1:link:0",
+        kind: "link",
+        name: "example.com/docs",
+        path: "https://example.com/docs",
+        chatTitle: "docs",
+      }),
+    ];
+    expect(filterArtifacts(listed, "cabin").map((a) => a.name)).toEqual(["cabin.png"]);
+    expect(filterArtifacts(listed, "ocean").map((a) => a.name)).toEqual(["waves.mp4"]);
 
-  it("Stop calls cancel and the run ends as stopped", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    let fail: (err: string) => void = () => {};
-    api.imagineGenerate.mockReturnValue(new Promise((_, reject) => (fail = reject)));
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    await userEvent.type(screen.getByLabelText("What to make"), "waves");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
-    expect(api.imagineCancel).toHaveBeenCalledTimes(1);
-    fail("Stopped.");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Stopped.");
-    expect(screen.getByRole("button", { name: "Make" })).toBeEnabled();
-  });
+    render(<Library onOpenChat={openChat} />);
+    await userEvent.click(screen.getByRole("button", { name: "Artifacts" }));
+    expect(await screen.findByLabelText("Artifacts")).toBeVisible();
+    expect(screen.getByText("cabin.png")).toBeVisible();
+    expect(screen.getByText("waves.mp4")).toBeVisible();
+    expect(screen.getByText("example.com/docs")).toBeVisible();
 
-  it("the lightbox opens a tile with Download and closes", async () => {
-    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true, account: null, canSignIn: false });
-    render(<Imagine />);
-    await userEvent.click(await screen.findByRole("button", { name: "Open snowy cabin" }));
+    await userEvent.type(screen.getByLabelText("Search artifacts"), "cabin");
+    expect(screen.getByText("cabin.png")).toBeVisible();
+    expect(screen.queryByText("waves.mp4")).toBeNull();
+    expect(screen.queryByText("example.com/docs")).toBeNull();
+
+    await userEvent.clear(screen.getByLabelText("Search artifacts"));
+    const chatButtons = screen.getAllByRole("button", { name: "Open chat" });
+    await userEvent.click(chatButtons[0]);
+    expect(openChat).toHaveBeenCalledWith("shell-1");
+
+    await userEvent.click(screen.getByRole("button", { name: "Open cabin.png" }));
     const box = await screen.findByRole("dialog", { name: "Image" });
-    expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute("download", "gen-1_a.png");
-    expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute(
-      "href",
-      "data:image/png;base64,gen-1_a.png",
-    );
+    expect(box.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,CABIN");
+    expect(within(box).getByRole("link", { name: "Download" })).toHaveAttribute("download", "cabin.png");
     await userEvent.click(within(box).getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+
+    const copyButtons = screen.getAllByRole("button", { name: "Copy" });
+    await userEvent.click(copyButtons[0]);
+    expect(writeText).toHaveBeenCalledWith(imgPath);
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied.");
   });
 
-  it("a video tile opens in a player", async () => {
-    api.getImagine.mockResolvedValue({
-      tiles: [tile({ id: "gen-3", name: "gen-3_a.mp4", title: "waves", video: true })],
-      ready: true,
-      account: null,
-      canSignIn: false,
-    });
-    api.imagineImage.mockResolvedValue("data:video/mp4;base64,AAAA");
-    render(<Imagine />);
-    await userEvent.click(await screen.findByRole("button", { name: "Open waves" }));
-    const box = await screen.findByRole("dialog", { name: "Image" });
-    expect(box.querySelector("video")).toHaveAttribute("src", "data:video/mp4;base64,AAAA");
-    expect(api.imagineImage).toHaveBeenCalledTimes(1);
-  });
-
-  it("with no sign-in it asks for one on the page, and a code signs Imagine in", async () => {
-    api.getImagine
-      .mockResolvedValueOnce({ tiles: [], ready: false, account: null, canSignIn: true })
-      .mockResolvedValueOnce({
-        tiles: [],
-        ready: true,
-        account: { name: null, email: "sam@example.com" },
-        canSignIn: true,
-      });
-    api.imagineSignInStart.mockResolvedValue({
-      userCode: "ABCD-EFGH",
-      verificationUri: "https://accounts.x.ai/device",
-      verificationUriComplete: null,
-      interval: 0.01,
-      expiresIn: 600,
-    });
-    // The poll answers only once the code has been seen: on a slow runner a
-    // poll that is ready at once replaces the code before the test looks.
-    let approve: (poll: { status: "ready"; signedIn: { name: string; email: string } }) => void = () => {};
-    api.imagineSignInPoll.mockReturnValue(new Promise((ok) => (approve = ok)));
-    render(<Imagine />);
-    const box = await screen.findByRole("region", { name: "Imagine sign-in" });
-    await userEvent.click(within(box).getByRole("button", { name: "Sign in with Grok" }));
-    expect(api.imagineSignInStart).toHaveBeenCalledTimes(1);
-    expect(await within(box).findByLabelText("Sign-in code")).toHaveTextContent("ABCD-EFGH");
-    approve({ status: "ready", signedIn: { name: "Sam", email: "sam@example.com" } });
-    expect(await within(box).findByText("Signed in as sam@example.com.")).toBeInTheDocument();
-    expect(api.getImagine).toHaveBeenCalledTimes(2);
-    await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
-    expect(screen.getByRole("button", { name: "Make" })).toBeEnabled();
-  });
-
-  it("Imagine's own sign-in can be signed out here; a chat sign-in alone shows nothing", async () => {
-    api.getImagine.mockResolvedValue({
-      tiles: [],
-      ready: true,
-      account: { name: null, email: "sam@example.com" },
-      canSignIn: true,
-    });
-    api.imagineSignOut.mockResolvedValue({ tiles: [], ready: true, account: null, canSignIn: true });
-    render(<Imagine />);
-    const box = await screen.findByRole("region", { name: "Imagine sign-in" });
-    await userEvent.click(within(box).getByRole("button", { name: "Sign out" }));
-    expect(api.imagineSignOut).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Imagine sign-in" })).toBeNull());
-  });
-
-  it("with no key it asks to sign in and Make waits", async () => {
-    api.getImagine.mockResolvedValue({ tiles: [], ready: false, account: null, canSignIn: false });
-    render(<Imagine />);
-    expect(await screen.findByRole("alert")).toHaveTextContent(NEED_SIGNIN);
-    await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
-    expect(screen.getByRole("button", { name: "Make" })).toBeDisabled();
-  });
-
-  it("a refused key shows the same pointer", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockRejectedValue(NEED_SIGNIN);
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    await userEvent.type(screen.getByLabelText("What to make"), "a cabin");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Sign in to Imagine first. Sign in with Grok here, or add an xAI API key in Settings → Account.",
-    );
-  });
-
-  it("+ New project clears the prompt, the result line and the error, keeps the gallery and focuses the prompt", async () => {
-    api.getImagine.mockResolvedValue({ tiles: [tile()], ready: true, account: null, canSignIn: false });
-    api.imagineGenerate.mockResolvedValue({ page: { tiles: [tile()], ready: true, account: null, canSignIn: false }, made: 1, note: "" });
-    render(<Imagine />);
-    await screen.findByRole("list", { name: "Gallery" });
-    await userEvent.type(screen.getByLabelText("What to make"), "a red barn");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "+ New project" }));
-    expect(screen.getByLabelText("What to make")).toHaveValue("");
-    expect(screen.getByLabelText("What to make")).toHaveFocus();
-    expect(screen.queryByText("Made 1.")).toBeNull();
-    expect(screen.getByRole("list", { name: "Gallery" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Make" })).toBeDisabled();
-  });
-
-  it("+ New project clears an error", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockRejectedValue("The image service is busy. Try again.");
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    await userEvent.type(screen.getByLabelText("What to make"), "a red barn");
-    await userEvent.click(screen.getByRole("button", { name: "Make" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("The image service is busy. Try again.");
-    await userEvent.click(screen.getByRole("button", { name: "+ New project" }));
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("a slash prompt makes one video at square", async () => {
-    api.getImagine.mockResolvedValue(EMPTY);
-    api.imagineGenerate.mockResolvedValue({
-      page: { tiles: [tile({ video: true })], ready: true, account: null, canSignIn: false },
-      made: 1,
-      note: "",
-    });
-    render(<Imagine />);
-    await screen.findByText(GALLERY_EMPTY);
-    act(() => {
-      requestImagine("video", "waves");
-    });
-    await waitFor(() => expect(api.imagineGenerate).toHaveBeenCalledWith("waves", "1:1", 1, "video"));
-    expect(await screen.findByText("Made 1.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Video" })).toHaveAttribute("aria-pressed", "true");
+  it("Library Artifacts empty state is distinct from Creations", async () => {
+    api.listChatArtifacts.mockResolvedValue([]);
+    render(<Library />);
+    await userEvent.click(screen.getByRole("button", { name: "Artifacts" }));
+    expect(await screen.findByText(ARTIFACTS_EMPTY)).toBeVisible();
+    expect(screen.queryByText(CREATIONS_EMPTY)).toBeNull();
   });
 });

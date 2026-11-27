@@ -314,6 +314,16 @@ pub fn duckduckgo_lite_url(query: &str) -> String {
     format!("https://lite.duckduckgo.com/lite/?q={}", query_value(query))
 }
 
+/// DuckDuckGo's bot challenge (the anomaly page). A results page can mention
+/// the word in a snippet, so a page that still has result links is not a block.
+pub fn duckduckgo_lite_blocked(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    let challenge = lower.contains("anomaly")
+        || lower.contains("bots use duckduckgo")
+        || lower.contains("unfortunately, bots use duckduckgo");
+    challenge && !lower.contains("result-link")
+}
+
 /// Parse DuckDuckGo Lite HTML into title / URL / snippet hits.
 pub fn parse_duckduckgo_lite(body: &str, max: usize) -> Vec<WebHit> {
     let mut out = Vec::new();
@@ -2342,6 +2352,19 @@ mod tests {
             duckduckgo_lite_url("rust lang"),
             "https://lite.duckduckgo.com/lite/?q=rust%20lang"
         );
+    }
+
+    #[test]
+    fn duckduckgo_anomaly_page_is_a_block_not_a_miss() {
+        let body = r#"<html><head><title>DuckDuckGo</title></head><body>
+            <div class="anomaly">Unfortunately, bots use DuckDuckGo, too.</div>
+            <script src="/anomaly.js?c=1"></script>
+        </body></html>"#;
+        assert!(duckduckgo_lite_blocked(body));
+        assert!(parse_duckduckgo_lite(body, 8).is_empty());
+        let mixed = r#"<a class="result-link" href="https://example.org/a">anomaly research</a>"#;
+        assert!(!duckduckgo_lite_blocked(mixed));
+        assert_eq!(parse_duckduckgo_lite(mixed, 8).len(), 1);
     }
 
     #[test]

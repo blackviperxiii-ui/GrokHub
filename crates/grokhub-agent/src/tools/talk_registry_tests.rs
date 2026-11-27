@@ -73,7 +73,7 @@ fn names(tools: &[Value]) -> Vec<String> {
 fn index(tools: &[Value]) -> String {
     tools
         .iter()
-        .find(|t| t["name"] == LOAD_TOOL_SCHEMA)
+        .find(|t| t["name"] == TOOL_SEARCH)
         .and_then(|t| t["description"].as_str())
         .unwrap_or("")
         .to_string()
@@ -100,7 +100,7 @@ fn talk_chat_indexes_the_workspace_tools_instead_of_sending_them() {
         "{index}"
     );
     let lines: Vec<&str> = index
-        .split_once("Deferred tools (index):\n")
+        .split_once("Full deferred index:\n")
         .map(|(_, l)| l)
         .unwrap_or("")
         .lines()
@@ -237,4 +237,30 @@ fn a_picture_ask_sends_the_picture_tool_up_front_at_the_tail() {
         !readonly.iter().any(|n| n == "image_generate"),
         "{readonly:?}"
     );
+}
+
+#[test]
+fn hangout_picture_and_video_asks_offer_media_tools_up_front() {
+    let s = "talk-reg-hangout-media";
+    let before = turn(s, &chat(), ON);
+    assert!(!names(&before).iter().any(|n| n == "image_generate"));
+    assert!(!names(&before).iter().any(|n| n == "video_generate"));
+
+    ensure_media_tools(s, "Nyx send me a picture of yourself");
+    let after_img = turn(s, &chat(), ON);
+    let sent_img = names(&after_img);
+    assert!(
+        sent_img.iter().any(|n| n == "image_generate"),
+        "{sent_img:?}"
+    );
+    assert!(wire(&after_img).starts_with(wire(&before).trim_end_matches(']')));
+
+    ensure_media_tools(s, "make a short video of ocean waves");
+    let after_vid = turn(s, &chat(), ON);
+    let sent_vid = names(&after_vid);
+    assert!(
+        sent_vid.iter().any(|n| n == "video_generate"),
+        "{sent_vid:?}"
+    );
+    assert!(wire(&after_vid).starts_with(wire(&after_img).trim_end_matches(']')));
 }

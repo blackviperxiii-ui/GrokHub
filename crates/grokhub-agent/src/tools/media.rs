@@ -468,7 +468,15 @@ fn imagine_takes_it(imagine: Option<&Arc<dyn ImagineApi>>) -> bool {
     })
 }
 
+/// How many times `image_generate` and its siblings entered the tool. Tests
+/// check that an identical prompt is not drawn again.
+#[cfg(test)]
+pub(crate) static IMAGE_RUNS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
+    #[cfg(test)]
+    IMAGE_RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     run_with_kit(name, args, &crate::route::local_image::kit_here, stop)
 }
 

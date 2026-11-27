@@ -49,13 +49,8 @@ fn only_windows_and_macos_declare_the_hub_sidecar() {
     }
 }
 
-/// The step both workflows run before any cargo or tauri step in `src-tauri`,
-/// as whole lines: its name, its condition and its command together.
-const STAGE_STEP: [&str; 3] = [
-    "      - name: Stage the grokhub-hub sidecar",
-    "        if: runner.os != 'Linux'",
-    "        run: node scripts/stage-hub-sidecar.mjs",
-];
+const STAGE_NAME: &str = "      - name: Stage the grokhub-hub sidecar";
+const STAGE_IF: &str = "        if: runner.os != 'Linux'";
 
 /// The lines of one job in a workflow: from its `  <job>:` line up to the next
 /// line indented two spaces or less that is not blank or a comment.
@@ -88,11 +83,13 @@ fn runs_cargo_or_tauri(line: &str) -> bool {
 fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
     let script = include_str!("../../scripts/stage-hub-sidecar.mjs");
     assert!(script.contains(r#"path.join(root, "src-tauri", `grokhub-hub-${host}${exe}`)"#));
-    // The build names the host triple and the copy reads that triple's folder,
-    // so CARGO_BUILD_TARGET or build.target cannot leave an older host binary
-    // in the path the script copies from.
+    // The release build names the host triple and the copy reads that triple's
+    // folder, so CARGO_BUILD_TARGET or build.target cannot leave an older host
+    // binary in the path the script copies from. The dev profile writes
+    // target/debug, which is the folder the workspace Windows cache holds.
     assert!(script.contains(r#""--target", host,"#));
     assert!(script.contains(r#"path.join(targetDir, host, "release", `grokhub-hub${exe}`)"#));
+    assert!(script.contains(r#"path.join(targetDir, "debug", `grokhub-hub${exe}`)"#));
     for (name, workflow, job, first_cargo) in [
         (
             "ci.yml",
@@ -108,14 +105,53 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
         ),
     ] {
         let lines = job_lines(workflow, job);
-        let stage: Vec<usize> = (0..lines.len())
-            .filter(|at| lines[*at..].starts_with(&STAGE_STEP))
+        let stage: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == STAGE_NAME)
+            .map(|(at, _)| at)
             .collect();
         assert_eq!(
             stage.len(),
             1,
-            "{name}: the `{job}` job stages the sidecar once, on Windows and macOS"
+            "{name}: the `{job}` job stages the sidecar once"
         );
+        let at = stage[0];
+        assert_eq!(
+            lines[at + 1],
+            STAGE_IF,
+            "{name}: sidecar staging runs on Windows and macOS"
+        );
+        let step_end = lines
+            .iter()
+            .enumerate()
+            .skip(at + 1)
+            .find(|(_, line)| {
+                line.starts_with("      - ")
+                    || (!line.starts_with("   ")
+                        && !line.trim().is_empty()
+                        && !line.trim_start().starts_with('#'))
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(lines.len());
+        let body = &lines[at..step_end];
+        assert!(
+            body.iter()
+                .any(|line| line.contains("node scripts/stage-hub-sidecar.mjs")),
+            "{name}: the stage step runs scripts/stage-hub-sidecar.mjs"
+        );
+        if name == "release.yml" {
+            assert!(
+                body.contains(&"        run: node scripts/stage-hub-sidecar.mjs"),
+                "release builds keep the optimized sidecar"
+            );
+        }
+        if name == "ci.yml" {
+            assert!(
+                body.iter().any(|line| line.contains("--profile dev")),
+                "beta Windows CI builds the dev sidecar that shares the workspace cache"
+            );
+        }
         let cargo = lines
             .iter()
             .position(|line| runs_cargo_or_tauri(line))
@@ -125,8 +161,111 @@ fn the_stage_script_writes_the_path_tauri_checks_and_ci_runs_it_before_cargo() {
             "{name}: the first cargo or tauri line of the `{job}` job"
         );
         assert!(
-            stage[0] + STAGE_STEP.len() <= cargo,
+            at < cargo,
             "{name}: the `{job}` job stages the sidecar before src-tauri cargo"
+        );
+    }
+}
+
+/// Beta still runs every workspace test. The Windows job is split so the
+/// two halves overlap; the `windows` job stays the required check.
+#[test]
+fn windows_nextest_on_beta_is_split_in_two_and_the_check_name_stays() {
+    let ci = include_str!("../../.github/workflows/ci.yml");
+    // A Windows checkout rewrites LF as CRLF. lines() drops either ending, so
+    // the job key is compared as text. A raw "\n  windows:\n" misses on CRLF.
+    let lines: Vec<&str> = ci.lines().collect();
+    assert!(ci.contains("part: [1, 2]"));
+    assert!(ci.contains(
+        "cargo nextest run --workspace --locked --profile ci --partition count:${{ matrix.part }}/2"
+    ));
+    let job = lines
+        .iter()
+        .position(|line| *line == "  windows:")
+        .expect("the required check is the windows job");
+    assert_eq!(
+        lines.get(job + 1).copied(),
+        Some("    needs: [changes, windows-parts]"),
+        "the windows job gates both parts"
+    );
+    assert!(ci.contains("PARTS: ${{ needs.windows-parts.result }}"));
+    assert!(ci.contains(r#"test "$PARTS" = success"#));
+    assert!(lines.contains(
+        &"    needs: [changes, fmt, guards, linux, deny, cross-check, shell, phone-android, phone-ios, windows, windows-release]"
+    ));
+    assert!(ci.contains("shared-key: windows-test"));
+    assert!(
+        ci.contains("Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $backup 'bin')"),
+        "parked rustup shims stay on PATH for the windows-test restore and the sidecar stage"
+    );
+}
+
+/// Pull requests cancel their own older run. A push never cancels the run
+/// before it, so every finished beta run is a real result for its commit.
+#[test]
+fn only_a_pull_request_cancels_its_older_ci_run() {
+    let ci = include_str!("../../.github/workflows/ci.yml");
+    assert!(ci
+        .lines()
+        .any(|line| line == "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}"));
+}
+
+/// The shell's tests run on nextest, and its doctests still run.
+#[test]
+fn shell_tests_run_on_nextest_and_keep_doctests() {
+    let lines = job_lines(include_str!("../../.github/workflows/ci.yml"), "shell");
+    assert!(lines.contains(
+        &"      - run: cargo nextest run --manifest-path src-tauri/Cargo.toml --locked --config-file .config/nextest.toml --profile ci"
+    ));
+    assert!(lines
+        .contains(&"      - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked"));
+}
+
+/// Windows runs the shell's clippy in a row of its own, beside the row that
+/// builds, tests and smoke-tests the shell. Linux and macOS have one row
+/// that still runs clippy, and every row that runs tests still runs them.
+#[test]
+fn windows_shell_clippy_runs_in_its_own_row_and_nothing_is_dropped() {
+    let lines = job_lines(include_str!("../../.github/workflows/ci.yml"), "shell");
+    let condition = |step: &str| {
+        let at = lines
+            .iter()
+            .position(|line| *line == step)
+            .unwrap_or_else(|| panic!("the shell job has `{step}`"));
+        lines[at + 1].trim()
+    };
+    for row in [
+        "        part: [build, clippy]",
+        "          - os: ubuntu-latest",
+        "          - os: macos-latest",
+    ] {
+        assert!(lines.contains(&row), "shell matrix: {row}");
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.trim() == "part: clippy")
+            .count(),
+        2,
+        "only Linux and macOS drop the clippy row"
+    );
+    assert_eq!(
+        condition("      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings"),
+        "if: runner.os != 'Windows' || matrix.part == 'clippy'"
+    );
+    for step in [
+        "      - run: cargo nextest run --manifest-path src-tauri/Cargo.toml --locked --config-file .config/nextest.toml --profile ci",
+        "      - run: cargo test --doc --manifest-path src-tauri/Cargo.toml --locked",
+    ] {
+        assert_eq!(condition(step), "if: matrix.part == 'build'", "{step}");
+    }
+    for step in [
+        "      - name: Smoke-test build",
+        "      - name: Smoke test (Windows)",
+    ] {
+        assert!(
+            condition(step).starts_with("if: matrix.part == 'build' && "),
+            "{step} runs in the build row"
         );
     }
 }

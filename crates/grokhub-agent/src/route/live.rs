@@ -97,6 +97,8 @@ pub struct RouteCall<'a> {
     pub providers: bool,
     /// The episode just re-planned: one model and one rung up for this call only.
     pub step_up: bool,
+    /// Code tab "Local models only and nonstop coding" is enabled for this project.
+    pub code_local_only: bool,
 }
 
 /// How the call went. Counts and ids only.
@@ -641,6 +643,9 @@ impl Decision {
         if self.budget_pause.is_none() && rule("voice:no_local") {
             return "Voice routing is set to Local only, and no on-device model is ready. Download one in Settings → Local AI or switch Voice routing to Auto.".to_string();
         }
+        if self.budget_pause.is_none() && rule("code:no_local") {
+            return "Local models only is on for this project, and no on-device model is ready. Enable Local AI in Settings → Local AI or turn off Local models only in Code → Settings.".to_string();
+        }
         self.pause_msg().to_string()
     }
 
@@ -711,6 +716,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let settings = spend::spend_settings();
     let user_bench = super::user_bench::load(config_dir);
     laps.mark("route:week_budget");
+    // Inside an agent's turn (pinned to its home), the agent's profile: its
+    // tier narrows the pick.
+    let agent = grokhub_core::agent_team::agent_turn(&crate::perm::config_dir()).map(|(_, p)| p);
+    let agent_tier = agent
+        .as_ref()
+        .map(|profile| profile.model_tier.clone())
+        .filter(|tier| !tier.is_empty());
     super::connectivity::sync_from_core();
     let rt = offline_estimator();
     let key = episode_key(call);
@@ -740,9 +752,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     });
     let lane = ask.as_ref().map(|a| a.lane());
     // What the chat's words asked for this kind of task ("use Opus for the
-    // refactor"); a helper reads its chat's asks.
+    // refactor"); a helper reads its chat's asks. An agent sees only its
+    // message, so the person's words don't steer its turn.
     let (named_model, named_effort) = ask
         .as_ref()
+        .filter(|_| agent.is_none())
         .map(|a| {
             let asks = super::task_steer::asks(config_dir, key);
             super::task_steer::for_kind(&asks, a.kind)
@@ -843,6 +857,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                     || stage.looped
                     || stage.check_failed
                     || stage.out_of_budget
+                    || stage.low_check
                     || (rejects.unwrap_or(0) > 0 && !verify_ok);
                 if trouble && !new_turn {
                     super::knn::note_trouble(key);
@@ -855,8 +870,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 verify_ok,
                 // "That's wrong" or "try again": the next answer starts one rung up.
                 correction: is_correction(call.text) || super::ask::asks_redo(call.text),
-                // No self-check score yet, so E4 stays quiet. App-side budget caps never throttle effort.
-                low_check: None,
+                // App-side budget caps never throttle effort.
                 budget_pct: None,
                 routine,
                 stage,
@@ -921,9 +935,13 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         })
     };
     let voice_reply = super::voice_route::active_reply_pref(config_dir);
+    let code_local_only = call.code_local_only
+        || crate::code_panel::session_local_only(call.session)
+        || crate::code_panel::session_local_only(call.episode);
     let sticky = sticky
         .filter(|m| !user_bench.matches_model(m))
         .filter(|m| !cooling(config_dir, m, now_ms))
+        .filter(|m| !code_local_only || super::local::is_local(m))
         .filter(|m| match &voice_reply {
             None => true,
             Some(super::voice_route::ReplyPref::LocalOnly) => super::local::is_local(m),
@@ -1033,10 +1051,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         lane,
         named_model: named_model.as_deref(),
         named_effort: named_effort.as_deref(),
+        model_tier: agent_tier.as_deref(),
         size: Some(size_est),
         // Failover PR 5: whether a local model is already loaded, for the
         // warm-local default. Never starts the sidecar to find out.
         local_warm: super::local::warm_runtime().is_some(),
+        light_chat: ask.as_ref().is_some_and(|a| a.light_chat()),
+        local_coding_first: !code_local_only
+            && super::local::warm_runtime().is_some()
+            && crate::code_guard::is_set(call.session),
         // Failover PR 6: the scorer's hard filters read the quota ledger
         // (PR 3) and the turn's explicitness, decided by the call site.
         quota: load_quota(config_dir),
@@ -1054,6 +1077,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             && tune::in_canary(key, super::trial::CANARY))
         .then_some(key),
         voice_reply,
+        code_local_only,
         user_bench,
     };
     let mut route = Router::choose(&input, &reg, &profiles, &table, now_ms);
@@ -1112,7 +1136,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     if let Some(a) = &ask {
         route.rule_ids.splice(0..0, a.rules.iter().cloned());
         super::ask::remember(key, a.kind);
-        if !route.no_route && !key.is_empty() {
+        if !route.no_route && !key.is_empty() && !call.adult {
             keep_session_model(key, turn, route.base.as_deref().unwrap_or(&route.model));
         }
     }
@@ -1180,10 +1204,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     // switch: neither is a model to wait for.
     if live
         && route.no_route
-        && !route
-            .rule_ids
-            .iter()
-            .any(|r| r == "local:paused" || r == "offline:switch" || r == "voice:no_local")
+        && !route.rule_ids.iter().any(|r| {
+            r == "local:paused"
+                || r == "offline:switch"
+                || r == "voice:no_local"
+                || r == "code:no_local"
+        })
     {
         let failed = reg
             .get(call.model)
@@ -1636,6 +1662,17 @@ pub fn route_log(
                 now,
             )
         });
+        // Frontier usage meter: local vs frontier turns for Home and training.
+        let project = super::frontier_usage::project_for_session(call.session, call.episode);
+        let cost_usd = if done.usage.cost_in_usd_ticks > 0 {
+            done.usage.cost_in_usd_ticks as f64 / TICKS_PER_USD
+        } else {
+            rec.outcome.as_ref().map(|o| o.cost_usd).unwrap_or(0.0)
+        };
+        let event = super::frontier_usage::event_from(&rec, &project, now, cost_usd);
+        timing::time("route:log_frontier", || {
+            super::frontier_usage::note(config_dir, &event)
+        });
         // Failover PR 5: what the call wrote and whether a free or on-device
         // model carried it, for the turn's mid-flight size upgrade.
         if done.ok {
@@ -1748,6 +1785,35 @@ impl StepOnDeviceForTests {
 impl Drop for StepOnDeviceForTests {
     fn drop(&mut self) {
         STEP_ON_DEVICE.with(|s| s.set(self.0));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_SCHEMA_CHECK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The loop's schema check, pinned on for a test that keeps the scripted
+/// client. A `local:` model id would send the turn to the sidecar instead.
+#[cfg(test)]
+pub(crate) fn schema_check_forced() -> bool {
+    FORCE_SCHEMA_CHECK.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) struct ForceSchemaCheck(bool);
+
+#[cfg(test)]
+impl ForceSchemaCheck {
+    pub(crate) fn on() -> Self {
+        Self(FORCE_SCHEMA_CHECK.with(|c| c.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ForceSchemaCheck {
+    fn drop(&mut self) {
+        FORCE_SCHEMA_CHECK.with(|c| c.set(self.0));
     }
 }
 
@@ -1891,7 +1957,7 @@ pub fn stream_routed(
 ) -> Result<TurnOutput, ClientError> {
     let entered = std::time::Instant::now();
     crate::harness::replay::clear_last();
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     // Playbooks 8: a banned ask never leaves the computer, this turn or a later one.
     let mut sent = req.clone();
     super::adult::scrub(&mut sent.input);
@@ -1905,6 +1971,18 @@ pub fn stream_routed(
         return Ok(held);
     }
     let (text, needs_image) = last_user_text(&sent.input);
+    // Classify each user turn fresh: only an explicit newest ask or an active
+    // 18+ voice keeps a chat turn local. Background work still checks the full
+    // history so summaries never send explicit history online.
+    let ask_adult = super::adult::ask_explicit(&sent.input);
+    let must_stay = super::adult::voice_on(&sent.input);
+    let background = class.trim().starts_with("background:");
+    let turn_adult = if background {
+        super::adult::explicit(&sent.input)
+    } else {
+        ask_adult || must_stay
+    };
+    let code_local_only = crate::code_panel::session_local_only(&req.conversation_id);
     let mut call = RouteCall {
         provider: super::PROVIDER_XAI,
         class,
@@ -1916,9 +1994,8 @@ pub fn stream_routed(
         needs_image,
         needs_tools: !req.tools.is_empty() || req.hosted_search,
         providers: true,
-        // Failover PR 6: the router hears the turn is explicit up
-        // front, from the same scrubbed input the guard below reads.
-        adult: super::adult::explicit(&sent.input),
+        adult: turn_adult,
+        code_local_only,
         ..RouteCall::default()
     };
     let now = grokhub_core::now_ms();
@@ -1939,32 +2016,29 @@ pub fn stream_routed(
     } else {
         grokhub_core::adult_guard::Dest::Xai
     };
-    // An 18+ voice keeps every turn of the chat here, so its voice stays here too.
-    let must_stay = super::adult::voice_on(&sent.input);
-    // 18+ chat runs on this computer's model only, never online. With none
-    // ready and an 18+ voice on, every turn gets the notice (with the
-    // self-check's reason) and nothing is sent: a clean ask in that voice is
-    // an 18+ turn too. With the voice off, it's decided per message: a clean
-    // ask still goes online with the chat's older 18+ parts left out; an 18+
-    // ask gets the notice. The app's own background work never goes online with it.
+    // 18+ asks and 18+ voices run on this computer's model only, never online.
+    // A clean turn in a normal chat that had older explicit turns strips those
+    // turns before going online so explicit content never leaves the machine
+    // and the explicit flag never sticks to later turns.
     let mut forced_adult_local = false;
     if super::adult::to_local(&sent.input, dest) {
-        match super::adult::no_local_notice() {
-            None => {
-                if user_bench.blocks_local() {
-                    return Err(ClientError::Protocol(
-                        "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
-                            .into(),
-                    ));
+        let stripped = !background
+            && !must_stay
+            && !ask_adult
+            && super::adult::leave_adult_out(&mut sent.input);
+        if !stripped {
+            match super::adult::no_local_notice() {
+                None => {
+                    if user_bench.blocks_local() {
+                        return Err(ClientError::Protocol(
+                            "Local models are benched. Unbench them in chat or Settings → AI models to answer on device."
+                                .into(),
+                        ));
+                    }
+                    on_device = true;
+                    forced_adult_local = true;
                 }
-                on_device = true;
-                forced_adult_local = true;
-            }
-            Some(notice) => {
-                let online = !class.trim().starts_with("background:")
-                    && !must_stay
-                    && super::adult::leave_adult_out(&mut sent.input);
-                if !online {
+                Some(notice) => {
                     note_here(class, &req.conversation_id, false, must_stay);
                     let out = super::adult::notice_answer(class, &notice)?;
                     sink(StreamEvent::TextDelta(out.text.clone()));
@@ -1977,6 +2051,16 @@ pub fn stream_routed(
     // the right voice.
     note_here(class, &req.conversation_id, on_device, must_stay);
     let mut active_decision = decision;
+    if forced_adult_local {
+        let rule = if ask_adult {
+            "adult:local_only"
+        } else {
+            "adult:voice_local"
+        };
+        if !active_decision.route.rule_ids.iter().any(|r| r == rule) {
+            active_decision.route.rule_ids.push(rule.into());
+        }
+    }
     let mut active_on_device = on_device;
     let mut active_on_provider = active_decision.on_provider() && !active_on_device;
     let mut active_model = if active_on_device && !active_decision.on_device() {
@@ -2063,7 +2147,8 @@ pub fn stream_routed(
     };
     // Reply text passes the hard-limit check before the chat shows it.
     let mut reply = grokhub_core::adult_guard::ReplyGuard::default();
-    let allow_cross_provider_failover = super::voice_route::active_reply_pref(&dir).is_none();
+    let allow_cross_provider_failover =
+        super::voice_route::active_reply_pref(&dir).is_none() && !code_local_only;
     let mut failed_hops: Vec<(String, ClientError, Duration)> = Vec::new();
     let mut tried: Vec<String> = Vec::new();
     let mut last_fail_rule: Option<&'static str> = None;
@@ -2072,11 +2157,13 @@ pub fn stream_routed(
     let mut out = Err(ClientError::Protocol("no route".into()));
     for attempt in 0..5 {
         if active_on_device {
-            let reason = if forced_adult_local {
-                "keeping explicit content on this computer"
-            } else {
-                super::local_live::routing_reason(&active_decision.route.rule_ids, last_fail_rule)
-            };
+            let reason = super::local_live::local_reason(
+                &active_decision.route.rule_ids,
+                last_fail_rule,
+                forced_adult_local,
+                ask_adult,
+                must_stay,
+            );
             super::local_live::note_route_reason(&req.conversation_id, reason);
             if !emitted_fallback_msg
                 && !class.trim().starts_with("background:")
@@ -2086,12 +2173,13 @@ pub fn stream_routed(
                     super::local::LOCAL_FALLBACK_MSG.into(),
                 ));
             }
-            if !class.trim().starts_with("background:") && super::local::warm_runtime().is_none() {
-                sink(StreamEvent::ReasoningDelta(
-                    super::local_live::loading_note(Some(reason)),
-                ));
-            }
-            let step_out = super::local::serve_request(class, &sent, cancel);
+            let step_out = super::local::serve_request_noting(class, &sent, cancel, &mut || {
+                if !class.trim().starts_with("background:") {
+                    sink(StreamEvent::ReasoningDelta(
+                        super::local_live::loading_note(Some(reason)),
+                    ));
+                }
+            });
             if let Ok(turn) = &step_out {
                 if !turn.text.is_empty() {
                     super::adult::guard(
@@ -2344,7 +2432,7 @@ pub fn compact_routed(
     if !client.compacts_server_side() {
         return None;
     }
-    let dir = crate::perm::config_dir();
+    let dir = crate::perm::app_config_dir();
     // Playbooks 8: a banned ask never leaves the computer, here either.
     let mut sent = req.clone();
     super::adult::scrub(&mut sent.input);

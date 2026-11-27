@@ -1,7 +1,7 @@
 # Built-in vstack skills: credit and license
 
 Bundled from [vstack](https://github.com/blackviperxiii-ui/vstack) release
-[`v1.4.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.4.0) (commit `11cca98b4a55da3118f51e749ac62faefbc21b3b`).
+[`v1.8.0`](https://github.com/blackviperxiii-ui/vstack/releases/tag/v1.8.0) (commit `1f92bd32792f001a16191a6297056c350c5caff5`).
 `.github/scripts/vstack_sync.py` writes this file, the skill folders and
 `../../src/builtin_skills.rs` from `vstack.json`; edit that list, not these files.
 
@@ -15,14 +15,18 @@ License: MIT. The upstream copyright and permission notice ships unchanged in
 Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 
 - architect
+- arena
+- automate-me
 - av-qa-walkthrough
 - bag-and-tag
 - benchmark-checklist
 - blast-radius
+- bro
 - chrome-extensions
 - correct
 - create-formal-verification-skill
 - create-verification-skill
+- database-architect
 - elevate
 - figure-it-out
 - follow-through
@@ -32,18 +36,27 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - ketchup
 - ketchup-video
 - land-it
+- lean-ci
+- lean-tests
 - maintain-formal-verification-skill
 - maintain-verification-skill
+- make-bot-ui
 - modern-web-guidance
+- no-comments
 - optimize
 - principle-attack-the-premise
 - principle-boundary-discipline
 - principle-build-the-lever
+- principle-encode-lessons-in-structure
+- principle-exhaust-the-design-space
 - principle-experience-first
 - principle-explain-the-number
 - principle-fix-root-causes
 - principle-foundational-thinking
+- principle-guard-the-context-window
+- principle-laziness-protocol
 - principle-make-operations-idempotent
+- principle-migrate-callers-then-delete-legacy-apis
 - principle-minimize-reader-load
 - principle-model-the-domain
 - principle-never-block-on-the-human
@@ -58,6 +71,7 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - qa-walkthrough
 - recall
 - reflect
+- reframe
 - setup-vstack
 - sharpen
 - show-me-your-work
@@ -71,6 +85,7 @@ Skills shipped here (read-only built-ins inside Loadout / GrokHub):
 - unslop
 - updater
 - viper-mode
+- vstack-help
 - why
 
 Left out:
@@ -79,4 +94,4 @@ Left out:
 
 Do not install these as a Cursor plugin from this tree; they are app built-ins.
 
-Bundle SHA-256: `db2aff9fa228ccc8385b52397dde7fef6b74a8243cee0fb3dfc5a23b438420ef`
+Bundle SHA-256: `70171695247be34ee1e61b9ae3b3c0842622f9f08c691a9621068e44c0860096`

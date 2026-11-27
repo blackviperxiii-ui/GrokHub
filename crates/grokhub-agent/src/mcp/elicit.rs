@@ -144,6 +144,18 @@ pub fn unalias_elicit(child: &str) {
     map.remove(child);
 }
 
+pub(crate) fn hook_session() -> Option<String> {
+    HOOK.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            None
+        } else {
+            // SAFETY: the frame lives on this thread's stack for the whole `with_elicit` body.
+            Some(unsafe { (*ptr).session.clone() })
+        }
+    })
+}
+
 pub(crate) fn wait_elicit(
     session: &str,
     id: &str,
@@ -295,6 +307,75 @@ pub(crate) fn ask_secret(server: &str, message: &str, title: &str) -> Option<Str
     }
 }
 
+/// Show a sign-in link on the cabin's URL elicit card without waiting. The
+/// agent never opens the browser; the user clicks the link. Returns the card
+/// id so a later [`try_take_elicit`] can see Decline / Cancel. `None` when
+/// unattended or there is no elicit hook.
+pub(crate) fn offer_url(server: &str, message: &str, url: &str) -> Option<String> {
+    let attended = HOOK.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            false
+        } else {
+            // SAFETY: the frame lives on this thread's stack for the whole `with_elicit` body.
+            unsafe { (*ptr).attended }
+        }
+    });
+    if !attended {
+        return None;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let wait_id = format!("{server}-oauth-{nanos}");
+    let view = ElicitView {
+        id: wait_id.clone(),
+        server_name: server.to_string(),
+        message: message.to_string(),
+        mode: "url".into(),
+        url: url.to_string(),
+        elicitation_id: String::new(),
+        field_name: None,
+        field_title: String::new(),
+        secret: false,
+        options: Vec::new(),
+    };
+    let emitted = HOOK.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            false
+        } else {
+            // SAFETY: same stack frame as above, and `with_elicit` has not returned.
+            let (emit_fn, emit_ptr) = unsafe { ((*ptr).emit_fn, (*ptr).emit) };
+            emit_fn(emit_ptr, view);
+            true
+        }
+    });
+    emitted.then_some(wait_id)
+}
+
+/// Non-blocking read of one answer for `id` on `session`. `None` when nothing
+/// has arrived yet. Notes for other cards are skipped (same as [`wait_elicit`]).
+pub(crate) fn try_take_elicit(session: &str, id: &str) -> Option<ElicitAnswer> {
+    if session.is_empty() || id.is_empty() {
+        return None;
+    }
+    let inbox = {
+        let map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
+        map.get(session).cloned()?
+    };
+    let rx = inbox.rx.lock().unwrap_or_else(|err| err.into_inner());
+    loop {
+        match rx.try_recv() {
+            Ok(note) if note.id == id => return Some(note_to_answer(note)),
+            Ok(_) => continue,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => return Some(ElicitAnswer::Cancel),
+        }
+    }
+}
+
 fn view_for(server: &str, id: &Value, params: &Value) -> ElicitView {
     let wait_id = id_string(id);
     let mut shaped = params.clone();
@@ -349,6 +430,26 @@ mod tests {
     }
 
     #[test]
+    fn offer_url_emits_a_url_card_without_waiting() {
+        let mut seen = Vec::new();
+        let mut emit = |view: ElicitView| seen.push(view);
+        let mut wait = |_id: &str| panic!("offer_url must not wait");
+        let id = with_elicit(true, "offer-url", &mut emit, &mut wait, || {
+            offer_url(
+                "Notion",
+                "Sign in to Notion in your browser, then press I've finished.",
+                "https://example.com/authorize",
+            )
+        });
+        assert!(id.is_some());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].mode, "url");
+        assert_eq!(seen[0].url, "https://example.com/authorize");
+        assert_eq!(seen[0].server_name, "Notion");
+        assert_eq!(seen[0].id, id.unwrap());
+    }
+
+    #[test]
     fn a_secret_typed_on_the_card_is_held_for_its_chat_and_a_plain_answer_is_not() {
         const TOKEN: &str = "sk-abcdefghijklmnopqrstuv";
         let mut emit = |_view: ElicitView| {};
@@ -357,10 +458,7 @@ mod tests {
             ask_secret("github", "Paste your token", "Token")
         });
         assert_eq!(got.as_deref(), Some(TOKEN));
-        assert_eq!(
-            crate::held::held_secrets("elicit-holds-secret"),
-            vec![TOKEN.to_string()]
-        );
+        assert!((crate::held::held_secrets("elicit-holds-secret")) == (vec![TOKEN.to_string()]));
 
         let plain = json!({
             "message": "Which branch?",
@@ -373,9 +471,6 @@ mod tests {
         with_elicit(true, "elicit-plain-answer", &mut emit, &mut wait, || {
             ask("github", &json!(1), &plain)
         });
-        assert_eq!(
-            crate::held::held_secrets("elicit-plain-answer"),
-            Vec::<String>::new()
-        );
+        assert!((crate::held::held_secrets("elicit-plain-answer")) == (Vec::<String>::new()));
     }
 }

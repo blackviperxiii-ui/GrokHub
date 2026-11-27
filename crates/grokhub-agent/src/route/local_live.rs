@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use grokhub_core::local_draft::Decision;
 use grokhub_core::local_setup;
+use grokhub_core::local_skills::TaskKind;
 
 use super::local_autoconfig::LaunchArgs;
 use super::local_scale::Mode;
@@ -317,12 +318,18 @@ pub fn routing_reason(rules: &[String], handoff_rule: Option<&str>) -> &'static 
         "keeping sensitive content on this computer"
     } else if has("adult:local_only") {
         "keeping explicit content on this computer"
+    } else if has("adult:voice_local") {
+        "18+ voice stays on this computer"
     } else if has("offline:local") {
         "offline mode is on"
     } else if has("local:no_keys") {
         "no online sign-in or API key is configured"
     } else if has("voice:local_only") {
         "voice replies are set to local only"
+    } else if has("code:local_only") {
+        "Code tab is set to local models only"
+    } else if has("local:coding_first") {
+        "trying local coding model first (escalates if verification fails)"
     } else if let Some(h) = handoff_rule {
         match h {
             "handoff:limit" => "cloud model hit its rate limit",
@@ -338,6 +345,28 @@ pub fn routing_reason(rules: &[String], handoff_rule: Option<&str>) -> &'static 
     }
 }
 
+/// Plain-English local routing reason for one turn. Only a turn whose own ask
+/// is explicit shows the explicit-content reason; a clean turn kept local by an
+/// 18+ voice says so directly instead of blaming explicit content.
+pub fn local_reason(
+    rules: &[String],
+    handoff_rule: Option<&str>,
+    forced_adult_local: bool,
+    ask_adult: bool,
+    must_stay: bool,
+) -> &'static str {
+    let adult_rule = forced_adult_local || rules.iter().any(|r| r == "adult:local_only");
+    if adult_rule && ask_adult {
+        "keeping explicit content on this computer"
+    } else if adult_rule && must_stay {
+        "18+ voice stays on this computer"
+    } else if adult_rule {
+        "selected for on-device execution"
+    } else {
+        routing_reason(rules, handoff_rule)
+    }
+}
+
 /// Formats the chat loading note with an optional routing reason.
 pub fn loading_note(reason: Option<&str>) -> String {
     match reason.map(str::trim).filter(|r| !r.is_empty()) {
@@ -348,6 +377,8 @@ pub fn loading_note(reason: Option<&str>) -> String {
 
 /// The line for each chat's last on-device reply, until the chat takes it.
 static LAST_LINE: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+/// The task kind of each chat's last on-device reply, kept beside its line.
+static LAST_KIND: Mutex<BTreeMap<String, TaskKind>> = Mutex::new(BTreeMap::new());
 /// Why the chat's current step was routed locally, for display on the reply/loading note.
 static ROUTE_REASON: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
@@ -389,6 +420,12 @@ pub fn note_reply(conversation_id: &str, ask: Option<(AskOutcome, PathBuf)>) {
         conversation_id,
         chat_line_with_reason(&name, draft, l.stand_in, ask, reason.as_deref()),
     );
+    if let Ok(mut kinds) = LAST_KIND.lock() {
+        match super::local_task::current_kind() {
+            Some(kind) => kinds.insert(conversation_id.to_string(), kind),
+            None => kinds.remove(conversation_id),
+        };
+    }
 }
 
 /// Keep `line` for `conversation_id`'s turn, until [`take_line`] takes it.
@@ -428,12 +465,20 @@ pub fn forget_line(conversation_id: &str) {
     if let Ok(mut reasons) = ROUTE_REASON.lock() {
         reasons.remove(conversation_id);
     }
+    if let Ok(mut kinds) = LAST_KIND.lock() {
+        kinds.remove(conversation_id);
+    }
 }
 
 /// The line for `conversation_id`'s turn that just ended, once: it clears,
 /// so a later turn that ran elsewhere shows none.
 pub fn take_line(conversation_id: &str) -> Option<String> {
     LAST_LINE.lock().ok()?.remove(conversation_id)
+}
+
+/// The task kind of `conversation_id`'s last on-device reply, once.
+pub fn take_kind(conversation_id: &str) -> Option<TaskKind> {
+    LAST_KIND.lock().ok()?.remove(conversation_id)
 }
 
 /// Where each chat's newest step ran, written when the step is decided so
@@ -507,6 +552,22 @@ mod tests {
                 "{} (Reason: already warm on this computer.)",
                 super::super::local::LOCAL_LOADING_NOTE
             )
+        );
+        assert_eq!(
+            super::local_reason(&["adult:local_only".into()], None, false, true, false),
+            "keeping explicit content on this computer"
+        );
+        assert_eq!(
+            super::local_reason(&["adult:local_only".into()], None, false, false, true),
+            "18+ voice stays on this computer"
+        );
+        assert_eq!(
+            super::local_reason(&["local:no_keys".into()], None, false, false, false),
+            "no online sign-in or API key is configured"
+        );
+        assert_eq!(
+            super::local_reason(&["size:warm_local".into()], None, false, false, false),
+            "already warm on this computer"
         );
     }
 
@@ -922,11 +983,20 @@ mod tests {
             Some("Answered by Gemma 4 E2B, your pick.")
         );
         assert_eq!(take_line(id), None);
+        if let Ok(mut kinds) = LAST_KIND.lock() {
+            kinds.insert(id.to_string(), TaskKind::Code);
+        }
+        assert_eq!(take_kind(id), Some(TaskKind::Code));
+        assert_eq!(take_kind(id), None);
         if let Ok(mut lines) = LAST_LINE.lock() {
             lines.insert(id.to_string(), "stale".into());
         }
+        if let Ok(mut kinds) = LAST_KIND.lock() {
+            kinds.insert(id.to_string(), TaskKind::Code);
+        }
         forget_line(id);
         assert_eq!(take_line(id), None);
+        assert_eq!(take_kind(id), None);
     }
 
     #[test]

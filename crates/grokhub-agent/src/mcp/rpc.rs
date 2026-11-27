@@ -262,7 +262,7 @@ fn resource_link_line(item: &Value) -> String {
 }
 
 /// Trimmed, control characters (newlines too) turned to spaces, at most `max` chars.
-fn one_line(text: &str, max: usize) -> String {
+pub(crate) fn one_line(text: &str, max: usize) -> String {
     text.trim()
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -335,6 +335,7 @@ pub(crate) fn parse_tools(result: &Value) -> (Vec<RawTool>, Option<String>) {
                 output_schema,
                 hints: parse_hints(item),
                 icons: parse_icons(item.get("icons")),
+                ui: super::apps::parse_ui_meta(item),
             });
         }
     }
@@ -418,6 +419,8 @@ pub(crate) struct RawTool {
     pub output_schema: Option<Value>,
     pub hints: ToolHints,
     pub icons: Vec<ToolIcon>,
+    /// `_meta.ui` when this tool hosts an MCP App view.
+    pub ui: Option<super::apps::UiMeta>,
 }
 
 /// A tool's `annotations` hints. The server sets them, so they can only make
@@ -448,7 +451,24 @@ pub struct ToolIcon {
 }
 
 fn client_capabilities() -> Value {
-    json!({ "elicitation": { "form": {}, "url": {} } })
+    json!({
+        "elicitation": { "form": {}, "url": {} },
+        "extensions": {
+            (super::apps::EXTENSION): super::apps::client_capability()
+        }
+    })
+}
+
+/// Session-era `initialize` keeps [`client_capabilities`]. Stateless
+/// 2026-07-28 and later also declare the tasks extension.
+fn capabilities_for(version: &str) -> Value {
+    let mut caps = client_capabilities();
+    if STATELESS_VERSIONS.contains(&version) {
+        if let Some(ext) = caps.get_mut("extensions").and_then(Value::as_object_mut) {
+            ext.insert(super::tasks::EXTENSION.into(), json!({}));
+        }
+    }
+    caps
 }
 
 fn client_info() -> Value {
@@ -506,7 +526,7 @@ pub(crate) fn with_meta(params: Value, version: &str) -> Value {
         );
         meta.insert(
             "io.modelcontextprotocol/clientCapabilities".into(),
-            client_capabilities(),
+            capabilities_for(version),
         );
         meta.insert("io.modelcontextprotocol/clientInfo".into(), client_info());
     }
@@ -532,17 +552,35 @@ pub(crate) const MAX_INPUT_ROUNDS: usize = 4;
 /// `_meta`) and gives back the result. An `input_required` result is answered
 /// on the elicit card and the call is sent again with `inputResponses` and the
 /// server's `requestState` (Multi Round-Trip Requests), at most
-/// [`MAX_INPUT_ROUNDS`] times.
+/// [`MAX_INPUT_ROUNDS`] times. Transports that also need the raw result use
+/// [`call_tool_raw`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn call_tool(
     server: &str,
     name: &str,
     args: &Value,
-    send: &mut dyn FnMut(Value) -> Result<Value, String>,
+    stop: &dyn Fn() -> bool,
+    send: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
 ) -> Result<(String, bool), String> {
+    let (text, failed, _) = call_tool_raw(server, "", name, args, stop, send)?;
+    Ok((text, failed))
+}
+
+/// Like [`call_tool`], and also the raw `CallToolResult` (for MCP Apps hosts).
+/// `session` is the chat the task id is bound to. A `resultType` of `"task"`
+/// is polled to the final tool result.
+pub(crate) fn call_tool_raw(
+    server: &str,
+    session: &str,
+    name: &str,
+    args: &Value,
+    stop: &dyn Fn() -> bool,
+    send: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+) -> Result<(String, bool, Value), String> {
     let base = json!({"name": name, "arguments": args});
     let mut params = base.clone();
     for _ in 0..=MAX_INPUT_ROUNDS {
-        let result = send(params)?;
+        let result = send("tools/call", params)?;
         match result.get("resultType").and_then(Value::as_str) {
             Some("input_required") => {
                 params = base.clone();
@@ -554,7 +592,16 @@ pub(crate) fn call_tool(
                     params["requestState"] = json!(state);
                 }
             }
-            _ => return Ok(tool_output(&complete(server, result)?)),
+            Some("task") => {
+                let raw = super::tasks::await_task(session, server, &result, stop, send)?;
+                let (text, failed) = tool_output(&raw);
+                return Ok((text, failed, raw));
+            }
+            _ => {
+                let raw = complete(server, result)?;
+                let (text, failed) = tool_output(&raw);
+                return Ok((text, failed, raw));
+            }
         }
     }
     Err(format!(
@@ -619,6 +666,9 @@ mod tests {
     #[test]
     fn initialize_asks_for_the_newest_and_accepts_every_session_version() {
         assert_eq!(initialize_params()["protocolVersion"], "2025-11-25");
+        assert!(initialize_params()["capabilities"]["extensions"]
+            .get("io.modelcontextprotocol/tasks")
+            .is_none());
         assert_eq!(negotiate("box", &answer("2025-11-25")), Ok("2025-11-25"));
         assert_eq!(negotiate("box", &answer("2025-06-18")), Ok("2025-06-18"));
         assert_eq!(negotiate("box", &answer("2025-03-26")), Ok("2025-03-26"));
@@ -744,7 +794,15 @@ mod tests {
                 "_meta": {
                     "progressToken": 7,
                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}, "url": {}}},
+                    "io.modelcontextprotocol/clientCapabilities": {
+                        "elicitation": {"form": {}, "url": {}},
+                        "extensions": {
+                            "io.modelcontextprotocol/ui": {
+                                "mimeTypes": ["text/html;profile=mcp-app"]
+                            },
+                            "io.modelcontextprotocol/tasks": {}
+                        }
+                    },
                     "io.modelcontextprotocol/clientInfo": {"name": "GrokHub", "version": env!("CARGO_PKG_VERSION")}
                 }
             })
@@ -764,14 +822,20 @@ mod tests {
             "requestState": "rs-1"
         });
         let mut sent = Vec::new();
-        let done = call_tool("box", "echo", &json!({"a": 1}), &mut |params| {
-            sent.push(params);
-            Ok(if sent.len() == 1 {
-                ask.clone()
-            } else {
-                json!({"resultType": "complete", "content": [{"type": "text", "text": "ok"}]})
-            })
-        });
+        let done = call_tool(
+            "box",
+            "echo",
+            &json!({"a": 1}),
+            &|| false,
+            &mut |_method, params| {
+                sent.push(params);
+                Ok(if sent.len() == 1 {
+                    ask.clone()
+                } else {
+                    json!({"resultType": "complete", "content": [{"type": "text", "text": "ok"}]})
+                })
+            },
+        );
         assert_eq!(done, Ok(("ok".to_string(), false)));
         assert_eq!(
             sent,
@@ -782,7 +846,7 @@ mod tests {
         );
 
         let mut rounds = 0;
-        let looped = call_tool("box", "echo", &json!({}), &mut |_| {
+        let looped = call_tool("box", "echo", &json!({}), &|| false, &mut |_method, _| {
             rounds += 1;
             Ok(json!({"resultType": "input_required", "requestState": "again"}))
         });
@@ -792,7 +856,7 @@ mod tests {
         );
         assert_eq!(rounds, MAX_INPUT_ROUNDS + 1);
 
-        let sampling = call_tool("box", "echo", &json!({}), &mut |_| {
+        let sampling = call_tool("box", "echo", &json!({}), &|| false, &mut |_method, _| {
             Ok(
                 json!({"resultType": "input_required", "inputRequests": {"q": {"method": "sampling/createMessage"}}}),
             )
@@ -801,7 +865,7 @@ mod tests {
             sampling,
             Err("MCP server `box` asked for sampling/createMessage, which this client does not offer".to_string())
         );
-        let empty = call_tool("box", "echo", &json!({}), &mut |_| {
+        let empty = call_tool("box", "echo", &json!({}), &|| false, &mut |_method, _| {
             Ok(json!({"resultType": "input_required"}))
         });
         assert_eq!(
@@ -809,7 +873,7 @@ mod tests {
             Err("MCP server `box` asked for more input without saying what".to_string())
         );
         // Older servers leave resultType out: complete.
-        let old = call_tool("box", "echo", &json!({}), &mut |_| {
+        let old = call_tool("box", "echo", &json!({}), &|| false, &mut |_method, _| {
             Ok(json!({"content": [{"type": "text", "text": "old"}], "isError": true}))
         });
         assert_eq!(old, Ok(("old".to_string(), true)));

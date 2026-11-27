@@ -28,6 +28,12 @@ pub struct Automation {
         skip_serializing_if = "crate::automation_check::CheckGate::is_plain"
     )]
     pub gate: crate::automation_check::CheckGate,
+    /// Saved condition or event-stream wait ([`crate::automation_wait`]).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::automation_wait::WaitTrigger::is_plain"
+    )]
+    pub wait: crate::automation_wait::WaitTrigger,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -39,6 +45,12 @@ pub struct Automation {
     /// How the last run ended. Older `automations.json` files load as clear.
     #[serde(default, skip_serializing_if = "AutoHealth::is_clear")]
     pub health: AutoHealth,
+    /// Delivery, run, and completion tracked separately from [`AutoOutcome`].
+    #[serde(
+        default,
+        skip_serializing_if = "crate::automation_wait::AutoLifecycle::is_clear"
+    )]
+    pub lifecycle: crate::automation_wait::AutoLifecycle,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,13 +112,18 @@ fn clip_error(why: &str) -> String {
     out
 }
 
-/// The scheduled turn finished with a reply.
-pub fn mark_automation_ok(mut a: Automation) -> Automation {
+/// The scheduled turn finished with a reply. `delivery` is whether the place
+/// its result goes (the job's board card) took it, or that it had none.
+pub fn mark_automation_ok(
+    mut a: Automation,
+    delivery: crate::automation_wait::Delivery,
+) -> Automation {
     a.health = AutoHealth {
         outcome: AutoOutcome::Ok,
         error: String::new(),
         fail_streak: 0,
     };
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(true, delivery);
     a
 }
 
@@ -118,6 +135,11 @@ pub fn mark_automation_failed(mut a: Automation, why: &str) -> Automation {
         a.health.error = "Run failed".into();
     }
     a.health.fail_streak = a.health.fail_streak.saturating_add(1);
+    // Error text was still delivered to the row / Fired event.
+    a.lifecycle = crate::automation_wait::AutoLifecycle::settled(
+        false,
+        crate::automation_wait::Delivery::Landed,
+    );
     a
 }
 
@@ -125,6 +147,11 @@ pub fn mark_automation_failed(mut a: Automation, why: &str) -> Automation {
 pub fn mark_automation_stopped(mut a: Automation) -> Automation {
     a.health.outcome = AutoOutcome::Stopped;
     a.health.error.clear();
+    a.lifecycle = crate::automation_wait::AutoLifecycle {
+        delivery: crate::automation_wait::LifePhase::Ok,
+        run: crate::automation_wait::LifePhase::Stopped,
+        completion: crate::automation_wait::LifePhase::Stopped,
+    };
     a
 }
 
@@ -319,6 +346,75 @@ pub fn due_automations(list: &[Automation], now_ms: u64) -> Vec<Automation> {
         .collect()
 }
 
+/// Most a UTC offset moves at once (daylight saving, a trip): how far ahead
+/// a slot may be for [`due_before_its_slot`] to hold a due job back.
+const OFFSET_SHIFT_MAX_MS: u64 = 2 * 3_600_000;
+
+/// A clock job is due, but no slot of it has come since its next run, and
+/// one is just ahead on `clock`. Its next run was worked out before the UTC
+/// offset changed (daylight saving ended overnight): it waits for the slot
+/// instead of firing an hour early. A late or missed slot still fires.
+pub fn due_before_its_slot(a: &Automation, clock: LocalClock) -> bool {
+    if a.wait.active() {
+        return false;
+    }
+    let Some(next) = a.next_run else {
+        return false;
+    };
+    let now = clock.now_ms;
+    if now < next {
+        return false;
+    }
+    let slots = clock_slots(a, clock);
+    let came = slots.iter().any(|&at| at + 60_000 >= next && at <= now);
+    let ahead = slots
+        .iter()
+        .any(|&at| at > now && at - now <= OFFSET_SHIFT_MAX_MS);
+    !came && ahead
+}
+
+/// A clock job whose next run was worked out before the UTC offset moved
+/// forward (daylight saving started overnight) sits up to two hours past its
+/// slot on `clock`. Its slot there, to run at instead, or `None` when the job
+/// is on its slot. The offset moving back is [`due_before_its_slot`]'s.
+pub fn slot_moved_earlier(a: &Automation, clock: LocalClock) -> Option<u64> {
+    if !a.enabled || a.wait.active() {
+        return None;
+    }
+    let next = a.next_run?;
+    if next <= clock.now_ms {
+        return None;
+    }
+    // Offsets move in steps of 30 minutes or more; seconds of drift are not one.
+    const SHIFT_MIN_MS: u64 = 15 * 60_000;
+    clock_slots(a, clock)
+        .into_iter()
+        .find(|&at| next > at && (SHIFT_MIN_MS..=OFFSET_SHIFT_MAX_MS).contains(&(next - at)))
+}
+
+/// A slot job's times on `clock`'s yesterday, today and tomorrow. Jobs not
+/// tied to a daily slot have none.
+fn clock_slots(a: &Automation, clock: LocalClock) -> Vec<u64> {
+    if matches!(a.schedule.as_str(), "heartbeat" | "once" | "monthly") {
+        return Vec::new();
+    }
+    const DAY_MS: u64 = 24 * 3_600_000;
+    let now = clock.now_ms;
+    let into_day = u64::from(clock.hour * 60 + clock.minute) * 60_000 + now % 60_000;
+    let Some(today) = now.checked_sub(into_day) else {
+        return Vec::new();
+    };
+    normalize_times(&a.time, &a.times)
+        .iter()
+        .filter_map(|t| hm_min(t))
+        .flat_map(|min| {
+            let at = today + u64::from(min) * 60_000;
+            [at.checked_sub(DAY_MS), Some(at), Some(at + DAY_MS)]
+        })
+        .flatten()
+        .collect()
+}
+
 pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8) -> bool {
     destructive && (quiet || autonomy == 0)
 }
@@ -350,6 +446,7 @@ pub fn mark_automation_ran(mut a: Automation, now_ms: u64) -> Automation {
     a.last_run = Some(now_ms);
     a.run_count = a.run_count.saturating_add(1);
     a.health.outcome = AutoOutcome::Started;
+    a.lifecycle = crate::automation_wait::AutoLifecycle::started();
     if a.schedule == "once" {
         a.enabled = false;
         a.next_run = None;
@@ -418,11 +515,13 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
             heartbeat_every_min: mins,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
             run_count: 0,
             health: AutoHealth::default(),
+            lifecycle: Default::default(),
         });
     }
     let lower = t.to_ascii_lowercase();
@@ -460,11 +559,13 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
         heartbeat_every_min: 0,
         check_command: String::new(),
         gate: Default::default(),
+        wait: Default::default(),
         enabled: true,
         last_run: None,
         next_run: None,
         run_count: 0,
         health: AutoHealth::default(),
+        lifecycle: Default::default(),
     })
 }
 
@@ -1228,11 +1329,13 @@ mod tests {
                 heartbeat_every_min: 0,
                 check_command: String::new(),
                 gate: Default::default(),
+                wait: Default::default(),
                 enabled: true,
                 last_run: None,
                 next_run: Some(500),
                 run_count: 0,
                 health: Default::default(),
+                lifecycle: Default::default(),
             }],
             1_000,
         );
@@ -1291,11 +1394,13 @@ mod tests {
             heartbeat_every_min: 15,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         };
         assert!(automation_blocked_by_policy(false, true, 0));
         let skipped = mark_automation_skipped(blocked, 1_000, clock);
@@ -1312,11 +1417,13 @@ mod tests {
             heartbeat_every_min: 0,
             check_command: "test -f /missing".into(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: Some(500),
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         };
         let check_skip = mark_automation_skipped(once.clone(), 1_000, clock);
         assert!(
@@ -1337,11 +1444,13 @@ mod tests {
             heartbeat_every_min: 0,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
             run_count: 0,
             health: Default::default(),
+            lifecycle: Default::default(),
         };
         let after = LocalClock {
             now_ms: 1_000,
@@ -1434,12 +1543,103 @@ mod tests {
             heartbeat_every_min: 0,
             check_command: String::new(),
             gate: Default::default(),
+            wait: Default::default(),
             enabled: true,
             last_run: None,
             next_run: None,
             run_count: 0,
             health: AutoHealth::default(),
+            lifecycle: Default::default(),
         }
+    }
+
+    /// Set as 09:00 at UTC-6, the clock now reads UTC-5: the job moves back
+    /// to 09:00 on that clock, before or after the slot. On time, already
+    /// due, or a job not tied to a slot, it stays.
+    #[test]
+    fn a_job_set_before_the_clock_went_forward_moves_back_to_its_slot() {
+        const MIN: u64 = 60_000;
+        const HOUR: u64 = 60 * MIN;
+        // Sunday 14:00 UTC: 09:00 at UTC-5.
+        let nine_cdt = 1_805_032_800_000;
+        let at = |ms: u64, offset: i32| LocalClock::at_offset(ms, offset);
+        let mut daily = job("a");
+        daily.next_run = Some(nine_cdt + HOUR);
+        assert_eq!(
+            slot_moved_earlier(&daily, at(nine_cdt - 30 * MIN, -300)),
+            Some(nine_cdt)
+        );
+        assert_eq!(
+            slot_moved_earlier(&daily, at(nine_cdt + 10 * MIN, -300)),
+            Some(nine_cdt)
+        );
+        assert_eq!(
+            slot_moved_earlier(&daily, at(nine_cdt - 30 * MIN, -360)),
+            None
+        );
+        // A few seconds off the slot is drift, not a moved clock.
+        let mut drift = daily.clone();
+        drift.next_run = Some(nine_cdt + 30_000);
+        assert_eq!(
+            slot_moved_earlier(&drift, at(nine_cdt - 30 * MIN, -300)),
+            None
+        );
+        let mut due = daily.clone();
+        due.next_run = Some(nine_cdt - MIN);
+        assert_eq!(slot_moved_earlier(&due, at(nine_cdt, -300)), None);
+        let mut beat = daily.clone();
+        beat.schedule = "heartbeat".into();
+        assert_eq!(
+            slot_moved_earlier(&beat, at(nine_cdt - 30 * MIN, -300)),
+            None
+        );
+        let mut off = daily.clone();
+        off.enabled = false;
+        assert_eq!(
+            slot_moved_earlier(&off, at(nine_cdt - 30 * MIN, -300)),
+            None
+        );
+    }
+
+    /// Only a job whose slot is still ahead since its next run waits: an
+    /// on-time, late or missed slot fires, as do jobs not tied to a slot.
+    #[test]
+    fn a_job_due_before_its_slot_is_held_only_after_the_clock_moves() {
+        const MIN: u64 = 60_000;
+        const HOUR: u64 = 60 * MIN;
+        // Sunday 14:00:30 UTC.
+        let utc_14 = 1_825_596_030_000;
+        let mut daily = job("a");
+        daily.next_run = Some(utc_14 - 30_000);
+        // Set as 09:00 at UTC-5; the clock now reads 08:00 at UTC-6.
+        let at = |ms: u64, offset: i32| LocalClock::at_offset(ms, offset);
+        assert!(due_before_its_slot(&daily, at(utc_14, -360)));
+        assert!(due_before_its_slot(&daily, at(utc_14 + 59 * MIN, -360)));
+        assert!(!due_before_its_slot(&daily, at(utc_14 + HOUR, -360)));
+        // On time, and an hour late, it fires.
+        assert!(!due_before_its_slot(&daily, at(utc_14, -300)));
+        assert!(!due_before_its_slot(&daily, at(utc_14 + HOUR, -300)));
+        // Missed for a day while the app was closed: it fires.
+        let mut missed = daily.clone();
+        missed.next_run = Some(utc_14 - 24 * HOUR);
+        assert!(!due_before_its_slot(&missed, at(utc_14, -360)));
+        // 08:00 is a slot of its own.
+        let mut twice = daily.clone();
+        twice.times = vec!["08:00".into(), "09:00".into()];
+        assert!(!due_before_its_slot(&twice, at(utc_14, -360)));
+        // Not due yet, a heartbeat, a once job and a waiting job never wait here.
+        assert!(!due_before_its_slot(&daily, at(utc_14 - 31_000, -360)));
+        for schedule in ["heartbeat", "once", "monthly"] {
+            let other = Automation {
+                schedule: schedule.into(),
+                ..daily.clone()
+            };
+            assert!(!due_before_its_slot(&other, at(utc_14, -360)), "{schedule}");
+        }
+        let mut waits = daily.clone();
+        waits.wait.kind = "event_stream".into();
+        waits.wait.source = "disk".into();
+        assert!(!due_before_its_slot(&waits, at(utc_14, -360)));
     }
 
     #[test]
@@ -1476,12 +1676,65 @@ mod tests {
         let stopped = mark_automation_stopped(a.clone());
         assert_eq!(stopped.health.fail_streak, 2, "a halt is not a success");
         assert!(automation_health_line(&stopped).is_none());
-        let ok = mark_automation_ok(a);
+        let ok = mark_automation_ok(a, crate::automation_wait::Delivery::Landed);
         assert!(ok.health.fail_streak == 0 && ok.health.error.is_empty());
         assert!(automation_health_line(&ok).is_none());
         let long = mark_automation_failed(job("b"), &"x".repeat(500));
         assert_eq!(long.health.error.chars().count(), AUTO_ERROR_CHARS);
         assert!(long.health.error.ends_with('…'));
+    }
+
+    /// L3: delivered means the run's result reached where it goes and that
+    /// place took it. A good run whose result went nowhere is healthy, but
+    /// not delivered and not complete.
+    #[test]
+    fn a_good_run_is_delivered_only_when_its_result_landed() {
+        use crate::automation_wait::{Delivery, LifePhase};
+        let landed = mark_automation_ok(mark_automation_ran(job("a"), 1_000), Delivery::Landed);
+        assert_eq!(
+            (
+                landed.lifecycle.run,
+                landed.lifecycle.delivery,
+                landed.lifecycle.completion
+            ),
+            (LifePhase::Ok, LifePhase::Ok, LifePhase::Ok)
+        );
+        let lost = mark_automation_ok(mark_automation_ran(job("b"), 1_000), Delivery::Lost);
+        assert_eq!(
+            (
+                lost.lifecycle.run,
+                lost.lifecycle.delivery,
+                lost.lifecycle.completion
+            ),
+            (LifePhase::Ok, LifePhase::Failed, LifePhase::Failed)
+        );
+        assert!(
+            automation_health_line(&lost).is_none(),
+            "the run itself was fine"
+        );
+    }
+
+    /// A good run with nowhere to hand its result on (a script-only job) is
+    /// complete, and its delivery reads neither ok nor failed.
+    #[test]
+    fn a_good_run_with_no_destination_is_complete_and_not_failed() {
+        use crate::automation_wait::{lifecycle_line, Delivery, LifePhase};
+        let a = mark_automation_ok(
+            mark_automation_ran(job("c"), 1_000),
+            Delivery::NoDestination,
+        );
+        assert_eq!(
+            (
+                a.lifecycle.run,
+                a.lifecycle.delivery,
+                a.lifecycle.completion
+            ),
+            (LifePhase::Ok, LifePhase::None, LifePhase::Ok)
+        );
+        assert_eq!(
+            lifecycle_line(&a.lifecycle).as_deref(),
+            Some("run ok · delivery — · completion ok")
+        );
     }
 
     /// The fields an edit re-parses: what the schedule is and what the job asks.

@@ -219,9 +219,11 @@ export function OnboardStage({ after, onSaved }: { after: boolean; onSaved?: () 
           drafts={drafts}
           amr={reply?.amr === true}
           openclaw={reply?.openclaw === true && !added}
+          sources={reply?.importSources ?? []}
           note={reply?.note ?? null}
           onChange={setDrafts}
           onImport={() => void run({ act: "openclaw", drafts })}
+          onImportSource={(source) => void run({ act: "openclaw", drafts, source })}
         />
       ) : (
         !error && <p className="note">Drafting…</p>
@@ -344,16 +346,20 @@ function Review({
   drafts,
   amr,
   openclaw,
+  sources,
   note,
   onChange,
   onImport,
+  onImportSource,
 }: {
   drafts: Drafts;
   amr: boolean;
   openclaw: boolean;
+  sources: { id: string; label: string }[];
   note: string | null;
   onChange: (d: Drafts) => void;
   onImport: () => void;
+  onImportSource?: (source: string) => void;
 }) {
   const file = (key: "user" | "soul" | "memory", label: string) => (
     <label className="onboard-field">
@@ -400,11 +406,21 @@ function Review({
           </ul>
         </>
       )}
-      {openclaw && (
+      {openclaw && sources.length === 0 && (
         <button type="button" className="chip onboard-import" onClick={onImport}>
           Add from OpenClaw
         </button>
       )}
+      {sources.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          className="chip onboard-import"
+          onClick={() => onImportSource?.(s.id) ?? onImport()}
+        >
+          Add from {s.label}
+        </button>
+      ))}
       {note && <p className="note">{note}</p>}
     </>
   );

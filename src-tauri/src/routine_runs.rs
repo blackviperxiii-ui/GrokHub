@@ -94,6 +94,7 @@ pub fn run(
             text: String::new(),
             error: format!("The routine {} is already running.", start.name),
             stop: "error".into(),
+            delivery: grokhub_core::Delivery::NoDestination,
         };
     };
     let routed = route().ok();
@@ -131,6 +132,7 @@ pub fn run(
             text: String::new(),
             error: text,
             stop: "error".into(),
+            delivery: grokhub_core::Delivery::NoDestination,
         },
         (Ended::Replan { .. }, Some((client, model, workspace, _))) => {
             let done = crate::unattended::run(crate::unattended::Job {
@@ -149,12 +151,14 @@ pub fn run(
                 text: done.text,
                 error: done.error,
                 stop: REPLANNED.into(),
+                delivery: grokhub_core::Delivery::NoDestination,
             }
         }
         _ => RunResult {
             text,
             error: String::new(),
             stop: FINISHED.into(),
+            delivery: grokhub_core::Delivery::NoDestination,
         },
     }
 }

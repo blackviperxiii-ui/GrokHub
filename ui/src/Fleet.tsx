@@ -11,7 +11,7 @@ import {
 } from "./api";
 import { ago } from "./Devices";
 import { UsageMeter } from "./Progress";
-import { StatusLine, useNote } from "./ui";
+import { PageHead, StatusLine, useNote } from "./ui";
 
 /** Machines re-read this often while the page shows, so a computer that went to sleep dims. */
 export const MACHINES_MS = 60_000;
@@ -321,9 +321,9 @@ export function Fleet({ shown = true }: { shown?: boolean }) {
 
   return (
     <section className="devices fleet" aria-label="Fleet">
-      <p className="note">{FLEET_NOTE}</p>
+      <PageHead title="Fleet">{FLEET_NOTE}</PageHead>
       <div className="card-buttons">
-        <button type="button" className="fleet-refresh" disabled={busy} onClick={() => void refresh()}>
+        <button type="button" disabled={busy} onClick={() => void refresh()}>
           {busy ? "Refreshing…" : "Refresh"}
         </button>
       </div>

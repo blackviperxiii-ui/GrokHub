@@ -339,7 +339,9 @@ fn segment_is_fast(words: &[String]) -> bool {
     let Some(head) = words.first() else {
         return false;
     };
-    if !perm::trusted_head(head) {
+    // `git add *` or `gh pr view *` takes whatever options the folder's file
+    // names spell, which these arms never read.
+    if !perm::trusted_head(head) || perm::glob_may_add_option(words) {
         return false;
     }
     if head == "git" {
@@ -519,8 +521,9 @@ fn clean_reason(raw: &str) -> String {
 }
 
 /// The head and tail of a long text, with a marker where the middle was left
-/// out, so a payload at the end of a long call still reaches the judge.
-fn clip_middle(text: &str, max: usize) -> String {
+/// out, so a payload at the end of a long call still reaches the judge (and a
+/// command's exit line still reaches the episode worker).
+pub(crate) fn clip_middle(text: &str, max: usize) -> String {
     let total = text.chars().count();
     if total <= max {
         return text.to_string();
@@ -1342,6 +1345,16 @@ mod tests {
         policy: Option<&Policy>,
         permits: &dyn PermitWait,
     ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        drive_gated(fake, dir, auto_gate(attended), policy, permits)
+    }
+
+    fn drive_gated(
+        fake: &LoopFake,
+        dir: &Path,
+        gate: Gate,
+        policy: Option<&Policy>,
+        permits: &dyn PermitWait,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let input = LoopIn {
             client: fake,
             workspace: dir,
@@ -1354,7 +1367,7 @@ mod tests {
             cancel: &CancelToken::new(),
             steer: &SteerQueue::new(),
             halt: &Never,
-            gate: auto_gate(attended),
+            gate,
             desktop: None,
             permits,
             perms: policy,
@@ -1740,5 +1753,810 @@ mod tests {
                 if output.contains("Denied by permission policy") && !output.contains("Auto mode blocked")
         )));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What an unattended run says when the push guard's ship class refuses
+    /// a shell command.
+    const HARD_SHIP_AWAY: &str = "Tool `run_terminal_command` was not executed: \
+        hard-class ship needs you, and nobody is here to approve it";
+
+    /// `--upload-pack` names the program git runs for the other side of a
+    /// fetch. The push guard reads it as a command that could ship, so an
+    /// unattended run refuses it before the judge, and the program never runs.
+    #[test]
+    fn unattended_auto_loop_refuses_upload_pack_before_the_judge() {
+        let dir = workspace("upload-pack");
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success());
+        let marker = dir.join("PWNED");
+        let cmd = format!("git fetch --upload-pack='touch {}' .", marker.display());
+        let fake = LoopFake {
+            turns: Mutex::new(vec![
+                Turn {
+                    text: String::new(),
+                    calls: vec![call(
+                        "g",
+                        "run_terminal_command",
+                        &serde_json::json!({ "command": cmd, "timeout": 10000 }).to_string(),
+                    )],
+                    usage: Usage::default(),
+                },
+                done(),
+            ]),
+            judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+            judge_usage: Usage::default(),
+            judge_err: false,
+            seen: Mutex::new(Vec::new()),
+        };
+        let permits = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+        let ran = marker.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(judge_calls(&fake), 0);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 0);
+        assert!(!ran, "the --upload-pack program ran");
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { output, .. }
+                if output.contains(HARD_SHIP_AWAY)
+        )));
+    }
+
+    /// The shell expands `git fetch *` into the workspace's file names, and
+    /// a cloned repo can hold one named `--upload-pack=<program>`: the glob
+    /// goes to the judge, and the program never runs.
+    #[test]
+    fn unattended_auto_loop_sends_a_glob_fetch_to_the_judge() {
+        let dir = workspace("glob-fetch");
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(dir.join("--upload-pack=touch PWNED"), "").unwrap();
+        let marker = dir.join("PWNED");
+        let fake = LoopFake {
+            turns: Mutex::new(vec![
+                Turn {
+                    text: String::new(),
+                    calls: vec![call(
+                        "g",
+                        "run_terminal_command",
+                        &serde_json::json!({ "command": "git fetch *", "timeout": 10000 })
+                            .to_string(),
+                    )],
+                    usage: Usage::default(),
+                },
+                done(),
+            ]),
+            judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+            judge_usage: Usage::default(),
+            judge_err: false,
+            seen: Mutex::new(Vec::new()),
+        };
+        let permits = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+        let ran = marker.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(judge_calls(&fake), 1);
+        assert_eq!(permits.asks.load(Ordering::SeqCst), 0);
+        assert!(!ran, "the --upload-pack program a file name spelled ran");
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { output, .. }
+                if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+        )));
+    }
+
+    /// `pull`'s `-j`/`--jobs` value is optional and must be stuck to it, so
+    /// the word after a bare `-j` is an option of its own. The push guard
+    /// reads each spelling here as a command that could ship, so an
+    /// unattended run refuses it before the judge: the program never runs.
+    #[test]
+    fn unattended_auto_loop_refuses_a_jobs_upload_pack_pull_before_the_judge() {
+        for (tag, spelling) in [
+            ("j", "git pull -j --upload-pack='touch {}' 4 ."),
+            ("jobs", "git pull --jobs --upload-pack='touch {}' 4 ."),
+            (
+                "timeout",
+                "timeout 5 git pull -j --upload-pack='touch {}' 4 .",
+            ),
+            ("abbrev", "git pull --upload-p='touch {}' ."),
+        ] {
+            let dir = workspace(&format!("jobs-upload-pack-{tag}"));
+            assert!(std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .success());
+            let marker = dir.join("PWNED");
+            let cmd = spelling.replace("{}", &marker.display().to_string());
+            let fake = LoopFake {
+                turns: Mutex::new(vec![
+                    Turn {
+                        text: String::new(),
+                        calls: vec![call(
+                            "g",
+                            "run_terminal_command",
+                            &serde_json::json!({ "command": cmd, "timeout": 10000 }).to_string(),
+                        )],
+                        usage: Usage::default(),
+                    },
+                    done(),
+                ]),
+                judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                judge_usage: Usage::default(),
+                judge_err: false,
+                seen: Mutex::new(Vec::new()),
+            };
+            let permits = Answer {
+                answer: PermAnswer::Deny,
+                asks: AtomicUsize::new(0),
+            };
+            let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+            let ran = marker.exists();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(judge_calls(&fake), 0, "{cmd}");
+            assert_eq!(permits.asks.load(Ordering::SeqCst), 0, "{cmd}");
+            assert!(!ran, "the --upload-pack program ran: {cmd}");
+            assert!(
+                history.iter().any(|item| matches!(
+                    item,
+                    InputItem::FunctionCallOutput { output, .. }
+                        if output.contains(HARD_SHIP_AWAY)
+                )),
+                "{cmd}"
+            );
+        }
+    }
+
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=user", "-c", "user.email=user@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A workspace whose files hold two bare repositories, as plain files a
+    /// clone can carry: `vendor/evil`, whose config names the ssh program a
+    /// fetch from `origin` runs, and `vendor/hist`, whose config and
+    /// attributes name the text conversion `log -p` runs. Each writes its
+    /// marker in the workspace.
+    fn planted_repositories(tag: &str) -> PathBuf {
+        let dir = workspace(tag);
+        git_ok(&dir, &["init", "-q"]);
+        let slashed = |name: &str| dir.join(name).display().to_string().replace('\\', "/");
+        let evil = dir.join("vendor/evil");
+        std::fs::create_dir_all(evil.join("objects")).unwrap();
+        std::fs::create_dir_all(evil.join("refs")).unwrap();
+        std::fs::write(evil.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            evil.join("config"),
+            format!(
+                "[core]\n\trepositoryformatversion = 0\n\tbare = true\n\
+                 \tsshCommand = touch '{}' #\n\
+                 [remote \"origin\"]\n\turl = git@example.invalid:x.git\n",
+                slashed("SSH_RAN")
+            ),
+        )
+        .unwrap();
+        let src = dir.join("src-history");
+        std::fs::create_dir_all(&src).unwrap();
+        git_ok(&src, &["init", "-q"]);
+        for n in ["1", "2"] {
+            std::fs::write(src.join("a.txt"), n).unwrap();
+            git_ok(&src, &["add", "a.txt"]);
+            git_ok(&src, &["commit", "-q", "-m", n]);
+        }
+        git_ok(
+            &dir,
+            &["clone", "-q", "--bare", "src-history", "vendor/hist"],
+        );
+        let hist = dir.join("vendor/hist");
+        std::fs::create_dir_all(hist.join("info")).unwrap();
+        std::fs::write(hist.join("info/attributes"), "* diff=x\n").unwrap();
+        let mut config = std::fs::read_to_string(hist.join("config")).unwrap();
+        config.push_str(&format!(
+            "[diff \"x\"]\n\ttextconv = touch '{}'; cat\n",
+            slashed("TEXTCONV_RAN")
+        ));
+        std::fs::write(hist.join("config"), config).unwrap();
+        dir
+    }
+
+    /// A git command pointed at another folder (`git -C`, `env -C`, `env
+    /// --chdir`) reads the repository there, so a bare one the workspace
+    /// carries chooses the programs it runs. Each spelling goes to the
+    /// judge, which blocks it: no card, and neither program runs.
+    #[test]
+    fn unattended_auto_loop_sends_git_pointed_at_another_folder_to_the_judge() {
+        for (tag, cmd) in [
+            ("env-c", "env -C vendor/evil git fetch origin"),
+            ("env-chdir-eq", "env --chdir=vendor/evil git fetch origin"),
+            ("env-chdir", "env --chdir vendor/evil git pull origin main"),
+            ("env-c-glued", "env -Cvendor/evil git fetch origin"),
+            ("git-c-log", "git -C vendor/hist log -p -n1"),
+            ("git-c-show", "git -C vendor/hist show"),
+            ("env-c-log", "env -C vendor/hist git log -p -n1"),
+        ] {
+            let dir = planted_repositories(&format!("pointed-{tag}"));
+            let fake = LoopFake {
+                turns: Mutex::new(vec![
+                    Turn {
+                        text: String::new(),
+                        calls: vec![call(
+                            "g",
+                            "run_terminal_command",
+                            &serde_json::json!({ "command": cmd, "timeout": 10000 }).to_string(),
+                        )],
+                        usage: Usage::default(),
+                    },
+                    done(),
+                ]),
+                judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                judge_usage: Usage::default(),
+                judge_err: false,
+                seen: Mutex::new(Vec::new()),
+            };
+            let permits = Answer {
+                answer: PermAnswer::Deny,
+                asks: AtomicUsize::new(0),
+            };
+            let (_, history, _) = drive(&fake, &dir, false, None, &permits);
+            let ran = ["SSH_RAN", "TEXTCONV_RAN"].map(|marker| dir.join(marker).exists());
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(judge_calls(&fake), 1, "{cmd}");
+            assert_eq!(permits.asks.load(Ordering::SeqCst), 0, "{cmd}");
+            assert_eq!(ran, [false, false], "a planted program ran: {cmd}");
+            assert!(
+                history.iter().any(|item| matches!(
+                    item,
+                    InputItem::FunctionCallOutput { output, .. }
+                        if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                )),
+                "{cmd}"
+            );
+        }
+    }
+
+    /// The gate's read-only pass runs a read with no judge and no card in
+    /// any mode. It stops at a git read pointed at another folder too, so a
+    /// supervised run shows the card; a read that stays put still runs.
+    #[test]
+    fn a_git_read_pointed_at_another_folder_asks_and_one_that_stays_put_runs() {
+        let gate = Gate {
+            mode: PermMode::Ask,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        let policy = Policy::empty();
+        let ws = Path::new("/home/user/my-app");
+        let decide = |cmd: &str| {
+            let args = serde_json::json!({ "command": cmd }).to_string();
+            gate::decide_with(
+                &gate,
+                "run_terminal_command",
+                &args,
+                false,
+                None,
+                ws,
+                Some(&policy),
+            )
+        };
+        for cmd in [
+            "git -C vendor/hist log -p -n1",
+            "git -Cvendor/hist show",
+            "env -C vendor/hist git log -p -n1",
+            "env --chdir=vendor/hist git show",
+            "env -P vendor/bin git status",
+            "env --argv0=git-rm git status",
+        ] {
+            assert_eq!(decide(cmd), Decision::Ask, "{cmd}");
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+        }
+        for cmd in [
+            "git -C . log -p -n1",
+            "git log -p -n1",
+            "env -u PAGER git log -n1",
+        ] {
+            assert_eq!(decide(cmd), Decision::Run, "{cmd}");
+            assert!(command_fast_allows(cmd), "{cmd} should fast-allow");
+        }
+    }
+
+    /// `--upload-pack` names a program a fetch runs, so the push guard reads
+    /// the command as one that could ship: it keeps its card, attended or
+    /// away, and the judge never sees it.
+    #[test]
+    fn upload_pack_fetch_and_pull_keep_their_card() {
+        let client = scripted(
+            r#"{"verdict":"block","reason":"runs a program"}"#,
+            Usage::default(),
+        );
+        let repo = workspace("upload-pack-review");
+        let arguments = serde_json::json!({
+            "command": "git fetch --upload-pack='touch PWNED' .",
+            "timeout": 3000,
+        })
+        .to_string();
+        let reviewed = |attended: bool| {
+            let gate = auto_gate(attended);
+            let base = gate::decide_with(
+                &gate,
+                "run_terminal_command",
+                &arguments,
+                false,
+                None,
+                &repo,
+                None,
+            );
+            review(&ReviewIn {
+                client: &client,
+                cancel: &CancelToken::new(),
+                halt: &|| false,
+                gate: &gate,
+                name: "run_terminal_command",
+                arguments: &arguments,
+                workspace: &repo,
+                policy: None,
+                latched_always: false,
+                desk: None,
+                history: &[],
+                conversation_id: "conv",
+                base,
+                timeout: JUDGE_TIMEOUT,
+            })
+        };
+        let attended = reviewed(true);
+        let away = reviewed(false);
+        let judged = client.seen.lock().unwrap().len();
+        let _ = std::fs::remove_dir_all(&repo);
+        assert_eq!(
+            crate::harness::classify("run_terminal_command", &arguments),
+            crate::harness::HardHit::Class(crate::harness::HardClass::Ship)
+        );
+        assert_eq!(attended.decision, Decision::Ask);
+        assert_eq!(attended.ask_reason, "");
+        assert!(attended.judge_usage.is_none());
+        assert_eq!(
+            away.decision,
+            Decision::Refuse(
+                "Tool `run_terminal_command` was not executed: hard-class ship needs you, \
+                 and nobody is here to approve it"
+                    .into()
+            )
+        );
+        assert!(away.judge_usage.is_none());
+        assert_eq!(judged, 0);
+        for cmd in [
+            "git fetch --upload-pack='touch PWNED' .",
+            "git pull --upload-pack='touch PWNED' .",
+            "git fetch --upload-pack=touch .",
+            "git fetch --upload-pack touch .",
+            "git fetch --upl=touch .",
+            "git pull -u .",
+            "git fetch 'ext::sh -c touch% PWNED'",
+            "git fetch fd::3",
+            "git pull evil::example.com/repo",
+            "git fetch evil://example.com/repo",
+            "git pull --rebase=interactive",
+            "git pull -s evil",
+            "git pull --edit",
+            "git pull --gpg-sign",
+            "git fetch -- origin",
+            "git -c core.sshCommand='touch PWNED' fetch",
+            "git -c protocol.ext.allow=always fetch 'ext::sh -c touch% PWNED'",
+            "git --config-env=core.sshCommand=EVIL fetch",
+            "GIT_SSH_COMMAND='touch PWNED' git fetch",
+            "GIT_CONFIG_PARAMETERS=\"'core.sshCommand'='touch PWNED'\" git pull",
+            "git clone --upload-pack=touch . copy",
+            "git push --receive-pack=touch .",
+            "git fetch *",
+            "git fetch origin *",
+            "git fetch .[!.]*",
+            "git pull ?*",
+            "git fetch --depth *",
+            "bash -c 'git fetch *'",
+            "git pull -j --upload-pack='touch PWNED' 4 .",
+            "git pull --jobs --upload-pack='touch PWNED' 4 .",
+            "timeout 5 git pull -j --upload-pack=touch 4 .",
+            "git pull -j -S 4 .",
+            "git fetch -j --upload-pack=touch 4 .",
+            "git pull -X --upload-pack=touch .",
+            "git pull --upload-p=touch .",
+            "git pull origin -- --upload-pack=touch",
+            "git -c alias.sync='!touch PWNED' sync",
+            "git -c alias.pull='!touch PWNED' pull",
+        ] {
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+        }
+    }
+
+    /// The gate's decision for a supervised shell command with a policy
+    /// loaded, as the app always has: a read runs with no card.
+    fn supervised_with_policy(cmd: &str) -> Decision {
+        supervised_under(cmd, &Policy::empty())
+    }
+
+    fn supervised_under(cmd: &str, policy: &Policy) -> Decision {
+        let gate = Gate {
+            mode: PermMode::Ask,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        let args = serde_json::json!({ "command": cmd }).to_string();
+        gate::decide_with(
+            &gate,
+            "run_terminal_command",
+            &args,
+            false,
+            None,
+            Path::new("/home/user/my-app"),
+            Some(policy),
+        )
+    }
+
+    /// A repository that tracks `zz.txt`, which holds `needle`, beside a
+    /// file named `-Otouch GREP_RAN`. `*` lists that name first, and `git
+    /// grep` reads it as `-O<program>`: it opens the matches in `touch`.
+    fn planted_dash_name(tag: &str) -> PathBuf {
+        let dir = workspace(tag);
+        std::fs::write(dir.join("zz.txt"), "needle\n").unwrap();
+        std::fs::write(dir.join("-Otouch GREP_RAN"), "").unwrap();
+        git_ok(&dir, &["init", "-q"]);
+        git_ok(&dir, &["add", "zz.txt"]);
+        dir
+    }
+
+    /// The shell fills `*` with the workspace's file names after the fast
+    /// path and the read-only pass have read the words, so a planted
+    /// `-O<program>` reaches `git grep`. Unattended Auto mode sends each
+    /// spelling to the judge, which blocks it with no card; a supervised run
+    /// with a policy loaded shows the card, which is denied. The program
+    /// never runs.
+    #[test]
+    fn a_loop_sends_a_read_whose_glob_can_fill_an_option_to_the_judge_or_a_card() {
+        let policy = Policy::empty();
+        let supervised = Gate {
+            mode: PermMode::Ask,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        for (n, cmd) in [
+            "git grep -e needle *",
+            "git -C . grep -e needle *",
+            "timeout 5 git grep -e needle *",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (tag, gate, perms, judged, asks) in [
+                ("auto", auto_gate(false), None, 1, 0),
+                ("supervised", supervised, Some(&policy), 0, 1),
+            ] {
+                let dir = planted_dash_name(&format!("dash-glob-{tag}-{n}"));
+                let fake = LoopFake {
+                    turns: Mutex::new(vec![
+                        Turn {
+                            text: String::new(),
+                            calls: vec![call(
+                                "g",
+                                "run_terminal_command",
+                                &serde_json::json!({ "command": cmd, "timeout": 10000 })
+                                    .to_string(),
+                            )],
+                            usage: Usage::default(),
+                        },
+                        done(),
+                    ]),
+                    judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                    judge_usage: Usage::default(),
+                    judge_err: false,
+                    seen: Mutex::new(Vec::new()),
+                };
+                let permits = Answer {
+                    answer: PermAnswer::Deny,
+                    asks: AtomicUsize::new(0),
+                };
+                let (_, history, _) = drive_gated(&fake, &dir, gate, perms, &permits);
+                let ran = dir.join("GREP_RAN").exists();
+                let _ = std::fs::remove_dir_all(&dir);
+                assert_eq!(judge_calls(&fake), judged, "{tag}: {cmd}");
+                assert_eq!(permits.asks.load(Ordering::SeqCst), asks, "{tag}: {cmd}");
+                assert!(!ran, "the planted -O program ran: {tag}: {cmd}");
+                let blocked = history.iter().any(|item| {
+                    matches!(
+                        item,
+                        InputItem::FunctionCallOutput { output, .. }
+                            if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                    )
+                });
+                assert_eq!(blocked, tag == "auto", "{tag}: {cmd}");
+            }
+        }
+    }
+
+    /// A word that a glob leads (`*`, `?x`, `[a-]*`), or an option whose
+    /// name holds one (`--o*`, `-n*`), can expand to an option the check
+    /// never read, before the `--` that ends them. A `--` right after an
+    /// option that may read it as its value (`-e`, `--author`, `-m`, `-U`,
+    /// `-k`), a cluster that ends in one (`-ie`) or a long name git expands
+    /// from a prefix (`--max-d`) ends nothing. A command with an option
+    /// that runs a program or writes a file then asks, and gets no fast
+    /// path; `uniq` writes its second file, which any glob can name.
+    #[test]
+    fn a_read_whose_glob_can_fill_an_option_asks() {
+        for cmd in [
+            "git grep -e needle *",
+            "git -C . grep -e needle *",
+            "timeout 5 git grep -e needle *",
+            "git log -p *",
+            "git log *.rs",
+            "git show ?x",
+            "git diff [a-]*",
+            "git grep -e -- *",
+            "git log -L -- *",
+            "git log --author -- *",
+            "git log -n -- *",
+            "git grep -m -- *",
+            "git grep -ie -- *",
+            "git grep --max-d -- *",
+            "git diff -U -- *",
+            "rg -e -- *",
+            "sort -k -- *",
+            "git log --o*",
+            "git grep -n* needle",
+            "rg needle *",
+            "rg -n needle *.rs",
+            "sort *.txt",
+            "sort -u *",
+            "uniq *.txt",
+            "uniq src/*.txt",
+            "uniq -f 1 src/*.log",
+            "kubectl get pods *",
+            "date -d *",
+        ] {
+            assert_eq!(supervised_with_policy(cmd), Decision::Ask, "{cmd}");
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+        }
+        for cmd in [
+            "git add *",
+            "git add -f *.env",
+            "git commit -m x *",
+            "gh pr view *",
+        ] {
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+        }
+    }
+
+    /// A glob after a path (`src/*`, `./*`) or a letter (`a*`), after the
+    /// `--` that ends the options (also right after an option that takes
+    /// no value: `--oneline`, `--stat`, `-p`, `-5`, `-m` for ls-files, `-n`
+    /// for grep, `-u` for sort, `-i` for rg), or in a stuck value
+    /// (`--glob=*.rs`) only expands to words that start the way they are
+    /// typed. Those reads, and every glob for a command with no option
+    /// that runs a program or writes a file, still run as they did.
+    #[test]
+    fn reads_whose_globs_cannot_fill_an_option_still_run() {
+        for cmd in [
+            "ls *.rs",
+            "ls -la [a-z]*",
+            "cat src/*.ts",
+            "cat *",
+            "grep -r foo .",
+            "grep -rn needle *",
+            "head -n 5 *.md",
+            "wc -l *.rs",
+            "tail ?x",
+            "git grep -e x -- '*.rs'",
+            "git grep -e needle -- *",
+            "git log -- '*.rs'",
+            "git log --format=%H -- '*.rs'",
+            "git log --oneline -- '*.rs'",
+            "git log -p -- '*.rs'",
+            "git log --oneline -5 -- '*.rs'",
+            "git diff --stat -- '*.rs'",
+            "git diff --name-only -- '*.ts'",
+            "git diff --cached -- '*.md'",
+            "git ls-files -m -- '*.rs'",
+            "git grep -n TODO -- '*.rs'",
+            "git grep -e needle -n -- *",
+            "git status --short -- '*.rs'",
+            "git diff --stat src/*.rs",
+            "git log -p ./*",
+            "git branch --list 'feat/*'",
+            "rg needle src/*.rs",
+            "rg --glob=*.rs needle",
+            "rg needle -- *",
+            "rg -i -- needle *",
+            "sort a*",
+            "sort -- *.txt",
+            "sort -u -- *.txt",
+            "uniq a.txt",
+        ] {
+            assert_eq!(supervised_with_policy(cmd), Decision::Run, "{cmd}");
+        }
+        for cmd in [
+            "git grep -e x -- '*.rs'",
+            "git grep -e needle -- *",
+            "git log -- '*.rs'",
+            "git log --oneline -- '*.rs'",
+            "git diff --stat -- '*.rs'",
+            "git diff --stat src/*.rs",
+            "git add src/*.rs",
+            "git add -- '*.rs'",
+            "git add .",
+            "git commit -m 'fix the *.rs globs'",
+            "gh pr view 42",
+        ] {
+            assert!(command_fast_allows(cmd), "{cmd} should fast-allow");
+        }
+    }
+
+    /// A repository that commits `0` and `sh` (both empty) and `zz`, a
+    /// script that writes `PWNED_<its first two words>` in the workspace.
+    /// `*` lists them in that order, so the shell turns `timeout * git log`
+    /// into `timeout 0 sh zz git log`: `sh` runs `zz`.
+    fn planted_wrapper_value(tag: &str) -> PathBuf {
+        let dir = workspace(tag);
+        std::fs::write(dir.join("0"), "").unwrap();
+        std::fs::write(dir.join("sh"), "").unwrap();
+        std::fs::write(dir.join("zz"), "touch \"$PWD/PWNED_$1_$2\"\n").unwrap();
+        git_ok(&dir, &["init", "-q"]);
+        git_ok(&dir, &["add", "-A"]);
+        git_ok(&dir, &["commit", "-qm", "x"]);
+        dir
+    }
+
+    /// The shell fills a glob in a wrapper's own words (timeout's duration,
+    /// the name `env -u` unsets, the value `nice -n` reads) before the
+    /// wrapped `git log` runs, so the file names it lists name the program
+    /// that runs. Unattended Auto mode sends each spelling to the judge,
+    /// which blocks it; a supervised run with a policy loaded shows the
+    /// card, which is denied. The planted script never runs.
+    #[test]
+    fn a_loop_sends_a_glob_in_a_wrapper_word_to_the_judge_or_a_card() {
+        let policy = Policy::empty();
+        let supervised = Gate {
+            mode: PermMode::Ask,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        };
+        for (n, cmd) in ["timeout * git log", "env -u * git log", "nice -n * git log"]
+            .into_iter()
+            .enumerate()
+        {
+            for (tag, gate, perms, judged, asks) in [
+                ("auto", auto_gate(false), None, 1, 0),
+                ("supervised", supervised, Some(&policy), 0, 1),
+            ] {
+                let dir = planted_wrapper_value(&format!("wrap-glob-{tag}-{n}"));
+                let fake = LoopFake {
+                    turns: Mutex::new(vec![
+                        Turn {
+                            text: String::new(),
+                            calls: vec![call(
+                                "g",
+                                "run_terminal_command",
+                                &serde_json::json!({ "command": cmd, "timeout": 10000 })
+                                    .to_string(),
+                            )],
+                            usage: Usage::default(),
+                        },
+                        done(),
+                    ]),
+                    judge_text: r#"{"verdict":"block","reason":"runs a program"}"#.into(),
+                    judge_usage: Usage::default(),
+                    judge_err: false,
+                    seen: Mutex::new(Vec::new()),
+                };
+                let permits = Answer {
+                    answer: PermAnswer::Deny,
+                    asks: AtomicUsize::new(0),
+                };
+                let (_, history, _) = drive_gated(&fake, &dir, gate, perms, &permits);
+                let markers: Vec<String> = std::fs::read_dir(&dir)
+                    .unwrap()
+                    .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+                    .filter(|name| name.starts_with("PWNED_"))
+                    .collect();
+                let _ = std::fs::remove_dir_all(&dir);
+                assert_eq!(judge_calls(&fake), judged, "{tag}: {cmd}");
+                assert_eq!(permits.asks.load(Ordering::SeqCst), asks, "{tag}: {cmd}");
+                assert_eq!(markers, Vec::<String>::new(), "{tag}: {cmd}");
+                let blocked = history.iter().any(|item| {
+                    matches!(
+                        item,
+                        InputItem::FunctionCallOutput { output, .. }
+                            if output.contains("Auto mode blocked `run_terminal_command`: runs a program")
+                    )
+                });
+                assert_eq!(blocked, tag == "auto", "{tag}: {cmd}");
+            }
+        }
+    }
+
+    /// Every word before the peeled command counts, not only the command:
+    /// a glob in a wrapper's word or value (`timeout *`, `env -u *`, `nice
+    /// -n *`, `stdbuf -o *`, `ionice -c *`, `chrt -o *`) or in an
+    /// assignment can name the program that runs, so the segment earns no
+    /// pass: no read-only run, no fast path, no allow rule, no Always
+    /// grant. The same wrappers with plain values still get each one.
+    #[test]
+    fn a_glob_in_a_wrapper_word_earns_no_pass() {
+        for cmd in [
+            "timeout * git log",
+            "timeout -s * 5 git log",
+            "timeout 5 nice -n ? git log",
+            "timeout * git status",
+            "env -u * git log",
+            "env -u* git log",
+            "env --unset * git log",
+            "env --unset=* git log",
+            "env NO_COLOR=* git log",
+            "NO_COLOR=* git log",
+            "nice -n * git log",
+            "stdbuf -o * git log",
+            "ionice -c * git log",
+            "chrt -o * git log",
+        ] {
+            assert_eq!(supervised_with_policy(cmd), Decision::Ask, "{cmd}");
+            assert!(!command_fast_allows(cmd), "{cmd} must not fast-allow");
+            assert!(!perm::shell_is_readonly(cmd), "{cmd} must not be a read");
+        }
+        for cmd in [
+            "timeout 5 git log",
+            "timeout 5 git status",
+            "env -u PAGER git log",
+            "env NO_COLOR=1 git log",
+            "NO_COLOR=1 git log",
+            "nice -n 5 git log",
+            "stdbuf -o L git log",
+            "ionice -c 3 git log",
+            "chrt -o 0 git log",
+        ] {
+            assert_eq!(supervised_with_policy(cmd), Decision::Run, "{cmd}");
+            assert!(command_fast_allows(cmd), "{cmd} should fast-allow");
+            assert!(perm::shell_is_readonly(cmd), "{cmd} should be a read");
+        }
+        let granted = Policy {
+            rules: Vec::new(),
+            grants: vec!["git commit -m x".into()],
+        };
+        let allowed = Policy {
+            rules: vec![parse_rule("Bash(git commit -m x)", Action::Allow).unwrap()],
+            grants: Vec::new(),
+        };
+        for (tag, policy) in [("grant", &granted), ("allow rule", &allowed)] {
+            assert_eq!(
+                supervised_under("timeout 5 git commit -m x", policy),
+                Decision::Run,
+                "{tag}"
+            );
+            assert_eq!(
+                supervised_under("timeout * git commit -m x", policy),
+                Decision::Ask,
+                "{tag}"
+            );
+        }
     }
 }

@@ -4,12 +4,12 @@ This page describes which GitHub Actions jobs run on which event, as the workflo
 
 Columns, left to right:
 
-- **PR**: a pull request into `beta` or `main`.
+- **PR**: a pull request into `beta` or `main`. A cell that names one base applies only to PRs into that base.
 - **Queue**: `merge_group`.
 - **Beta**: a push to `beta`, which every merged PR makes.
 - **Main**: a push to `main`, made by a promotion or a hotfix.
 - **Tag**: a `v*` tag.
-- **Nightly**: the 08:00 UTC schedule. It fires from `main` but builds `beta`.
+- **Nightly**: `nightly.yml` fires at 08:00 UTC from `main` and dispatches `ci.yml` and `release.yml` on `beta` with `nightly=true`. The build runs in `beta`'s cache scope, so `beta`'s code never writes the caches of `main`, which every branch reads.
 - **Manual**: `workflow_dispatch`.
 
 ## ci.yml
@@ -18,10 +18,11 @@ Columns, left to right:
 |---|---|---|---|---|---|---|---|
 | `changes`, `fmt`, `guards` | yes | yes | yes | yes | yes | yes | yes |
 | `linux` (required) | code ¹ | yes | yes | yes | yes | yes ² | yes |
-| `windows` (required) | Rust ³ | yes | yes | yes | yes | yes ² | yes |
+| `windows` (required) | into `main`, Rust ³ | yes | yes | yes | yes | yes ² | yes |
 | `deny` | lock ⁴ | yes | no | yes | yes | yes ² | yes |
-| `shell` | ubuntu ⁵ | ubuntu, windows | no | ubuntu, windows | 3 OS | 3 OS ² | 3 OS |
-| `phone (android)` | phone ⁶ | yes | no | phone ⁶ | yes | yes ² | yes |
+| `shell` | into `main`, ubuntu ⁵ | ubuntu, windows | ubuntu, windows ⁵ | ubuntu, windows | 3 OS | 3 OS ² | 3 OS |
+| `shell-lint` ⁷ | into `beta`, shell ⁵ | no | no | no | no | no | no |
+| `phone (android)` | into `main`, phone ⁶ | yes | phone ⁶ | phone ⁶ | yes | yes ² | yes |
 | `phone (ios)` | no | no | no | no | yes | yes ² | yes |
 | `cross-check` (macOS, iOS, Android, wasm) | no | no | no | no | yes | yes ² | yes |
 | `windows-release` | no | no | no | no | no | yes ² | yes |
@@ -31,8 +32,9 @@ Columns, left to right:
 2. Skipped when `beta` has not moved since the last green nightly (see below).
 3. Same as 1, and also skipped when a PR touches only `ui/` or workflows other than `ci.yml`.
 4. Only when `Cargo.lock` or `deny.toml` changes.
-5. Only when shell paths change (`ui/`, `src-tauri/`, the shared crates, `ci.yml`). The Windows WebView2 smoke test runs on Queue, Main, Tag, Nightly and Manual.
+5. Only when shell paths change: `ui/`, `src-tauri/`, `brand/`, the crates the shell builds, the root `Cargo.toml`, the root Rust config (`clippy.toml`, `rustfmt.toml`, `rust-toolchain.toml`, `.cargo/`), `ci.yml`, `release.yml` and the two scripts the shell tests read. The Windows WebView2 smoke test runs on every event that runs the Windows shell job.
 6. Only when `ui/`, `src-tauri/` or `ci.yml` changes.
+7. The lint half of `shell` on ubuntu: ui eslint, vitest and the UI build, then `cargo fmt --check` and `cargo clippy --all-targets -D warnings` for `src-tauri`. It restores the `shell-ubuntu-latest` cache that a push to `beta` saves, and never saves one. It is not a required check of its own: `linux` fails unless `shell-lint` passed, or was skipped because no shell path changed.
 
 Every gate is a job-level `if:`, never a workflow-level path filter. A skipped job still reports, so a required check (`fmt`, `guards`, `linux`, `windows`, `pii-guard`) never sits waiting.
 
@@ -54,7 +56,7 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 
 7. The nightly skips everything after `plan` when `vX.Y.Z-beta.N` already exists, which means nothing new landed on `beta`.
 
-- Rust caches (`shell-<os>`) are used only on the `beta` ref. Tags and the nightly build cold.
+- Rust caches (`shell-<os>`) are used only on the `beta` ref, the nightly included. Tags build cold.
 - A newer beta build cancels one still running. Tag runs never cancel.
 - A tag builds only when it is `v<VERSION>` or `v<VERSION>-beta.N` for the tagged commit. `plan` runs `scripts/release-tag-check.sh` before any build or signing, and the `guards` job fails when that call is missing or is not the first command for a tag (`scripts/ci-guards.sh`).
 - `publish` downloads only the `shell-*` artifacts.
@@ -67,7 +69,8 @@ The `changes` job looks up the cache key `ci-nightly-green-<beta sha>`. If the k
 | Workflow | Runs on |
 |---|---|
 | `pii-guard.yml` (required `pii-guard`) | PR, Queue, push to `beta` and `main`. Superseded PR and beta runs are cancelled. |
-| `auto-merge.yml` | PR events into `beta`. Turns on squash auto-merge. Builds nothing. |
+| `nightly.yml` | Schedule (08:00 UTC) and manual. Dispatches the `ci.yml` and `release.yml` nightly on `beta`. Builds nothing. |
+| `auto-merge.yml` | PR events into `beta`. Turns on squash auto-merge (or squash-merges when the PR is already clean). Job-level concurrency so a skipped bot review does not cancel a ready_for_review run. Builds nothing. |
 | `retarget.yml` | PRs opened against `main`. Moves them to `beta`. Builds nothing. |
 | `cards-sync.yml`, `claude.yml` | Bot workflows: schedule, issue, review and manual triggers. They build nothing. |
 

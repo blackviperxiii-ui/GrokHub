@@ -1,6 +1,6 @@
 # Local makepkg from a clone (not the AUR source PKGBUILD).
 pkgname=grokhub
-pkgver=3.6.0
+pkgver=3.7.0
 pkgrel=1
 pkgdesc="Loadout: a gaming and PC companion desktop app, built with Tauri, and its LAN hub; no Electron"
 arch=('x86_64')
@@ -45,7 +45,7 @@ package() {
   install -Dm755 "$hub/grokhub" "$pkgdir/usr/bin/grokhub"
   # Menus and KWin match the entry by its Exec path, so it is absolute.
   install -dm755 "$pkgdir/usr/share/applications"
-  sed -e 's|^Exec=grokhub-shell$|Exec=/usr/bin/grokhub-shell|' \
+  sed -e 's|^Exec=grokhub-shell\( %u\)\?$|Exec=/usr/bin/grokhub-shell %u|' \
       -e 's|^TryExec=grokhub-shell$|TryExec=/usr/bin/grokhub-shell|' \
       packaging/grokhub-shell.desktop >"$pkgdir/usr/share/applications/grokhub-shell.desktop"
   chmod 644 "$pkgdir/usr/share/applications/grokhub-shell.desktop"

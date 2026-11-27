@@ -9,18 +9,23 @@ import {
   listChats,
   onAutomationRan,
   onChatEvent,
+  onCompanionEvent,
   onHalt,
   onLocalEngineEvent,
+  onSkillInstallOffer,
   onUpdateAvailable,
   saveDockLayout,
   shareSchedulerClock,
+  takeSkillInstallOffer,
   WEB,
   workboardSweepUndo,
   type BoardSwept,
   type Capabilities,
   type DockLayout,
   type Profile,
+  type SkillInstallPreview,
 } from "./api";
+import { SkillInstallConfirm } from "./SkillInstallConfirm";
 import { onGameCompanionNotice } from "./gameSession";
 import {
   cardsByChat,
@@ -52,8 +57,15 @@ import { Chat, newConversationId, type Prefill, type QueueAct } from "./Chat";
 import { useChipRow } from "./Chips";
 import { RecordIndicator } from "./RecordIndicator";
 import { HALT_DONE, HALT_FAILED, HaltButton, HaltNote, haltShown, isHaltKey } from "./Halt";
-import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, moreViews, type PaletteAction, type View } from "./Palette";
+import { NO_SOURCES, Palette, VIEW_LABELS, hasPage, type PaletteAction, type View } from "./Palette";
 import { COMPOSER_SLASH, shellKeys, type CommandRunners } from "./paletteCommands";
+import {
+  loadRailPrefs,
+  RAIL_PREFS_EVENT,
+  saveRailPrefs,
+  type RailPrefs,
+  type RailSectionId,
+} from "./railPrefs";
 import { Shortcuts } from "./Shortcuts";
 import type { Section } from "./sections";
 import { useOverscroll } from "./rubberBand";
@@ -76,6 +88,7 @@ import {
   isDockable,
 } from "./Dock";
 import { AutoNote, FirstRun, useAutoSetup } from "./AutoSetup";
+import { FirstRunV2 } from "./FirstRunV2";
 import { OnboardStage } from "./GetToKnowYou";
 import { WindowControls } from "./WindowControls";
 
@@ -87,10 +100,11 @@ const loaders = {
   code: () => import("./Code").then((m) => ({ default: m.Code })),
   command: () => import("./CommandBox").then((m) => ({ default: m.CommandBox })),
   connectors: () => import("./Connectors").then((m) => ({ default: m.Connectors })),
-  imagine: () => import("./Imagine").then((m) => ({ default: m.Imagine })),
+  marketplace: () => import("./Marketplace").then((m) => ({ default: m.Marketplace })),
   devices: () => import("./Devices").then((m) => ({ default: m.Devices })),
   fleet: () => import("./Fleet").then((m) => ({ default: m.Fleet })),
   journal: () => import("./Journal").then((m) => ({ default: m.Journal })),
+  meetings: () => import("./Meetings").then((m) => ({ default: m.Meetings })),
   workboard: () => import("./Workboard").then((m) => ({ default: m.Workboard })),
   history: () => import("./History").then((m) => ({ default: m.History })),
   home: () => import("./Home").then((m) => ({ default: m.Home })),
@@ -99,18 +113,20 @@ const loaders = {
   mods: () => import("./Mods").then((m) => ({ default: m.Mods })),
   objectives: () => import("./Objectives").then((m) => ({ default: m.Objectives })),
   skills: () => import("./Skills").then((m) => ({ default: m.Skills })),
+  team: () => import("./Team").then((m) => ({ default: m.Team })),
   pulse: () => import("./Pulse").then((m) => ({ default: m.Pulse })),
   settings: () => import("./Settings").then((m) => ({ default: m.Settings })),
   updates: () => import("./UpdatesDrivers").then((m) => ({ default: m.UpdatesDrivers })),
 };
 const Agents = lazy(loaders.agents);
 const Connectors = lazy(loaders.connectors);
-const Imagine = lazy(loaders.imagine);
+const Marketplace = lazy(loaders.marketplace);
 const Devices = lazy(loaders.devices);
 const Fleet = lazy(loaders.fleet);
 const History = lazy(loaders.history);
 const Home = lazy(loaders.home);
 const Journal = lazy(loaders.journal);
+const Meetings = lazy(loaders.meetings);
 const Code = lazy(loaders.code);
 const CommandBox = lazy(loaders.command);
 const Library = lazy(loaders.library);
@@ -119,6 +135,7 @@ const Mods = lazy(loaders.mods);
 const Objectives = lazy(loaders.objectives);
 const Pulse = lazy(loaders.pulse);
 const Skills = lazy(loaders.skills);
+const Team = lazy(loaders.team);
 const Settings = lazy(loaders.settings);
 const Workboard = lazy(loaders.workboard);
 const UpdatesDrivers = lazy(loaders.updates);
@@ -196,8 +213,41 @@ export function App() {
   // A browser is the web app from its first render: it must not run a
   // desktop-only step (the last chat, say) while its capabilities load.
   const [caps, setCaps] = useState<Capabilities>(() => (inShell() ? CORE_ONLY : WEB));
-  // The palette: everything (Ctrl+K, Command), or the rail's More, pages only.
-  const [palette, setPalette] = useState<false | "all" | "more">(false);
+  // The palette (Ctrl+K, Command).
+  const [palette, setPalette] = useState<false | "all">(false);
+  const [railPrefs, setRailPrefs] = useState<RailPrefs>(() => loadRailPrefs());
+  const setRail = useCallback((next: RailPrefs) => {
+    setRailPrefs(next);
+    saveRailPrefs(next);
+  }, []);
+  const setRailPin = useCallback(
+    (page: View, on: boolean) => {
+      const pinned = on
+        ? railPrefs.pinned.includes(page)
+          ? railPrefs.pinned
+          : [...railPrefs.pinned, page]
+        : railPrefs.pinned.filter((v) => v !== page);
+      setRail({ ...railPrefs, pinned });
+    },
+    [railPrefs, setRail],
+  );
+  const toggleRailSection = useCallback(
+    (id: RailSectionId) => {
+      const collapsed = railPrefs.collapsed.includes(id)
+        ? railPrefs.collapsed.filter((s) => s !== id)
+        : [...railPrefs.collapsed, id];
+      setRail({ ...railPrefs, collapsed });
+    },
+    [railPrefs, setRail],
+  );
+  useEffect(() => {
+    function onPrefs(event: Event) {
+      const detail = (event as CustomEvent<RailPrefs>).detail;
+      if (detail) setRailPrefs(detail);
+    }
+    window.addEventListener(RAIL_PREFS_EVENT, onPrefs);
+    return () => window.removeEventListener(RAIL_PREFS_EVENT, onPrefs);
+  }, []);
   const [sheet, setSheet] = useState(false);
   const paletteChips = useChipRow({ surface: "palette", active: palette === "all" });
   const [signedOut, setSignedOut] = useState(false);
@@ -213,6 +263,7 @@ export function App() {
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number } | null>(null);
   const [askClear, setAskClear] = useState(false);
   const [clear, setClear] = useState<{ n: number }>();
+  const [skillInstall, setSkillInstall] = useState<SkillInstallPreview | null>(null);
   const [activity, setActivity] = useState<Record<string, ActivityItem>>({});
   // Messages lined up behind the open chat's reply, as the chat reports them.
   const [queued, setQueued] = useState<{ conversationId: string; texts: string[] }>();
@@ -376,6 +427,26 @@ export function App() {
       stop?.();
     };
   }, [canHalt]);
+  // loadout://skill/install deep links: pending offer + live event.
+  useEffect(() => {
+    if (!inShell()) return;
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void takeSkillInstallOffer().then(
+      (preview) => {
+        if (!dropped && preview) setSkillInstall(preview);
+      },
+      () => {},
+    );
+    void onSkillInstallOffer((preview) => setSkillInstall(preview)).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, []);
   // The palette's Sign in row follows the key and the Grok sign-in, which
   // Settings may have added.
   useEffect(() => {
@@ -481,6 +552,28 @@ export function App() {
     const timer = window.setInterval(share, CLOCK_SHARE_MS);
     return () => window.clearInterval(timer);
   }, []);
+  // A companion's wake opens a new chat; what it heard is sent in the open one.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+    void onCompanionEvent((event) => {
+      if (event.kind === "heard") {
+        if (!event.text.trim()) return;
+        setPrefill((now) => ({ text: event.text, n: (now?.n ?? 0) + 1, send: true }));
+      } else {
+        setPrefill((now) => ({ text: "", n: (now?.n ?? 0) + 1, conversationId: newConversationId() }));
+        notify("info", `${event.name} woke this app.`, undefined, "Devices");
+      }
+      setView("chat");
+    }).then((unlisten) => {
+      if (dropped) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [notify]);
   // An auto-resume stopped for the day: the card waits in Blocked, and the
   // bell says so.
   useEffect(() => {
@@ -710,7 +803,10 @@ export function App() {
               onOpenSettings={() => setView("settings")}
               onSignIn={() => run({ kind: "settings", section: "account" })}
               onOpenView={openView}
-              onOpenSection={(section) => run({ kind: "settings", section })}
+              onOpenSection={(section) =>
+                // `/plugins` lands on the Marketplace, where plugins moved from Labs.
+                section === "labs" && openView("marketplace") ? undefined : run({ kind: "settings", section })
+              }
               onOpenPalette={() => setPalette("all")}
               onQueue={onQueue}
               queueAct={queueAct}
@@ -814,6 +910,10 @@ export function App() {
               openCard={openCard}
               onCards={setCardChats}
               onSwept={noteSweep}
+              onOpenChat={(id) => {
+                openSaved(id);
+                setView("chat");
+              }}
               onResume={({ prompt, conversationId }) => {
                 // The resume block goes once, as the resume turn's input.
                 setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, send: true, conversationId }));
@@ -858,6 +958,18 @@ export function App() {
             />
           </Page>
         ) : null;
+      case "team":
+        return opened.has("team") && !caps.remote ? (
+          <Page key="team" shown={shown}>
+            <Team shown={shown} />
+          </Page>
+        ) : null;
+      case "meetings":
+        return opened.has("meetings") && !caps.remote ? (
+          <Page key="meetings" shown={shown}>
+            <Meetings />
+          </Page>
+        ) : null;
       case "history":
         return opened.has("history") && !caps.remote ? (
           <Page key="history" shown={shown}>
@@ -888,6 +1000,12 @@ export function App() {
             <Connectors remote={Boolean(caps.remote)} />
           </Page>
         ) : null;
+      case "marketplace":
+        return opened.has("marketplace") && caps.plugins ? (
+          <Page key="marketplace" shown={shown}>
+            <Marketplace onUse={ask} remote={Boolean(caps.remote)} />
+          </Page>
+        ) : null;
       case "updates":
         return opened.has("updates") && !caps.remote ? (
           <Page key="updates" shown={shown}>
@@ -897,7 +1015,7 @@ export function App() {
       case "library":
         return opened.has("library") && caps.library ? (
           <Page key="library" shown={shown}>
-            <Library />
+            <Library onOpenChat={openSaved} />
           </Page>
         ) : null;
       case "mods":
@@ -915,7 +1033,6 @@ export function App() {
               onClose={() => setView(before)}
               backTo={VIEW_LABELS[before]}
               onProfile={setProfile}
-              onOpenConnectors={() => setView("connectors")}
             />
           </Page>
         ) : null;
@@ -929,12 +1046,6 @@ export function App() {
         return opened.has("fleet") && caps.webAccess && !caps.remote ? (
           <Page key="fleet" shown={shown}>
             <Fleet shown={shown} />
-          </Page>
-        ) : null;
-      case "imagine":
-        return opened.has("imagine") ? (
-          <Page key="imagine" shown={shown}>
-            <Imagine />
           </Page>
         ) : null;
       case "agents":
@@ -1021,10 +1132,12 @@ export function App() {
         <Rail
           caps={caps}
           view={view}
-          moreOpen={palette === "more"}
+          pinned={railPrefs.pinned}
+          collapsed={railPrefs.collapsed}
           onOpen={setView}
-          onMore={() => setPalette((open) => (open === "more" ? false : "more"))}
           onChatMenu={setTabMenu}
+          onPin={setRailPin}
+          onToggleSection={toggleRailSection}
           profile={profile}
           // The web app's Settings has no Account page: the avatar only shows there.
           onProfile={caps.remote ? undefined : () => run({ kind: "settings", section: "account" })}
@@ -1033,6 +1146,9 @@ export function App() {
           {haltNote && <HaltNote text={haltNote} onDismiss={() => setHaltNote(undefined)} />}
           {caps.autoSetup && auto.reply?.firstRun && <FirstRun reply={auto.reply} act={auto.act} />}
           {caps.autoSetup && <OnboardStage after={auto.reply !== null && !auto.reply.firstRun} onSaved={readProfile} />}
+          {caps.autoSetup && (
+            <FirstRunV2 after={auto.reply !== null && !auto.reply.firstRun} onAsk={askNow} />
+          )}
           {caps.autoSetup && auto.note && !auto.reply?.firstRun && (
             <AutoNote note={auto.note} act={auto.act} onClose={auto.closeNote} />
           )}
@@ -1051,9 +1167,6 @@ export function App() {
               onClose={() => setPalette(false)}
             />
           )}
-          {palette === "more" && (
-            <Palette caps={caps} only={moreViews(caps)} onPick={run} onClose={() => setPalette(false)} />
-          )}
           {tabMenu && <ChatTabMenu at={tabMenu} onClear={() => setAskClear(true)} onClose={() => setTabMenu(null)} />}
           {sheet && (
             <Shortcuts
@@ -1071,6 +1184,17 @@ export function App() {
           )}
           {/* Chat and Automations stay mounted so a reply or a Run now in flight
               is not lost when another tab opens. */}
+          {skillInstall && (
+            <SkillInstallConfirm
+              preview={skillInstall}
+              onDone={(note) => {
+                setSkillInstall(null);
+                setView("skills");
+                setNotices((now) => pushNotice(now, "success", note, Date.now()));
+              }}
+              onCancel={() => setSkillInstall(null)}
+            />
+          )}
           {askClear && (
             <ClearChatDialog
               onConfirm={() => {
@@ -1091,9 +1215,11 @@ export function App() {
                 {pageNode("code", view === "code")}
                 {pageNode("command", view === "command")}
                 {pageNode("journal", view === "journal")}
+                {pageNode("meetings", view === "meetings")}
                 {pageNode("history", view === "history")}
                 {pageNode("memory", view === "memory")}
                 {pageNode("connectors", view === "connectors")}
+                {pageNode("marketplace", view === "marketplace")}
                 {pageNode("updates", view === "updates")}
                 {pageNode("library", view === "library")}
                 {pageNode("mods", view === "mods")}
@@ -1101,6 +1227,7 @@ export function App() {
                 {pageNode("devices", view === "devices")}
                 {pageNode("fleet", view === "fleet")}
                 {pageNode("agents", view === "agents")}
+                {pageNode("team", view === "team")}
               </div>
               <div hidden={!isDockable(view)}>
                 <Dock
@@ -1122,18 +1249,20 @@ export function App() {
               {pageNode("code", view === "code")}
               {pageNode("command", view === "command")}
               {pageNode("journal", view === "journal")}
+              {pageNode("meetings", view === "meetings")}
               {pageNode("history", view === "history")}
               {pageNode("memory", view === "memory")}
               {pageNode("skills", view === "skills")}
               {pageNode("connectors", view === "connectors")}
+              {pageNode("marketplace", view === "marketplace")}
               {pageNode("updates", view === "updates")}
               {pageNode("library", view === "library")}
               {pageNode("mods", view === "mods")}
               {pageNode("settings", view === "settings")}
               {pageNode("devices", view === "devices")}
               {pageNode("fleet", view === "fleet")}
-              {pageNode("imagine", view === "imagine")}
               {pageNode("agents", view === "agents")}
+              {pageNode("team", view === "team")}
             </>
           )}
         </main>

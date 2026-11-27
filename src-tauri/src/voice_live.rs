@@ -853,6 +853,8 @@ pub(crate) async fn voice_live_start(
     let id = conversation_id.unwrap_or_default();
     crate::off_main(move || {
         voice_route::set_session_active(true);
+        // Open-mic owns the mic: pause always-listen wake matching.
+        crate::wake_word::set_voice_busy_flag(true);
         let cfg = voice_route::read(&dir);
         let models = models_dir(&dir);
         let mut missing = Vec::new();
@@ -902,6 +904,7 @@ pub(crate) async fn voice_live_chat(
 pub(crate) fn voice_live_stop() {
     voice_route::set_session_active(false);
     SESSION.lock().unwrap_or_else(|e| e.into_inner()).take();
+    crate::wake_word::set_voice_busy_flag(false);
 }
 
 /// One block of the open mic (base64 of 16 kHz mono s16le).

@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -154,6 +154,9 @@ struct TaskSlot {
     route: Mutex<Option<crate::route::live::RouteSeen>>,
     /// A subagent's progress, kept only when it started with the watch on.
     progress: Option<Mutex<Progress>>,
+    /// A command's workspace, where a long read of its output is saved
+    /// whole. Helpers have none: their results are already capped and saved.
+    workspace: Option<PathBuf>,
 }
 
 struct Progress {
@@ -397,7 +400,7 @@ impl TaskHub {
         }
         let cwd = cwd
             .canonicalize()
-            .map_err(|err| format!("workspace is not available: {err}"))?;
+            .map_err(|err| crate::tools::workspace_unavailable_error(cwd, &err))?;
         let id = {
             let mut hub = self.lock();
             if hub.halted {
@@ -414,16 +417,17 @@ impl TaskHub {
             proc.kill_tree();
             return Err("halted".into());
         }
-        self.watch(&id, proc, command, owned_by_monitor, owner, guard);
+        self.watch(&id, proc, command, &cwd, owned_by_monitor, owner, guard);
         Ok(id)
     }
 
-    /// Track `proc` as task `id` and supervise it until it ends.
+    /// Track `proc`, run in `cwd`, as task `id` and supervise it until it ends.
     fn watch(
         self: &Arc<Self>,
         id: &str,
         proc: crate::tools::shell::BgProc,
         title: String,
+        cwd: &Path,
         owned_by_monitor: bool,
         owner: Option<String>,
         guard: Option<crate::sandbox::git_guard::Guard>,
@@ -440,6 +444,7 @@ impl TaskHub {
             model: String::new(),
             route: Mutex::new(None),
             progress: None,
+            workspace: Some(cwd.to_path_buf()),
         });
         self.lock().tasks.insert(id.to_string(), Arc::clone(&slot));
         self.mark();
@@ -457,6 +462,7 @@ impl TaskHub {
     pub(crate) fn adopt(
         self: &Arc<Self>,
         proc: crate::tools::shell::BgProc,
+        cwd: &Path,
         command: &str,
         owner: Option<&str>,
         guard: Option<crate::sandbox::git_guard::Guard>,
@@ -479,6 +485,7 @@ impl TaskHub {
             &id,
             proc,
             command.trim().to_string(),
+            cwd,
             false,
             owner.map(str::to_string),
             guard,
@@ -545,7 +552,7 @@ impl TaskHub {
     }
 
     fn output_of(&self, id: &str, slot: &TaskSlot, phase: Phase) -> String {
-        let text = format_output(slot, phase);
+        let text = format_output(slot, phase, &self.session_id());
         if slot.agent && !matches!(phase, Phase::Running) {
             self.joined(id);
         }
@@ -599,6 +606,7 @@ impl TaskHub {
                     log: VecDeque::new(),
                 })
             }),
+            workspace: None,
         });
         self.lock().tasks.insert(id.clone(), slot);
         self.mark();
@@ -1054,14 +1062,26 @@ fn kill_slot(slot: &TaskSlot) {
     }
 }
 
-fn format_output(slot: &TaskSlot, phase: Phase) -> String {
+/// What task `slot` printed since the last read. `session` is the chat,
+/// whose held secrets stay out of a long output's saved copy.
+fn format_output(slot: &TaskSlot, phase: Phase, session: &str) -> String {
     let ring = slot.ring.lock().unwrap_or_else(|err| err.into_inner());
     let cursor = slot.read_at.load(Ordering::SeqCst);
     let end = ring.end();
     let (truncated, bytes) = ring.slice_from(cursor);
     slot.read_at.store(end, Ordering::SeqCst);
     drop(ring);
-    let mut body = crate::tools::shell::cap_output(&String::from_utf8_lossy(&bytes));
+    // A command's long output is saved whole before the cut; it reads back
+    // fenced, as this read is.
+    let keep = slot
+        .workspace
+        .as_deref()
+        .map(|workspace| crate::tools::spool::Keep {
+            workspace,
+            session: Some(session),
+            outside: true,
+        });
+    let mut body = crate::tools::shell::cap_output(&String::from_utf8_lossy(&bytes), keep.as_ref());
     // What the task printed is outside data. A subagent's result that our
     // own code fenced whole is kept as written; the run reading it has still
     // read outside text if the helper's run did.
@@ -1794,8 +1814,9 @@ mod tests {
         let hub = TaskHub::new("adopt");
         let (command, timeout) = first_then_second();
         let args = serde_json::json!({"command": command, "timeout": timeout});
-        let mut adopt = |proc, guard| hub.adopt(proc, command, None, guard);
-        let out = crate::tools::shell::run_adoptable(&dir, &args, &|| false, Some(&mut adopt));
+        let mut adopt = |proc, guard| hub.adopt(proc, &dir, command, None, guard);
+        let out =
+            crate::tools::shell::run_adoptable(&dir, None, &args, &|| false, Some(&mut adopt));
         assert!(!out.failed, "{}", out.text);
         assert!(
             out.text.contains("moved to the background as task t1"),
@@ -1832,9 +1853,10 @@ mod tests {
         #[cfg(not(unix))]
         let (command, timeout) = ("Start-Sleep -Seconds 30", 3_000);
         let args = serde_json::json!({"command": command, "timeout": timeout});
-        let mut adopt = |proc, guard| hub.adopt(proc, command, None, guard);
+        let mut adopt = |proc, guard| hub.adopt(proc, &dir, command, None, guard);
         let started = Instant::now();
-        let out = crate::tools::shell::run_adoptable(&dir, &args, &|| false, Some(&mut adopt));
+        let out =
+            crate::tools::shell::run_adoptable(&dir, None, &args, &|| false, Some(&mut adopt));
         assert!(out.failed, "{}", out.text);
         assert!(
             out.text.contains(&format!("timed out after {timeout}ms")),
@@ -1868,6 +1890,9 @@ mod tests {
     #[test]
     fn a_chatty_background_task_reads_back_head_and_tail_not_a_megabyte() {
         let dir = scratch("chatty");
+        // The whole read is saved in the config folder, pinned here.
+        let cfg = scratch("chatty-cfg");
+        let _cfg = crate::perm::ConfigGuard::set(&cfg);
         let hub = TaskHub::new("chatty");
         remember(&hub);
         let id = hub
@@ -1881,7 +1906,29 @@ mod tests {
             "head and tail kept"
         );
         assert!(text.contains("output truncated"));
+        assert!(
+            text.contains("lines 2222-58336 of 60002 are cut"),
+            "{}",
+            text.lines()
+                .find(|line| line.contains("output truncated"))
+                .unwrap_or_default()
+        );
+        let saved = text
+            .split("The whole output is in `")
+            .nth(1)
+            .and_then(|rest| rest.split('`').next())
+            .expect("the marker names the file");
+        assert!(saved.ends_with("-fetched.txt"), "{saved}");
+        let whole = std::fs::read_to_string(saved).expect("saved output");
+        assert!(whole.starts_with("FIRST\n1\n2\n"), "{}", &whole[..20]);
+        assert!(whole.contains("\n30000\n"));
+        assert!(
+            whole.ends_with("\n60000\nLAST"),
+            "{}",
+            &whole[whole.len() - 20..]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[cfg(unix)]

@@ -287,12 +287,8 @@ async function main() {
       screen: document.documentElement.clientWidth,
     }));
     check(wide.page <= wide.screen, `the chat is wider than a phone: ${JSON.stringify(wide)}`);
-    // The rail sits over the bottom edge; Send must stay clickable. The page
-    // makes room for the rail with a short transition, so wait for it.
-    await page.waitForFunction(() => {
-      const room = parseFloat(getComputedStyle(document.querySelector(".app")).paddingBottom);
-      return room >= document.querySelector(".rail").getBoundingClientRect().height;
-    });
+    // The grouped rail stays a side column. Send must stay clickable.
+    await page.locator("nav.rail .rail-section").first().waitFor({ timeout: 10000 });
     const covered = await page.evaluate(() => {
       const send = document.querySelector("form.composer button[type='submit']");
       const r = send.getBoundingClientRect();
@@ -305,6 +301,8 @@ async function main() {
       const bar = document.querySelector(".rail").getBoundingClientRect();
       return [...document.querySelectorAll("nav.rail button")]
         .map((b) => b.getBoundingClientRect())
+        // A button the layout hides has no box.
+        .filter((r) => r.width > 0 && r.height > 0)
         .filter((r) => r.top < bar.top - 1 || r.bottom > bar.bottom + 1).length;
     });
     check(spill === 0, `${spill} tab(s) spill out of the phone's views bar`);
@@ -338,10 +336,11 @@ async function main() {
 
     // Every view renders on what the desktop sends; a missing field here
     // once blanked the whole page.
-    // They are not on the rail: More lists them.
-    for (const view of ["Automations", "Connectors", "Personal"]) {
-      await page.locator("nav.rail button.rail-more").click();
-      await page.getByRole("dialog", { name: "More pages" }).getByRole("option", { name: view, exact: true }).click();
+    // Connectors, Automations and Personal are on the grouped rail.
+    await page.locator("nav.rail button", { hasText: "MCPs & Connectors" }).click();
+    await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ timeout: 10000 });
+    for (const view of ["Automations", "Personal"]) {
+      await page.locator("nav.rail button", { hasText: view }).click();
       await page.getByRole("button", { name: "Chat", exact: true }).waitFor({ timeout: 10000 });
     }
     await page.getByLabel("Add something about you").waitFor({ timeout: 10000 });

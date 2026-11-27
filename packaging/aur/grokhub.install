@@ -8,7 +8,7 @@ post_install() {
 
   Run:    grokhub-shell
   Hub:    grokhub-hub (systemctl --user enable --now grokhub-hub)
-  Menu:   Applications → GrokHub Shell
+  Menu:   Applications → Loadout
   Sign-in: first launch Get Started (SuperGrok OAuth)
 
   Config: ~/.config/GrokHub

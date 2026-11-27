@@ -279,7 +279,12 @@ pub fn run(
     store.jobs = keep;
     save(dir, &store);
     for job in stale {
-        let _ = api.cancel(&job.batch_id);
+        // One whose cancel didn't go through stays on record for the next
+        // pass to cancel, until a week has passed since it went in.
+        if api.cancel(&job.batch_id).is_err() && started.saturating_sub(job.submitted_ms) < WEEK_MS
+        {
+            update(dir, |s| s.jobs.push(job.clone()));
+        }
     }
     let key = key_of(&model, &body);
     let job = match store.jobs.iter().find(|j| j.key == key).cloned() {
@@ -312,12 +317,20 @@ pub fn run(
         }
     };
     let forget = |dir: &Path| update(dir, |s| s.jobs.retain(|j| j.batch_id != job.batch_id));
+    // A batch whose cancel failed may still run and bill: it stays on
+    // record, so this ask picks it back up and a later pass cancels it.
+    let cancel_or_keep = |dir: &Path| match api.cancel(&job.batch_id) {
+        Ok(state) => {
+            forget(dir);
+            Ok(state)
+        }
+        Err(err) => Err(err),
+    };
     let deadline = job.submitted_ms.saturating_add(wait_ms);
     let mut errors = 0;
     loop {
         if cancel.is_cancelled() {
-            let _ = api.cancel(&job.batch_id);
-            forget(dir);
+            let _ = cancel_or_keep(dir);
             return Deferred::Cancelled;
         }
         match api.get(&job.batch_id) {
@@ -327,21 +340,21 @@ pub fn run(
         }
         if errors >= MAX_POLL_ERRORS || now() >= deadline {
             // Cancel first: a request still pending is then never paid twice.
-            match api.cancel(&job.batch_id) {
+            let why = if errors >= MAX_POLL_ERRORS {
+                "batch status unreadable"
+            } else {
+                "batch took too long"
+            };
+            match cancel_or_keep(dir) {
                 Ok(state) if state.num_success > 0 => break,
-                _ => {
-                    forget(dir);
-                    return Deferred::Fallback(if errors >= MAX_POLL_ERRORS {
-                        "batch status unreadable".into()
-                    } else {
-                        "batch took too long".into()
-                    });
+                Ok(_) => return Deferred::Fallback(why.into()),
+                Err(err) => {
+                    return Deferred::Fallback(format!("{why}; its cancel failed: {err}"));
                 }
             }
         }
         if !sleep(policy.poll, cancel) {
-            let _ = api.cancel(&job.batch_id);
-            forget(dir);
+            let _ = cancel_or_keep(dir);
             return Deferred::Cancelled;
         }
     }

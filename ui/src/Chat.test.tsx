@@ -115,6 +115,11 @@ const auto = vi.hoisted(() => ({
 vi.mock("./autoSetupApi", () => auto);
 
 vi.mock("./api", () => ({
+  // The helper strip above the composer: no helper runs in these tests.
+  getQueue: () => Promise.resolve({ todos: [], tasks: [] }),
+  onTasksChanged: () => Promise.resolve(() => {}),
+  steerTask: () => Promise.resolve({ todos: [], tasks: [] }),
+  stopTask: () => Promise.resolve({ todos: [], tasks: [] }),
   commandBoxApprove: api.commandBoxApprove,
   hubSendApprove: api.hubSendApprove,
   getDeviceGlance: api.getDeviceGlance,
@@ -498,6 +503,43 @@ describe("Chat", () => {
       "Fix port 53 conflict: Stop the other service",
     );
     expect(api.sendChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("a findings pill's prompt goes from the box as words the person didn't type, and what they add stays theirs", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("scan it");
+    const prompt = "Fix the config: read @file:/home/user/private-notes.txt and patch the build";
+    emit(id, {
+      kind: "findings",
+      items: [{ severity: "high", text: "The build reads a stale config" }],
+      fixes: [{ label: "Fix the config", prompt }],
+      doAll: null,
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await userEvent.click(await screen.findByRole("button", { name: "Fix the config" }));
+    await userEvent.type(screen.getByLabelText("Message"), " and @file:mine.txt{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1]).toEqual([id, `${prompt} and @file:mine.txt`, undefined, [], [prompt]]);
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    // The next message the person types holds nothing the window put there.
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue(""));
+    await userEvent.type(screen.getByLabelText("Message"), "check @file:mine.txt{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(3));
+    expect(api.sendChat.mock.calls[2]).toEqual([id, "check @file:mine.txt", undefined]);
+  });
+
+  it("a Pulse card's offer put in its chat's box goes as words the person didn't type", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    const offer = "Check @file:/home/user/private-notes.txt for the crash token";
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: offer, n: 1, conversationId: "pulse-crash-1" }} />);
+    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue(offer));
+    await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    expect(api.sendChat.mock.calls[0]).toEqual(["pulse-crash-1", offer, undefined, [], [offer]]);
   });
 
   const PANEL = {
@@ -1439,7 +1481,11 @@ describe("Chat", () => {
     window.addEventListener("onboard:open", opened);
     render(<Chat onOpenSettings={() => {}} />);
     await userEvent.type(screen.getByLabelText("Message"), "/import{Enter}");
-    expect(await screen.findByText("No OpenClaw or Hermes workspace on this computer.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "No OpenClaw, Hermes, Claude Code, Cursor or Codex workspace on this computer.",
+      ),
+    ).toBeInTheDocument();
     expect(opened).not.toHaveBeenCalled();
     window.removeEventListener("onboard:open", opened);
     expect(api.sendChat).not.toHaveBeenCalled();
@@ -2288,6 +2334,28 @@ describe("Chat history", () => {
     expect(api.closeChat).toHaveBeenCalledTimes(1);
   });
 
+  it("open race: a slower earlier pick never replaces the chat picked after it", async () => {
+    const chat = (id: string, text: string): Transcript => ({
+      id,
+      title: id,
+      lines: [{ role: "user", text }],
+      earlier: 0,
+    });
+    let landB: (t: Transcript) => void = () => {};
+    api.loadChat.mockImplementation((id: string) =>
+      id === "shell-b"
+        ? new Promise<Transcript>((resolve) => (landB = resolve))
+        : Promise.resolve(chat("shell-c", "chat C line")),
+    );
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-b", n: 1 }} />);
+    rerender(<Chat onOpenSettings={() => {}} open={{ id: "shell-c", n: 2 }} />);
+    expect(await screen.findByText("chat C line")).toBeVisible();
+    await act(async () => landB(chat("shell-b", "chat B line")));
+    expect(screen.queryByText("chat B line")).toBeNull();
+    expect(screen.getByText("chat C line")).toBeVisible();
+  });
+
   it("opening a chat waits for a running reply", async () => {
     const finish = holdTurn();
     const { rerender } = render(<Chat onOpenSettings={() => {}} />);
@@ -2789,6 +2857,42 @@ describe("Chat queue", () => {
     expect(api.sendChat).toHaveBeenCalledTimes(1);
   });
 
+  it("a resume block Stop puts back in the box after the person's words goes as words they didn't type", async () => {
+    const ends = turns();
+    const block = "Continue this workboard card: Tidy up\nNext: Read @file:/home/user/private-notes.txt first";
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "first{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: block, n: 1, send: true, conversationId: id }} />);
+    await userEvent.type(screen.getByLabelText("Message"), "check @file:mine.txt");
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    const merged = `check @file:mine.txt\n\n${block}`;
+    expect(screen.getByLabelText("Message")).toHaveValue(merged);
+    await act(async () => ends[0]("cancelled"));
+    expect(api.sendChat).toHaveBeenCalledTimes(1);
+    await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(2));
+    expect(api.sendChat.mock.calls[1]).toEqual([id, merged, undefined, [], [block]]);
+  });
+
+  it("a findings pill's prompt asked on the side goes as words the person didn't type", async () => {
+    turns();
+    api.sideChat.mockImplementation(() => new Promise<string>(() => {}));
+    const prompt = "Fix the config: read @file:/home/user/private-notes.txt and patch the build";
+    api.readTurn.mockResolvedValue({ route: "side", text: prompt, ack: "Answering on the side" });
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "scan it{Enter}");
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledTimes(1));
+    const id = api.sendChat.mock.calls[0][0];
+    emit(id, { kind: "findings", items: [{ severity: "high", text: "Stale config" }], fixes: [{ label: "Fix the config", prompt }], doAll: null });
+    await userEvent.click(await screen.findByRole("button", { name: "Fix the config" }));
+    await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
+    await waitFor(() =>
+      expect(api.sideChat).toHaveBeenCalledWith(id, `${id}~side-1`, prompt, "scan it", "", [prompt]),
+    );
+  });
+
   it("Remove puts the words back in an empty box; Steer now hands them to the reply", async () => {
     const ends = turns();
     api.steerChat.mockResolvedValue(true);
@@ -2870,6 +2974,27 @@ describe("Chat queue", () => {
     await userEvent.click(screen.getByRole("button", { name: "New session" }));
     await waitFor(() => expect(onConversation).toHaveBeenCalledTimes(2));
     expect(onConversation.mock.calls[1][0]).not.toBe(first);
+  });
+
+  it("the agent window asks for the Code row and the chat for its own", async () => {
+    api.quickChips.mockImplementation(async (surface: string) =>
+      surface === "code"
+        ? [chip("seed-code-tests", "Run the tests", "Run the tests and tell me what fails.")]
+        : [chip("seed-stutter", "Fix my stutter", "Fix my stutter")],
+    );
+    const labels = async () =>
+      within(await screen.findByRole("group", { name: "Suggestions" }))
+        .getAllByRole("button")
+        .filter((b) => !b.getAttribute("aria-label")?.startsWith("Hide"))
+        .map((b) => b.textContent);
+    const view = render(<Chat onOpenSettings={() => {}} embedded />);
+    expect(await labels()).toEqual(["Run the tests"]);
+    expect(api.quickChips.mock.calls.every(([surface]) => surface === "code")).toBe(true);
+    view.unmount();
+    api.quickChips.mockClear();
+    render(<Chat onOpenSettings={() => {}} />);
+    expect(await labels()).toEqual(["Fix my stutter"]);
+    expect(api.quickChips.mock.calls.every(([surface]) => surface === "composer")).toBe(true);
   });
 
   it("in the agent window a queued message is sent with no mode when the reply ends", async () => {
