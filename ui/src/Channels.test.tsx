@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelKind, ChannelState, Channels as Shape } from "./channelsApi";
+import type { ChannelKind, ChannelState, Channels as Shape, StartQr } from "./channelsApi";
 
 const api = vi.hoisted(() => ({
   getChannels: vi.fn<() => Promise<Shape | null>>(),
@@ -12,10 +12,11 @@ const api = vi.hoisted(() => ({
   unpairChannelSender: vi.fn<(kind: ChannelKind, sender: string) => Promise<Shape | null>>(),
   addChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
   removeChannelWebhook: vi.fn<(name: string) => Promise<Shape | null>>(),
+  telegramQr: vi.fn<() => Promise<StartQr | null>>(),
 }));
 vi.mock("./channelsApi", () => api);
 
-import { Channels } from "./Channels";
+import { Channels, QR_NOTE } from "./Channels";
 
 const row = (kind: ChannelKind, name: string, live: boolean, setupLabel = `${name} bot token`): ChannelState => ({
   kind,
@@ -56,6 +57,43 @@ describe("Phone and chat apps", () => {
     const { container } = render(<Channels />);
     await waitFor(() => expect(api.getChannels).toHaveBeenCalledTimes(1));
     expect(container.textContent).toBe("");
+  });
+
+  it("shows a pairing QR for a connected Telegram bot, and a new one on asking", async () => {
+    const connected: Shape = {
+      ...none,
+      channels: none.channels.map((ch) => (ch.live ? { ...ch, connected: true, running: true } : ch)),
+    };
+    api.getChannels.mockResolvedValue(connected);
+    api.telegramQr
+      .mockResolvedValueOnce({ link: "https://t.me/my_app_bot?start=aaa", svg: "<svg>one</svg>", expiresMs: 1 })
+      .mockResolvedValueOnce({ link: "https://t.me/my_app_bot?start=bbb", svg: "<svg>two</svg>", expiresMs: 2 });
+    render(<Channels />);
+    // Only Telegram has a QR; Discord pairs by code.
+    expect(await screen.findAllByRole("button", { name: "Pair a phone with a QR code" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Pair a phone with a QR code" }));
+    const figure = await screen.findByRole("figure", { name: "Telegram pairing QR code" });
+    const img = screen.getByRole("img", { name: "QR code that opens the bot in Telegram and pairs your phone" });
+    expect(img.getAttribute("src")).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent("<svg>one</svg>")}`);
+    expect(figure.textContent).toContain(QR_NOTE);
+    expect(figure.textContent).toContain("https://t.me/my_app_bot?start=aaa");
+    await userEvent.click(screen.getByRole("button", { name: "Show a new QR code" }));
+    expect(await screen.findByText("https://t.me/my_app_bot?start=bbb")).toBeTruthy();
+    expect(api.telegramQr).toHaveBeenCalledTimes(2);
+    await userEvent.click(screen.getByRole("button", { name: "Hide QR code" }));
+    expect(screen.queryByRole("figure", { name: "Telegram pairing QR code" })).toBeNull();
+  });
+
+  it("says why when the QR can't be made", async () => {
+    api.getChannels.mockResolvedValue({
+      ...none,
+      channels: [{ ...none.channels[0], connected: true, running: true }, ...none.channels.slice(1)],
+    });
+    api.telegramQr.mockRejectedValue("Telegram refused the bot token. Paste it again from BotFather.");
+    render(<Channels />);
+    await userEvent.click(await screen.findByRole("button", { name: "Pair a phone with a QR code" }));
+    expect(await screen.findByText(/Telegram refused the bot token/)).toBeTruthy();
+    expect(screen.queryByRole("figure", { name: "Telegram pairing QR code" })).toBeNull();
   });
 
   it("connects a bot and clears the token from the page", async () => {

@@ -7,10 +7,12 @@ import {
   getChannels,
   removeChannelWebhook,
   setChannelAsks,
+  telegramQr,
   unpairChannelSender,
   type ChannelKind,
   type ChannelState,
   type Channels as Shape,
+  type StartQr,
 } from "./channelsApi";
 import { PRODUCT_NAME } from "./brand";
 import { StatusLine, useNote } from "./ui";
@@ -18,6 +20,9 @@ import { StatusLine, useNote } from "./ui";
 export const CHANNELS_NOTE = `Message ${PRODUCT_NAME} from your phone through a bot you made. Anyone else who messages the bot gets a pairing code and nothing more, until you enter that code here.`;
 
 export const WEBHOOKS_NOTE = `A service you use (a deploy, a form, a store) can trigger ${PRODUCT_NAME} with a signed POST. It sends X-Webhook-Timestamp (Unix seconds) and X-Webhook-Signature: sha256= then the HMAC-SHA256 of "timestamp.body" with the secret. The hub listens while this computer is shared on the Devices page.`;
+
+export const QR_NOTE =
+  "Scan it with your phone's camera. Telegram opens the bot and pairs that phone, with no code to type. It works once, for 10 minutes, and showing a new one turns this one off.";
 
 function statusOf(ch: ChannelState): string {
   if (!ch.live) return "Coming next";
@@ -32,6 +37,7 @@ export function Channels() {
   const [code, setCode] = useState("");
   const [hookName, setHookName] = useState("");
   const [secret, setSecret] = useState<string | null>(null);
+  const [qr, setQr] = useState<StartQr | null>(null);
   const [busy, setBusy] = useState(false);
   const { note, ok, fail } = useNote();
 
@@ -56,6 +62,17 @@ export function Channels() {
     } catch (err) {
       fail(err);
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function showQr() {
+    setBusy(true);
+    try {
+      setQr(await telegramQr());
+    } catch (err) {
+      fail(err);
     } finally {
       setBusy(false);
     }
@@ -92,11 +109,42 @@ export function Channels() {
             </div>
             {ch.problem && <div className="card-health">{ch.problem}</div>}
             {!ch.live ? null : ch.connected ? (
-              <div className="card-buttons">
-                <button type="button" className="quiet danger" disabled={busy} onClick={() => void act(() => disconnectChannel(ch.kind))}>
-                  Disconnect
-                </button>
-              </div>
+              <>
+                <div className="card-buttons">
+                  {ch.kind === "telegram" && (
+                    <button type="button" disabled={busy} onClick={() => void showQr()}>
+                      {qr ? "Show a new QR code" : "Pair a phone with a QR code"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="quiet danger"
+                    disabled={busy}
+                    onClick={() => {
+                      setQr(null);
+                      void act(() => disconnectChannel(ch.kind));
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+                {ch.kind === "telegram" && qr && (
+                  <figure className="channel-qr" aria-label="Telegram pairing QR code">
+                    <img
+                      src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(qr.svg)}`}
+                      alt="QR code that opens the bot in Telegram and pairs your phone"
+                      width={240}
+                      height={240}
+                    />
+                    <figcaption className="note">
+                      {QR_NOTE} On the phone itself, open <code>{qr.link}</code>
+                    </figcaption>
+                    <button type="button" className="quiet" onClick={() => setQr(null)}>
+                      Hide QR code
+                    </button>
+                  </figure>
+                )}
+              </>
             ) : (
               <form className="card-buttons" onSubmit={(e) => void connect(e, ch.kind)}>
                 <label>

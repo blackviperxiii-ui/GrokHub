@@ -497,6 +497,15 @@ async fn disconnect_channel(
         .await?
 }
 
+/// A QR that pairs the phone which scans it with the Telegram bot. Desktop
+/// only: a browser on the hub never gets a link that pairs a stranger.
+#[tauri::command]
+async fn telegram_qr(state: State<'_, ShellState>) -> Result<channels::StartQr, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || channels::telegram_qr(&dir, &grokhub_agent::channels_net::os_keychain()))
+        .await?
+}
+
 /// The code a stranger was sent: they count as paired from now on.
 #[tauri::command]
 fn approve_channel_code(
@@ -10236,6 +10245,7 @@ pub fn run() {
             get_channels,
             connect_channel,
             disconnect_channel,
+            telegram_qr,
             approve_channel_code,
             unpair_channel_sender,
             set_channel_asks,
