@@ -4477,6 +4477,16 @@ export function stopTask(
   return invoke<Queue>("stop_task", { conversationId, taskId: taskId ?? null });
 }
 
+/** Steer: text for a running helper's next step. Rejects when the helper has
+ * already finished, so the box can say the text never reached it. */
+export function steerTask(
+  conversationId: string,
+  taskId: string,
+  text: string,
+): Promise<Queue> {
+  return invoke<Queue>("steer_task", { conversationId, taskId, text });
+}
+
 /** How the session's review stands against the change that is there now.
  * "stale": a file, HEAD or a commit differs from what the review read. */
 export type ReviewCheck = { state: "none" | "stale" | "clean" } | { state: "blockers"; count: number };
