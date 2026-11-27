@@ -167,7 +167,11 @@ pub fn extract_prompt_hints(text: &str) -> (Vec<String>, Vec<String>) {
     let mut seen_terms = HashSet::new();
 
     for raw in text.split(|c: char| {
-        c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '`')
+        c.is_whitespace()
+            || matches!(
+                c,
+                ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '`'
+            )
     }) {
         let tok = raw.trim_matches(|c: char| matches!(c, '.' | ':' | '<' | '>' | '!'));
         if tok.is_empty() {
@@ -906,7 +910,13 @@ fn render_within_budget(ranked: &[Symbol], budget_tokens: usize) -> (String, usi
 
     // Final exact verification & trim if header digits pushed slightly over budget.
     loop {
-        let rendered = format_map(&file_order, &by_file, chosen.len(), ranked.len(), budget_tokens);
+        let rendered = format_map(
+            &file_order,
+            &by_file,
+            chosen.len(),
+            ranked.len(),
+            budget_tokens,
+        );
         if estimate_tokens(&rendered) <= budget_tokens || chosen.len() <= 1 {
             return (rendered, chosen.len());
         }
@@ -993,10 +1003,8 @@ mod tests {
     use super::*;
 
     fn temp_ws(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "grokhub-repomap-{tag}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("grokhub-repomap-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1048,16 +1056,43 @@ mod tests {
             .iter()
             .map(|s| (s.name.as_str(), s.kind, s.line))
             .collect();
-        assert!(pairs.contains(&("Engine", SymbolKind::Struct, 1)), "{pairs:?}");
+        assert!(
+            pairs.contains(&("Engine", SymbolKind::Struct, 1)),
+            "{pairs:?}"
+        );
         assert!(pairs.contains(&("run", SymbolKind::Method, 3)), "{pairs:?}");
-        assert!(pairs.contains(&("helper", SymbolKind::Function, 5)), "{pairs:?}");
-        assert!(pairs.contains(&("User", SymbolKind::Interface, 1)), "{pairs:?}");
-        assert!(pairs.contains(&("greet", SymbolKind::Function, 2)), "{pairs:?}");
-        assert!(pairs.contains(&("JobRunner", SymbolKind::Class, 1)), "{pairs:?}");
-        assert!(pairs.contains(&("execute", SymbolKind::Method, 2)), "{pairs:?}");
-        assert!(pairs.contains(&("standalone", SymbolKind::Function, 4)), "{pairs:?}");
-        assert!(pairs.contains(&("Server", SymbolKind::Struct, 2)), "{pairs:?}");
-        assert!(pairs.contains(&("StartServer", SymbolKind::Function, 3)), "{pairs:?}");
+        assert!(
+            pairs.contains(&("helper", SymbolKind::Function, 5)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("User", SymbolKind::Interface, 1)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("greet", SymbolKind::Function, 2)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("JobRunner", SymbolKind::Class, 1)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("execute", SymbolKind::Method, 2)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("standalone", SymbolKind::Function, 4)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("Server", SymbolKind::Struct, 2)),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("StartServer", SymbolKind::Function, 3)),
+            "{pairs:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -1171,8 +1206,9 @@ mod tests {
 
     #[test]
     fn extracts_prompt_hints_and_reads_config_flag() {
-        let (files, terms) =
-            extract_prompt_hints("Fix `calculate_total` in src/billing/tax.rs and crates\\core\\lib.rs");
+        let (files, terms) = extract_prompt_hints(
+            "Fix `calculate_total` in src/billing/tax.rs and crates\\core\\lib.rs",
+        );
         assert_eq!(files, vec!["src/billing/tax.rs", "crates/core/lib.rs"]);
         assert!(terms.contains(&"calculate_total".to_string()), "{terms:?}");
 
