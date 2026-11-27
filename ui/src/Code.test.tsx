@@ -44,6 +44,7 @@ const api = vi.hoisted(() => ({
   codePanelBackupRestore: vi.fn(),
   vstackSyncStatus: vi.fn(),
   vstackSyncNow: vi.fn(),
+  loadChat: vi.fn(),
 }));
 
 vi.mock("./api", () => api);
@@ -162,6 +163,7 @@ import {
   readSideTab,
   RESUME,
 } from "./Code";
+import { CODE_REVIEW_FALLBACK, filterFindings, parseCodeReview } from "./codeReview";
 
 function repo(over: Partial<CodeRepo> = {}): CodeRepo {
   return {
@@ -271,6 +273,8 @@ describe("Code tab", () => {
     });
     api.codePanelSettingsSave.mockReset();
     api.codePanelBackupRestore.mockReset();
+    api.loadChat.mockReset();
+    api.loadChat.mockResolvedValue({ id: "shell-new-1", title: "Code", lines: [], earlier: 0 });
   });
 
   afterEach(() => {
@@ -1171,5 +1175,113 @@ describe("Code tab", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     await userEvent.click(toggle);
     expect(await screen.findByLabelText("Model route: Local")).toHaveTextContent("Local");
+  });
+
+  const REVIEW_JSON = `{
+    "verdict": "needs-attention",
+    "summary": "One risky unwrap in the new parser.",
+    "findings": [{
+      "severity": "high",
+      "title": "unwrap on user input",
+      "body": "parse_review unwraps the JSON object.",
+      "file": "src/review.rs",
+      "line_start": 12,
+      "line_end": 18,
+      "confidence": 0.91,
+      "recommendation": "Return markdown on parse failure.",
+      "next_steps": ["Add a unit test for malformed JSON"]
+    }, {
+      "severity": "info",
+      "title": "Naming",
+      "body": "The helper name is fine.",
+      "file": "src/lib.rs",
+      "line_start": 3,
+      "line_end": 3,
+      "confidence": 0.4,
+      "recommendation": "Leave as is.",
+      "next_steps": []
+    }]
+  }`;
+
+  it("parses structured review JSON and falls back when the reply is not JSON", () => {
+    const parsed = parseCodeReview(REVIEW_JSON);
+    expect(parsed).toEqual({
+      kind: "structured",
+      review: {
+        verdict: "needs-attention",
+        summary: "One risky unwrap in the new parser.",
+        findings: [
+          {
+            severity: "high",
+            title: "unwrap on user input",
+            body: "parse_review unwraps the JSON object.",
+            file: "src/review.rs",
+            lineStart: 12,
+            lineEnd: 18,
+            confidence: 0.91,
+            recommendation: "Return markdown on parse failure.",
+            nextSteps: ["Add a unit test for malformed JSON"],
+          },
+          {
+            severity: "info",
+            title: "Naming",
+            body: "The helper name is fine.",
+            file: "src/lib.rs",
+            lineStart: 3,
+            lineEnd: 3,
+            confidence: 0.4,
+            recommendation: "Leave as is.",
+            nextSteps: [],
+          },
+        ],
+      },
+    });
+    if (parsed.kind !== "structured") throw new Error("expected structured");
+    expect(filterFindings(parsed.review, "high")).toHaveLength(1);
+    expect(filterFindings(parsed.review, "high")[0]?.title).toBe("unwrap on user input");
+    expect(parseCodeReview("Looks good.\nNot JSON {")).toEqual({
+      kind: "markdown",
+      text: "Looks good.\nNot JSON {",
+    });
+  });
+
+  it("renders a verdict badge, filters findings, and jumps to file:line_start", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.loadChat.mockResolvedValue({
+      id: "shell-new-1",
+      title: "Code",
+      lines: [{ role: "assistant", text: REVIEW_JSON }],
+      earlier: 0,
+    });
+    render(<Code shown onOpenSettings={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Ask the agent to review" }));
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    expect(await screen.findByText("Needs attention")).toBeInTheDocument();
+    expect(screen.getByText("One risky unwrap in the new parser.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "src/review.rs:12" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "src/lib.rs:3" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "High" }));
+    expect(screen.getByRole("button", { name: "src/review.rs:12" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "src/lib.rs:3" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "src/review.rs:12" }));
+    expect(await screen.findByText("Opened src/review.rs at line 12.")).toBeInTheDocument();
+  });
+
+  it("shows the markdown fallback when the review reply is not JSON", async () => {
+    api.codeRepo.mockResolvedValue(repo());
+    api.loadChat.mockResolvedValue({
+      id: "shell-new-1",
+      title: "Code",
+      lines: [{ role: "assistant", text: "Looks good overall." }],
+      earlier: 0,
+    });
+    render(<Code shown onOpenSettings={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Ask the agent to review" }));
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    await userEvent.click(screen.getByRole("button", { name: "stub reply" }));
+    expect(await screen.findByText(CODE_REVIEW_FALLBACK)).toBeInTheDocument();
+    expect(screen.getByLabelText("Review as markdown")).toHaveTextContent("Looks good overall.");
+    expect(screen.queryByText("Needs attention")).not.toBeInTheDocument();
   });
 });

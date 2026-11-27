@@ -1,0 +1,1 @@
+- Code tab Review asks for structured JSON, shows a verdict badge and clickable `file:line` findings, and keeps a markdown fallback when the reply is not JSON.
