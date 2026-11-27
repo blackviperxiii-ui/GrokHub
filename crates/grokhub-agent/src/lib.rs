@@ -113,7 +113,8 @@ pub use config_file::config_warnings;
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
 pub use eval::live::{
-    ab_flag as live_ab_flag, ab_passed as live_ab_passed, dream_lessons_passed,
+    ab_flag as live_ab_flag, ab_passed as live_ab_passed,
+    check_tool_calls as check_live_tool_calls, dream_lessons_passed,
     parse_budget as parse_live_budget, read_progress as read_live_progress, render_live, run_live,
     run_live_with, write_atomic as write_live_atomic, write_coding_results,
     write_progress as write_live_progress, EvalSuite, LiveOpts, LiveReport,
