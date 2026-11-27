@@ -18,6 +18,7 @@ const READONLY: &[&str] = &[
     "list_dir",
     "grep",
     "glob",
+    "repo_map",
     "get_command_or_subagent_output",
     "scheduler_list",
     "search_tool",

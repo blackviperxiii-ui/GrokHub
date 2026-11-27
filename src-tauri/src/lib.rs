@@ -790,8 +790,18 @@ fn tell_display(window: &tauri::WebviewWindow) {
 
 /// The composer's command list for a draft that starts with `/`.
 #[tauri::command]
-fn slash_hits(draft: String) -> Vec<slash::Hit> {
-    slash::hits(&draft, false)
+fn slash_hits(state: State<'_, ShellState>, draft: String) -> Vec<slash::Hit> {
+    let work = workspace(&state);
+    let home = grokhub_core::user_home();
+    slash::hits_with(
+        &draft,
+        false,
+        Some(slash::HitsCtx {
+            config_dir: &state.config_dir,
+            workspace: &work,
+            home: home.as_deref(),
+        }),
+    )
 }
 
 /// Runs a slash line instead of sending it. Nothing reaches the model.
@@ -7625,24 +7635,36 @@ fn set_web_access(
     capabilities::needs(capabilities::current().web_access, "Web access")?;
     if !on {
         web.stop();
+        #[cfg(desktop)]
+        if let Some(companions) = app.try_state::<Arc<companions::Companions>>() {
+            companions.set_web_origin(None);
+        }
         return Ok(web.view());
     }
     let config_dir = app.state::<ShellState>().config_dir.clone();
     let dispatch_app = app.clone();
     let dispatch: remote::Dispatch =
         Arc::new(move |command, args| remote_call(&dispatch_app, command, &args));
+    let assets_app = app.clone();
     let assets: remote::Assets = Arc::new(move |path| {
-        app.asset_resolver()
+        assets_app
+            .asset_resolver()
             .get(path.to_string())
             .map(|asset| (asset.bytes, asset.mime_type))
     });
-    web.start(
+    let view = web.start(
         std::net::Ipv4Addr::UNSPECIFIED.into(),
         remote::PORT,
         Some(&config_dir),
         dispatch,
         assets,
-    )
+    )?;
+    #[cfg(desktop)]
+    if let Some(companions) = app.try_state::<Arc<companions::Companions>>() {
+        companions.set_web_origin(web.primary_origin());
+        web.set_companion_port(companions.active_port());
+    }
+    Ok(view)
 }
 
 /// The Devices page (desktop only; not a web command): this computer, web
@@ -8616,7 +8638,20 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
             arg(args, "base")?,
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
-        "slash_hits" => out(slash::hits(&arg::<String>(args, "draft")?, true)),
+        "slash_hits" => {
+            let draft: String = arg(args, "draft")?;
+            let work = workspace(&state);
+            let home = grokhub_core::user_home();
+            out(slash::hits_with(
+                &draft,
+                true,
+                Some(slash::HitsCtx {
+                    config_dir: &state.config_dir,
+                    workspace: &work,
+                    home: home.as_deref(),
+                }),
+            ))
+        }
         "run_slash" => {
             let id: Option<String> = arg(args, "conversationId")?;
             let owned = |id: &str| web.owns(id);
@@ -9626,6 +9661,8 @@ pub fn run() {
                 app.state::<ShellState>().config_dir.clone(),
                 Arc::clone(&app.state::<Arc<hub_share::HubShare>>()),
             );
+            let web = Arc::new(remote::WebAccess::default());
+            app.manage(Arc::clone(&web));
             #[cfg(desktop)]
             {
                 let host = Arc::new(companions::Companions::open(
@@ -9633,13 +9670,13 @@ pub fn run() {
                 ));
                 app.manage(Arc::clone(&host));
                 let handle = app.handle().clone();
+                let web_for_companions = Arc::clone(&web);
                 std::thread::spawn(move || {
                     host.resume();
+                    web_for_companions.set_companion_port(host.active_port());
                     companions::watch(handle, host);
                 });
             }
-            let web = Arc::new(remote::WebAccess::default());
-            app.manage(Arc::clone(&web));
             // Chat events reach paired browsers too; each page keeps its own
             // conversation's.
             app.listen_any(CHAT_EVENT, move |event| {
