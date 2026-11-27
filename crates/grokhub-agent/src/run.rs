@@ -3996,7 +3996,7 @@ fn lone_field(value: &serde_json::Value) -> Option<String> {
 fn card_fields(tool: &str) -> &'static [&'static str] {
     match tool {
         "read_file" => &["target_file"],
-        "list_dir" | "grep" | "glob" | "skill" => &["path"],
+        "list_dir" | "grep" | "glob" | "repo_map" | "skill" => &["path"],
         "write" => &["path", "file_path", "target_file"],
         "search_replace" => &["file_path", "path", "target_file"],
         "run_terminal_command" | "monitor" => &["command"],
@@ -12338,6 +12338,8 @@ linter (or run the changed file) before you finish: a re-read or git status does
             ("grep", r#"{"pattern":"needle","path":"crates"}"#, "crates"),
             ("grep", r#"{"pattern":"needle"}"#, ALL),
             ("glob", r#"{"pattern":"**/*.rs","path":"crates"}"#, "crates"),
+            ("repo_map", r#"{"path":"crates"}"#, "crates"),
+            ("repo_map", "{}", ALL),
             (
                 "get_command_or_subagent_output",
                 r#"{"task_id":"t1","path":"README.md"}"#,
@@ -12689,7 +12691,7 @@ linter (or run the changed file) before you finish: a re-read or git status does
         native.sort_unstable();
         native.dedup();
         assert_eq!(covered, native);
-        assert_eq!(native.len(), 82);
+        assert_eq!(native.len(), 83);
     }
 
     #[test]
