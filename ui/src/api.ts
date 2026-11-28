@@ -5544,6 +5544,41 @@ export interface RepoRulesBundle {
   promptBlock: string;
 }
 
+/** One Claude Code session row for the Code tab import picker. */
+export interface ClaudeSessionRow {
+  id: string;
+  title: string;
+  cwd?: string | null;
+  path: string;
+  turnCount: number;
+  updatedMs: number;
+  matchesWorkspace: boolean;
+}
+
+/** Sanitized Claude Code session context ready for a Code thread. */
+export interface ClaudeImport {
+  title: string;
+  cwd?: string | null;
+  turns: Array<{ role: string; text: string }>;
+  files: string[];
+  context: string;
+}
+
+/** Recent Claude Code sessions matching the open workspace. */
+export function claudeSessionsList(): Promise<ClaudeSessionRow[]> {
+  return invoke<ClaudeSessionRow[]>("claude_sessions_list");
+}
+
+/** Import one Claude Code session JSONL into sanitized context text. */
+export function claudeSessionImport(path: string): Promise<ClaudeImport> {
+  return invoke<ClaudeImport>("claude_session_import", { path });
+}
+
+/** System file picker for a Claude Code `.jsonl`; null when cancelled. */
+export function claudeSessionPick(): Promise<ClaudeImport | null> {
+  return invoke<ClaudeImport | null>("claude_session_pick");
+}
+
 export function codeProjects(): Promise<CodeProjects> {
   return invoke<CodeProjects>("code_projects");
 }

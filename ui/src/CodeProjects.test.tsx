@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
   codeProjectLinkRemote: vi.fn<(url: string, branch?: string | null) => Promise<ProjectList>>(),
   codeProjectSetBranch: vi.fn<(id: string, branch?: string | null) => Promise<ProjectList>>(),
   listChats: vi.fn<() => Promise<ChatRow[]>>(),
+  claudeSessionsList: vi.fn<() => Promise<import("./api").ClaudeSessionRow[]>>(),
+  claudeSessionImport: vi.fn<(path: string) => Promise<import("./api").ClaudeImport>>(),
+  claudeSessionPick: vi.fn<() => Promise<import("./api").ClaudeImport | null>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -19,11 +22,16 @@ vi.mock("./History", () => ({ whenLabel: (updated: number) => `at ${updated}` })
 
 import {
   CodeProjects,
+  claudeSessionPreview,
   folderName,
   isCodeSession,
   projectLinkLine,
   projectRulesLine,
   projectSessions,
+  IMPORT_CLAUDE,
+  IMPORT_CLAUDE_EMPTY,
+  IMPORT_CLAUDE_LIST,
+  IMPORT_CLAUDE_PICK,
   LINK_REPO,
   PROJECTS_AGENT_BUSY,
   PROJECTS_EMPTY,
@@ -65,7 +73,12 @@ function chat(id: string, project: string | null, updated: number): ChatRow {
 }
 
 function show() {
-  const calls = { onSwitched: vi.fn(), onNewSession: vi.fn(), onOpenSession: vi.fn() };
+  const calls = {
+    onSwitched: vi.fn(),
+    onNewSession: vi.fn(),
+    onOpenSession: vi.fn(),
+    onImportClaude: vi.fn(),
+  };
   render(<CodeProjects {...calls} />);
   return calls;
 }
@@ -75,6 +88,15 @@ describe("CodeProjects", () => {
     for (const fn of Object.values(api)) fn.mockReset();
     api.codeProjects.mockResolvedValue(onHarbor());
     api.listChats.mockResolvedValue([chat("a", "p1", 10), chat("b", "p2", 30), chat("c", "p1", 20), chat("d", null, 40)]);
+    api.claudeSessionsList.mockResolvedValue([]);
+    api.claudeSessionImport.mockResolvedValue({
+      title: "Fix the auth bug",
+      cwd: "/work/harbor",
+      turns: [{ role: "user", text: "fix auth" }],
+      files: ["/work/harbor/src/auth.rs"],
+      context: "## Imported Claude Code session\n\nTitle: Fix the auth bug\n",
+    });
+    api.claudeSessionPick.mockResolvedValue(null);
   });
 
   it("names the open project and lists only its sessions, newest first", async () => {
@@ -218,7 +240,12 @@ describe("CodeProjects", () => {
   });
 
   it("holds the project and the other sessions while the agent replies", async () => {
-    const calls = { onSwitched: vi.fn(), onNewSession: vi.fn(), onOpenSession: vi.fn() };
+    const calls = {
+      onSwitched: vi.fn(),
+      onNewSession: vi.fn(),
+      onOpenSession: vi.fn(),
+      onImportClaude: vi.fn(),
+    };
     render(<CodeProjects {...calls} agentBusy openSession="c" />);
     const rows = within(await screen.findByRole("list", { name: "Sessions" })).getAllByRole("button");
     expect(rows[0]).toHaveAttribute("aria-current", "true");
@@ -226,6 +253,7 @@ describe("CodeProjects", () => {
     expect(rows[1]).not.toHaveAttribute("aria-current");
     expect(rows[1]).toBeDisabled();
     expect(screen.getByRole("button", { name: "New session" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: IMPORT_CLAUDE })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Switch project" }));
     await userEvent.click(within(screen.getByRole("list", { name: "Projects" })).getByRole("button", { name: /Dawn/ }));
     expect(screen.getByRole("status")).toHaveTextContent(PROJECTS_AGENT_BUSY);
@@ -233,8 +261,61 @@ describe("CodeProjects", () => {
     expect(calls.onSwitched).not.toHaveBeenCalled();
   });
 
+  it("lists matching Claude sessions and imports one into the Code thread", async () => {
+    api.claudeSessionsList.mockResolvedValue([
+      {
+        id: "sess-a",
+        title: "Fix the auth bug",
+        cwd: "/work/harbor",
+        path: "/home/user/.claude/projects/-work-harbor/sess-a.jsonl",
+        turnCount: 3,
+        updatedMs: 1_700_000_000_000,
+        matchesWorkspace: true,
+      },
+    ]);
+    const calls = show();
+    await userEvent.click(await screen.findByRole("button", { name: IMPORT_CLAUDE }));
+    expect(api.claudeSessionsList).toHaveBeenCalledTimes(1);
+    const list = await screen.findByRole("list", { name: IMPORT_CLAUDE_LIST });
+    expect(within(list).getByText("Fix the auth bug")).toBeInTheDocument();
+    expect(within(list).getByText(/3 turns · at 1700000000000/)).toBeInTheDocument();
+    await userEvent.click(within(list).getByRole("button", { name: /Fix the auth bug/ }));
+    expect(api.claudeSessionImport).toHaveBeenCalledWith(
+      "/home/user/.claude/projects/-work-harbor/sess-a.jsonl",
+    );
+    await waitFor(() =>
+      expect(calls.onImportClaude).toHaveBeenCalledWith(
+        expect.stringContaining("Imported Claude Code session"),
+      ),
+    );
+    expect(screen.queryByRole("list", { name: IMPORT_CLAUDE_LIST })).not.toBeInTheDocument();
+  });
+
+  it("shows an empty Claude picker and can pick a session file", async () => {
+    api.claudeSessionsList.mockResolvedValue([]);
+    api.claudeSessionPick.mockResolvedValueOnce({
+      title: "Picked",
+      turns: [],
+      files: [],
+      context: "## Imported Claude Code session\n\nTitle: Picked\n",
+    });
+    const calls = show();
+    await userEvent.click(await screen.findByRole("button", { name: IMPORT_CLAUDE }));
+    expect(await screen.findByText(IMPORT_CLAUDE_EMPTY)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: IMPORT_CLAUDE_PICK }));
+    expect(api.claudeSessionPick).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(calls.onImportClaude).toHaveBeenCalledWith(expect.stringContaining("Title: Picked")),
+    );
+  });
+
   it("tells the tab the app's folder, and reads the project and its sessions again when told", async () => {
-    const calls = { onSwitched: vi.fn(), onNewSession: vi.fn(), onOpenSession: vi.fn() };
+    const calls = {
+      onSwitched: vi.fn(),
+      onNewSession: vi.fn(),
+      onOpenSession: vi.fn(),
+      onImportClaude: vi.fn(),
+    };
     const onFolder = vi.fn();
     const view = render(<CodeProjects {...calls} onFolder={onFolder} refresh={1} />);
     await waitFor(() => expect(onFolder).toHaveBeenCalledWith("/work/harbor"));
@@ -281,5 +362,28 @@ describe("helpers", () => {
       "Local folder · on beta",
     );
     expect(projectRulesLine({ ...harbor, rules: [] })).toBe(RULES_NONE);
+  });
+
+  it("claudeSessionPreview shows turn count and when", () => {
+    expect(
+      claudeSessionPreview({
+        id: "s1",
+        title: "Auth",
+        path: "/home/user/.claude/projects/-work-harbor/s1.jsonl",
+        turnCount: 1,
+        updatedMs: 42,
+        matchesWorkspace: true,
+      }),
+    ).toBe("1 turn · at 42");
+    expect(
+      claudeSessionPreview({
+        id: "s2",
+        title: "Auth",
+        path: "/home/user/.claude/projects/-work-harbor/s2.jsonl",
+        turnCount: 3,
+        updatedMs: 99,
+        matchesWorkspace: true,
+      }),
+    ).toBe("3 turns · at 99");
   });
 });

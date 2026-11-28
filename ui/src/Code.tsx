@@ -518,6 +518,17 @@ export function Code({
                 onSwitched={() => setSwitches((n) => n + 1)}
                 onNewSession={() => startSession("")}
                 onOpenSession={openSession}
+                onImportClaude={(context) => {
+                  if (sessionNow.current && !busyNow.current) {
+                    setPrefill((now) => ({
+                      text: context,
+                      n: (now?.n ?? 0) + 1,
+                      conversationId: sessionNow.current,
+                    }));
+                  } else {
+                    startSession(context);
+                  }
+                }}
                 onFolder={onFolder}
                 agentBusy={busy}
                 openSession={session}

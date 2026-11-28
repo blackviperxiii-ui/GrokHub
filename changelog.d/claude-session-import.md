@@ -1,0 +1,1 @@
+- Code tab: import recent Claude Code session context (read-only) into a Loadout thread.

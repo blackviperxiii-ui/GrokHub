@@ -8,6 +8,7 @@
 
 pub mod activity;
 pub mod chat_push;
+pub mod claude_import;
 pub mod commit;
 pub mod deploy;
 pub mod files;

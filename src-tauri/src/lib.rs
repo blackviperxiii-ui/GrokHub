@@ -3847,6 +3847,72 @@ async fn code_project_rules(
     .await?
 }
 
+/// Code tab: recent Claude Code sessions that match the open workspace.
+#[tauri::command]
+async fn claude_sessions_list(
+    state: State<'_, ShellState>,
+) -> Result<Vec<grokhub_code::claude_import::ClaudeSessionRow>, String> {
+    let workspace = current(&state).workspace;
+    // off_main wraps T; return the Vec directly (same shape as list_connectors).
+    off_main(move || {
+        let Some(dir) = fleet::claude_dir() else {
+            return Vec::new();
+        };
+        grokhub_code::claude_import::list_sessions(&dir, &workspace, false)
+    })
+    .await
+}
+
+/// Code tab: import one Claude Code session JSONL into sanitized context.
+#[tauri::command]
+async fn claude_session_import(
+    path: String,
+) -> Result<grokhub_code::claude_import::ClaudeImport, String> {
+    off_main(move || {
+        let Some(dir) = fleet::claude_dir() else {
+            return Err("Claude Code isn't on this computer.".into());
+        };
+        grokhub_code::claude_import::import_session(Path::new(&path), &dir)
+    })
+    .await?
+}
+
+/// Code tab: pick a Claude Code `.jsonl` under `~/.claude/projects/` and import it.
+#[tauri::command]
+async fn claude_session_pick(
+    app: AppHandle,
+) -> Result<Option<grokhub_code::claude_import::ClaudeImport>, String> {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        off_main(move || {
+            let Some(dir) = fleet::claude_dir() else {
+                return Err("Claude Code isn't on this computer.".into());
+            };
+            let projects = dir.join("projects");
+            let mut picker = app
+                .dialog()
+                .file()
+                .set_title("Import a Claude Code session")
+                .add_filter("Claude session", &["jsonl"]);
+            if projects.is_dir() {
+                picker = picker.set_directory(&projects);
+            }
+            let picked = picker.blocking_pick_file().and_then(|p| p.into_path().ok());
+            match picked {
+                Some(path) => grokhub_code::claude_import::import_session(&path, &dir).map(Some),
+                None => Ok(None),
+            }
+        })
+        .await?
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Err("Picking a Claude session file needs the desktop app.".into())
+    }
+}
+
 /// Code tab: the agent window shows this session. It takes the open
 /// project's folder unless it has one already; the answer is its folder.
 /// A session with no saved turns yet started here, so it has a lead.
@@ -10107,6 +10173,9 @@ pub fn run() {
             code_project_link_remote,
             code_project_set_branch,
             code_project_rules,
+            claude_sessions_list,
+            claude_session_import,
+            claude_session_pick,
             code_session_bind,
             code_session_lead,
             code_session_plan,
