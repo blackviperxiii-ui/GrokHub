@@ -2,6 +2,7 @@
 // the open chat's saved history for good, so the confirm says so plainly.
 import { useEffect, useRef } from "react";
 import { PRODUCT_NAME } from "./brand";
+import { Menu, MenuItem } from "./Menu";
 import { useDismiss, useModalFocus } from "./ui";
 
 export const CLEAR_CHAT_LABEL = "Clear chat…";
@@ -15,19 +16,17 @@ export function ChatTabMenu({ at, onClear, onClose }: { at: { x: number; y: numb
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => first.current?.focus(), []);
   return (
-    <div ref={ref} className="feed-menu tab-menu" role="menu" aria-label="Chat" style={{ left: at.x, top: at.y }}>
-      <button
+    <Menu ref={ref} className="feed-menu tab-menu" aria-label="Chat" style={{ left: at.x, top: at.y }} onClose={onClose}>
+      <MenuItem
         ref={first}
-        type="button"
-        role="menuitem"
         onClick={() => {
           onClose();
           onClear();
         }}
       >
         {CLEAR_CHAT_LABEL}
-      </button>
-    </div>
+      </MenuItem>
+    </Menu>
   );
 }
 

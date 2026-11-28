@@ -4809,6 +4809,26 @@ a.feed-title:focus-visible {
   box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
 }
 
+/* Nested hover submenu panel (Menu.tsx SubMenu). Theme tokens only. */
+.menu-submenu {
+  position: relative;
+}
+
+.menu-submenu-panel {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  margin-left: 2px;
+  z-index: 6;
+}
+
+.menu-submenu-panel[data-side="left"] {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 2px;
+}
+
 .feed-menu button {
   border: none;
   background: transparent;

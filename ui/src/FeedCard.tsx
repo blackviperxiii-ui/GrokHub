@@ -4,6 +4,7 @@ import { externalUrlOk, openExternal } from "./external";
 import { Markdown } from "./Markdown";
 import { VerdictLine } from "./PulseFix";
 import { reducedMotion } from "./rubberBand";
+import { Menu, MenuItem } from "./Menu";
 import { ConfirmRow, ExternalLink, useDismiss, useModalFocus } from "./ui";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
@@ -492,23 +493,19 @@ export function FeedCard({
               </button>
             )}
             {menu && (
-              <div className="feed-menu" role="menu">
-                <button type="button" role="menuitem" onClick={() => void askWhy()}>
-                  Why I created this
-                </button>
+              <Menu className="feed-menu" onClose={() => setMenu(false)}>
+                <MenuItem onClick={() => void askWhy()}>Why I created this</MenuItem>
                 {post.issue && onIssue && (
-                  <button
-                    type="button"
-                    role="menuitem"
+                  <MenuItem
                     onClick={() => {
                       setMenu(false);
                       onIssue();
                     }}
                   >
                     Copy as GitHub issue
-                  </button>
+                  </MenuItem>
                 )}
-              </div>
+              </Menu>
             )}
           </div>
         </div>

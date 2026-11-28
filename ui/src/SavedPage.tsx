@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { pulseSaved, pulseUnsave, type SavedFind } from "./api";
 import { Snippet } from "./FeedCard";
+import { Menu, MenuItem } from "./Menu";
 import { ExternalLink, useDismiss } from "./ui";
 
 export const SAVED_EMPTY = "Nothing saved yet. Save a post in the feed and it stays here.";
@@ -40,10 +41,8 @@ function SavedCard({
             ⋯
           </button>
           {menu && (
-            <div className="feed-menu" role="menu">
-              <button
-                type="button"
-                role="menuitem"
+            <Menu className="feed-menu" onClose={() => setMenu(false)}>
+              <MenuItem
                 style={{ whiteSpace: "nowrap" }}
                 onClick={() => {
                   setMenu(false);
@@ -51,8 +50,8 @@ function SavedCard({
                 }}
               >
                 Remove from saved
-              </button>
-            </div>
+              </MenuItem>
+            </Menu>
           )}
         </div>
       </div>

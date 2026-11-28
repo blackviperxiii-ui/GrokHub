@@ -18,6 +18,7 @@ import {
 } from "./api";
 import { dialogOpen, isChatShortcut } from "./chatKeys";
 import { ClearChatDialog } from "./ClearChat";
+import { Menu, MenuItem } from "./Menu";
 import { useDismiss } from "./ui";
 
 export const CHAT_TABS_LABEL = "Chat tabs";
@@ -368,53 +369,43 @@ function TabContextMenu({
 }) {
   const ref = useDismiss<HTMLDivElement>(true, onClose);
   return (
-    <div ref={ref} className="feed-menu tab-menu" role="menu" aria-label="Chat tab" style={{ left: at.x, top: at.y }}>
+    <Menu ref={ref} className="feed-menu tab-menu" aria-label="Chat tab" style={{ left: at.x, top: at.y }} onClose={onClose}>
       {clearOnly ? (
-        <button
-          type="button"
-          role="menuitem"
+        <MenuItem
           onClick={() => {
             onClose();
             onClear();
           }}
         >
           Clear chat…
-        </button>
+        </MenuItem>
       ) : (
         <>
-          <button
-            type="button"
-            role="menuitem"
+          <MenuItem
             onClick={() => {
               onClose();
               onPin();
             }}
           >
             Pin
-          </button>
-          <button
-            type="button"
-            role="menuitem"
+          </MenuItem>
+          <MenuItem
             onClick={() => {
               onClose();
               onArchive();
             }}
           >
             Archive
-          </button>
-          <button
-            type="button"
-            role="menuitem"
+          </MenuItem>
+          <MenuItem
             onClick={() => {
               onClose();
               onRename();
             }}
           >
             Rename
-          </button>
-          <button
-            type="button"
-            role="menuitem"
+          </MenuItem>
+          <MenuItem
             className="danger"
             onClick={() => {
               onClose();
@@ -422,21 +413,19 @@ function TabContextMenu({
             }}
           >
             Delete
-          </button>
-          <button
-            type="button"
-            role="menuitem"
+          </MenuItem>
+          <MenuItem
             onClick={() => {
               onClose();
               onClear();
             }}
           >
             Clear chat…
-          </button>
+          </MenuItem>
         </>
       )}
       {children}
-    </div>
+    </Menu>
   );
 }
 
@@ -457,23 +446,21 @@ function ToolsMenu({
 }) {
   const ref = useDismiss<HTMLDivElement>(true, onClose);
   return (
-    <div ref={ref} className="feed-menu tab-menu" role="menu" aria-label="Chat tools" style={{ left: at.x, top: at.y }}>
+    <Menu ref={ref} className="feed-menu tab-menu" aria-label="Chat tools" style={{ left: at.x, top: at.y }} onClose={onClose}>
       <p className="feed-menu-date">Archived</p>
       {archived.length === 0 ? (
         <p className="feed-menu-date">No archived chats</p>
       ) : (
         archived.map((tab) => (
-          <button
+          <MenuItem
             key={tab.id}
-            type="button"
-            role="menuitem"
             onClick={() => {
               onClose();
               onRestoreArchived(tab.id);
             }}
           >
             Restore {shortTitle(tab.title)}
-          </button>
+          </MenuItem>
         ))
       )}
       <p className="feed-menu-date">Recently deleted</p>
@@ -481,20 +468,18 @@ function ToolsMenu({
         <p className="feed-menu-date">Trash is empty</p>
       ) : (
         deleted.map((tab) => (
-          <button
+          <MenuItem
             key={tab.id}
-            type="button"
-            role="menuitem"
             onClick={() => {
               onClose();
               onRestoreDeleted(tab.id);
             }}
           >
             Restore {shortTitle(tab.title)}
-          </button>
+          </MenuItem>
         ))
       )}
-    </div>
+    </Menu>
   );
 }
 

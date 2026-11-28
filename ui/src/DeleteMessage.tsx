@@ -3,6 +3,7 @@
 // alone; a reply goes whole, with the tools it ran.
 import { useEffect, useRef } from "react";
 import { PRODUCT_NAME } from "./brand";
+import { Menu, MenuItem } from "./Menu";
 import { useDismiss, useModalFocus } from "./ui";
 
 export const DELETE_MESSAGE_LABEL = "Delete message…";
@@ -82,19 +83,17 @@ export function MessageMenu({
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => first.current?.focus(), []);
   return (
-    <div ref={ref} className="feed-menu tab-menu" role="menu" aria-label="Message" style={{ left: at.x, top: at.y }}>
-      <button
+    <Menu ref={ref} className="feed-menu tab-menu" aria-label="Message" style={{ left: at.x, top: at.y }} onClose={onClose}>
+      <MenuItem
         ref={first}
-        type="button"
-        role="menuitem"
         onClick={() => {
           onClose();
           onDelete();
         }}
       >
         {DELETE_MESSAGE_LABEL}
-      </button>
-    </div>
+      </MenuItem>
+    </Menu>
   );
 }
 
