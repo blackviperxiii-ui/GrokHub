@@ -159,6 +159,7 @@ impl SseParser {
                 }
             }
             note_served_model(&v);
+            note_service_tier(&v);
             let hosted = parse_hosted_usage(&v);
             if !hosted.is_empty() {
                 out.push(SseEvent::Hosted(hosted));
@@ -327,6 +328,7 @@ fn parse_call(item: &Value) -> Option<FunctionCall> {
 
 thread_local! {
     static SERVED_MODEL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static SERVICE_TIER: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Router R0 passive health: the `response.model` of the last completed stream
@@ -344,6 +346,21 @@ fn note_served_model(v: &Value) {
 /// Take (and clear) the model the last completed stream on this thread said it was.
 pub fn take_served_model() -> Option<String> {
     SERVED_MODEL.with(|s| s.borrow_mut().take())
+}
+
+fn note_service_tier(v: &Value) {
+    let tier = v
+        .get("response")
+        .and_then(|r| r.get("service_tier"))
+        .and_then(|t| t.as_str())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    SERVICE_TIER.with(|s| *s.borrow_mut() = tier);
+}
+
+/// Take (and clear) `response.service_tier` from the last completed stream.
+pub fn take_service_tier() -> Option<String> {
+    SERVICE_TIER.with(|s| s.borrow_mut().take())
 }
 
 /// The `url_citation` URLs on a message's `output_text` parts, once each.
@@ -674,5 +691,21 @@ mod tests {
         ));
         assert_eq!(done.len(), 1, "{done:?}");
         assert!(matches!(done[0], SseEvent::Completed { .. }));
+    }
+
+    #[test]
+    fn completed_response_records_service_tier() {
+        let _ = take_service_tier();
+        let mut p = SseParser::new();
+        let _ = p.push(&frame(
+            r#"{"type":"response.completed","response":{"service_tier":"priority","usage":{"input_tokens":1},"output":[]}}"#,
+        ));
+        assert_eq!(take_service_tier().as_deref(), Some("priority"));
+        assert!(take_service_tier().is_none());
+        let mut p = SseParser::new();
+        let _ = p.push(&frame(
+            r#"{"type":"response.completed","response":{"usage":{"input_tokens":1},"output":[]}}"#,
+        ));
+        assert!(take_service_tier().is_none());
     }
 }

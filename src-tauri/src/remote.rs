@@ -1518,6 +1518,8 @@ mod tests {
             "get_pc_snapshot",
             "get_living_wall",
             "set_living_wall",
+            "get_priority_service_tier",
+            "set_priority_service_tier",
             "library_friends",
             "library_steam_settings",
             "mods_games",

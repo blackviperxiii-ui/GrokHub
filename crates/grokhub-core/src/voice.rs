@@ -467,12 +467,38 @@ pub fn tts_request_body(text: &str, voice: &str) -> Value {
     })
 }
 
+/// Optional PII redaction on `/v1/stt`. Empty `redact` and `show_redacted_text`
+/// false send nothing extra (the default).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SttRedact {
+    pub redact: Vec<String>,
+    pub show_redacted_text: bool,
+}
+
+impl SttRedact {
+    /// Meetings / voice toggle: group `pii` plus the redacted string in the body.
+    pub fn pii() -> Self {
+        Self {
+            redact: vec!["pii".into()],
+            show_redacted_text: true,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.redact.is_empty() && !self.show_redacted_text
+    }
+}
+
+/// Prefer `redacted_text` when the server returned one, else `text`.
 pub fn parse_stt_text(body: &Value) -> Option<String> {
-    body.get("text")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+    let trimmed = |key: &str| {
+        body.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    };
+    trimmed("redacted_text").or_else(|| trimmed("text"))
 }
 
 pub fn transcribe_route(has_key: bool, has_local: bool) -> TranscribeRoute {
@@ -499,15 +525,37 @@ pub fn parse_voice_event_text(body: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// `file` must be last in the multipart body.
-pub fn stt_multipart(wav: &[u8], filename: &str, boundary: &str) -> Vec<u8> {
+fn stt_field(out: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+    out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    out.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    out.extend_from_slice(value.as_bytes());
+    out.extend_from_slice(b"\r\n");
+}
+
+/// `file` must be last in the multipart body. Repeated `redact` fields come
+/// before it when `opts` is set.
+pub fn stt_multipart(
+    wav: &[u8],
+    filename: &str,
+    boundary: &str,
+    opts: Option<&SttRedact>,
+) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    out.extend_from_slice(b"Content-Disposition: form-data; name=\"language\"\r\n\r\n");
-    out.extend_from_slice(b"en\r\n");
-    out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    out.extend_from_slice(b"Content-Disposition: form-data; name=\"format\"\r\n\r\n");
-    out.extend_from_slice(b"true\r\n");
+    stt_field(&mut out, boundary, "language", "en");
+    stt_field(&mut out, boundary, "format", "true");
+    if let Some(opts) = opts.filter(|o| !o.is_empty()) {
+        for group in &opts.redact {
+            let group = group.trim();
+            if !group.is_empty() {
+                stt_field(&mut out, boundary, "redact", group);
+            }
+        }
+        if opts.show_redacted_text {
+            stt_field(&mut out, boundary, "show_redacted_text", "true");
+        }
+    }
     out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     out.extend_from_slice(
         format!(
@@ -640,6 +688,14 @@ mod tests {
             parse_stt_text(&serde_json::json!({ "text": " flash the pi " })).as_deref(),
             Some("flash the pi")
         );
+        assert_eq!(
+            parse_stt_text(&serde_json::json!({
+                "text": "ssn 123-45-6789",
+                "redacted_text": "ssn [REDACTED]"
+            }))
+            .as_deref(),
+            Some("ssn [REDACTED]")
+        );
         assert_eq!(transcribe_route(true, false), TranscribeRoute::Xai);
         assert_eq!(transcribe_route(false, true), TranscribeRoute::Local);
         assert_eq!(transcribe_route(false, false), TranscribeRoute::None);
@@ -679,10 +735,28 @@ mod tests {
         assert!(!voice_strip_visible(VoiceState::Idle, 0));
         assert_eq!(voice_state_after_ptt_stt(true, false), VoiceState::Ready);
         assert_eq!(voice_state_after_ptt_stt(false, false), VoiceState::Idle);
-        let form = stt_multipart(b"RIFF", "grokhub-voice.wav", "bound");
+        let form = stt_multipart(b"RIFF", "grokhub-voice.wav", "bound", None);
         let s = String::from_utf8_lossy(&form);
         assert!(s.find("name=\"language\"").unwrap() < s.find("name=\"file\"").unwrap());
         assert!(s.contains("filename=\"grokhub-voice.wav\""));
+        assert!(!s.contains("name=\"redact\""));
+        assert!(!s.contains("show_redacted_text"));
+        let pii = stt_multipart(b"RIFF", "voice.wav", "b", Some(&SttRedact::pii()));
+        let pii = String::from_utf8_lossy(&pii);
+        assert!(
+            pii.find("name=\"redact\"").unwrap() < pii.find("name=\"file\"").unwrap(),
+            "{pii}"
+        );
+        assert!(pii.contains("name=\"redact\"\r\n\r\npii\r\n"));
+        assert!(pii.contains("name=\"show_redacted_text\"\r\n\r\ntrue\r\n"));
+        let pci = SttRedact {
+            redact: vec!["pii".into(), "pci".into()],
+            show_redacted_text: false,
+        };
+        let both_bytes = stt_multipart(b"x", "a.wav", "z", Some(&pci));
+        let both = String::from_utf8_lossy(&both_bytes);
+        assert_eq!(both.matches("name=\"redact\"").count(), 2, "{both}");
+        assert!(!both.contains("show_redacted_text"));
     }
 
     #[test]

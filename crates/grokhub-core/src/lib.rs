@@ -592,9 +592,9 @@ pub use md::{
 };
 pub use meetings::{
     append_speech, end_meeting, follow_notes, get_meeting, search_transcripts, set_join_consent,
-    set_record_consent, start_meeting, talk, LineKind, Meeting, MeetingConsent, MeetingStatus,
-    MeetingsStore, TranscriptHit, TranscriptLine, ALREADY_LIVE, JOIN_OFF, MISSING, NO_LIVE,
-    RECORD_OFF,
+    set_record_consent, set_redact_pii, start_meeting, talk, LineKind, Meeting, MeetingConsent,
+    MeetingStatus, MeetingsStore, TranscriptHit, TranscriptLine, ALREADY_LIVE, JOIN_OFF, MISSING,
+    NO_LIVE, RECORD_OFF,
 };
 pub use mission::{
     mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,
@@ -823,8 +823,8 @@ pub use voice::{
     transcribe_route, tts_request_body, tts_url, tts_voice, voice_can_connect, voice_log_role,
     voice_mode_active, voice_mode_label, voice_session_url, voice_state_after_ptt_stt,
     voice_stream_token, voice_strip_visible, voice_transcript_sends_chat, voice_tts_script,
-    CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
-    VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES,
+    CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, SttRedact, TranscribeRoute, VoiceEvent,
+    VoiceRole, VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, TTS_VOICES,
     VOICE_PAUSED, VOICE_READY_HIDE_MS, VOICE_TALK_STYLE,
 };
 pub use wake_word::{

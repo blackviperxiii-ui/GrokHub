@@ -140,10 +140,10 @@ pub fn target_for(config_dir: &Path, chat: &str) -> Option<StreamTarget> {
         return None;
     }
     Some(StreamTarget {
-        url: grokhub_core::stt_stream::stt_stream_url(&[
-            grokhub_core::brand::product_name(),
-            "Grok",
-        ]),
+        url: grokhub_core::stt_stream::stt_stream_url_with(
+            &[grokhub_core::brand::product_name(), "Grok"],
+            crate::meetings::redact_opts(config_dir).as_ref(),
+        ),
         bearer: crate::voice::stt_bearer().ok()?,
     })
 }

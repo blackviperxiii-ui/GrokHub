@@ -318,6 +318,42 @@ impl TextFormat {
     }
 }
 
+/// Processing tier on `/v1/responses`. `Default` is omitted on the wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServiceTier {
+    #[default]
+    Default,
+    Priority,
+}
+
+/// `app.json` key for Settings → Priority service tier. Off by default.
+pub const PRIORITY_SERVICE_TIER_KEY: &str = "priorityServiceTier";
+
+impl ServiceTier {
+    pub fn from_config(config_dir: &std::path::Path) -> Self {
+        if grokhub_core::app_json::bool_or(config_dir, PRIORITY_SERVICE_TIER_KEY, false) {
+            Self::Priority
+        } else {
+            Self::Default
+        }
+    }
+
+    /// `None` means leave the field off the request (`default` / omitted).
+    pub fn as_wire(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::Priority => Some("priority"),
+        }
+    }
+}
+
+/// Adds `service_tier` only for [`ServiceTier::Priority`].
+pub fn apply_service_tier(body: &mut Value, tier: ServiceTier) {
+    if let Some(s) = tier.as_wire() {
+        body["service_tier"] = json!(s);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponsesRequest {
     pub model: String,
@@ -1067,6 +1103,8 @@ pub struct XaiClient {
     /// WebSocket mode's sockets (`ws_mode`), for api.x.ai or a loopback test
     /// server; `None` for a plain loopback client.
     ws: Option<crate::ws_mode::WsPool>,
+    /// Settings toggle; [`ServiceTier::Default`] omits the field.
+    service_tier: ServiceTier,
 }
 
 /// One Batch API call on api.x.ai: the root, or a batch id with `/requests`,
@@ -1134,7 +1172,14 @@ impl XaiClient {
             compact_key_refused: AtomicBool::new(false),
             // Unit tests never dial api.x.ai; their sockets are loopback only.
             ws: (!cfg!(test)).then(|| crate::ws_mode::WsPool::new(crate::ws_mode::WS_URL)),
+            service_tier: ServiceTier::Default,
         }
+    }
+
+    /// Opt-in Priority processing on `/v1/responses`. Off (`Default`) omits the field.
+    pub fn with_service_tier(mut self, tier: ServiceTier) -> Self {
+        self.service_tier = tier;
+        self
     }
 
     /// For night passes that can wait: a one-shot text ask goes through xAI's
@@ -1337,8 +1382,13 @@ impl XaiClient {
             return Err(ClientError::Cancelled);
         }
         let _ = crate::sse::take_served_model();
+        let _ = crate::sse::take_service_tier();
         let _ = take_watermarked();
-        let body = crate::timing::time("client:body", || responses_body(req));
+        let body = crate::timing::time("client:body", || {
+            let mut body = responses_body(req);
+            apply_service_tier(&mut body, self.service_tier);
+            body
+        });
         // Round 3 item 28: kept sealed by hash, so this exact request can be replayed.
         crate::harness::replay::note_request(&crate::perm::config_dir(), &body);
         if !crate::pace::take(&req.model, cancel) {
@@ -2716,6 +2766,7 @@ mod tests {
             "include",
             "text",
             "parallel_tool_calls",
+            "service_tier",
         ];
         const NEVER: &[&str] = &[
             "context_management",
@@ -3008,6 +3059,28 @@ mod tests {
     }
 
     const SEALED: &str = r#"{"id":"rs_1","summary":[],"type":"reasoning","status":"completed","encrypted_content":"gAAAA=="}"#;
+
+    #[test]
+    fn service_tier_is_omitted_by_default_and_priority_is_literal() {
+        let mut body = responses_body(&grok_req("grok-4.7", Some("high")));
+        assert!(body.get("service_tier").is_none(), "{body}");
+        apply_service_tier(&mut body, ServiceTier::Default);
+        assert!(body.get("service_tier").is_none(), "{body}");
+        apply_service_tier(&mut body, ServiceTier::Priority);
+        assert_eq!(body["service_tier"], "priority");
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-tier-{}-{}",
+            std::process::id(),
+            grokhub_core::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(ServiceTier::from_config(&dir), ServiceTier::Default);
+        grokhub_core::app_json::patch(&dir, &[(PRIORITY_SERVICE_TIER_KEY, json!(true))]).unwrap();
+        assert_eq!(ServiceTier::from_config(&dir), ServiceTier::Priority);
+        grokhub_core::app_json::patch(&dir, &[(PRIORITY_SERVICE_TIER_KEY, json!(false))]).unwrap();
+        assert_eq!(ServiceTier::from_config(&dir), ServiceTier::Default);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn grok_bodies_carry_the_cache_key_and_ask_for_sealed_reasoning() {

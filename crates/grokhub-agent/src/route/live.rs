@@ -113,6 +113,8 @@ pub struct RouteDone {
     pub served_model: Option<String>,
     /// Last `/v1/responses` reply sent `x-watermark: true`.
     pub watermarked: bool,
+    /// `response.service_tier` from the last completed stream, when present.
+    pub service_tier: Option<String>,
     /// The call was cancelled, or its result is not ours to see (Grok Build
     /// runs the turn): no outcome and nothing about the model is learned.
     pub cancelled: bool,
@@ -152,6 +154,7 @@ impl RouteDone {
     pub fn of(out: &Result<TurnOutput, ClientError>, elapsed: Duration) -> Self {
         let latency_ms = elapsed.as_millis() as u64;
         let served_model = crate::sse::take_served_model();
+        let service_tier = crate::sse::take_service_tier();
         let watermarked = crate::client::take_watermarked();
         match out {
             Ok(turn) => Self {
@@ -160,6 +163,7 @@ impl RouteDone {
                 usage: turn.usage.clone(),
                 latency_ms,
                 served_model,
+                service_tier,
                 watermarked,
                 hosted: turn.hosted,
                 sources: u32::try_from(turn.sources.len()).unwrap_or(u32::MAX),

@@ -119,6 +119,7 @@ mod net_watch;
 mod night;
 mod nudges;
 pub mod nyx;
+mod priority_tier;
 mod profile;
 mod prompt_tidy;
 pub use grokhub_agent::xai_keychain as oauth;
@@ -205,7 +206,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use grokhub_agent::{AuthKind, XaiClient};
+use grokhub_agent::{AuthKind, ServiceTier, XaiClient};
 use grokhub_core::review_pass::SuggestedTile;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -1046,12 +1047,16 @@ fn model_client() -> Result<(XaiClient, AuthKind), String> {
     signed_client(oauth::bearer(&oauth::Keychain), credential::load_key, idle)
 }
 
+fn with_service_tier(client: XaiClient, config_dir: &Path) -> XaiClient {
+    client.with_service_tier(ServiceTier::from_config(config_dir))
+}
+
 /// [`model_client`] for a chat turn. With no usable sign-in or key and either
 /// Local AI or an added provider ready, the client has no xAI bearer and the
 /// router answers on that route instead.
 fn chat_client(config_dir: &Path) -> Result<(XaiClient, AuthKind), String> {
     match model_client() {
-        Ok(found) => Ok(found),
+        Ok((client, kind)) => Ok((with_service_tier(client, config_dir), kind)),
         Err(_)
             if grokhub_agent::route::local::available()
                 || !grokhub_agent::route::providers::usable(
@@ -1061,7 +1066,10 @@ fn chat_client(config_dir: &Path) -> Result<(XaiClient, AuthKind), String> {
                 .is_empty() =>
         {
             Ok((
-                XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120)),
+                with_service_tier(
+                    XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120)),
+                    config_dir,
+                ),
                 AuthKind::ApiKey,
             ))
         }
@@ -6090,6 +6098,24 @@ async fn set_game_watch(
         .await?
 }
 
+/// Settings → Account → Priority service tier: off until switched on.
+#[tauri::command]
+async fn get_priority_service_tier(
+    state: State<'_, ShellState>,
+) -> Result<priority_tier::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || priority_tier::view(&dir)).await
+}
+
+#[tauri::command]
+async fn set_priority_service_tier(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<priority_tier::View, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || priority_tier::set(&dir, on)).await?
+}
+
 /// Settings → Behavior → Living wall: off until switched on.
 #[cfg(desktop)]
 #[tauri::command]
@@ -10463,6 +10489,8 @@ pub fn run() {
             set_game_companion,
             set_game_companion_ping,
             get_game_watch,
+            get_priority_service_tier,
+            set_priority_service_tier,
             #[cfg(desktop)]
             get_living_wall,
             #[cfg(desktop)]

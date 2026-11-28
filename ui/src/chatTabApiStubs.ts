@@ -51,5 +51,8 @@ export function chatTabApiStubs() {
     onTasksChanged: () => Promise.resolve(() => {}),
     steerTask: () => Promise.resolve({ todos: [], tasks: [] }),
     stopTask: () => Promise.resolve({ todos: [], tasks: [] }),
+    // Settings → Account: off / missing command unless a suite turns it on.
+    getPriorityServiceTier: () => Promise.reject("unknown command get_priority_service_tier"),
+    setPriorityServiceTier: () => Promise.reject("unknown command set_priority_service_tier"),
   };
 }

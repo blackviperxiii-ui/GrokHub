@@ -7,7 +7,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use grokhub_core::{
     append_speech, end_meeting, follow_notes, search_transcripts, set_join_consent,
-    set_record_consent, start_meeting, talk, Meeting, MeetingStatus, MeetingsStore, TranscriptHit,
+    set_record_consent, set_redact_pii, start_meeting, talk, Meeting, MeetingStatus, MeetingsStore,
+    SttRedact, TranscriptHit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +30,7 @@ fn path(config_dir: &Path) -> PathBuf {
 pub struct ConsentView {
     pub join: bool,
     pub record: bool,
+    pub redact_pii: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -84,6 +86,7 @@ pub struct Page {
 pub enum Act {
     SetJoin { on: bool },
     SetRecord { on: bool },
+    SetRedactPii { on: bool },
     Start { title: String },
     FollowNotes { notes: String },
     Talk { text: String },
@@ -146,6 +149,7 @@ fn page_of(store: &MeetingsStore, query: &str) -> Page {
         consent: ConsentView {
             join: store.consent.join,
             record: store.consent.record,
+            redact_pii: store.consent.redact_pii,
         },
         live,
         past,
@@ -178,6 +182,15 @@ fn save(config_dir: &Path, store: &MeetingsStore) -> Result<(), String> {
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
 
+/// STT PII redaction from Meetings settings. `None` when the toggle is off.
+pub fn redact_opts(config_dir: &Path) -> Option<SttRedact> {
+    let _g = store();
+    load_unlocked(config_dir)
+        .ok()
+        .filter(|d| d.consent.redact_pii)
+        .map(|_| SttRedact::pii())
+}
+
 /// Load the Meetings page. `query` is the current search box (may be blank).
 pub fn load(config_dir: &Path, query: &str) -> Result<Page, String> {
     let _g = store();
@@ -195,6 +208,7 @@ pub fn act(config_dir: &Path, act: Act, query: &str) -> Result<Page, String> {
     match act {
         Act::SetJoin { on } => set_join_consent(&mut data, on),
         Act::SetRecord { on } => set_record_consent(&mut data, on),
+        Act::SetRedactPii { on } => set_redact_pii(&mut data, on),
         Act::Start { title } => {
             start_meeting(&mut data, &title, None).map_err(|e| e.to_string())?;
         }
@@ -240,7 +254,14 @@ mod tests {
         let root = temp_config("round");
         let page = load(&root, "").unwrap();
         assert!(!page.consent.join);
+        assert!(!page.consent.redact_pii);
         assert!(page.live.is_none());
+
+        let page = act(&root, Act::SetRedactPii { on: true }, "").unwrap();
+        assert!(page.consent.redact_pii);
+        assert!(redact_opts(&root).is_some());
+        act(&root, Act::SetRedactPii { on: false }, "").unwrap();
+        assert!(redact_opts(&root).is_none());
 
         act(&root, Act::SetJoin { on: true }, "").unwrap();
         act(&root, Act::SetRecord { on: true }, "").unwrap();

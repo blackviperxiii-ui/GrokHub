@@ -24,6 +24,7 @@ import { BrowserAttach } from "./BrowserAttach";
 import { CodeSettings } from "./CodeSettings";
 import { Defaults } from "./Defaults";
 import { GrokSignIn } from "./GrokSignIn";
+import { PriorityServiceTier } from "./PriorityServiceTier";
 import { Labs } from "./Labs";
 import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
@@ -418,6 +419,7 @@ export function Settings({
           canPick={caps.tray}
         />
         {caps.grokSignIn && <GrokSignIn signedIn={loaded.signedIn} planNote={loaded.planNote} onChange={setSettings} />}
+        <PriorityServiceTier />
         <div className="key">
           <h2>{caps.grokSignIn ? "Or use an xAI API key" : "xAI API key"}</h2>
           <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>

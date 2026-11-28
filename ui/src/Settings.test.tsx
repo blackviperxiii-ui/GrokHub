@@ -66,6 +66,9 @@ vi.mock("./GameCompanionSetting", () => ({
   ),
 }));
 vi.mock("./LivingWall", () => ({ LivingWall: () => <p>Living wall row</p> }));
+vi.mock("./PriorityServiceTier", () => ({
+  PriorityServiceTier: () => <p>Priority service tier row</p>,
+}));
 vi.mock("./SteamPulseSources", () => ({ SteamPulseSources: () => <p>Steam Pulse sources</p> }));
 vi.mock("./LocalModelsSource", () => ({ LocalModelsSource: () => <p>Local models source</p> }));
 vi.mock("./KnowMe", () => ({ KnowMe: () => <p>Know me panel</p> }));
