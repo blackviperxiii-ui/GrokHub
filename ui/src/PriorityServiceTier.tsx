@@ -17,7 +17,7 @@ export function PriorityServiceTier() {
 
   useEffect(() => {
     getPriorityServiceTier().then(
-      (view) => setOn(view.on),
+      (view) => setOn(view == null ? null : view.on),
       () => setOn(null),
     );
   }, []);

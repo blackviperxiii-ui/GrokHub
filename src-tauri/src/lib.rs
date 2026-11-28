@@ -3889,7 +3889,7 @@ async fn claude_session_pick(
         off_main(move || {
             let Some(dir) = fleet::claude_dir() else {
                 return Err("Claude Code isn't on this computer.".into());
-            }
+            };
             let projects = dir.join("projects");
             let mut picker = app
                 .dialog()
@@ -3899,9 +3899,7 @@ async fn claude_session_pick(
             if projects.is_dir() {
                 picker = picker.set_directory(&projects);
             }
-            let picked = picker
-                .blocking_pick_file()
-                .and_then(|p| p.into_path().ok());
+            let picked = picker.blocking_pick_file().and_then(|p| p.into_path().ok());
             match picked {
                 Some(path) => grokhub_code::claude_import::import_session(&path, &dir).map(Some),
                 None => Ok(None),

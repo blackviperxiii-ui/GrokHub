@@ -618,6 +618,11 @@ export function initScript(theme = "ops-dark") {
         case "plugin:event|emit":
         case "plugin:event|emit-to":
           return null;
+        case "get_priority_service_tier":
+        case "set_priority_service_tier":
+          // Settings → Account (#2324). Default off; null here blew ui-shots
+          // with "Cannot read properties of null (reading 'on')".
+          return { on: false };
         case "get_settings":
           return { ...fix.settings, theme: fix.theme };
         case "get_profile":
