@@ -1,5 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
+  claudeSessionImport,
+  claudeSessionPick,
+  claudeSessionsList,
   codeProjectLinkRemote,
   codeProjectNew,
   codeProjectOpen,
@@ -8,6 +11,7 @@ import {
   codeProjects,
   listChats,
   type ChatRow,
+  type ClaudeSessionRow,
   type CodeProject,
   type CodeProjects as ProjectList,
 } from "./api";
@@ -24,6 +28,17 @@ export const SESSIONS_SHOWN = 6;
 export const PROJECTS_AGENT_BUSY = "The agent is still replying. Stop it or wait, then switch.";
 export const LINK_REPO = "Link repo…";
 export const RULES_NONE = "No rule files found";
+export const IMPORT_CLAUDE = "Import Claude session";
+export const IMPORT_CLAUDE_EMPTY =
+  "No Claude Code sessions match this workspace. Pick a session file, or run Claude Code in this folder first.";
+export const IMPORT_CLAUDE_PICK = "Pick session file…";
+export const IMPORT_CLAUDE_LIST = "Claude Code sessions";
+
+/** One-line preview for a Claude session row (turns + when). */
+export function claudeSessionPreview(row: ClaudeSessionRow, now: Date = new Date()): string {
+  const turns = row.turnCount === 1 ? "1 turn" : `${row.turnCount} turns`;
+  return `${turns} · ${whenLabel(row.updatedMs, now)}`;
+}
 
 /** The last part of a folder path, for a folder with no project row. */
 export function folderName(path: string): string {
@@ -77,6 +92,8 @@ interface Props {
   onSwitched: () => void;
   onNewSession: () => void;
   onOpenSession: (id: string) => void;
+  /** Prefill a Code thread with imported Claude session context. */
+  onImportClaude?: (context: string) => void;
   /** The folder the app works in, each time the bar reads it. */
   onFolder?: (folder: string) => void;
   /** The agent window's reply is running: the project and the session stay. */
@@ -94,6 +111,7 @@ export function CodeProjects({
   onSwitched,
   onNewSession,
   onOpenSession,
+  onImportClaude,
   onFolder,
   agentBusy = false,
   openSession,
@@ -104,6 +122,8 @@ export function CodeProjects({
   const [picking, setPicking] = useState(false);
   const [naming, setNaming] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [claudeRows, setClaudeRows] = useState<ClaudeSessionRow[] | null>(null);
   const [name, setName] = useState("");
   const [remoteUrl, setRemoteUrl] = useState("");
   const [branchOverride, setBranchOverride] = useState("");
@@ -172,6 +192,74 @@ export function CodeProjects({
     if (!current) return;
     const branch = branchOverride.trim() || null;
     void change(() => codeProjectSetBranch(current.id, branch));
+  }
+
+  async function openClaudeImport() {
+    if (busy || !onImportClaude) return;
+    if (agentBusy) {
+      setNote(PROJECTS_AGENT_BUSY);
+      return;
+    }
+    const next = !importing;
+    setImporting(next);
+    setNaming(false);
+    setLinking(false);
+    setPicking(false);
+    setNote(null);
+    if (!next) {
+      setClaudeRows(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      setClaudeRows(await claudeSessionsList());
+    } catch (err) {
+      setNote(String(err));
+      setClaudeRows([]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importClaudePath(path: string) {
+    if (busy || !onImportClaude) return;
+    if (agentBusy) {
+      setNote(PROJECTS_AGENT_BUSY);
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    try {
+      const imported = await claudeSessionImport(path);
+      onImportClaude(imported.context);
+      setImporting(false);
+      setClaudeRows(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pickClaudeFile() {
+    if (busy || !onImportClaude) return;
+    if (agentBusy) {
+      setNote(PROJECTS_AGENT_BUSY);
+      return;
+    }
+    setBusy(true);
+    setNote(null);
+    try {
+      const imported = await claudeSessionPick();
+      if (!imported) return;
+      onImportClaude(imported.context);
+      setImporting(false);
+      setClaudeRows(null);
+    } catch (err) {
+      setNote(String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   const current = list?.projects.find((p) => p.current);
@@ -328,10 +416,54 @@ export function CodeProjects({
         <div className="code-sessions">
           <div className="code-head">
             <h3>{SESSIONS_TITLE}</h3>
-            <button type="button" onClick={onNewSession} disabled={agentBusy}>
-              New session
-            </button>
+            <div className="card-buttons">
+              {onImportClaude && (
+                <button
+                  type="button"
+                  className="quiet"
+                  aria-expanded={importing}
+                  disabled={agentBusy || busy}
+                  onClick={() => void openClaudeImport()}
+                >
+                  {IMPORT_CLAUDE}
+                </button>
+              )}
+              <button type="button" onClick={onNewSession} disabled={agentBusy}>
+                New session
+              </button>
+            </div>
           </div>
+          {importing && (
+            <div className="code-claude-import" aria-label={IMPORT_CLAUDE_LIST}>
+              <div className="code-head">
+                <h4>{IMPORT_CLAUDE_LIST}</h4>
+                <button type="button" className="quiet" disabled={busy} onClick={() => void pickClaudeFile()}>
+                  {IMPORT_CLAUDE_PICK}
+                </button>
+              </div>
+              {claudeRows === null ? (
+                <p className="note">Loading…</p>
+              ) : claudeRows.length === 0 ? (
+                <p className="note">{IMPORT_CLAUDE_EMPTY}</p>
+              ) : (
+                <ul className="rows code-project-list" aria-label={IMPORT_CLAUDE_LIST}>
+                  {claudeRows.map((row) => (
+                    <li key={row.path}>
+                      <button
+                        type="button"
+                        className="code-skill quiet"
+                        disabled={busy || agentBusy}
+                        onClick={() => void importClaudePath(row.path)}
+                      >
+                        <span className="card-title">{row.title}</span>
+                        <span className="note">{claudeSessionPreview(row)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           {sessions.length === 0 ? (
             <p className="note">{SESSIONS_EMPTY}</p>
           ) : (
