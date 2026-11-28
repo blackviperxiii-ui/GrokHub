@@ -339,6 +339,177 @@ pub fn get_meeting<'a>(store: &'a MeetingsStore, id: &str) -> Option<&'a Meeting
     store.meetings.iter().find(|m| m.id == id)
 }
 
+/// One post-transcript action item. `due` is empty when the line named none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionItem {
+    pub owner: String,
+    pub action: String,
+    pub due: String,
+    pub source_quote: String,
+}
+
+const OWNER_SKIP: &[&str] = &[
+    "a", "an", "the", "this", "that", "we", "they", "it", "yes", "no", "ok",
+];
+
+/// Pull `{owner, action, due, source_quote}` items from a finished transcript.
+/// No lines matching the patterns yields an empty list, not a placeholder.
+pub fn extract_action_items(lines: &[TranscriptLine]) -> Vec<ActionItem> {
+    let mut items = Vec::new();
+    for line in lines {
+        if let Some(item) = parse_action_line(line) {
+            items.push(item);
+        }
+    }
+    items
+}
+
+fn parse_action_line(line: &TranscriptLine) -> Option<ActionItem> {
+    let quote = line.text.trim();
+    if quote.is_empty() || quote.ends_with('?') {
+        return None;
+    }
+    if let Some(rest) = strip_prefix_ci(quote, "action:") {
+        return labeled_action(rest, quote, line);
+    }
+    if let Some(rest) = strip_prefix_ci(quote, "action item:") {
+        return labeled_action(rest, quote, line);
+    }
+    if let Some(rest) = strip_prefix_ci(quote, "i'll ") {
+        let owner = if line.speaker.trim().is_empty() {
+            "user".to_string()
+        } else {
+            line.speaker.trim().to_string()
+        };
+        return split_due(rest, owner, quote);
+    }
+    if let Some(rest) = strip_prefix_ci(quote, "i will ") {
+        let owner = if line.speaker.trim().is_empty() {
+            "user".to_string()
+        } else {
+            line.speaker.trim().to_string()
+        };
+        return split_due(rest, owner, quote);
+    }
+    will_or_to(quote)
+}
+
+fn labeled_action(rest: &str, quote: &str, line: &TranscriptLine) -> Option<ActionItem> {
+    let rest = rest.trim().trim_end_matches('.');
+    if rest.is_empty() {
+        return None;
+    }
+    let (body, owner_paren, due_paren) = split_owner_due_paren(rest);
+    let action = body.trim().trim_end_matches('.').trim();
+    if action.is_empty() {
+        return None;
+    }
+    let owner = owner_paren
+        .or_else(|| {
+            let s = line.speaker.trim();
+            (!s.is_empty()).then(|| s.to_string())
+        })
+        .unwrap_or_else(|| "user".to_string());
+    Some(ActionItem {
+        owner,
+        action: action.to_string(),
+        due: due_paren.unwrap_or_default(),
+        source_quote: quote.to_string(),
+    })
+}
+
+fn split_owner_due_paren(rest: &str) -> (String, Option<String>, Option<String>) {
+    let Some(open) = rest.rfind('(') else {
+        return (rest.to_string(), None, None);
+    };
+    if !rest.ends_with(')') {
+        return (rest.to_string(), None, None);
+    }
+    let inner = rest[open + 1..rest.len() - 1].trim();
+    let body = rest[..open].trim().to_string();
+    let mut owner = None;
+    let mut due = None;
+    for part in inner.split(',') {
+        let part = part.trim();
+        if let Some(v) = strip_prefix_ci(part, "owner:") {
+            let v = v.trim();
+            if !v.is_empty() {
+                owner = Some(v.to_string());
+            }
+        } else if let Some(v) = strip_prefix_ci(part, "due:") {
+            let v = v.trim();
+            if !v.is_empty() {
+                due = Some(v.to_string());
+            }
+        }
+    }
+    (body, owner, due)
+}
+
+fn will_or_to(quote: &str) -> Option<ActionItem> {
+    let lower = quote.to_ascii_lowercase();
+    let (owner_end, rest) = if let Some(i) = lower.find(" will ") {
+        (i, &quote[i + 6..])
+    } else {
+        let i = lower.find(" to ")?;
+        (i, &quote[i + 4..])
+    };
+    let owner = quote[..owner_end].trim();
+    if !owner_ok(owner) {
+        return None;
+    }
+    split_due(rest, owner.to_string(), quote)
+}
+
+fn owner_ok(owner: &str) -> bool {
+    let owner = owner.trim();
+    if owner.is_empty() || owner.contains(' ') || owner.len() > 32 {
+        return false;
+    }
+    let first = owner.chars().next().unwrap_or(' ');
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    let low = owner.to_ascii_lowercase();
+    !OWNER_SKIP.contains(&low.as_str())
+}
+
+fn split_due(rest: &str, owner: String, quote: &str) -> Option<ActionItem> {
+    let rest = rest.trim().trim_end_matches('.');
+    if rest.is_empty() {
+        return None;
+    }
+    let lower = rest.to_ascii_lowercase();
+    let (action, due) = if let Some(i) = lower.rfind(" by ") {
+        (rest[..i].trim(), rest[i + 4..].trim())
+    } else {
+        (rest, "")
+    };
+    if action.is_empty() {
+        return None;
+    }
+    Some(ActionItem {
+        owner,
+        action: action.to_string(),
+        due: due.to_string(),
+        source_quote: quote.to_string(),
+    })
+}
+
+fn strip_prefix_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let t = text.as_bytes();
+    let p = prefix.as_bytes();
+    if t.len() < p.len() {
+        return None;
+    }
+    if t[..p.len()].eq_ignore_ascii_case(p) {
+        Some(&text[p.len()..])
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +597,65 @@ mod tests {
         let mut store = ready();
         let m = start_meeting(&mut store, "   ", Some(1)).unwrap();
         assert_eq!(m.title, "Untitled meeting");
+    }
+
+    fn speech(speaker: &str, text: &str) -> TranscriptLine {
+        TranscriptLine::new(LineKind::Speech, text, speaker, 1)
+    }
+
+    #[test]
+    fn extract_action_items_from_transcript_lines() {
+        let lines = [
+            speech("host", "user will file the bug by Friday"),
+            speech(
+                "host",
+                "Action: ship the beta (owner: user, due: 2026-12-01)",
+            ),
+            speech("user", "I'll send the notes by EOD"),
+            speech("host", "host to merge the PR"),
+            speech("host", "Yes if CI is green"),
+            speech("host", "Can we ship tomorrow?"),
+        ];
+        let items = extract_action_items(&lines);
+        assert_eq!(
+            items,
+            vec![
+                ActionItem {
+                    owner: "user".into(),
+                    action: "file the bug".into(),
+                    due: "Friday".into(),
+                    source_quote: "user will file the bug by Friday".into(),
+                },
+                ActionItem {
+                    owner: "user".into(),
+                    action: "ship the beta".into(),
+                    due: "2026-12-01".into(),
+                    source_quote: "Action: ship the beta (owner: user, due: 2026-12-01)".into(),
+                },
+                ActionItem {
+                    owner: "user".into(),
+                    action: "send the notes".into(),
+                    due: "EOD".into(),
+                    source_quote: "I'll send the notes by EOD".into(),
+                },
+                ActionItem {
+                    owner: "host".into(),
+                    action: "merge the PR".into(),
+                    due: "".into(),
+                    source_quote: "host to merge the PR".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_action_items_empty_when_none() {
+        let lines = [
+            speech("host", "No blockers"),
+            TranscriptLine::new(LineKind::Note, "Decide on rollout", "", 2),
+        ];
+        assert!(extract_action_items(&lines).is_empty());
+        assert!(extract_action_items(&[]).is_empty());
     }
 
     #[test]

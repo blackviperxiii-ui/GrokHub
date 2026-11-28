@@ -591,10 +591,10 @@ pub use md::{
     CodeTok, MdAlign, MdBlock, MdSpan,
 };
 pub use meetings::{
-    append_speech, end_meeting, follow_notes, get_meeting, search_transcripts, set_join_consent,
-    set_record_consent, set_redact_pii, start_meeting, talk, LineKind, Meeting, MeetingConsent,
-    MeetingStatus, MeetingsStore, TranscriptHit, TranscriptLine, ALREADY_LIVE, JOIN_OFF, MISSING,
-    NO_LIVE, RECORD_OFF,
+    append_speech, end_meeting, extract_action_items, follow_notes, get_meeting,
+    search_transcripts, set_join_consent, set_record_consent, set_redact_pii, start_meeting, talk,
+    ActionItem, LineKind, Meeting, MeetingConsent, MeetingStatus, MeetingsStore, TranscriptHit,
+    TranscriptLine, ALREADY_LIVE, JOIN_OFF, MISSING, NO_LIVE, RECORD_OFF,
 };
 pub use mission::{
     mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,

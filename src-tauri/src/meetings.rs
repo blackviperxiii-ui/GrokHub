@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use grokhub_core::{
-    append_speech, end_meeting, follow_notes, search_transcripts, set_join_consent,
-    set_record_consent, set_redact_pii, start_meeting, talk, Meeting, MeetingStatus, MeetingsStore,
-    SttRedact, TranscriptHit,
+    append_speech, end_meeting, extract_action_items, follow_notes, search_transcripts,
+    set_join_consent, set_record_consent, set_redact_pii, start_meeting, talk, Meeting,
+    MeetingStatus, MeetingsStore, SttRedact, TranscriptHit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +53,16 @@ pub struct MeetingView {
     pub ended_ms: Option<u64>,
     pub live_notes: String,
     pub transcript: Vec<LineView>,
+    pub action_items: Vec<ActionItemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionItemView {
+    pub owner: String,
+    pub action: String,
+    pub due: String,
+    pub source_quote: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -114,6 +124,15 @@ fn meeting_view(m: &Meeting) -> MeetingView {
         ended_ms: m.ended_ms,
         live_notes: m.live_notes.clone(),
         transcript: m.transcript.iter().map(line_view).collect(),
+        action_items: extract_action_items(&m.transcript)
+            .into_iter()
+            .map(|item| ActionItemView {
+                owner: item.owner,
+                action: item.action,
+                due: item.due,
+                source_quote: item.source_quote,
+            })
+            .collect(),
     }
 }
 

@@ -1,0 +1,1 @@
+- live_eval `--efforts` compares pass rate, tokens, wall time, and USD side by side; Meetings extracts `{owner, action, due, source_quote}` items from a finished transcript.

@@ -115,6 +115,10 @@ pub use compact::{estimate_input_tokens, message_text};
 pub use config_file::config_warnings;
 pub use dream_model::sleep_dream;
 pub use eval::efficiency::{render_bench, run_bench, BenchRow};
+pub use eval::effort_sweep::{
+    parse_efforts, render_markdown as render_effort_sweep, write_results as write_effort_sweep,
+    EffortArmMetrics, EffortSweepReport,
+};
 pub use eval::live::{
     ab_flag as live_ab_flag, ab_passed as live_ab_passed, dream_lessons_passed,
     parse_budget as parse_live_budget, read_progress as read_live_progress, render_live, run_live,

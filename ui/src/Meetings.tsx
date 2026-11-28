@@ -57,6 +57,40 @@ function LineList({ lines }: { lines: MeetingRow["transcript"] }) {
   );
 }
 
+function ActionItemList({ items }: { items: NonNullable<MeetingRow["actionItems"]> }) {
+  if (items.length === 0) {
+    return <p className="empty">No action items.</p>;
+  }
+  const copyText = items
+    .map((item) => {
+      const due = item.due ? `, due ${item.due}` : "";
+      return `${item.owner}: ${item.action}${due}`;
+    })
+    .join("\n");
+  return (
+    <div>
+      <ul className="rows" aria-label="Action items">
+        {items.map((item, i) => (
+          <li key={`${item.owner}-${item.action}-${i}`}>
+            <strong>{item.owner}</strong>
+            {": "}
+            {item.action}
+            {item.due ? ` · due ${item.due}` : ""}
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard.writeText(copyText);
+        }}
+      >
+        Copy action items
+      </button>
+    </div>
+  );
+}
+
 function HitList({ hits }: { hits: MeetingHit[] }) {
   if (hits.length === 0) return null;
   return (
@@ -344,6 +378,7 @@ export function Meetings() {
             <article key={m.id}>
               <h4>{m.title}</h4>
               <LineList lines={m.transcript} />
+              <ActionItemList items={m.actionItems ?? []} />
             </article>
           ))}
         </div>
