@@ -27,6 +27,7 @@ import {
 } from "./api";
 import { isCodeSession } from "./CodeProjects";
 import { SavedCard } from "./SavedCard";
+import { Menu, MenuItem } from "./Menu";
 import { ConfirmRow, PageHead, StatusLine, useDismiss, useNote } from "./ui";
 
 /** Project sessions live in the Code Editor Projects tab, not here. */
@@ -161,45 +162,37 @@ function ChatMenu({
         ⋯
       </button>
       {menu && (
-        <div className="feed-menu" role="menu">
+        <Menu className="feed-menu" onClose={() => setMenu(false)}>
           {!main && (
             <>
-              <button
-                type="button"
-                role="menuitem"
+              <MenuItem
                 onClick={() => {
                   setMenu(false);
                   onPin();
                 }}
               >
                 {pinned ? "Unpin" : "Pin"}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
+              </MenuItem>
+              <MenuItem
                 onClick={() => {
                   setMenu(false);
                   onRename();
                 }}
               >
                 Rename
-              </button>
+              </MenuItem>
             </>
           )}
-          <button
-            type="button"
-            role="menuitem"
+          <MenuItem
             onClick={() => {
               setMenu(false);
               onExport();
             }}
           >
             Export
-          </button>
+          </MenuItem>
           {!main && (
-            <button
-              type="button"
-              role="menuitem"
+            <MenuItem
               className="danger"
               onClick={() => {
                 setMenu(false);
@@ -207,9 +200,9 @@ function ChatMenu({
               }}
             >
               Delete
-            </button>
+            </MenuItem>
           )}
-        </div>
+        </Menu>
       )}
     </div>
   );

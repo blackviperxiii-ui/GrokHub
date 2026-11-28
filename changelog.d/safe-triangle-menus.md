@@ -1,0 +1,1 @@
+- Loadout menus: safe-triangle hover corridor for nested submenus so diagonal pointer motion keeps the open submenu instead of switching early.

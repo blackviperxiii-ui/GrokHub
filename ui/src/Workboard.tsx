@@ -5,7 +5,6 @@ import {
   type CSSProperties,
   type DragEvent,
   type FormEvent,
-  type KeyboardEvent,
 } from "react";
 import {
   getWorkboard,
@@ -32,6 +31,7 @@ import { StatusTracker, statusFromLane } from "./Progress";
 import { SessionsBoard } from "./SessionsBoard";
 import { CardChat, ownChat } from "./WorkboardChat";
 import { CardTriage, dueLocalValue, priorityChip } from "./WorkboardTriage";
+import { Menu, MenuItem } from "./Menu";
 import { PageHead } from "./ui";
 
 export type WorkboardKind = "cards" | "sessions";
@@ -573,19 +573,6 @@ function MoveMenu({
     button.current?.focus();
   }
 
-  function onKey(event: KeyboardEvent) {
-    const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
-    const at = items.indexOf(document.activeElement as HTMLButtonElement);
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      items[(at + step + items.length) % items.length]?.focus();
-    }
-  }
-
   return (
     <span className="board-move">
       <button
@@ -599,21 +586,19 @@ function MoveMenu({
         Move
       </button>
       {open && (
-        <div ref={menu} className="board-menu" role="menu" aria-label="Move to" onKeyDown={onKey}>
+        <Menu ref={menu} className="board-menu" aria-label="Move to" onClose={close}>
           {dests.map((d) => (
-            <button
+            <MenuItem
               key={d.lane}
-              type="button"
-              role="menuitem"
               onClick={() => {
                 close();
                 onMove(d.lane);
               }}
             >
               {d.label}
-            </button>
+            </MenuItem>
           ))}
-        </div>
+        </Menu>
       )}
     </span>
   );

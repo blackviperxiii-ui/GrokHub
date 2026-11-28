@@ -12,6 +12,7 @@ import {
   type DesktopNyxTalk,
 } from "./desktopNyxApi";
 import { FRAME_MS, SMOOTH_FRAMES, smoothLevelAt, TALK_HOP, talkHop } from "./lipsync";
+import { Menu, MenuItem } from "./Menu";
 import { useDesktopNyx } from "./useDesktopNyx";
 
 /** Every outfit picture, including gaming (the chat dock leaves that out). */
@@ -52,7 +53,7 @@ export function NyxDesk() {
   const [state, setState] = useDesktopNyx();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const artRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLUListElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const press = useRef<{ x: number; y: number } | null>(null);
 
   // Reduce motion stills her breath, float and flicker, and her figure
@@ -216,69 +217,55 @@ export function NyxDesk() {
         )}
       </div>
       {menu && (
-        <ul
+        <Menu
           ref={menuRef}
           className="nyx-desk-menu"
           style={{ left: menu.x, top: menu.y }}
-          role="menu"
+          aria-label={`${COMPANION_NAME} desk`}
+          onClose={() => setMenu(null)}
           onClick={(e) => e.stopPropagation()}
         >
-          <li role="none">
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                void desktopNyxDock().then(setState);
-              }}
-            >
-              Bring her back
-            </button>
-          </li>
-          <li role="none">
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setMenu(null);
-                void desktopNyxSet({ behind: !state.behind }).then(setState);
-              }}
-            >
-              {state.behind ? "Float above windows" : "Stay behind windows"}
-            </button>
-          </li>
-          <li className="nyx-desk-menu-label" role="presentation">
+          <MenuItem
+            onClick={() => {
+              setMenu(null);
+              void desktopNyxDock().then(setState);
+            }}
+          >
+            Bring her back
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setMenu(null);
+              void desktopNyxSet({ behind: !state.behind }).then(setState);
+            }}
+          >
+            {state.behind ? "Float above windows" : "Stay behind windows"}
+          </MenuItem>
+          <p className="nyx-desk-menu-label" role="presentation">
             Change outfit
-          </li>
+          </p>
           {state.outfits.map((o) => (
-            <li key={o.id} role="none">
-              <button
-                type="button"
-                role="menuitem"
-                aria-checked={state.outfit === o.id}
-                onClick={() => {
-                  setMenu(null);
-                  void desktopNyxSetOutfit(o.id).then(setState);
-                }}
-              >
-                {o.label}
-              </button>
-            </li>
-          ))}
-          <li role="none">
-            <button
-              type="button"
-              role="menuitem"
-              aria-checked={state.outfit == null}
+            <MenuItem
+              key={o.id}
+              aria-checked={state.outfit === o.id}
               onClick={() => {
                 setMenu(null);
-                void desktopNyxSetOutfit(null).then(setState);
+                void desktopNyxSetOutfit(o.id).then(setState);
               }}
             >
-              Pick for me
-            </button>
-          </li>
-        </ul>
+              {o.label}
+            </MenuItem>
+          ))}
+          <MenuItem
+            aria-checked={state.outfit == null}
+            onClick={() => {
+              setMenu(null);
+              void desktopNyxSetOutfit(null).then(setState);
+            }}
+          >
+            Pick for me
+          </MenuItem>
+        </Menu>
       )}
     </div>
   );
