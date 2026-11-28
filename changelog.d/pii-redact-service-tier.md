@@ -1,0 +1,1 @@
+- Meetings can redact PII in xAI speech transcripts (off by default). Settings → Account can opt into xAI Priority processing on `/v1/responses` (higher token cost; off by default).

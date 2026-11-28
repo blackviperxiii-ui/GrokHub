@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MeetingsAct, MeetingsPage } from "./api";
-import { MEETINGS_EMPTY, Meetings } from "./Meetings";
+import { MEETINGS_EMPTY, Meetings, REDACT_PII_HINT, REDACT_PII_TITLE } from "./Meetings";
 
 const api = vi.hoisted(() => ({
   getMeetings: vi.fn<(query?: string) => Promise<MeetingsPage>>(),
@@ -16,7 +16,7 @@ vi.mock("./api", async (importOriginal) => {
 
 function emptyPage(over: Partial<MeetingsPage> = {}): MeetingsPage {
   return {
-    consent: { join: false, record: false },
+    consent: { join: false, record: false, redactPii: false },
     live: null,
     past: [],
     hits: [],
@@ -36,7 +36,9 @@ describe("Meetings", () => {
     expect(await screen.findByText(MEETINGS_EMPTY)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start meeting" })).toBeDisabled();
 
-    api.meetingsAct.mockResolvedValueOnce(emptyPage({ consent: { join: true, record: false } }));
+    api.meetingsAct.mockResolvedValueOnce(
+      emptyPage({ consent: { join: true, record: false, redactPii: false } }),
+    );
     await userEvent.click(screen.getAllByRole("button", { name: "Allow" })[0]!);
     await waitFor(() => expect(api.meetingsAct).toHaveBeenCalledWith({ kind: "setJoin", on: true }, ""));
     await waitFor(() => expect(screen.getByRole("button", { name: "Start meeting" })).toBeEnabled());
@@ -44,10 +46,10 @@ describe("Meetings", () => {
 
   it("starts a meeting, follows notes, talks, ends, and searches", async () => {
     api.getMeetings.mockResolvedValue(
-      emptyPage({ consent: { join: true, record: true } }),
+      emptyPage({ consent: { join: true, record: true, redactPii: false } }),
     );
     const live: MeetingsPage = emptyPage({
-      consent: { join: true, record: true },
+      consent: { join: true, record: true, redactPii: false },
       live: {
         id: "mtg1",
         title: "Standup",
@@ -83,7 +85,7 @@ describe("Meetings", () => {
       })
       .mockResolvedValueOnce(
         emptyPage({
-          consent: { join: true, record: true },
+          consent: { join: true, record: true, redactPii: false },
           past: [
             {
               id: "mtg1",
@@ -102,7 +104,7 @@ describe("Meetings", () => {
       )
       .mockResolvedValueOnce(
         emptyPage({
-          consent: { join: true, record: true },
+          consent: { join: true, record: true, redactPii: false },
           query: "blockers",
           hits: [
             {
@@ -151,5 +153,24 @@ describe("Meetings", () => {
       expect(api.meetingsAct).toHaveBeenCalledWith({ kind: "search", query: "blockers" }, "blockers"),
     );
     expect(await screen.findByText(/Any blockers\?/)).toBeInTheDocument();
+  });
+
+  it("sends setRedactPii when the transcript toggle is flipped", async () => {
+    api.getMeetings.mockResolvedValue(emptyPage());
+    api.meetingsAct.mockResolvedValueOnce(
+      emptyPage({ consent: { join: false, record: false, redactPii: true } }),
+    );
+    render(<Meetings />);
+    const sw = await screen.findByRole("switch", { name: REDACT_PII_TITLE });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(REDACT_PII_HINT)).toBeVisible();
+    await userEvent.click(sw);
+    await waitFor(() =>
+      expect(api.meetingsAct).toHaveBeenCalledWith({ kind: "setRedactPii", on: true }, ""),
+    );
+    expect(await screen.findByRole("switch", { name: REDACT_PII_TITLE })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 });

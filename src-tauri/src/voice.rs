@@ -498,7 +498,12 @@ pub fn transcribe_at(config_dir: &Path, wav: &[u8], to: &Target) -> Result<Strin
         config_dir,
         &hx::EgressReq::new(&to.url, &[hx::DataClass::Chat]),
     )?;
-    let body = stt_multipart(wav, "voice.wav", BOUNDARY);
+    let body = stt_multipart(
+        wav,
+        "voice.wav",
+        BOUNDARY,
+        crate::meetings::redact_opts(config_dir).as_ref(),
+    );
     let agent = grokhub_core::http::agent(grokhub_core::http::Opts {
         overall: Some(TIMEOUT),
         redirects: 0,
@@ -642,7 +647,7 @@ mod tests {
             + 4;
         assert_eq!(
             &req[body_at..],
-            stt_multipart(&recording, "voice.wav", BOUNDARY)
+            stt_multipart(&recording, "voice.wav", BOUNDARY, None)
         );
     }
 

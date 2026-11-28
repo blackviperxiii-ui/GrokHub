@@ -7,6 +7,7 @@ import {
   type MeetingsPage,
 } from "./api";
 import { PRODUCT_NAME } from "./brand";
+import { Toggle } from "./Toggle";
 import { PageHead, StatusLine, useNote } from "./ui";
 
 export const MEETINGS_EMPTY =
@@ -17,6 +18,10 @@ export const JOIN_HINT =
 
 export const RECORD_HINT =
   "Off until you allow it. Keeps a transcript of notes, Talk turns, and speech lines you save. Explicit consent before any recording.";
+
+export const REDACT_PII_TITLE = "Redact PII in transcripts";
+export const REDACT_PII_HINT =
+  "Off by default. When on, xAI speech-to-text replaces personal data in the transcript it returns.";
 
 /** Allow counts only from the pointer: Enter or Space on a focused Allow does nothing. */
 function pointer(e: MouseEvent) {
@@ -122,6 +127,14 @@ export function Meetings() {
     );
   }
 
+  async function setRedactPii(on: boolean) {
+    if (busy) return;
+    await run(
+      () => meetingsAct({ kind: "setRedactPii", on }, query),
+      on ? "PII redaction on." : "PII redaction off.",
+    );
+  }
+
   async function start(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -209,6 +222,18 @@ export function Meetings() {
               Allow
             </button>
           )}
+        </div>
+        <div className="consent-row">
+          <Toggle
+            checked={page?.consent.redactPii ?? false}
+            disabled={busy || page == null}
+            onChange={(on) => void setRedactPii(on)}
+          >
+            {REDACT_PII_TITLE}
+          </Toggle>
+          <p className="hint" style={{ margin: 0 }}>
+            {REDACT_PII_HINT}
+          </p>
         </div>
       </div>
 

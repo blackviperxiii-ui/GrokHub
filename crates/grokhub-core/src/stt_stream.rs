@@ -17,12 +17,29 @@ pub const SMART_TURN_TIMEOUT_MS: u32 = 2500;
 /// The streaming socket: 16 kHz PCM, interim results, Smart Turn, and the
 /// words the app is most likely to hear spelled the way it spells them.
 pub fn stt_stream_url(keyterms: &[&str]) -> String {
+    stt_stream_url_with(keyterms, None)
+}
+
+/// Streaming STT URL. `redact` repeats `&redact=` for each group.
+pub fn stt_stream_url_with(keyterms: &[&str], redact: Option<&crate::voice::SttRedact>) -> String {
     let mut url = format!(
         "wss://api.x.ai/v1/stt?sample_rate={}&encoding=pcm&interim_results=true\
          &endpointing={ENDPOINTING_MS}&smart_turn={SMART_TURN}\
          &smart_turn_timeout={SMART_TURN_TIMEOUT_MS}&language=en&format=true",
         crate::voice_turn::RATE
     );
+    if let Some(opts) = redact.filter(|o| !o.is_empty()) {
+        for group in &opts.redact {
+            let group = group.trim();
+            if !group.is_empty() {
+                url.push_str("&redact=");
+                url.push_str(&query_escape(group));
+            }
+        }
+        if opts.show_redacted_text {
+            url.push_str("&show_redacted_text=true");
+        }
+    }
     for term in keyterms {
         let term: String = term.chars().take(50).collect();
         if term.trim().is_empty() {
@@ -72,13 +89,7 @@ pub fn parse_stt_event(raw: &str) -> SttEvent {
     let Ok(v) = serde_json::from_str::<Value>(raw) else {
         return SttEvent::Other;
     };
-    let text = || {
-        v.get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string()
-    };
+    let text = || crate::voice::parse_stt_text(&v).unwrap_or_default();
     let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
     match v.get("type").and_then(Value::as_str).unwrap_or("") {
         "transcript.created" => SttEvent::Ready,
@@ -241,6 +252,10 @@ mod tests {
         }
         assert_eq!(url.matches("keyterm=").count(), 2, "{url}");
         assert!(stt_stream_url(&["a&b=c"]).contains("keyterm=a%26b%3Dc"));
+        assert!(!url.contains("redact="));
+        let pii = stt_stream_url_with(&["Grok"], Some(&crate::voice::SttRedact::pii()));
+        assert!(pii.contains("&redact=pii"), "{pii}");
+        assert!(pii.contains("&show_redacted_text=true"), "{pii}");
     }
 
     #[test]
@@ -254,6 +269,12 @@ mod tests {
                 r#"{"type":"transcript.partial","text":"I will buy two","is_final":true,"speech_final":true,"end_of_turn_confidence":0.98}"#
             ),
             partial("I will buy two", true, true)
+        );
+        assert_eq!(
+            parse_stt_event(
+                r#"{"type":"transcript.done","text":"ssn 111-11-1111","redacted_text":"ssn [REDACTED]"}"#
+            ),
+            SttEvent::Done("ssn [REDACTED]".into()),
         );
         assert_eq!(
             parse_stt_event(r#"{"type":"transcript.done","text":" all of it ","duration":2.1}"#),

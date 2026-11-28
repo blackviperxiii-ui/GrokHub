@@ -2312,7 +2312,7 @@ export interface MeetingHit {
 }
 
 export interface MeetingsPage {
-  consent: { join: boolean; record: boolean };
+  consent: { join: boolean; record: boolean; redactPii: boolean };
   live: MeetingRow | null;
   past: MeetingRow[];
   hits: MeetingHit[];
@@ -2322,6 +2322,7 @@ export interface MeetingsPage {
 export type MeetingsAct =
   | { kind: "setJoin"; on: boolean }
   | { kind: "setRecord"; on: boolean }
+  | { kind: "setRedactPii"; on: boolean }
   | { kind: "start"; title: string }
   | { kind: "followNotes"; notes: string }
   | { kind: "talk"; text: string }
@@ -5220,6 +5221,19 @@ export function getLivingWall(): Promise<LivingWall> {
 
 export function setLivingWall(on: boolean): Promise<LivingWall> {
   return invoke<LivingWall>("set_living_wall", { on });
+}
+
+/** Settings → Account → Priority service tier (`app.json` priorityServiceTier). Off by default. */
+export interface PriorityServiceTier {
+  on: boolean;
+}
+
+export function getPriorityServiceTier(): Promise<PriorityServiceTier> {
+  return invoke<PriorityServiceTier>("get_priority_service_tier");
+}
+
+export function setPriorityServiceTier(on: boolean): Promise<PriorityServiceTier> {
+  return invoke<PriorityServiceTier>("set_priority_service_tier", { on });
 }
 
 /** The living wall's cover as it starts, lands in the Imagine gallery, or

@@ -33,6 +33,9 @@ pub struct MeetingConsent {
     /// May keep a transcript and accept Talk / speech lines.
     #[serde(default)]
     pub record: bool,
+    /// Send xAI STT `redact=pii` and surface `redacted_text` in transcripts.
+    #[serde(default)]
+    pub redact_pii: bool,
 }
 
 /// Lifecycle of one meeting.
@@ -163,6 +166,11 @@ pub fn set_join_consent(store: &mut MeetingsStore, on: bool) {
 /// Turn record consent on or off. Call only from a user click path.
 pub fn set_record_consent(store: &mut MeetingsStore, on: bool) {
     store.consent.record = on;
+}
+
+/// Turn PII redaction on or off. Off by default; only a user click turns it on.
+pub fn set_redact_pii(store: &mut MeetingsStore, on: bool) {
+    store.consent.redact_pii = on;
 }
 
 /// Start a live meeting. Needs join consent. Recording/Talk need record too
@@ -404,6 +412,16 @@ mod tests {
     }
 
     #[test]
+    fn redact_pii_starts_off_and_flips() {
+        let mut store = MeetingsStore::default();
+        assert!(!store.consent.redact_pii);
+        set_redact_pii(&mut store, true);
+        assert!(store.consent.redact_pii);
+        set_redact_pii(&mut store, false);
+        assert!(!store.consent.redact_pii);
+    }
+
+    #[test]
     fn empty_title_becomes_untitled() {
         let mut store = ready();
         let m = start_meeting(&mut store, "   ", Some(1)).unwrap();
@@ -415,6 +433,7 @@ mod tests {
         let store: MeetingsStore = serde_json::from_str("{}").unwrap();
         assert!(!store.consent.join);
         assert!(!store.consent.record);
+        assert!(!store.consent.redact_pii);
         assert!(store.meetings.is_empty());
         assert!(store.live_id.is_none());
     }
