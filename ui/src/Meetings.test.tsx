@@ -155,6 +155,47 @@ describe("Meetings", () => {
     expect(await screen.findByText(/Any blockers\?/)).toBeInTheDocument();
   });
 
+  it("lists extracted action items on a past meeting and a clean empty fallback", async () => {
+    api.getMeetings.mockResolvedValue(
+      emptyPage({
+        past: [
+          {
+            id: "mtg1",
+            title: "Standup",
+            status: "ended",
+            startedMs: 1,
+            endedMs: 4,
+            liveNotes: "",
+            transcript: [],
+            actionItems: [
+              {
+                owner: "user",
+                action: "file the bug",
+                due: "Friday",
+                sourceQuote: "user will file the bug by Friday",
+              },
+            ],
+          },
+          {
+            id: "mtg2",
+            title: "Chat",
+            status: "ended",
+            startedMs: 5,
+            endedMs: 6,
+            liveNotes: "",
+            transcript: [{ id: "l1", atMs: 5, kind: "speech", speaker: "host", text: "No blockers" }],
+            actionItems: [],
+          },
+        ],
+      }),
+    );
+    render(<Meetings />);
+    expect(await screen.findByText(/file the bug/)).toBeInTheDocument();
+    expect(screen.getByText(/due Friday/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy action items" })).toBeInTheDocument();
+    expect(screen.getByText("No action items.")).toBeInTheDocument();
+  });
+
   it("sends setRedactPii when the transcript toggle is flipped", async () => {
     api.getMeetings.mockResolvedValue(emptyPage());
     api.meetingsAct.mockResolvedValueOnce(

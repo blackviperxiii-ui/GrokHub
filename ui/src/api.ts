@@ -2291,6 +2291,13 @@ export interface MeetingLine {
   text: string;
 }
 
+export interface MeetingActionItem {
+  owner: string;
+  action: string;
+  due: string;
+  sourceQuote: string;
+}
+
 export interface MeetingRow {
   id: string;
   title: string;
@@ -2299,6 +2306,7 @@ export interface MeetingRow {
   endedMs: number | null;
   liveNotes: string;
   transcript: MeetingLine[];
+  actionItems?: MeetingActionItem[];
 }
 
 export interface MeetingHit {

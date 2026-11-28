@@ -2,7 +2,8 @@
 //! app's own shape (chat prompt, Auto gate, no turn cap).
 //!
 //! GROKHUB_EVAL_API_KEY=... cargo run -p grokhub-agent --example live_eval -- \
-//!     --budget-usd 1.00 [--k 3] [--model grok-4.3] [--effort low] [--only recall] \
+//!     --budget-usd 1.00 [--k 3] [--model grok-4.3] [--effort low] \
+//!     [--efforts low,medium,high,xhigh] [--only recall] \
 //!     [--ab prefix_cache] [--mde 10] [--provider grok|openrouter|local] [--suite default|coding|skills] \
 //!     [--ablate-skill <skill-name>] [--skill-override <path>] [--out report.md]
 //!
@@ -19,6 +20,11 @@
 //! model id) with the key in GROKHUB_EVAL_OPENROUTER_KEY. `--provider local`
 //! sends them to the model server at GROKHUB_EVAL_LOCAL_URL (loopback only),
 //! model `--provider-model`, token GROKHUB_EVAL_LOCAL_TOKEN.
+//!
+//! `--efforts low,medium,high,xhigh` runs the same suite once per effort and
+//! writes a side-by-side table (pass rate, tokens, wall time, USD) in the
+//! markdown report and `<out>.results.json`. `--out` is required. Do not pass
+//! `--effort` or `--ab` with it. Each effort gets the full `--budget-usd` cap.
 //!
 //! `--suite coding` runs the 30 fixed coding tasks instead of the chat set.
 //! Pass or fail is each task's own tests. `--out` is required: the run writes
@@ -102,6 +108,7 @@ fn main() {
     let mut suite_explicit = false;
     let mut ablate_skill: Option<String> = None;
     let mut skill_override_path: Option<String> = None;
+    let mut efforts: Option<Vec<String>> = None;
     let mut i = 0;
     while i < args.len() {
         let value = args.get(i + 1).cloned().unwrap_or_default();
@@ -114,6 +121,9 @@ fn main() {
             }
             "--model" => opts.model = value,
             "--effort" => opts.effort = Some(value),
+            "--efforts" => {
+                efforts = Some(grokhub_agent::parse_efforts(&value).unwrap_or_else(|e| fail(&e)));
+            }
             "--only" => opts.only = Some(value),
             "--ab" => {
                 ab_flag(&value).unwrap_or_else(|e| fail(&e));
@@ -210,6 +220,23 @@ fn main() {
     if opts.suite == grokhub_agent::EvalSuite::Skills && out.is_none() {
         fail("--suite skills needs --out (it writes <out>.results.json)");
     }
+    if let Some(list) = &efforts {
+        if out.is_none() {
+            fail("--efforts needs --out (it writes <out>.results.json)");
+        }
+        if opts.effort.is_some() {
+            fail("pass --efforts or --effort, not both");
+        }
+        if opts.ab.is_some() {
+            fail("--efforts cannot run with --ab");
+        }
+        if opts.suite == grokhub_agent::EvalSuite::Skills {
+            fail("--efforts does not run --suite skills");
+        }
+        if list.is_empty() {
+            fail("--efforts takes a comma list such as low,medium,high,xhigh");
+        }
+    }
     let budget = grokhub_agent::parse_live_budget(&budget).unwrap_or_else(|e| fail(&e));
     if signin && opts.provider != Provider::Grok {
         fail("--auth signin works with --provider grok only");
@@ -269,6 +296,50 @@ fn main() {
         let _ = std::fs::remove_file(file);
     }
     let md_path = out.as_ref().map(std::path::PathBuf::from);
+    if let Some(list) = efforts {
+        let mut arms = Vec::new();
+        for effort in &list {
+            opts.effort = Some(effort.clone());
+            opts.resume.clear();
+            let report =
+                grokhub_agent::run_live_with(client.clone(), &opts, budget, &mut |so_far, last| {
+                    eprintln!(
+                        "[{effort}] try {}/{}: {} {}{}",
+                        so_far.attempts.len(),
+                        so_far.planned,
+                        last.task,
+                        if last.pass { "pass" } else { "fail" },
+                        last.error
+                            .as_deref()
+                            .map(|e| format!(" ({e})"))
+                            .unwrap_or_default()
+                    );
+                });
+            if let Some(why) = &report.stopped {
+                eprintln!("[{effort}] stopped early: {why}");
+            }
+            arms.push(grokhub_agent::EffortArmMetrics::from_report(
+                effort, &report,
+            ));
+        }
+        let sweep = grokhub_agent::EffortSweepReport {
+            model: opts.model.clone(),
+            provider: opts.provider.label().to_string(),
+            arms,
+        };
+        let md = grokhub_agent::render_effort_sweep(&sweep);
+        if let Some(path) = &md_path {
+            if let Err(err) = grokhub_agent::write_live_atomic(path, md.as_bytes()) {
+                fail(&format!("could not write report: {err}"));
+            }
+            if let Err(err) = grokhub_agent::write_effort_sweep(&sweep, path) {
+                fail(&format!("could not write the results file: {err}"));
+            }
+        }
+        print!("{md}");
+        let _ = std::fs::remove_dir_all(&scratch);
+        return;
+    }
     if opts.suite == grokhub_agent::EvalSuite::Skills {
         let mut skill_opts = grokhub_agent::SkillAblationOpts::new(opts.model.clone());
         skill_opts.effort = opts.effort.clone();
