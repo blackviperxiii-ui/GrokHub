@@ -1,0 +1,1 @@
+- CI: give the Settings nav walk 15s on Windows so main's release-sidecar build cannot flake the 5s default.
