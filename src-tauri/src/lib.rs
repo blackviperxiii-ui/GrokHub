@@ -3853,13 +3853,12 @@ async fn claude_sessions_list(
     state: State<'_, ShellState>,
 ) -> Result<Vec<grokhub_code::claude_import::ClaudeSessionRow>, String> {
     let workspace = current(&state).workspace;
+    // off_main wraps T; return the Vec directly (same shape as list_connectors).
     off_main(move || {
         let Some(dir) = fleet::claude_dir() else {
-            return Ok(Vec::new());
+            return Vec::new();
         };
-        Ok(grokhub_code::claude_import::list_sessions(
-            &dir, &workspace, false,
-        ))
+        grokhub_code::claude_import::list_sessions(&dir, &workspace, false)
     })
     .await
 }
